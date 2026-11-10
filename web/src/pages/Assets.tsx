@@ -1,8 +1,8 @@
 import { Card, Tabs, type Key } from '@heroui/react'
 import { useSearchParams } from 'react-router-dom'
-import { api, asAgentId, type CatalogItem, type ItemKind, type ItemOf } from '../api'
-import { KIND_LABEL, KINDS, filterItems, isKind, type OwnerFilter } from '../rules'
-import { ItemAccess } from './itemParts'
+import { api, asAgentId, type CatalogAsset, type AssetKind, type AssetOf } from '../api'
+import { KIND_LABEL, KINDS, filterAssets, isKind, type OwnerFilter } from '../rules'
+import { AssetAccess } from './assetParts'
 import { McpTab } from './Mcp'
 import { MemoryTab } from './Memory'
 import { ToolLine } from './Permissions'
@@ -11,16 +11,16 @@ import { SkillTab } from './Skills'
 import { EmptyHint, Loading, Page, SelectInput, useAgents, useLoad } from '../ui'
 
 /** 内置工具：归平台、代码里定义，不能改；只看它被哪些角色收录 */
-function ToolTab({ items }: { items: ItemOf<'tool'>[] }) {
-  return items.length === 0 ? (
+function ToolTab({ assets }: { assets: AssetOf<'tool'>[] }) {
+  return assets.length === 0 ? (
     <EmptyHint>没有工具</EmptyHint>
   ) : (
     <div className="flex flex-col gap-2">
-      {items.map((i) => (
+      {assets.map((i) => (
         <Card key={i.name}>
           <Card.Content className="flex flex-col gap-1.5 text-sm">
             <ToolLine tool={i} />
-            <ItemAccess item={i} />
+            <AssetAccess asset={i} />
           </Card.Content>
         </Card>
       ))}
@@ -30,26 +30,26 @@ function ToolTab({ items }: { items: ItemOf<'tool'>[] }) {
 
 function KindTab({
   kind,
-  items,
+  assets,
   owner,
   onChange,
 }: {
-  kind: ItemKind
-  items: CatalogItem[]
+  kind: AssetKind
+  assets: CatalogAsset[]
   owner: OwnerFilter
   onChange: () => void
 }) {
   switch (kind) {
     case 'tool':
-      return <ToolTab items={filterItems(items, 'tool', owner)} />
+      return <ToolTab assets={filterAssets(assets, 'tool', owner)} />
     case 'skill':
-      return <SkillTab items={filterItems(items, 'skill', owner)} onChange={onChange} />
+      return <SkillTab assets={filterAssets(assets, 'skill', owner)} onChange={onChange} />
     case 'mcp':
-      return <McpTab items={filterItems(items, 'mcp', owner)} onChange={onChange} />
+      return <McpTab assets={filterAssets(assets, 'mcp', owner)} onChange={onChange} />
     case 'secret':
-      return <SecretTab items={filterItems(items, 'secret', owner)} onChange={onChange} />
+      return <SecretTab assets={filterAssets(assets, 'secret', owner)} onChange={onChange} />
     case 'memory':
-      return <MemoryTab items={filterItems(items, 'memory', owner)} onChange={onChange} />
+      return <MemoryTab assets={filterAssets(assets, 'memory', owner)} onChange={onChange} />
   }
 }
 
@@ -62,12 +62,12 @@ function ownerFilterOf(value: string | null): OwnerFilter {
  * AI 资产池：全部工具、skill、MCP server、secret、记忆，不分公共私有。每项显示 owner（平台或某个 agent）与收录它的角色；
  * agent 能用、能改的 = 它自己的 + 它的角色（含 base）与 allow 放行的，在「角色」页编辑。种类与 owner 筛选放在地址里（?kind=&owner=）
  */
-export default function Items() {
+export default function Assets() {
   const [params, setParams] = useSearchParams()
   const kindParam = params.get('kind')
-  const kind: ItemKind = isKind(kindParam) ? kindParam : 'skill'
+  const kind: AssetKind = isKind(kindParam) ? kindParam : 'skill'
   const owner = ownerFilterOf(params.get('owner'))
-  const items = useLoad(() => api.items(), [])
+  const assets = useLoad(() => api.assets(), [])
   const agents = useAgents()
   const set = (patch: Record<string, string>) => setParams({ kind, owner, ...patch }, { replace: true })
 
@@ -96,7 +96,7 @@ export default function Items() {
             {KINDS.map((k) => (
               <Tabs.Tab key={k} id={k}>
                 {KIND_LABEL[k]}
-                {items.data && `（${filterItems(items.data, k, owner).length}）`}
+                {assets.data && `（${filterAssets(assets.data, k, owner).length}）`}
                 <Tabs.Indicator />
               </Tabs.Tab>
             ))}
@@ -104,8 +104,8 @@ export default function Items() {
         </Tabs.ListContainer>
         {KINDS.map((k) => (
           <Tabs.Panel key={k} id={k} className="pt-3">
-            <Loading state={items}>
-              {(all) => <KindTab kind={k} items={all} owner={owner} onChange={() => void items.reload()} />}
+            <Loading state={assets}>
+              {(all) => <KindTab kind={k} assets={all} owner={owner} onChange={() => void assets.reload()} />}
             </Loading>
           </Tabs.Panel>
         ))}

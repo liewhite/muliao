@@ -129,15 +129,15 @@ class ReachOut(BaseModel):
     """一份配置能用（use）的内置工具与资产（skill、MCP server、secret、记忆，`kind:name`）。"""
 
     tools: list[ToolOut]
-    items: list[str]
+    assets: list[str]
 
     @classmethod
     def of(cls, r: Reach) -> "ReachOut":
-        return cls(tools=[ToolOut.of(t) for t in r.tools], items=r.items)
+        return cls(tools=[ToolOut.of(t) for t in r.tools], assets=r.assets)
 
 
 class AgentPreviewIn(BaseModel):
-    # 已有的 agent（它自己的条目总能用）；null 为还没建的
+    # 已有的 agent（它自己的资产总能用）；null 为还没建的
     agent_id: str | None
     roles: list[str]
     allow: list[str]
@@ -146,7 +146,7 @@ class AgentPreviewIn(BaseModel):
 
 @router.post("/agent-preview")
 async def preview_agent(c: C, body: AgentPreviewIn) -> ReachOut:
-    """agent 配置（还没保存的也行）最终能用的：自己的条目 + base + 角色 + allow / deny 放行的，与运行时同一套计算，
+    """agent 配置（还没保存的也行）最终能用的：自己的资产 + base + 角色 + allow / deny 放行的，与运行时同一套计算，
     与保存时同样校验（不合法 422）。"""
     rules = AgentRules.of(body.roles, body.allow, body.deny)
     return ReachOut.of(await c.distribution.preview_agent(body.agent_id, rules))

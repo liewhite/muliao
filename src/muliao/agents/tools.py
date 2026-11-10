@@ -49,7 +49,7 @@ class AgentDetail(BaseModel):
     # 按规则最终能用的内置工具
     tools: list[str]
     # 能用（use）的 skill、MCP server、secret、记忆（`kind:name`）：自己的与规则放行的
-    items: list[str]
+    assets: list[str]
     # 全部角色与全部内置工具，写 roles / allow / deny 时参照
     available_roles: list[RoleDetail]
     all_tools: list[str]
@@ -95,7 +95,7 @@ def agents_toolset(
         """Show an agent's configuration, the built-in tools and the skills/MCP servers/secrets/memories it ends up with,
         every role and every built-in tool. Use your own name to see yours. Returns a JSON object with `name`,
         `description`, `group`, `archived`, `model`, `thinking`, `roles` (besides `base`), `allow`, `deny`,
-        `tools` (the built-in tools it ends up with), `items` (`kind:name` of the skills, MCP servers, secrets
+        `tools` (the built-in tools it ends up with), `assets` (`kind:name` of the skills, MCP servers, secrets
         and memory blocks it can use), `available_roles` (every role: `name`, `description`, `fixed_allow`, `allow`, `deny`) and
         `all_tools` (every built-in tool).
 
@@ -115,7 +115,7 @@ def agents_toolset(
             allow=list(rules.allow),
             deny=list(rules.deny),
             tools=reach.tool_names,
-            items=reach.items,
+            assets=reach.assets,
             available_roles=[RoleDetail.of(r) for r in await distribution.list()],
             all_tools=list(distribution.tools),
         )

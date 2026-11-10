@@ -94,21 +94,40 @@ def _meta(a: assets.Asset) -> SkillMeta:
     return SkillMeta(a.name, a.description, a.owner, a.path / SKILL_FILE)
 
 
-def _read_files(directory: Path) -> dict[str, SkillFile]:
-    """skill 目录里的全部 UTF-8 文本文件（导出用；二进制文件不进 .skill 包）。"""
+@dataclass(frozen=True)
+class SkillFiles:
+    # 相对 skill 目录的路径 → 内容，含 SKILL.md
+    files: dict[str, SkillFile]
+    # 没有收进来的文件与原因（不是 UTF-8 文本的）
+    skipped: list[Skipped]
+
+
+@dataclass(frozen=True)
+class SkillExport:
+    # 标准 .skill 文件
+    package: bytes
+    # 没有打进包的文件与原因
+    skipped: list[Skipped]
+
+
+def _read_files(directory: Path) -> SkillFiles:
+    """skill 目录里的全部 UTF-8 文本文件（导出用）；二进制文件不进 .skill 包，列进 skipped。"""
     files: dict[str, SkillFile] = {}
+    skipped: list[Skipped] = []
     for current, dirs, names in os.walk(directory):
         dirs[:] = sorted(d for d in dirs if not d.startswith("."))
         for name in sorted(names):
             path = Path(current) / name
             if name.startswith(".") or path.is_symlink() or not path.is_file():
                 continue
+            rel = path.relative_to(directory).as_posix()
             try:
                 text = path.read_text(encoding="utf-8")
             except UnicodeDecodeError:
+                skipped.append(Skipped(rel, "not UTF-8 text"))
                 continue
-            files[path.relative_to(directory).as_posix()] = SkillFile(text, os.access(path, os.X_OK))
-    return files
+            files[rel] = SkillFile(text, os.access(path, os.X_OK))
+    return SkillFiles(files, skipped)
 
 
 def _replace_dir(directory: Path, files: Mapping[str, SkillFile]) -> None:
@@ -177,14 +196,15 @@ class SkillStore:
             await asyncio.to_thread(put)
         return _meta((await self._source.snapshot()).asset(_KIND, name))
 
-    async def files(self, name: str) -> dict[str, SkillFile]:
-        """SKILL.md 与全部文本附件（二进制文件不在内）。"""
+    async def files(self, name: str) -> SkillFiles:
+        """SKILL.md 与全部文本附件；二进制文件不在内，列在 skipped。"""
         asset = (await self._source.snapshot()).asset(_KIND, name)
         return await asyncio.to_thread(_read_files, asset.path)
 
-    async def export(self, name: str) -> bytes:
-        """打成标准 .skill 文件（skill_package）：SKILL.md 与文本附件。"""
-        return skill_package.pack(name, await self.files(name))
+    async def export(self, name: str) -> SkillExport:
+        """打成标准 .skill 文件（skill_package）：SKILL.md 与文本附件；没打进去的同导入一样逐个列出原因。"""
+        read = await self.files(name)
+        return SkillExport(skill_package.pack(name, read.files), read.skipped)
 
     async def import_package(
         self, data: bytes, *, actor: str, owner: str | None, replace: bool

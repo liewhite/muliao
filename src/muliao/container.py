@@ -19,9 +19,9 @@ from muliao.agent_runtime.mcp import McpConnector
 from muliao.agents.api import (
     AgentLifecycle,
     AgentService,
+    AssetCatalog,
     AssetSource,
     Distribution,
-    ItemCatalog,
     McpRegistry,
     MemoryStore,
     SkillStore,
@@ -117,7 +117,7 @@ class Container:
     # 分发：角色、agent 的规则与能用的、预览
     distribution: Distribution
     # 资源池：全部资源、转移 owner
-    catalog: ItemCatalog
+    catalog: AssetCatalog
     agent_lifecycle: AgentLifecycle
     sessions: SessionService
     notifications: Notifications
@@ -154,7 +154,7 @@ class Assembly:
     memory: MemoryStore
     agents: AgentService
     distribution: Distribution
-    catalog: ItemCatalog
+    catalog: AssetCatalog
     agent_lifecycle: AgentLifecycle
     sessions: SessionService
     notifications: Notifications
@@ -346,7 +346,7 @@ def assemble(
     # stdio server 的进程与 agent 的命令关在同一个写沙箱里（#499）
     mcp_connector = McpConnector(vault, confiner.of)
     mcp = McpRegistry(assets, mcp_connector.probe)
-    catalog = ItemCatalog(assets, tools)
+    catalog = AssetCatalog(assets, tools)
     # 会话领域先于消费者构造的端口（会话忙不忙、停止会话、委派、后台任务的占用），别的领域与工具集要用它们
     ports = SessionPorts.build(db, queue, messaging, tz)
     activity = ports.activity

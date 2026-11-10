@@ -17,11 +17,11 @@ from pydantic import BaseModel
 
 from muliao.api import (
     agents,
+    assets,
     features,
     files,
     history,
     issues,
-    items,
     jobs,
     models,
     notifications,
@@ -146,7 +146,7 @@ def _private_routes() -> APIRouter:
     router.include_router(tasks.router)
     router.include_router(jobs.router)
     router.include_router(workspace.router)
-    router.include_router(items.router)
+    router.include_router(assets.router)
     router.include_router(push.router)
     router.include_router(triggers.router)
     router.include_router(webhook.router)

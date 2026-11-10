@@ -20,7 +20,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection, Iterable, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from fnmatch import fnmatchcase
@@ -166,7 +166,7 @@ def kind_of(pattern: str) -> Kind | None:
 
 def check_patterns(patterns: Sequence[str]) -> None:
     """不查数据库的规则校验：形式合法、不重复，tool 规则至少匹配一个登记的工具（拼错的在写入时报出，而不是悄悄什么都不
-    匹配）。别的种类的规则是否匹配现有资产由写入方对着快照查（agents.roles.check_new_items）。"""
+    匹配）。别的种类的规则是否匹配现有资产由写入方对着快照查（agents.distribution.check_rules）。"""
     bad = [
         p
         for p in patterns
@@ -265,3 +265,33 @@ FIXED_RULES: dict[str, Rules] = {
     ),
     ADMIN: Rules(allow=("use:tool:*", "write:*")),
 }
+
+
+@dataclass(frozen=True)
+class AgentRules:
+    """agent 的分发规则：角色（不含每个 agent 隐含的 base）与它自己的 allow / deny（`action:kind:glob`）。"""
+
+    roles: tuple[str, ...] = ()
+    allow: tuple[str, ...] = ()
+    deny: tuple[str, ...] = ()
+
+    @classmethod
+    def of(cls, roles: Sequence[str], allow: Sequence[str], deny: Sequence[str]) -> AgentRules:
+        return cls(tuple(roles), tuple(allow), tuple(deny))
+
+    @property
+    def own(self) -> Rules:
+        """它自己的 allow / deny（不含角色）。"""
+        return Rules(self.allow, self.deny)
+
+    def effective(self, known: Mapping[str, Role]) -> Rules:
+        """最终规则：各来源（sources）的并集；known 是全部角色。"""
+        return Rules.union(r for _, r in self.sources(known))
+
+    def sources(self, known: Mapping[str, Role]) -> list[tuple[str | None, Rules]]:
+        """最终规则的各个来源：(角色名, 它的规则)——base 在前、再按它的 roles——最后是 (None, 它自己的 allow / deny)。
+        界面按来源解释（access.Provenance）用同一份。不存在的角色读树时已跳过（agents.access_file），这里再遇到是代码错误。"""
+        missing = [r for r in self.roles if r not in known]
+        if missing:
+            raise RuntimeError(f"agent references unknown roles {missing}")
+        return [*((r, known[r].effective) for r in (BASE, *self.roles)), (None, self.own)]

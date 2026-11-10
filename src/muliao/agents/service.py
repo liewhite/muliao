@@ -15,18 +15,19 @@ from datetime import datetime
 from pathlib import Path
 from typing import cast
 
-import tomlkit
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from tomlkit.toml_document import TOMLDocument
 
-from muliao.agents import access_file, assets
+from muliao.agents import access_file, agent_file, assets
 from muliao.agents.active import AgentNames, active_row_in, agent_names_in, runnable_row_in
-from muliao.agents.agent_rules import AgentRules
-from muliao.agents.assets import AGENT_FILE, PLATFORM, PRIVATE_MEMORY_FILE, Snapshot
+from muliao.agents.agent_file import AGENT_FILE, AgentFile
+from muliao.agents.assets import PLATFORM, PRIVATE_MEMORY_FILE, Snapshot
 from muliao.agents.distribution import check_agent_rules
 from muliao.agents.ids import new_agent_id
 from muliao.agents.kinds import StoredKind
 from muliao.agents.naming import new_agent_name, normalize_agent_name
+from muliao.agents.permissions import AgentRules
 from muliao.agents.source import AssetSource
 from muliao.agents.tables import Agent
 from muliao.agents.thinking import THINKING_LEVELS, Thinking, check_thinking_level
@@ -99,6 +100,16 @@ class _AgentFields:
     model: str
     thinking: Thinking
     group: str | None
+
+    def file(self, agent_id: str) -> AgentFile:
+        """agent.toml 里的内容（名字不在文件里：目录名就是名字）。"""
+        return AgentFile(
+            id=agent_id,
+            description=self.description,
+            model=self.model,
+            thinking=self.thinking,
+            group=self.group,
+        )
 
 
 @dataclass(frozen=True)
@@ -333,7 +344,7 @@ class AgentService:
             directory = snapshot.root / name
             try:
                 await asyncio.to_thread(
-                    _write_new_agent, directory, snapshot.access_file, agent_id, fields, rules
+                    _write_new_agent, directory, snapshot.access_path, agent_id, fields, rules
                 )
                 async with self._db.transaction() as s:
                     agent = Agent(
@@ -349,7 +360,7 @@ class AgentService:
                     self.workspace(agent_id).mkdir(parents=True, exist_ok=True)
                     info = info_of(agent)
             except BaseException:
-                await asyncio.to_thread(_undo_new_agent, directory, snapshot.access_file, name)
+                await asyncio.to_thread(_undo_new_agent, directory, snapshot.access_path, name)
                 raise
         log.info("agent created", extra={"agent": agent_id, "agent_name": name, "actor": actor})
         return info
@@ -379,7 +390,7 @@ class AgentService:
             undo = await asyncio.to_thread(
                 _write_agent_update,
                 directory.path,
-                snapshot.access_file,
+                snapshot.access_path,
                 directory.name,
                 agent_id,
                 fields,
@@ -422,7 +433,7 @@ class AgentService:
         return fields
 
     async def get_active(self, agent_id: str) -> AgentInfo:
-        """还可用的 agent：正在删除的按不存在处理（例如读它的记忆、条目时）。为它写数据的检查在写入的地方：数据库数据在
+        """还可用的 agent：正在删除的按不存在处理（例如读它的记忆、资产时）。为它写数据的检查在写入的地方：数据库数据在
         同一事务里用 active_agent_in。"""
         async with self._db.transaction() as s:
             return await active_agent_in(s, agent_id)
@@ -483,26 +494,11 @@ class AgentService:
                 )
 
 
-def _agent_toml(directory: Path, agent_id: str, fields: _AgentFields) -> str:
-    """agent.toml 的新内容：已有的文件在原文上改（保留注释与别的排版），没有就新建。"""
-    path = directory / AGENT_FILE
-    doc = tomlkit.parse(path.read_text(encoding="utf-8")) if path.is_file() else tomlkit.document()
-    doc["id"] = agent_id
-    doc["description"] = fields.description
-    doc["model"] = fields.model
-    doc["thinking"] = fields.thinking
-    if fields.group is None:
-        doc.pop("group", None)
-    else:
-        doc["group"] = fields.group
-    return tomlkit.dumps(doc)
-
-
 def _write_new_agent(
     directory: Path, access: Path, agent_id: str, fields: _AgentFields, rules: AgentRules
 ) -> None:
     directory.mkdir(parents=True)
-    write_atomic(directory / AGENT_FILE, _agent_toml(directory, agent_id, fields))
+    write_atomic(directory / AGENT_FILE, agent_file.dump(directory / AGENT_FILE, fields.file(agent_id)))
     write_atomic(directory / PRIVATE_MEMORY_FILE, "")
     access_file.edit(access, lambda doc: access_file.set_agent_rules(doc, fields.name, rules))
 
@@ -534,9 +530,9 @@ def _write_agent_update(
             target.rename(directory)
 
     try:
-        write_atomic(target / AGENT_FILE, _agent_toml(target, agent_id, fields))
+        write_atomic(target / AGENT_FILE, agent_file.dump(target / AGENT_FILE, fields.file(agent_id)))
 
-        def change(doc: tomlkit.TOMLDocument) -> None:
+        def change(doc: TOMLDocument) -> None:
             if fields.name != old_name:
                 access_file.rename_agent(doc, old_name, fields.name)
             access_file.set_agent_rules(doc, fields.name, rules)

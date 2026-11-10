@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { Button, Card, Chip, toast } from '@heroui/react'
 import { Trash2 } from 'lucide-react'
-import { api, type AgentId, type ItemOf } from '../api'
-import { ItemAccess, OwnerSelect } from './itemParts'
+import { api, type AgentId, type AssetOf } from '../api'
+import { AssetAccess, OwnerSelect } from './assetParts'
 import {
   ActionButton,
   CollapsibleForm,
@@ -15,14 +15,14 @@ import {
   useConfirm,
 } from '../ui'
 
-function SecretForm({ items, onSaved }: { items: ItemOf<'secret'>[]; onSaved: () => void }) {
+function SecretForm({ assets, onSaved }: { assets: AssetOf<'secret'>[]; onSaved: () => void }) {
   const [owner, setOwner] = useState<AgentId | null>(null)
   const [key, setKey] = useState('')
   const [value, setValue] = useState('')
   const [description, setDescription] = useState('')
   // 没动过开关为 null：已有的保持原值、新建的允许（只改值时不把不允许的悄悄放开）
   const [allowShell, setAllowShell] = useState<boolean | null>(null)
-  const existing = items.find((i) => i.name === key)
+  const existing = assets.find((i) => i.name === key)
   const action = useAction()
 
   async function save() {
@@ -62,7 +62,7 @@ function SecretForm({ items, onSaved }: { items: ItemOf<'secret'>[]; onSaved: ()
   )
 }
 
-function SecretItem({ item, onChange }: { item: ItemOf<'secret'>; onChange: () => void }) {
+function SecretItem({ item, onChange }: { item: AssetOf<'secret'>; onChange: () => void }) {
   const confirm = useConfirm()
   const action = useAction()
 
@@ -97,15 +97,15 @@ function SecretItem({ item, onChange }: { item: ItemOf<'secret'>; onChange: () =
             <Trash2 className="size-4" />
           </Button>
         </div>
-        <ItemAccess item={item} onTransferred={onChange} />
+        <AssetAccess asset={item} onTransferred={onChange} />
         <ErrorAlert error={action.error} />
       </Card.Content>
     </Card>
   )
 }
 
-/** secret 的资产页：值加密保存、不再显示；items 是资产池里（已筛选的）secret */
-export function SecretTab({ items, onChange }: { items: ItemOf<'secret'>[]; onChange: () => void }) {
+/** secret 的资产页：值加密保存、不再显示；assets 是资产池里（已筛选的）secret */
+export function SecretTab({ assets, onChange }: { assets: AssetOf<'secret'>[]; onChange: () => void }) {
   return (
     <div className="flex flex-col gap-3">
       <p className="text-sm text-muted">
@@ -113,12 +113,12 @@ export function SecretTab({ items, onChange }: { items: ItemOf<'secret'>[]; onCh
         <code className="font-mono">run_shell(secrets=[KEY])</code> 注入同名环境变量；不允许 shell 的只能用{' '}
         <code className="font-mono">skill_run(secrets=[KEY])</code> 经 skill 里的脚本注入。
       </p>
-      <SecretForm items={items} onSaved={onChange} />
-      {items.length === 0 ? (
+      <SecretForm assets={assets} onSaved={onChange} />
+      {assets.length === 0 ? (
         <EmptyHint>没有 secret</EmptyHint>
       ) : (
         <div className="flex flex-col gap-2">
-          {items.map((i) => (
+          {assets.map((i) => (
             <SecretItem key={i.name} item={i} onChange={onChange} />
           ))}
         </div>

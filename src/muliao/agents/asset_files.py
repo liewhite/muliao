@@ -11,9 +11,10 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Literal, get_args
 
+from muliao.agents import access_file, agent_file
+from muliao.agents.agent_file import AGENT_FILE
 from muliao.agents.assets import (
     ACCESS_FILE,
-    AGENT_FILE,
     MCP_DIR,
     MEMORY_DIR,
     PLATFORM,
@@ -21,8 +22,6 @@ from muliao.agents.assets import (
     SECRETS_DIR,
     SKILLS_DIR,
     Snapshot,
-    access_problems,
-    parse_agent_file,
 )
 from muliao.agents.kinds import StoredKind, label
 from muliao.agents.mcp_config import parse_mcp_file
@@ -160,7 +159,7 @@ def _memory(path: Path, text: str, limit: int) -> None:
 
 def _agent(agent_id: str, text: str, check_model: Callable[[str, Thinking], None]) -> None:
     try:
-        data = parse_agent_file(text)
+        data = agent_file.parse(text)
     except InvalidInput as e:
         raise _Rejected(str(e), "agent.toml") from e
     if data.id != agent_id:
@@ -176,8 +175,9 @@ def _agent(agent_id: str, text: str, check_model: Callable[[str, Thinking], None
 def _access(snapshot: Snapshot, text: str) -> None:
     """按读树的同一套规则读一遍；只拦这次新出现的问题（文件里原有的、与这次改动无关的不挡，比如某个 agent 的目录暂时
     读坏了）。"""
-    existing = {p.reason for p in snapshot.problems if p.path == snapshot.access_file}
-    new = [r for r in access_problems(snapshot, text) if r not in existing]
+    existing = {p.reason for p in snapshot.problems if p.path == snapshot.access_path}
+    agents = {a.name: a.id for a in snapshot.agents.values()}
+    new = [p.reason for p in access_file.parse(text, agents).problems if p.reason not in existing]
     if new:
         raise _Rejected("; ".join(new), "Roles and permissions")
 

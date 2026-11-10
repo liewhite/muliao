@@ -1,4 +1,4 @@
-"""AI 资源池（ItemCatalog）：跨种类看资源——全部资源与收录它们的角色（界面的资源页）、转移 owner（把文件或目录挪到新 owner
+"""AI 资源池（AssetCatalog）：跨种类看资源——全部资源与收录它们的角色（界面的资源页）、转移 owner（把文件或目录挪到新 owner
 的目录下）。各种类自己的内容与写入在各 store（skills、mcp、secrets、memory）；能用、能改的规则是分发子域的（agents.access）。"""
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class CatalogEntry:
+class CatalogAsset:
     """资源池里的一项（界面的资源页）。内置工具归平台、没有描述、修改时间与文件。"""
 
     kind: Kind
@@ -44,7 +44,7 @@ class CatalogEntry:
     allow_shell: bool | None = None
 
 
-class ItemCatalog:
+class AssetCatalog:
     def __init__(
         self,
         source: AssetSource,
@@ -54,12 +54,12 @@ class ItemCatalog:
         self._source = source
         self._tools = tuple(tools)
 
-    async def catalog(self) -> list[CatalogEntry]:
+    async def catalog(self) -> list[CatalogAsset]:
         """全部资源：内置工具（按登记顺序）在前，skill、MCP server、secret、记忆按种类、名称；每项带收录它的角色。"""
         snapshot = await self._source.snapshot()
         sharing = sharing_of(snapshot)
         tools = [
-            CatalogEntry(
+            CatalogAsset(
                 Kind.TOOL,
                 n,
                 None,
@@ -72,7 +72,7 @@ class ItemCatalog:
             for n in self._tools
         ]
         return tools + [
-            CatalogEntry(
+            CatalogAsset(
                 as_kind(kind),
                 a.name,
                 a.owner,
@@ -88,7 +88,7 @@ class ItemCatalog:
             for a in snapshot.of_kind(kind)
         ]
 
-    async def transfer_item(self, kind: StoredKind, name: str, owner: str | None, actor: str) -> None:
+    async def transfer(self, kind: StoredKind, name: str, owner: str | None, actor: str) -> None:
         """把资源挪到 owner（agent 的 id；None 归平台）的目录下。actor 要能改它（Grants.can 的 write）。内容不变；谁能用随
         owner 变（agents.access 的 Grants.can）。agent 的私有记忆名字就是 agent 名，所以记忆只能在平台与同名 agent 之间转。"""
         async with self._source.writing() as snapshot:
@@ -111,4 +111,4 @@ class ItemCatalog:
                     "none would load. Rename or remove the copies first"
                 )
             await asyncio.to_thread(assets.move, asset.path, snapshot.path_of(kind, name, owner))
-        log.info("item transferred", extra={"kind": kind, "item": name, "owner": owner, "actor": actor})
+        log.info("asset transferred", extra={"kind": kind, "asset": name, "owner": owner, "actor": actor})

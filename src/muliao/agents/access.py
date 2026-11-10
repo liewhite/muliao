@@ -17,29 +17,37 @@ changeable / writable / usable。全部按一份资源快照（agents.assets.Sna
 from __future__ import annotations
 
 import os
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from muliao.agents.agent_rules import AgentRules
 from muliao.agents.assets import ACCESS_FILE, PLATFORM, Asset, Snapshot
 from muliao.agents.ids import USER
 from muliao.agents.kinds import Kind, StoredKind, as_kind, label
-from muliao.agents.permissions import BASE, Action, Role, Rules, ToolSpec, pattern_of, permission_of, spec_of
+from muliao.agents.permissions import (
+    BASE,
+    Action,
+    AgentRules,
+    Role,
+    Rules,
+    ToolSpec,
+    pattern_of,
+    permission_of,
+    spec_of,
+)
 from muliao.errors import Forbidden
 
 
 @dataclass(frozen=True)
 class Grants:
-    """一个使用者能对哪些资产做什么。agent_id 为 None 是用户：全部能做。"""
+    """一个使用者能对哪些资产做什么：它名下的都能做，别的看规则。agent_id 为 None 的没有自己的资产：只按规则判断的一个
+    角色或还没建的 agent（Grants(None, rules)），以及用户（USER_GRANTS，规则放行一切）。"""
 
     agent_id: str | None
     rules: Rules
 
     def can(self, action: Action, kind: Kind, name: str, owner: str | None) -> bool:
-        if self.agent_id is None:
-            return True
-        return owner == self.agent_id or self.rules.allows(action, kind, name)
+        return (self.agent_id is not None and owner == self.agent_id) or self.rules.allows(action, kind, name)
 
     def uses(self, kind: Kind, name: str, owner: str | None) -> bool:
         return self.can(Action.USE, kind, name, owner)
@@ -48,20 +56,8 @@ class Grants:
         return self.can(Action.WRITE, kind, name, owner)
 
 
-USER_GRANTS = Grants(None, Rules())
-
-
-# 「这一项能不能用」：(种类, 名字, owner)；Grants.uses 与 granted_by 都是它
-Keep = Callable[[Kind, str, str | None], bool]
-
-
-def granted_by(rules: Rules) -> Keep:
-    """只按规则、不看 owner 的「能用」（Grants.can 的规则那一半）：一个角色本身、还没建的 agent。与 Grants.uses 同签名。"""
-    return lambda kind, name, _owner: rules.includes(kind, name)
-
-
-def grants_of(agent_id: str, rules: AgentRules, known: Mapping[str, Role]) -> Grants:
-    return Grants(agent_id, rules.effective(known))
+# 用户（界面）全部能做
+USER_GRANTS = Grants(None, Rules(allow=("*:*",)))
 
 
 @dataclass(frozen=True)
@@ -106,12 +102,12 @@ def grants_for(snapshot: Snapshot, actor: str) -> Grants:
     """actor（agent 的 id，或 ids.USER 即用户）的 Grants，按快照里角色的定义算。"""
     if actor == USER:
         return USER_GRANTS
-    return grants_of(actor, snapshot.rules_of(actor), snapshot.roles)
+    return Grants(actor, snapshot.rules_of(actor).effective(snapshot.roles))
 
 
 @dataclass(frozen=True)
 class Sharing:
-    """条目的分发情况，一次读出角色与全部 agent 的规则后算多项。"""
+    """资产的分发情况，一次读出角色与全部 agent 的规则后算多项。"""
 
     roles: tuple[Role, ...]
     base: Rules
@@ -120,7 +116,7 @@ class Sharing:
 
     def shared(self, kind: Kind, name: str, owner: str | None) -> bool:
         """「分发出去了」：base 收录它（人人可用，也给以后新建的 agent），或某个不是它 owner 的 agent 的规则收录它（放行
-        use：admin 的 `write:*` 不算分发）。只有一个定义：条目页据此说明谁能用（CatalogEntry.shared），删 agent 时据此把它
+        use：admin 的 `write:*` 不算分发）。只有一个定义：资产页据此说明谁能用（CatalogAsset.shared），删 agent 时据此把它
         名下分发出去的资产转给平台。没分给任何 agent 的自建角色收录它不算。"""
         return self.base.includes(kind, name) or any(
             r.includes(kind, name) for a, r in self.agents if a != owner
@@ -256,23 +252,22 @@ def write_scope(snapshot: Snapshot, agent_id: str) -> WriteScope:
 
 @dataclass(frozen=True)
 class Reach:
-    """一份配置能用的：内置工具（按登记顺序）与存在 items 里的资产（`kind:name`，按种类、名称）。"""
+    """一份配置能用的：内置工具（按登记顺序）与资产（`kind:name`，按种类、名称）。"""
 
     tools: list[ToolSpec]
-    items: list[str]
+    assets: list[str]
 
     @property
     def tool_names(self) -> list[str]:
         return [t.name for t in self.tools]
 
 
-def reach_of(snapshot: Snapshot, available: Collection[str], rules: Rules, keep: Keep) -> Reach:
-    """工具按 rules 在 available（当前配置下注册的工具）里取；资源是 keep(kind, name, owner) 为真的。界面预览、角色的覆盖范围、
-    get_agent 共用。"""
-    items = [
+def reach_of(snapshot: Snapshot, available: Collection[str], grants: Grants) -> Reach:
+    """grants 能用的：工具在 available（当前配置下注册的工具）里取，资产在快照里取。界面预览、角色的覆盖范围、get_agent 共用。"""
+    assets = [
         pattern_of(as_kind(k), a.name)
         for k in sorted(StoredKind, key=lambda k: k.value)
         for a in snapshot.of_kind(k)
-        if keep(as_kind(k), a.name, a.owner)
+        if grants.uses(as_kind(k), a.name, a.owner)
     ]
-    return Reach([spec_of(n) for n in rules.tools(available)], items)
+    return Reach([spec_of(n) for n in grants.rules.tools(available)], assets)

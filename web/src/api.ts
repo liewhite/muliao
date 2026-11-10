@@ -86,20 +86,20 @@ export type TriggerKindName = Trigger['kind']
 export type McpServer = WithAgentId<Schemas['McpOut'], 'owner'>
 export type McpInput = WithAgentId<Schemas['McpIn'], 'owner'>
 /** AI 资产池里的一项（内置工具、skill、MCP server、secret、记忆），带收录它的角色与这一种自己的详情（按 kind 收窄）；
- * 后端 agents/catalog.py、api/items.py */
-export type CatalogItem = WithAgentId<
-  | Schemas['ToolItemOut']
-  | Schemas['SkillItemOut']
-  | Schemas['McpItemOut']
-  | Schemas['SecretItemOut']
-  | Schemas['MemoryItemOut'],
+ * 后端 agents/catalog.py、api/assets.py */
+export type CatalogAsset = WithAgentId<
+  | Schemas['CatalogToolOut']
+  | Schemas['CatalogSkillOut']
+  | Schemas['CatalogMcpOut']
+  | Schemas['CatalogSecretOut']
+  | Schemas['CatalogMemoryOut'],
   'owner'
 >
-export type ItemKind = CatalogItem['kind']
-export type ItemOf<K extends ItemKind> = Extract<CatalogItem, { kind: K }>
+export type AssetKind = CatalogAsset['kind']
+export type AssetOf<K extends AssetKind> = Extract<CatalogAsset, { kind: K }>
 /** 存成文件的资源种类（能改、能转移）：内置工具之外的四种 */
 export type StoredKind = Schemas['StoredKind']
-/** 角色（内置或自建）、它能用的工具与条目、带它的 agent；后端 agents/permissions.py、agents/roles.py */
+/** 角色（内置或自建）、它能用的工具与资产、带它的 agent；后端 agents/permissions.py、agents/distribution.py */
 export type Role = Omit<Schemas['RoleOut'], 'agents'> & { agents: AgentId[] }
 export type RoleInput = Schemas['RoleIn']
 export type ToolPermission = Schemas['ToolOut']
@@ -150,8 +150,8 @@ async function send<T>(
   path: string,
   query: Query | undefined,
   body?: { type: string; data: BodyInit },
-  // 响应体是文件（如 .skill 包）：成功时原样交出 Blob
-  blob = false,
+  // 响应体是文件（如 .skill 包）：成功时交出响应本身，由调用方读 Blob 与响应头
+  raw = false,
 ): Promise<T> {
   const resp = await fetch(withQuery(path, query), {
     method,
@@ -176,7 +176,7 @@ async function send<T>(
   // 204 按 HTTP 语义没有响应体。FastAPI 的 204 仍带着 JSONResponse 的 content-type: application/json
   // （fastapi/routing.py 先建 JSONResponse 再清空响应体），所以不能按 Content-Type 判断
   if (resp.status === 204) return undefined as T
-  if (blob) return (await resp.blob()) as T
+  if (raw) return resp as T
   // 其余按响应的类型解码：JSON 响应体缺失时 resp.json() 直接报错；没有响应体的接口（stop 这类 202，接口描述里
   // 没有 content，类型为 void）必须真的没有响应体
   if (resp.headers.get('Content-Type')?.startsWith('application/json')) return (await resp.json()) as T
@@ -250,7 +250,7 @@ export const workspaceFileUrl = (agentId: AgentId, path: string) =>
 
 /** skill 目录里一个文件的内容（path 相对 skill 目录），同 workspaceFileUrl */
 export const skillFileUrl = (name: string, path: string) =>
-  `/api/items/skill/${encodeURIComponent(name)}/file?${new URLSearchParams({ path })}`
+  `/api/assets/skill/${encodeURIComponent(name)}/file?${new URLSearchParams({ path })}`
 
 export const api = {
   login: (password: string) => call('post', '/api/auth/login', { body: { password } }),
@@ -259,23 +259,23 @@ export const api = {
 
   agents: () => branded<Agent[]>(call('get', '/api/agents')),
   agentDefaults: () => call('get', '/api/agent-defaults'),
-  /** 全部角色：内置在前（base 每个 agent 隐含），自建的按名称；各带只按它自己的规则能用的工具与条目 */
+  /** 全部角色：内置在前（base 每个 agent 隐含），自建的按名称；各带只按它自己的规则能用的工具与资产 */
   roles: () => branded<Role[]>(call('get', '/api/roles')),
   createRole: (name: string, body: RoleInput) => call('post', '/api/roles/{name}', { path: { name }, body }),
   updateRole: (name: string, body: RoleInput) => call('put', '/api/roles/{name}', { path: { name }, body }),
   deleteRole: (name: string) => call('delete', '/api/roles/{name}', { path: { name } }),
-  /** agent 配置（还没保存的也行）最终能用的工具与条目：与运行时同一套计算；agent_id 为 null 是还没建的 */
+  /** agent 配置（还没保存的也行）最终能用的工具与资产：与运行时同一套计算；agent_id 为 null 是还没建的 */
   previewAgent: (body: Schemas['AgentPreviewIn']) => call('post', '/api/agent-preview', { body }),
   /** agent 能用的资产按种类分组，各带来源；记忆另附合并后注入指令的样子（与运行时同一渲染） */
   agentAssets: (agentId: AgentId) =>
     call('get', '/api/agents/{agent_id}/assets', { path: { agent_id: agentId } }),
-  /** 角色规则（还没保存的也行）能用的工具与条目；name 为 null 是还没建的 */
+  /** 角色规则（还没保存的也行）能用的工具与资产；name 为 null 是还没建的 */
   previewRole: (body: Schemas['RolePreviewIn']) => call('post', '/api/role-preview', { body }),
   /** 全部 AI 资源：内置工具在前，资源文件按种类、名称 */
-  items: () => branded<CatalogItem[]>(call('get', '/api/items')),
+  assets: () => branded<CatalogAsset[]>(call('get', '/api/assets')),
   /** 把 skill / MCP server / secret / 记忆挪到另一个 owner（null 归平台）的目录下；内容与收录它的角色不变 */
-  transferItem: (kind: StoredKind, name: string, owner: AgentId | null) =>
-    call('put', '/api/items/{kind}/{name}/owner', { path: { kind, name }, body: { owner } }),
+  transferAsset: (kind: StoredKind, name: string, owner: AgentId | null) =>
+    call('put', '/api/assets/{kind}/{name}/owner', { path: { kind, name }, body: { owner } }),
   /** agent 的工作历史：不给 query 按日期倒序；给了按关键词检索 */
   agentHistory: (agent_id: AgentId, query?: string) =>
     branded<HistoryEntry[]>(
@@ -285,7 +285,7 @@ export const api = {
   workspace: (agent_id: AgentId, path: string) =>
     call('get', '/api/agents/{agent_id}/workspace', { path: { agent_id }, query: { path } }),
   /** 浏览中的一个文件的内容（workspaceFileUrl / skillFileUrl；响应体是文件本身，接口描述里没有 JSON 响应体） */
-  fileBlob: (url: string) => send<Blob>('GET', url, undefined, undefined, true),
+  fileBlob: (url: string) => send<Response>('GET', url, undefined, undefined, true).then((r) => r.blob()),
   /** 全部 agent 的自定义页面（工作目录 site/<名>/index.html），各带打开它的签名地址 */
   pages: () => branded<SitePage[]>(call('get', '/api/pages')),
   /** 服务端配置决定的可选能力（如语音输入）与默认值（如压缩阈值） */
@@ -314,25 +314,29 @@ export const api = {
         : call('delete', '/api/agents/{agent_id}/archive', { path: { agent_id } }),
     ),
   /** 一块记忆（global 是全局记忆，agent 的私有记忆名字是它建时的名字） */
-  memory: (name: string) => branded<Memory>(call('get', '/api/items/memory/{name}', { path: { name } })),
+  memory: (name: string) => branded<Memory>(call('get', '/api/assets/memory/{name}', { path: { name } })),
   /** 新建的归 owner（缺省为平台）；已有的整体改写正文与描述，owner 不变 */
   saveMemory: (name: string, body: WithAgentId<Schemas['MemoryIn'], 'owner'>) =>
-    branded<Memory>(call('put', '/api/items/memory/{name}', { path: { name }, body })),
-  deleteMemory: (name: string) => call('delete', '/api/items/memory/{name}', { path: { name } }),
+    branded<Memory>(call('put', '/api/assets/memory/{name}', { path: { name }, body })),
+  deleteMemory: (name: string) => call('delete', '/api/assets/memory/{name}', { path: { name } }),
 
-  skill: (name: string) => call('get', '/api/items/skill/{name}', { path: { name } }),
+  skill: (name: string) => call('get', '/api/assets/skill/{name}', { path: { name } }),
   /** 新建的归 owner；已有的整体改写正文与描述，owner 不变 */
-  saveSkill: (name: string, body: Schemas['SkillIn']) => call('put', '/api/items/skill/{name}', { path: { name }, body }),
-  deleteSkill: (name: string) => call('delete', '/api/items/skill/{name}', { path: { name } }),
+  saveSkill: (name: string, body: Schemas['SkillIn']) => call('put', '/api/assets/skill/{name}', { path: { name }, body }),
+  deleteSkill: (name: string) => call('delete', '/api/assets/skill/{name}', { path: { name } }),
   /** skill 目录里 path（相对 skill 目录，空为根）这一层，同工作目录浏览 */
   skillFiles: (name: string, path: string) =>
-    call('get', '/api/items/skill/{name}/files', { path: { name }, query: { path } }),
-  /** 标准 .skill 文件（zip）；失败时与其他调用一样抛 ApiError，不会把错误体当成文件存下 */
-  exportSkill: (name: string) =>
-    send<Blob>('GET', `/api/items/skill/${encodeURIComponent(name)}/package`, undefined, undefined, true),
+    call('get', '/api/assets/skill/{name}/files', { path: { name }, query: { path } }),
+  /** 标准 .skill 文件（zip）与没打进包的文件（响应头 X-Skipped-Files）；失败时与其他调用一样抛 ApiError，不会把错误体当成文件存下 */
+  exportSkill: async (name: string) => {
+    const resp = await send<Response>('GET', `/api/assets/skill/${encodeURIComponent(name)}/package`, undefined, undefined, true)
+    const skipped = resp.headers.get('X-Skipped-Files')
+    if (skipped === null) throw new Error('skill export answered without the X-Skipped-Files header')
+    return { blob: await resp.blob(), skipped: JSON.parse(skipped) as Schemas['SkippedOut'][] }
+  },
   /** 导入标准 .skill 文件（名字取自包）；同名 skill 已存在时 409，replace 为 true 时覆盖 */
   importSkill: (owner: string | null, file: Blob, replace: boolean) =>
-    send<Schemas['SkillImportOut']>('POST', '/api/items/skill', { owner, replace }, { type: 'application/zip', data: file }),
+    send<Schemas['SkillImportOut']>('POST', '/api/assets/skill', { owner, replace }, { type: 'application/zip', data: file }),
 
   /** origin_ref 是发起方在它那个 origin 里的身份：触发器的 id，用来列出某个触发器发起过的会话；q 是关键字（标题或消息含有它，不能为空串） */
   sessions: (query: {
@@ -419,19 +423,19 @@ export const api = {
   deleteTrigger: (trigger_id: number) => call('delete', '/api/triggers/{trigger_id}', { path: { trigger_id } }),
   /** 新增（启用的）MCP server；同名已存在 409 */
   addMcp: (name: string, body: McpInput) =>
-    branded<McpServer>(call('put', '/api/items/mcp/{name}', { path: { name }, body })),
-  probeMcp: (name: string) => call('post', '/api/items/mcp/{name}/tools', { path: { name } }),
+    branded<McpServer>(call('put', '/api/assets/mcp/{name}', { path: { name }, body })),
+  probeMcp: (name: string) => call('post', '/api/assets/mcp/{name}/tools', { path: { name } }),
   setMcpEnabled: (name: string, enabled: boolean) =>
-    branded<McpServer>(call('put', '/api/items/mcp/{name}/enabled', { path: { name }, body: { enabled } })),
-  deleteMcp: (name: string) => call('delete', '/api/items/mcp/{name}', { path: { name } }),
+    branded<McpServer>(call('put', '/api/assets/mcp/{name}/enabled', { path: { name }, body: { enabled } })),
+  deleteMcp: (name: string) => call('delete', '/api/assets/mcp/{name}', { path: { name } }),
 
   /** 新建的归 owner（null 为平台）；已有的改值与描述，owner 不变；allowShell 为 null：已有的保持原值，新建的允许 */
   setSecret: (owner: AgentId | null, key: string, value: string, description: string, allowShell: boolean | null) =>
-    call('put', '/api/items/secret/{name}', {
+    call('put', '/api/assets/secret/{name}', {
       path: { name: key },
       body: { owner, value, description, allow_shell: allowShell },
     }),
-  deleteSecret: (key: string) => call('delete', '/api/items/secret/{name}', { path: { name: key } }),
+  deleteSecret: (key: string) => call('delete', '/api/assets/secret/{name}', { path: { name: key } }),
 
   /** owner 给出时只列这个项目（agent）负责的 issue */
   issues: (owner?: string) => call('get', '/api/issues', { query: { owner } }),

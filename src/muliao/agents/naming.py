@@ -11,10 +11,15 @@ _SLUG = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 AGENT_NAME_MAX = 64
 
 
+def nfc(name: str) -> str:
+    """NFC 规范化：同一个字的不同编码形式视为同一个名称（macOS 的文件名可能是 NFD）。"""
+    return unicodedata.normalize("NFC", name)
+
+
 def normalize_agent_name(value: str) -> str:
     """agent 名称只用于展示（标识用 id），所以只要求：去首尾空白后非空、不超过 64 个字符、不含控制字符。
     NFC 规范化，使同一个字的不同编码形式被视为同一个名称（名称唯一）。"""
-    name = unicodedata.normalize("NFC", value).strip()
+    name = nfc(value).strip()
     if not name or len(name) > AGENT_NAME_MAX:
         raise InvalidInput(f"agent name must be 1-{AGENT_NAME_MAX} characters, got {len(name)}")
     if any(unicodedata.category(ch).startswith("C") for ch in name):

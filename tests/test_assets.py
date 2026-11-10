@@ -128,7 +128,7 @@ async def test_a_platform_asset_with_hidden_copies_is_not_transferred_to_an_agen
     skill(r / "platform" / "skills" / "dup")
     skill(r / "alpha" / "skills" / "dup")
     with pytest.raises(Conflict, match="alpha/skills/dup"):
-        await container.catalog.transfer_item(StoredKind.SKILL, "dup", beta.id, actor="user")
+        await container.catalog.transfer(StoredKind.SKILL, "dup", beta.id, actor="user")
     assert (await container.assets.snapshot()).asset(StoredKind.SKILL, "dup").owner is None
 
 
@@ -326,26 +326,26 @@ async def test_memory_blocks_skills_and_problems_reach_the_run(container, make_a
 async def test_memory_api_writes_files_and_follows_ownership(client, container, make_agent):
     agent = await make_agent("alpha")
     await login(client)
-    got = (await client.get("/api/items/memory/global")).json()
+    got = (await client.get("/api/assets/memory/global")).json()
     assert (got["content"], got["owner"], got["max_chars"]) == ("", None, 4000)
-    resp = await client.put("/api/items/memory/global", json={"content": "first  \n\n\nsecond"})
+    resp = await client.put("/api/assets/memory/global", json={"content": "first  \n\n\nsecond"})
     assert resp.json()["content"] == "first\n\nsecond"
     assert (root(container) / "platform" / "memory" / "global.md").read_text() == "first\n\nsecond\n"
-    assert (await client.put("/api/items/memory/alpha", json={"content": "- tea"})).json()[
+    assert (await client.put("/api/assets/memory/alpha", json={"content": "- tea"})).json()[
         "owner"
     ] == agent.id
-    created = await client.put("/api/items/memory/trading", json={"content": "x"})
+    created = await client.put("/api/assets/memory/trading", json={"content": "x"})
     assert created.json()["owner"] is None
-    assert (await client.put("/api/items/memory/Bad Name", json={"content": "x"})).status_code == 422
+    assert (await client.put("/api/assets/memory/Bad Name", json={"content": "x"})).status_code == 422
     # 私有记忆名字就是 agent 名
     assert (
-        await client.put("/api/items/memory/other", json={"content": "x", "owner": agent.id})
+        await client.put("/api/assets/memory/other", json={"content": "x", "owner": agent.id})
     ).status_code == 422
-    assert (await client.delete("/api/items/memory/trading")).status_code == 204
+    assert (await client.delete("/api/assets/memory/trading")).status_code == 204
     assert not (root(container) / "platform" / "memory" / "trading.md").exists()
-    assert (await client.delete("/api/items/memory/global")).status_code == 422
-    assert (await client.get("/api/items/memory/nope")).status_code == 404
-    over = await client.put("/api/items/memory/global", json={"content": "x" * 4001})
+    assert (await client.delete("/api/assets/memory/global")).status_code == 422
+    assert (await client.get("/api/assets/memory/nope")).status_code == 404
+    over = await client.put("/api/assets/memory/global", json={"content": "x" * 4001})
     assert over.status_code == 422
 
 
@@ -377,7 +377,7 @@ async def test_skills_are_written_imported_exported_and_deleted_as_directories(c
     text = (directory / "SKILL.md").read_text()
     assert "license: MIT" in text and "New." in text
     assert (directory / "scripts" / "run.sh").exists()
-    package = await container.skills.export("digest")
+    package = (await container.skills.export("digest")).package
     await container.skills.delete("digest", "user")
     assert not directory.exists()
     imported = await container.skills.import_package(package, actor="user", owner=None, replace=False)
@@ -427,17 +427,17 @@ async def test_secrets_are_encrypted_files(container, make_agent):
 async def test_transferring_moves_the_file_to_the_new_owner(container, make_agent):
     alpha = await make_agent("alpha")
     await container.skills.write("digest", "When digesting", "Do it.", actor="user", owner=alpha.id)
-    await container.catalog.transfer_item(StoredKind.SKILL, "digest", None, "user")
+    await container.catalog.transfer(StoredKind.SKILL, "digest", None, "user")
     assert (root(container) / "platform" / "skills" / "digest" / "SKILL.md").exists()
     assert await owned(container, "skill", None) == ["digest"]
     with pytest.raises(InvalidInput, match="already belongs"):
-        await container.catalog.transfer_item(StoredKind.SKILL, "digest", None, "user")
-    await container.catalog.transfer_item(StoredKind.MEMORY, "alpha", None, "user")
+        await container.catalog.transfer(StoredKind.SKILL, "digest", None, "user")
+    await container.catalog.transfer(StoredKind.MEMORY, "alpha", None, "user")
     assert (root(container) / "platform" / "memory" / "alpha.md").exists()
     await container.memory.put("trading", "x", actor="user")
     with pytest.raises(InvalidInput, match="named after the agent"):
-        await container.catalog.transfer_item(StoredKind.MEMORY, "trading", alpha.id, "user")
-    await container.catalog.transfer_item(StoredKind.MEMORY, "alpha", alpha.id, "user")
+        await container.catalog.transfer(StoredKind.MEMORY, "trading", alpha.id, "user")
+    await container.catalog.transfer(StoredKind.MEMORY, "alpha", alpha.id, "user")
     assert (root(container) / "alpha" / "memory.md").exists()
 
 

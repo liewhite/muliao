@@ -39,14 +39,14 @@ export function ToolLine({ tool }: { tool: ToolPermission }) {
 }
 
 /** 能用的资产（`kind:name`）：按种类成组，点进资产页 */
-function ItemChips({ items }: { items: string[] }) {
-  if (items.length === 0) return <span className="text-sm text-muted">没有 skill、MCP、secret、记忆</span>
+function AssetChips({ assets }: { assets: string[] }) {
+  if (assets.length === 0) return <span className="text-sm text-muted">没有 skill、MCP、secret、记忆</span>
   return (
     <div className="flex flex-wrap gap-1.5">
-      {items.map((i) => {
+      {assets.map((i) => {
         const { kind, name } = splitRule(i)
         return (
-          <Link key={i} to={`/items?kind=${kind}`}>
+          <Link key={i} to={`/ai-assets?kind=${kind}`}>
             <Chip size="sm" variant="secondary">
               <span className="text-muted">{KIND_LABEL[kind]}</span> <span className="font-mono">{name}</span>
             </Chip>
@@ -62,9 +62,9 @@ export function ReachView({ reach, what = '能用' }: { reach: Reach; what?: str
   return (
     <div className="flex flex-col gap-2">
       <div className="text-sm text-muted">
-        {what}的 skill、MCP、secret、记忆（{reach.items.length}）
+        {what}的 skill、MCP、secret、记忆（{reach.assets.length}）
       </div>
-      <ItemChips items={reach.items} />
+      <AssetChips assets={reach.assets} />
       <Disclosure>
         <Disclosure.Heading>
           <Disclosure.Trigger className="flex items-center gap-1 text-sm text-muted">
@@ -163,8 +163,8 @@ export function RulesInput({
 
 /** 规则补全的候选：全部资产（含工具）及每种的 `use:kind:*` */
 function useCandidates(): string[] {
-  const items = useLoad(() => api.items(), [])
-  return ruleCandidates(items.data ?? [])
+  const assets = useLoad(() => api.assets(), [])
+  return ruleCandidates(assets.data ?? [])
 }
 
 export type PermissionValue = { roles: string[]; allow: string[]; deny: string[] }

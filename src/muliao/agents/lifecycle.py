@@ -139,7 +139,8 @@ def _retire_assets(snapshot: Snapshot, agent_id: str) -> None:
             if a.owner == agent_id and sharing.shared(as_kind(kind), a.name, agent_id):
                 assets.move(a.path, snapshot.path_of(kind, a.name, None))
                 log.info(
-                    "asset moved to the platform with its agent deleted", extra={"kind": kind, "item": a.name}
+                    "asset moved to the platform with its agent deleted",
+                    extra={"kind": kind, "asset": a.name},
                 )
-    access_file.edit(snapshot.access_file, lambda doc: access_file.remove_agent(doc, agent.name))
+    access_file.edit(snapshot.access_path, lambda doc: access_file.remove_agent(doc, agent.name))
     assets.remove(agent.path)

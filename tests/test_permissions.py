@@ -135,7 +135,7 @@ async def test_roles_are_created_assigned_updated_and_protected(container):
         await container.agents.create(AgentSpec(name="x", description="d", roles=["public"]), actor="user")
 
 
-async def test_a_role_hands_out_skills_and_secrets_and_an_items_owner_always_has_it(container, make_agent):
+async def test_a_role_hands_out_skills_and_secrets_and_an_assets_owner_always_has_it(container, make_agent):
     owner, trader, other = await make_agent("owner"), await make_agent("trader"), await make_agent("other")
     await container.skills.write("relay-host", "d", "body", actor=owner.id, owner=owner.id)
     await container.vault.set("RELAY_KEY", "v", "", actor=owner.id, owner=owner.id)
@@ -149,7 +149,7 @@ async def test_a_role_hands_out_skills_and_secrets_and_an_items_owner_always_has
     assert [s.name for s in await container.skills.index(trader.id)] == ["relay-host"]
     assert await container.vault.resolve_many(trader.id, ["RELAY_KEY"], shell=False) == {"RELAY_KEY": "v"}
     # 记忆：base 收录的全局记忆与它自己的私有记忆
-    assert (await container.distribution.reach(trader.id)).items == [
+    assert (await container.distribution.reach(trader.id)).assets == [
         "memory:global",
         "memory:trader",
         "secret:RELAY_KEY",
@@ -188,7 +188,7 @@ async def test_only_the_owner_an_admin_or_the_user_can_change_an_item(container,
     await container.vault.delete("K", "user")
 
 
-async def test_a_deleted_agents_shared_items_move_to_the_platform(container, make_agent):
+async def test_a_deleted_agents_shared_assets_move_to_the_platform(container, make_agent):
     owner, user = await make_agent("owner"), await make_agent("user1")
     await container.skills.write("shared", "d", "b", actor=owner.id, owner=owner.id)
     await container.skills.write("alone", "d", "b", actor=owner.id, owner=owner.id)
@@ -211,9 +211,9 @@ async def test_transferring_an_item_moves_who_owns_and_uses_it(container, make_a
     await container.vault.set("K", "x", "", actor=old.id, owner=old.id)
     # 只有能改它的人能转：别的 agent 不行
     with pytest.raises(Forbidden):
-        await container.catalog.transfer_item(StoredKind.SKILL, "s", other.id, other.id)
-    await container.catalog.transfer_item(StoredKind.SKILL, "s", new.id, "user")
-    await container.catalog.transfer_item(StoredKind.SECRET, "K", None, old.id)
+        await container.catalog.transfer(StoredKind.SKILL, "s", other.id, other.id)
+    await container.catalog.transfer(StoredKind.SKILL, "s", new.id, "user")
+    await container.catalog.transfer(StoredKind.SECRET, "K", None, old.id)
     assert await owned(container, "skill", new.id) == ["s"]
     assert await owned(container, "secret", None) == ["K"]
     assert [s.name for s in await container.skills.index(new.id)] == ["s"]
@@ -228,22 +228,22 @@ async def test_transfer_rejects_no_ops_and_unknown_owners(container, make_agent)
     a = await make_agent("a")
     await container.skills.write("s", "d", "b", actor=a.id, owner=a.id)
     with pytest.raises(InvalidInput, match="already belongs"):
-        await container.catalog.transfer_item(StoredKind.SKILL, "s", a.id, "user")
+        await container.catalog.transfer(StoredKind.SKILL, "s", a.id, "user")
     with pytest.raises(NotFound):
-        await container.catalog.transfer_item(StoredKind.SKILL, "s", "nobody", "user")
+        await container.catalog.transfer(StoredKind.SKILL, "s", "nobody", "user")
     with pytest.raises(NotFound, match="MCP server 's' not found"):
-        await container.catalog.transfer_item(StoredKind.MCP, "s", None, "user")
+        await container.catalog.transfer(StoredKind.MCP, "s", None, "user")
     assert await owned(container, "skill", a.id) == ["s"]
 
 
-async def test_transfer_item_api(client, container, make_agent):
+async def test_transfer_asset_api(client, container, make_agent):
     await login(client)
     a = await make_agent("a")
     await container.skills.write("s", "d", "b", actor="user", owner=None)
-    resp = await client.put("/api/items/skill/s/owner", json={"owner": a.id})
+    resp = await client.put("/api/assets/skill/s/owner", json={"owner": a.id})
     assert resp.status_code == 204
     assert await owned(container, "skill", a.id) == ["s"]
-    assert (await client.put("/api/items/tool/run_shell/owner", json={"owner": None})).status_code == 422
+    assert (await client.put("/api/assets/tool/run_shell/owner", json={"owner": None})).status_code == 422
 
 
 async def test_mcp_is_what_the_agent_owns_or_its_roles_give_it(container, models):
@@ -282,7 +282,7 @@ async def test_an_item_rule_survives_its_item_being_removed(container):
     await container.mcp.add("echo", spec, actor="user", owner=None, probe=False)
     await container.distribution.create(RoleSpec("echoer", "echo", ["use:mcp:echo"], []), actor="user")
     await container.mcp.remove("echo", "user")
-    # 已有的规则不查是否匹配现有条目：改描述照常
+    # 已有的规则不查是否匹配现有资产：改描述照常
     await container.distribution.update(RoleSpec("echoer", "new", ["use:mcp:echo"], []), actor="user")
     with pytest.raises(InvalidInput, match="no existing"):
         await container.distribution.update(
@@ -292,7 +292,7 @@ async def test_an_item_rule_survives_its_item_being_removed(container):
 
 async def test_tools_and_roles_api(client, container):
     await login(client)
-    items = {i["name"]: i for i in (await client.get("/api/items")).json() if i["kind"] == "tool"}
+    items = {i["name"]: i for i in (await client.get("/api/assets")).json() if i["kind"] == "tool"}
     assert (items["delete_agent"]["access"], items["delete_agent"]["admin"]) == ("write", True)
     assert (items["run_shell"]["access"], items["run_shell"]["admin"]) == ("write", False)
     assert (await client.get("/api/tools")).status_code == 404
@@ -312,7 +312,7 @@ async def test_tools_and_roles_api(client, container):
     role_preview = (
         await client.post("/api/role-preview", json={"name": None, "allow": body["allow"], "deny": []})
     ).json()
-    assert role_preview["items"] == ["skill:s"]
+    assert role_preview["assets"] == ["skill:s"]
     assert [t["name"] for t in role_preview["tools"]][:2] == ["issue_list", "issue_show"]
     bad_role = {"name": None, "allow": ["use:skill:nope"], "deny": []}
     assert (await client.post("/api/role-preview", json=bad_role)).status_code == 422
@@ -323,7 +323,7 @@ async def test_tools_and_roles_api(client, container):
     assert not listed[BASE]["assignable"] and listed["admin"]["assignable"] and listed["triage"]["assignable"]
     assert "use:tool:run_shell" in listed[BASE]["fixed_allow"]
     assert [t["name"] for t in listed["triage"]["reach"]["tools"]][:2] == ["issue_list", "issue_show"]
-    assert listed["triage"]["reach"]["items"] == ["skill:s"] and listed[BASE]["reach"]["items"] == [
+    assert listed["triage"]["reach"]["assets"] == ["skill:s"] and listed[BASE]["reach"]["assets"] == [
         "memory:global"
     ]
     # 内置角色的预览含它固定的部分
@@ -342,11 +342,11 @@ async def test_tools_and_roles_api(client, container):
     listed = {r["name"]: r for r in (await client.get("/api/roles")).json()}
     assert listed["triage"]["agents"] == [agent["id"]] and agent["id"] in listed[BASE]["agents"]
     assert listed["admin"]["agents"] == []
-    # 自己的条目总能用，deny 只拦规则分来的
+    # 自己的资产总能用，deny 只拦规则分来的
     await container.skills.write("own", "d", "b", actor="user", owner=agent["id"])
     reach = (await preview(agent["id"], ["triage"], deny=["use:skill:*"])).json()
-    assert reach["items"] == ["memory:global", "memory:t", "skill:own"]
-    assert (await preview(None, ["triage"])).json()["items"] == ["memory:global", "skill:s"]
+    assert reach["assets"] == ["memory:global", "memory:t", "skill:own"]
+    assert (await preview(None, ["triage"])).json()["assets"] == ["memory:global", "skill:s"]
     assert (await client.delete("/api/roles/triage")).status_code == 409
     assert (await client.delete(f"/api/agents/{agent['id']}")).status_code == 204
     # 删除 agent 的清理做完、行删掉之后角色才没人引用
@@ -411,14 +411,14 @@ async def test_agent_assets_group_by_kind_with_sources_and_memory_preview(client
     )
     assert '<memory name="team" access="editable, shared"' in got["memory_preview"]
     assert "\n- team fact\n</memory>" in got["memory_preview"]
-    # 与 reach（运行时同一套规则）列出的条目一致
+    # 与 reach（运行时同一套规则）列出的资产一致
     reach = await container.distribution.reach(agent.id)
     listed = [
         f"{k}:{a['name']}"
         for k, g in (("mcp", "mcp"), ("memory", "memories"), ("secret", "secrets"), ("skill", "skills"))
         for a in got[g]
     ]
-    assert sorted(listed) == sorted(reach.items)
+    assert sorted(listed) == sorted(reach.assets)
     assert (await client.get("/api/agents/nope/assets")).status_code == 404
 
     # admin 靠 write:* 能改全局记忆，但不算来源（use 只来自 base）
@@ -444,7 +444,7 @@ async def test_an_item_denied_to_every_other_agent_goes_with_its_owner(container
     await container.distribution.update(
         RoleSpec(BASE, base.description, ["use:skill:public"], []), actor="user"
     )
-    # 条目页与删除用同一个「收录」：triage 收录它，但带 triage 的唯一一个 agent 拦了它，没人在用
+    # 资产页与删除用同一个「收录」：triage 收录它，但带 triage 的唯一一个 agent 拦了它，没人在用
     [entry] = [e for e in await container.catalog.catalog() if e.name == "shared"]
     assert entry.roles == ("triage",)
     await container.agent_lifecycle.delete(owner.id, actor="user")

@@ -19,7 +19,8 @@ from pathlib import Path
 
 from muliao.agents import asset_files
 from muliao.agents.active import Mirrored, agent_names_in, sync_mirror_in
-from muliao.agents.assets import AGENT_FILE, Problem, Snapshot, fingerprint, load_tree
+from muliao.agents.agent_file import AGENT_FILE
+from muliao.agents.assets import Problem, Snapshot, fingerprint, load_tree
 from muliao.agents.kinds import StoredKind
 from muliao.agents.permissions import GLOBAL_MEMORY
 from muliao.agents.thinking import Thinking, check_thinking_level

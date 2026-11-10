@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react'
 import { Button, Card, toast } from '@heroui/react'
 import { ChevronDown, ChevronRight, Trash2 } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { api, type AgentId, type ItemOf } from '../api'
-import { ItemAccess, OwnerSelect } from './itemParts'
+import { api, type AgentId, type AssetOf } from '../api'
+import { AssetAccess, OwnerSelect } from './assetParts'
 import {
   ActionButton,
   CollapsibleForm,
@@ -92,7 +92,7 @@ function MemoryForm({ onSaved }: { onSaved: () => void }) {
   )
 }
 
-function MemoryItem({ item, onChange }: { item: ItemOf<'memory'>; onChange: () => void }) {
+function MemoryItem({ item, onChange }: { item: AssetOf<'memory'>; onChange: () => void }) {
   const [open, setOpen] = useState(false)
   const confirm = useConfirm()
   const action = useAction()
@@ -126,7 +126,7 @@ function MemoryItem({ item, onChange }: { item: ItemOf<'memory'>; onChange: () =
             </Button>
           )}
         </div>
-        <ItemAccess item={item} onTransferred={onChange} />
+        <AssetAccess asset={item} onTransferred={onChange} />
         <ErrorAlert error={action.error} />
         {open && (
           <MemoryEditor
@@ -141,7 +141,7 @@ function MemoryItem({ item, onChange }: { item: ItemOf<'memory'>; onChange: () =
 }
 
 /** 记忆的资产页：全局记忆（base 收录）、共享记忆（角色写 `*:memory:<名>` 收录，成员能用也能改）与各 agent 的私有记忆 */
-export function MemoryTab({ items, onChange }: { items: ItemOf<'memory'>[]; onChange: () => void }) {
+export function MemoryTab({ assets, onChange }: { assets: AssetOf<'memory'>[]; onChange: () => void }) {
   return (
     <div className="flex flex-col gap-3">
       <p className="text-sm text-muted">
@@ -150,11 +150,11 @@ export function MemoryTab({ items, onChange }: { items: ItemOf<'memory'>[]; onCh
         <code className="font-mono">use:memory:名字</code>。
       </p>
       <MemoryForm onSaved={onChange} />
-      {items.length === 0 ? (
+      {assets.length === 0 ? (
         <EmptyHint>没有记忆</EmptyHint>
       ) : (
         <div className="flex flex-col gap-2">
-          {items.map((i) => (
+          {assets.map((i) => (
             <MemoryItem key={i.name} item={i} onChange={onChange} />
           ))}
         </div>
@@ -165,11 +165,11 @@ export function MemoryTab({ items, onChange }: { items: ItemOf<'memory'>[]; onCh
 
 /** agent 页的记忆：它名下的记忆块（私有记忆）逐块编辑；全局与共享记忆在资产页 */
 export function AgentMemories({ agent }: { agent: AgentId }) {
-  const items = useLoad(() => api.items(), [])
+  const assets = useLoad(() => api.assets(), [])
   return (
-    <Loading state={items}>
+    <Loading state={assets}>
       {(all) => {
-        const own = all.filter((i): i is ItemOf<'memory'> => i.kind === 'memory' && i.owner === agent)
+        const own = all.filter((i): i is AssetOf<'memory'> => i.kind === 'memory' && i.owner === agent)
         return (
           <div className="flex flex-col gap-4">
             {own.length === 0 ? (
@@ -180,12 +180,12 @@ export function AgentMemories({ agent }: { agent: AgentId }) {
                   key={m.name}
                   name={m.name}
                   hint="agent 每次运行都会看到它能用的全部记忆，也会自行修改"
-                  onSaved={() => void items.reload()}
+                  onSaved={() => void assets.reload()}
                 />
               ))
             )}
             <p className="text-sm text-muted">
-              它还能用全局记忆与角色分给它的共享记忆：见 <Link to="/items?kind=memory" className="text-accent">AI 资产 · 记忆</Link>。
+              它还能用全局记忆与角色分给它的共享记忆：见 <Link to="/ai-assets?kind=memory" className="text-accent">AI 资产 · 记忆</Link>。
             </p>
           </div>
         )

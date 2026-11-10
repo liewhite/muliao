@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { asAgentId, type CatalogItem } from './api'
-import { filterItems, ruleCandidates, splitRule } from './rules'
+import { asAgentId, type CatalogAsset } from './api'
+import { filterAssets, ruleCandidates, splitRule } from './rules'
 
 const a = asAgentId('agent-a')
-const common = (name: string, owner: CatalogItem['owner']) => ({ name, owner, description: '', roles: [], shared: false })
+const common = (name: string, owner: CatalogAsset['owner']) => ({ name, owner, description: '', roles: [], shared: false })
 const AT = '2026-10-27T00:00:00Z'
-const ITEMS: CatalogItem[] = [
+const ASSETS: CatalogAsset[] = [
   { kind: 'tool', access: 'write', admin: false, updated_at: null, ...common('run_shell', null) },
   { kind: 'skill', updated_at: AT, path: '/a/platform/skills/relay-host', ...common('relay-host', null) },
   { kind: 'skill', updated_at: AT, path: '/a/agent-a/skills/mine', ...common('mine', a) },
@@ -23,7 +23,7 @@ describe('splitRule', () => {
 
 describe('ruleCandidates', () => {
   it('每种的通配符在前，然后是全部资产（存在库里的还有 use + write）', () => {
-    expect(ruleCandidates(ITEMS)).toEqual([
+    expect(ruleCandidates(ASSETS)).toEqual([
       'use:tool:*',
       'use:skill:*',
       'use:mcp:*',
@@ -38,9 +38,9 @@ describe('ruleCandidates', () => {
   })
 })
 
-describe('filterItems', () => {
+describe('filterAssets', () => {
   it('按种类与 owner 筛选', () => {
-    const names = (owner: Parameters<typeof filterItems>[2]) => filterItems(ITEMS, 'skill', owner).map((i) => i.name)
+    const names = (owner: Parameters<typeof filterAssets>[2]) => filterAssets(ASSETS, 'skill', owner).map((i) => i.name)
     expect(names('all')).toEqual(['relay-host', 'mine'])
     expect(names('platform')).toEqual(['relay-host'])
     expect(names(a)).toEqual(['mine'])

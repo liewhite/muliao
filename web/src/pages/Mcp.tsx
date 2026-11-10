@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { Button, Card, Chip, toast } from '@heroui/react'
 import { Plug, Trash2 } from 'lucide-react'
-import { api, type AgentId, type ItemOf, type McpInput } from '../api'
-import { ItemAccess, OwnerSelect } from './itemParts'
+import { api, type AgentId, type AssetOf, type McpInput } from '../api'
+import { AssetAccess, OwnerSelect } from './assetParts'
 import { CollapsibleForm, ToggleSwitch, ActionButton,
   EmptyHint,
   ErrorAlert,
@@ -121,7 +121,7 @@ function McpForm({ onCreated }: { onCreated: () => void }) {
 }
 
 /** 连接地址与环境变量 / 请求头 */
-function McpTarget({ server }: { server: ItemOf<'mcp'> }) {
+function McpTarget({ server }: { server: AssetOf<'mcp'> }) {
   const pairs = { ...server.env, ...server.headers }
   return (
     <>
@@ -139,7 +139,7 @@ function McpTarget({ server }: { server: ItemOf<'mcp'> }) {
   )
 }
 
-function McpItem({ server, onChange }: { server: ItemOf<'mcp'>; onChange: () => void }) {
+function McpItem({ server, onChange }: { server: AssetOf<'mcp'>; onChange: () => void }) {
   const confirm = useConfirm()
   const [tools, setTools] = useState<string[] | null>(null)
   const action = useAction()
@@ -160,7 +160,7 @@ function McpItem({ server, onChange }: { server: ItemOf<'mcp'>; onChange: () => 
             </Chip>
           </div>
           <div className="mt-1.5">
-            <ItemAccess item={server} onTransferred={onChange} />
+            <AssetAccess asset={server} onTransferred={onChange} />
           </div>
         </div>
         <ToggleSwitch
@@ -194,16 +194,16 @@ function McpItem({ server, onChange }: { server: ItemOf<'mcp'>; onChange: () => 
   )
 }
 
-/** MCP server 的资产页：items 是资产池里（已筛选的）MCP server，带各自的配置与启停 */
-export function McpTab({ items, onChange }: { items: ItemOf<'mcp'>[]; onChange: () => void }) {
+/** MCP server 的资产页：assets 是资产池里（已筛选的）MCP server，带各自的配置与启停 */
+export function McpTab({ assets, onChange }: { assets: AssetOf<'mcp'>[]; onChange: () => void }) {
   return (
     <div className="flex flex-col gap-3">
       <McpForm onCreated={onChange} />
-      {items.length === 0 ? (
+      {assets.length === 0 ? (
         <EmptyHint>没有 MCP server</EmptyHint>
       ) : (
         <div className="flex flex-col gap-3">
-          {items.map((server) => (
+          {assets.map((server) => (
             <McpItem key={`${server.name}-${server.enabled}`} server={server} onChange={onChange} />
           ))}
         </div>

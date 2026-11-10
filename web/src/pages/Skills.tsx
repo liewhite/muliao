@@ -2,9 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import { Button, Card, toast } from '@heroui/react'
 import { Download, Plus, Trash2, Upload } from 'lucide-react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { api, ApiError, asAgentId, skillFileUrl, type AgentId, type ItemOf, type Schemas, type Skill } from '../api'
+import { api, ApiError, asAgentId, skillFileUrl, type AgentId, type AssetOf, type Schemas, type Skill } from '../api'
 import { FileBrowser } from './FileBrowser'
-import { ItemAccess, OwnerSelect } from './itemParts'
+import { AssetAccess, OwnerSelect } from './assetParts'
 import { ActionButton,
   CollapsibleForm,
   EmptyHint,
@@ -21,14 +21,14 @@ import { ActionButton,
   useLoad,
 } from '../ui'
 
-const SKILLS = '/items?kind=skill'
+const SKILLS = '/ai-assets?kind=skill'
 
 function editorPath(name?: string): string {
-  return name ? `/items/skill?${new URLSearchParams({ name })}` : '/items/skill'
+  return name ? `/ai-assets/skill?${new URLSearchParams({ name })}` : '/ai-assets/skill'
 }
 
-/** skill 的资产页：items 是资产池里（已筛选的）skill，点进编辑 */
-export function SkillTab({ items, onChange }: { items: ItemOf<'skill'>[]; onChange: () => void }) {
+/** skill 的资产页：assets 是资产池里（已筛选的）skill，点进编辑 */
+export function SkillTab({ assets, onChange }: { assets: AssetOf<'skill'>[]; onChange: () => void }) {
   const [owner, setOwner] = useState<AgentId | null>(null)
   return (
     <div className="flex flex-col gap-3">
@@ -42,11 +42,11 @@ export function SkillTab({ items, onChange }: { items: ItemOf<'skill'>[]; onChan
         <OwnerSelect value={owner} onChange={setOwner} />
         <ImportSkill owner={owner} onImported={onChange} />
       </CollapsibleForm>
-      {items.length === 0 ? (
+      {assets.length === 0 ? (
         <EmptyHint>没有 skill</EmptyHint>
       ) : (
         <div className="flex flex-col gap-2">
-          {items.map((s) => (
+          {assets.map((s) => (
             <Card key={s.name}>
               <Card.Header>
                 <Link to={editorPath(s.name)} className="hover:underline">
@@ -55,7 +55,7 @@ export function SkillTab({ items, onChange }: { items: ItemOf<'skill'>[]; onChan
                 <Card.Description>{s.description}</Card.Description>
               </Card.Header>
               <Card.Content>
-                <ItemAccess item={s} onTransferred={onChange} />
+                <AssetAccess asset={s} onTransferred={onChange} />
               </Card.Content>
             </Card>
           ))}
@@ -118,19 +118,25 @@ function ImportSkill({ owner, onImported }: { owner: AgentId | null; onImported:
           <ErrorAlert error={action.error} />
         </div>
       )}
-      {result && result.skipped.length > 0 && (
-        <div className="w-full text-sm text-muted">
-          <div>以下文件没有导入：</div>
-          <ul className="list-disc pl-5">
-            {result.skipped.map((s) => (
-              <li key={s.path}>
-                <span className="font-mono">{s.path}</span>：{s.reason}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+      {result && <SkippedFiles what="导入" skipped={result.skipped} />}
     </>
+  )
+}
+
+/** 导入、导出时没收进来的文件与原因（二进制、不是 UTF-8 文本……）；没有时不显示 */
+function SkippedFiles({ what, skipped }: { what: string; skipped: Schemas['SkippedOut'][] }) {
+  if (skipped.length === 0) return null
+  return (
+    <div className="w-full text-sm text-muted">
+      <div>以下文件没有{what}：</div>
+      <ul className="list-disc pl-5">
+        {skipped.map((s) => (
+          <li key={s.path}>
+            <span className="font-mono">{s.path}</span>：{s.reason}
+          </li>
+        ))}
+      </ul>
+    </div>
   )
 }
 
@@ -144,6 +150,8 @@ export function SkillEditor() {
   const [skill, setSkill] = useState<Skill>({ owner: null, name: existing ?? '', description: '', body: '' })
   const loaded = useLoad(() => (existing ? api.skill(existing) : Promise.resolve(null)), [existing])
   const action = useAction()
+  // 上一次导出没打进包的文件，带着是哪个 skill 的：切到别的 skill 就不显示
+  const [exportSkipped, setExportSkipped] = useState<{ name: string; skipped: Schemas['SkippedOut'][] } | null>(null)
   useEffect(() => {
     if (loaded.data) setSkill(loaded.data)
   }, [loaded.data])
@@ -160,8 +168,11 @@ export function SkillEditor() {
 
   async function exportPackage() {
     if (!existing) return
+    setExportSkipped(null)
     await action.run(async () => {
-      const url = URL.createObjectURL(await api.exportSkill(existing))
+      const exported = await api.exportSkill(existing)
+      setExportSkipped({ name: existing, skipped: exported.skipped })
+      const url = URL.createObjectURL(exported.blob)
       const link = document.createElement('a')
       link.href = url
       link.download = `${existing}.skill`
@@ -230,6 +241,7 @@ export function SkillEditor() {
                     </Button>
                   )}
                 </div>
+                {exportSkipped?.name === existing && <SkippedFiles what="打进导出的包" skipped={exportSkipped.skipped} />}
               </Card.Content>
             </Card>
             {existing && (

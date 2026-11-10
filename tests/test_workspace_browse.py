@@ -100,10 +100,10 @@ async def test_requires_login(container, make_agent, client):
 
 
 async def test_skill_directory_is_browsed_the_same_way(container, client, tmp_path):
-    """skill 页的文件浏览（GET /api/items/skill/{name}/files 与 /file）：同一套列目录、读文件与越界规则。"""
+    """skill 页的文件浏览（GET /api/assets/skill/{name}/files 与 /file）：同一套列目录、读文件与越界规则。"""
     await login(client)
     resp = await client.put(
-        "/api/items/skill/tool", json={"owner": None, "description": "d", "body": "steps"}
+        "/api/assets/skill/tool", json={"owner": None, "description": "d", "body": "steps"}
     )
     assert resp.status_code == 200
     root = await container.skills.directory("tool")
@@ -113,19 +113,19 @@ async def test_skill_directory_is_browsed_the_same_way(container, client, tmp_pa
     outside.write_text("x")
     os.symlink(outside, root / "link.txt")
 
-    top = (await client.get("/api/items/skill/tool/files")).json()
+    top = (await client.get("/api/assets/skill/tool/files")).json()
     assert [(e["name"], e["is_dir"]) for e in top] == [("scripts", True), ("SKILL.md", False)]
-    inner = (await client.get("/api/items/skill/tool/files", params={"path": "scripts"})).json()
+    inner = (await client.get("/api/assets/skill/tool/files", params={"path": "scripts"})).json()
     assert [e["name"] for e in inner] == ["run.py"]
 
-    script = await client.get("/api/items/skill/tool/file", params={"path": "scripts/run.py"})
+    script = await client.get("/api/assets/skill/tool/file", params={"path": "scripts/run.py"})
     assert script.text == "print(1)\n"
     assert script.headers["content-disposition"].startswith("attachment")
     assert script.headers["content-security-policy"].startswith("sandbox")
 
     for path in ("link.txt", "../", "/etc"):
-        assert (await client.get("/api/items/skill/tool/file", params={"path": path})).status_code == 422, (
+        assert (await client.get("/api/assets/skill/tool/file", params={"path": path})).status_code == 422, (
             path
         )
-    assert (await client.get("/api/items/skill/tool/file", params={"path": "nope"})).status_code == 404
-    assert (await client.get("/api/items/skill/nope/files")).status_code == 404
+    assert (await client.get("/api/assets/skill/tool/file", params={"path": "nope"})).status_code == 404
+    assert (await client.get("/api/assets/skill/nope/files")).status_code == 404

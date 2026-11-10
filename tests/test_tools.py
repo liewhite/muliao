@@ -88,7 +88,7 @@ async def test_get_agent_shows_roles_resulting_tools_and_every_permission(contai
     # 最终工具：base 的减去 deny；base 没有管理类工具
     assert {"issue_create", "edit_file"} <= set(detail["tools"])
     assert not {"issue_update", "create_agent"} & set(detail["tools"])
-    assert detail["items"] == ["memory:global", "memory:narrow", "skill:notes"]
+    assert detail["assets"] == ["memory:global", "memory:narrow", "skill:notes"]
     # 参照：全部角色（含固定的规则）与全部内置工具（没配置 [web] 时不列 web 工具）
     admin = next(r for r in detail["available_roles"] if r["name"] == "admin")
     assert admin["fixed_allow"] == ["use:tool:*", "write:*"]

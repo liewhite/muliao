@@ -142,10 +142,10 @@ async def test_the_api_sets_and_shows_allow_shell(client, container):
     from tests.conftest import login
 
     await login(client)
-    resp = await client.put("/api/items/secret/K", json={"value": "v", "allow_shell": False})
+    resp = await client.put("/api/assets/secret/K", json={"value": "v", "allow_shell": False})
     assert resp.status_code == 204
-    assert (await client.get("/api/items/secret/K")).json()["allow_shell"] is False
-    [item] = [i for i in (await client.get("/api/items")).json() if i["kind"] == "secret"]
+    assert (await client.get("/api/assets/secret/K")).json()["allow_shell"] is False
+    [item] = [i for i in (await client.get("/api/assets")).json() if i["kind"] == "secret"]
     assert item["allow_shell"] is False
-    resp = await client.put("/api/items/secret/K", json={"value": "v2"})
-    assert (await client.get("/api/items/secret/K")).json()["allow_shell"] is False
+    resp = await client.put("/api/assets/secret/K", json={"value": "v2"})
+    assert (await client.get("/api/assets/secret/K")).json()["allow_shell"] is False

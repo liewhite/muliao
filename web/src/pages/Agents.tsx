@@ -372,7 +372,7 @@ export function AgentDetail() {
                   </div>
                   <div className="text-muted">
                     创建于 {formatTime(a.created_at)} ·{' '}
-                    <Link to={`/items?owner=${a.id}`} className="text-accent">
+                    <Link to={`/ai-assets?owner=${a.id}`} className="text-accent">
                       它名下的 AI 资产
                     </Link>
                   </div>

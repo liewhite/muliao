@@ -55,10 +55,10 @@ async def test_an_imported_skill_exports_the_same_files_and_keeps_extra_frontmat
         alpha,
         [],
     )
-    assert (await skills.files("digest"))["SKILL.md"].content == SKILL_MD
+    assert (await skills.files("digest")).files["SKILL.md"].content == SKILL_MD
     exported = await skills.export("digest")
-    assert _members(exported) == _members(package)
-    with zipfile.ZipFile(io.BytesIO(exported)) as archive:
+    assert _members(exported.package) == _members(package) and exported.skipped == []
+    with zipfile.ZipFile(io.BytesIO(exported.package)) as archive:
         modes = {i.filename: (i.external_attr >> 16) & 0o777 for i in archive.infolist()}
     assert (modes["digest/run.sh"], modes["digest/SKILL.md"]) == (0o755, 0o644)
 
@@ -77,7 +77,7 @@ async def test_importing_over_an_existing_skill_needs_replace_and_then_swaps_its
 
     await skills.import_package(package, actor="user", owner=beta, replace=True)
 
-    assert set(await skills.files("digest")) == {"SKILL.md", "scripts/fetch.py"}
+    assert set((await skills.files("digest")).files) == {"SKILL.md", "scripts/fetch.py"}
     assert not (directory / "old.py").exists()
     # 用户覆盖时 owner 不变
     assert (await skills.read("digest")).meta == SkillMeta(
@@ -115,7 +115,7 @@ async def test_files_that_would_not_be_kept_are_skipped_and_listed(container, ma
         "node_modules/pkg/index.js",
         "tool",
     ]
-    assert set(await container.skills.files("digest")) == {"SKILL.md", "notes.md"}
+    assert set((await container.skills.files("digest")).files) == {"SKILL.md", "notes.md"}
 
 
 async def test_importing_for_an_unavailable_owner_is_refused(container, make_agent):

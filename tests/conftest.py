@@ -143,5 +143,5 @@ async def share(container: Assembly, *rules: str) -> None:
 
 
 async def owned(container: Assembly, kind: str, owner: str | None) -> list[str]:
-    """owner 名下（None 为平台的）这一种条目的名字，按名称（条目池 ItemCatalog.catalog）。"""
+    """owner 名下（None 为平台的）这一种资产的名字，按名称（资产池 AssetCatalog.catalog）。"""
     return [e.name for e in await container.catalog.catalog() if e.kind == kind and e.owner == owner]

@@ -1,10 +1,11 @@
-"""AI 资源（内置工具、skill、MCP server、secret、记忆）的接口，按统一模型：`/items` 列出全部资源（每种带自己的详情），
-`/items/{kind}/{name}` 读、写、删一个资源，`/owner` 对存成文件的资源通用（挪到另一个 owner 的目录），各种类专有的操作
+"""AI 资源（内置工具、skill、MCP server、secret、记忆）的接口，按统一模型：`/assets` 列出全部资源（每种带自己的详情），
+`/assets/{kind}/{name}` 读、写、删一个资源，`/owner` 对存成文件的资源通用（挪到另一个 owner 的目录），各种类专有的操作
 在自己的子路径（MCP 的启停与测试连接、skill 包的导入导出）。资源都是资源目录里的文件（agents.assets），这里读写的就是它们。
 
 写入的人（actor）都是 user；新建的资源归请求给出的 owner（缺省为平台），已有的 owner 不变。
 """
 
+import json
 from datetime import datetime
 from typing import Annotated, Literal
 
@@ -16,7 +17,7 @@ from pydantic import BaseModel, Field
 from muliao.agents.api import (
     MAX_PACKAGE_BYTES,
     USER,
-    CatalogEntry,
+    CatalogAsset,
     Kind,
     McpServer,
     McpTransport,
@@ -32,24 +33,24 @@ from muliao.workspace.api import file_in, list_dir
 
 router = APIRouter()
 
-# ---- 条目池 ----
+# ---- 资产池 ----
 
 
-class _ItemBase(BaseModel):
+class _CatalogBase(BaseModel):
     """资产池里的一项，在规则里写作 `<action>:<kind>:<name>`。"""
 
     name: str
-    # agent 的 id；null 归平台（内置工具、界面上建的、迁移前的公共条目）
+    # agent 的 id；null 归平台（内置工具、界面上建的、迁移前的公共资产）
     owner: str | None
     description: str
     # 收录它的角色（allow 放行、deny 没拦，含内置的 base、admin）
     roles: list[str]
     # 分发出去了：base 收录它，或某个不是 owner 的 agent 的规则（角色或自己的 allow）放行它；否则只有 owner 能用
-    # （归平台的就谁也用不了）。与删除 agent 时把条目转给平台同一个定义
+    # （归平台的就谁也用不了）。与删除 agent 时把资产转给平台同一个定义
     shared: bool
 
 
-class ToolItemOut(_ItemBase):
+class CatalogToolOut(_CatalogBase):
     """内置工具：归平台、代码里定义，不能改。"""
 
     kind: Literal["tool"]
@@ -60,14 +61,14 @@ class ToolItemOut(_ItemBase):
     admin: bool
 
 
-class _StoredItemBase(_ItemBase):
+class _StoredCatalogBase(_CatalogBase):
     # 文件的修改时间
     updated_at: datetime
     # 文件（skill 是目录）的位置
     path: str
 
 
-class SkillItemOut(_StoredItemBase):
+class CatalogSkillOut(_StoredCatalogBase):
     kind: Literal["skill"]
 
 
@@ -94,11 +95,11 @@ class McpConfigOut(BaseModel):
         }
 
 
-class McpItemOut(_StoredItemBase, McpConfigOut):
+class CatalogMcpOut(_StoredCatalogBase, McpConfigOut):
     kind: Literal["mcp"]
 
 
-class SecretItemOut(_StoredItemBase):
+class CatalogSecretOut(_StoredCatalogBase):
     """值不返回。"""
 
     kind: Literal["secret"]
@@ -106,18 +107,21 @@ class SecretItemOut(_StoredItemBase):
     allow_shell: bool
 
 
-class MemoryItemOut(_StoredItemBase):
-    """正文不在列表里（GET /items/memory/{name} 读）。"""
+class CatalogMemoryOut(_StoredCatalogBase):
+    """正文不在列表里（GET /assets/memory/{name} 读）。"""
 
     kind: Literal["memory"]
 
 
-ItemOut = Annotated[
-    ToolItemOut | SkillItemOut | McpItemOut | SecretItemOut | MemoryItemOut, Field(discriminator="kind")
+CatalogAssetOut = Annotated[
+    CatalogToolOut | CatalogSkillOut | CatalogMcpOut | CatalogSecretOut | CatalogMemoryOut,
+    Field(discriminator="kind"),
 ]
 
 
-def _item_out(e: CatalogEntry) -> ToolItemOut | SkillItemOut | McpItemOut | SecretItemOut | MemoryItemOut:
+def _asset_out(
+    e: CatalogAsset,
+) -> CatalogToolOut | CatalogSkillOut | CatalogMcpOut | CatalogSecretOut | CatalogMemoryOut:
     common = {
         "name": e.name,
         "owner": e.owner,
@@ -131,24 +135,24 @@ def _item_out(e: CatalogEntry) -> ToolItemOut | SkillItemOut | McpItemOut | Secr
         case Kind.TOOL:
             tool = e.tool
             assert tool is not None
-            return ToolItemOut(kind="tool", access=tool.access.value, admin=tool.admin, **common)
+            return CatalogToolOut(kind="tool", access=tool.access.value, admin=tool.admin, **common)
         case Kind.SKILL:
-            return SkillItemOut(kind="skill", **stored)
+            return CatalogSkillOut(kind="skill", **stored)
         case Kind.MCP:
             assert e.mcp is not None
-            return McpItemOut(kind="mcp", **stored, **McpConfigOut.fields_of(e.mcp))
+            return CatalogMcpOut(kind="mcp", **stored, **McpConfigOut.fields_of(e.mcp))
         case Kind.SECRET:
             assert e.allow_shell is not None
-            return SecretItemOut(kind="secret", allow_shell=e.allow_shell, **stored)
+            return CatalogSecretOut(kind="secret", allow_shell=e.allow_shell, **stored)
         case Kind.MEMORY:
-            return MemoryItemOut(kind="memory", **stored)
+            return CatalogMemoryOut(kind="memory", **stored)
 
 
-@router.get("/items")
-async def list_items(c: C) -> list[ItemOut]:
+@router.get("/assets")
+async def list_assets(c: C) -> list[CatalogAssetOut]:
     """全部资源：内置工具（按登记顺序，仅当前配置下注册的）在前，存成文件的按种类、名称；每种带自己的
     详情（工具的读写与管理类、MCP 的配置与启停）。"""
-    return [_item_out(e) for e in await c.catalog.catalog()]
+    return [_asset_out(e) for e in await c.catalog.catalog()]
 
 
 # ---- 存成文件的资源通用：owner ----
@@ -159,10 +163,10 @@ class OwnerIn(BaseModel):
     owner: str | None
 
 
-@router.put("/items/{kind}/{name}/owner", status_code=204)
-async def transfer_item(c: C, kind: StoredKind, name: str, body: OwnerIn) -> None:
+@router.put("/assets/{kind}/{name}/owner", status_code=204)
+async def transfer_asset(c: C, kind: StoredKind, name: str, body: OwnerIn) -> None:
     """挪到另一个 owner 的目录下；内容与收录它的角色不变。内置工具归平台，不在这里（kind 不接受 tool）。"""
-    await c.catalog.transfer_item(kind, name, body.owner, USER)
+    await c.catalog.transfer(kind, name, body.owner, USER)
 
 
 # ---- 记忆 ----
@@ -195,19 +199,19 @@ def _memory_out(c: C, m: MemoryInfo) -> MemoryOut:
     )
 
 
-@router.get("/items/memory/{name}")
+@router.get("/assets/memory/{name}")
 async def get_memory(c: C, name: str) -> MemoryOut:
     return _memory_out(c, await c.memory.read(name))
 
 
-@router.put("/items/memory/{name}")
+@router.put("/assets/memory/{name}")
 async def put_memory(c: C, name: str, body: MemoryIn) -> MemoryOut:
     """新建的归 owner（归平台的名字要是 slug；agent 的私有记忆名字就是 agent 名）；已有的整体改写正文，owner 不变。谁能用由
     角色收录它（`use:memory:<名>`）。"""
     return _memory_out(c, await c.memory.put(name, body.content, actor=USER, owner=body.owner))
 
 
-@router.delete("/items/memory/{name}", status_code=204)
+@router.delete("/assets/memory/{name}", status_code=204)
 async def delete_memory(c: C, name: str) -> None:
     """全局记忆不能删（422）。"""
     await c.memory.delete(name, USER)
@@ -237,33 +241,33 @@ class SkillIn(BaseModel):
     body: str
 
 
-@router.get("/items/skill/{name}")
+@router.get("/assets/skill/{name}")
 async def get_skill(c: C, name: str) -> SkillDetail:
     skill = await c.skills.read(name)
     meta = skill.meta
     return SkillDetail(name=meta.name, description=meta.description, owner=meta.owner, body=skill.body)
 
 
-@router.put("/items/skill/{name}")
+@router.put("/assets/skill/{name}")
 async def put_skill(c: C, name: str, body: SkillIn) -> SkillOut:
     """新建的归 owner；已有的整体改写正文与描述（附件不变），owner 不变。"""
     meta = await c.skills.write(name, body.description, body.body, actor=USER, owner=body.owner)
     return SkillOut.of(meta)
 
 
-@router.delete("/items/skill/{name}", status_code=204)
+@router.delete("/assets/skill/{name}", status_code=204)
 async def delete_skill(c: C, name: str) -> None:
     await c.skills.delete(name, USER)
 
 
-@router.get("/items/skill/{name}/files")
+@router.get("/assets/skill/{name}/files")
 async def list_skill_files(c: C, name: str, path: str = "") -> list[EntryOut]:
     """skill 目录里 path（相对 skill 目录，空为根）这一层，同工作目录浏览：目录在前，各自按名称排序。"""
     root = await c.skills.directory(name)
     return [EntryOut.of(e) for e in await anyio.to_thread.run_sync(list_dir, root, path)]
 
 
-@router.get("/items/skill/{name}/file")
+@router.get("/assets/skill/{name}/file")
 async def read_skill_file(c: C, name: str, path: str) -> FileResponse:
     """skill 目录里一个文件的内容（同工作目录浏览：图片 inline，其余作为附件）。"""
     root = await c.skills.directory(name)
@@ -271,27 +275,45 @@ async def read_skill_file(c: C, name: str, path: str) -> FileResponse:
 
 
 SKILL_PACKAGE_TYPE = "application/zip"
-
-
-@router.get(
-    "/items/skill/{name}/package",
-    response_class=Response,
-    responses={200: {"content": {SKILL_PACKAGE_TYPE: {}}, "description": "<name>.skill"}},
-)
-async def export_skill(c: C, name: str) -> Response:
-    """下载标准 .skill 文件（zip：`<name>/SKILL.md` 与附件）。"""
-    package = await c.skills.export(name)
-    return Response(
-        package,
-        media_type=SKILL_PACKAGE_TYPE,
-        headers={"Content-Disposition": f'attachment; filename="{name}.skill"'},
-    )
+# 导出时没打进包的文件：JSON 数组（元素同 SkippedOut，非 ASCII 转义），没有时为 []
+SKIPPED_HEADER = "X-Skipped-Files"
 
 
 class SkippedOut(BaseModel):
     # 包里的路径（相对 skill 目录；macOS 元数据是包里的完整路径）
     path: str
     reason: str
+
+
+@router.get(
+    "/assets/skill/{name}/package",
+    response_class=Response,
+    responses={
+        200: {
+            "content": {SKILL_PACKAGE_TYPE: {}},
+            "description": "<name>.skill",
+            "headers": {
+                SKIPPED_HEADER: {
+                    "description": "没打进包的文件（二进制等）：JSON 数组，每项 {path, reason}",
+                    "schema": {"type": "string"},
+                }
+            },
+        }
+    },
+)
+async def export_skill(c: C, name: str) -> Response:
+    """下载标准 .skill 文件（zip：`<name>/SKILL.md` 与附件）；没打进包的文件同导入一样逐个列出（响应头 X-Skipped-Files）。"""
+    exported = await c.skills.export(name)
+    skipped = [SkippedOut(path=s.path, reason=s.reason).model_dump() for s in exported.skipped]
+    return Response(
+        exported.package,
+        media_type=SKILL_PACKAGE_TYPE,
+        headers={
+            "Content-Disposition": f'attachment; filename="{name}.skill"',
+            # 头只能是 latin-1：json.dumps 默认把非 ASCII 字符转义
+            SKIPPED_HEADER: json.dumps(skipped),
+        },
+    )
 
 
 class SkillImportOut(BaseModel):
@@ -307,7 +329,7 @@ class SkillImportOut(BaseModel):
         )
 
 
-@router.post("/items/skill")
+@router.post("/assets/skill")
 async def import_skill(
     c: C, request: Request, owner: str | None = None, replace: bool = False
 ) -> SkillImportOut:
@@ -348,12 +370,12 @@ class EnabledIn(BaseModel):
     enabled: bool
 
 
-@router.get("/items/mcp/{name}")
+@router.get("/assets/mcp/{name}")
 async def get_mcp(c: C, name: str) -> McpOut:
     return McpOut.of(await c.mcp.get(name))
 
 
-@router.put("/items/mcp/{name}", status_code=201)
+@router.put("/assets/mcp/{name}", status_code=201)
 async def add_mcp(c: C, name: str, body: McpIn) -> McpOut:
     """新增（启用的）server；同名的已存在 409（名字全局唯一，配置不能原地改写：删了再建）。"""
     config = mcp_config(
@@ -368,17 +390,17 @@ async def add_mcp(c: C, name: str, body: McpIn) -> McpOut:
     return McpOut.of(server, tools)
 
 
-@router.delete("/items/mcp/{name}", status_code=204)
+@router.delete("/assets/mcp/{name}", status_code=204)
 async def delete_mcp(c: C, name: str) -> None:
     await c.mcp.remove(name, USER)
 
 
-@router.put("/items/mcp/{name}/enabled")
+@router.put("/assets/mcp/{name}/enabled")
 async def set_mcp_enabled(c: C, name: str, body: EnabledIn) -> McpOut:
     return McpOut.of(await c.mcp.set_enabled(name, body.enabled, USER))
 
 
-@router.post("/items/mcp/{name}/tools")
+@router.post("/assets/mcp/{name}/tools")
 async def probe_mcp(c: C, name: str) -> list[str]:
     """连接一次，列出它的工具（测试连接）。"""
     return await c.mcp.probe(await c.mcp.get(name), USER)
@@ -404,7 +426,7 @@ class SecretIn(BaseModel):
     allow_shell: bool | None = None
 
 
-@router.get("/items/secret/{name}")
+@router.get("/assets/secret/{name}")
 async def get_secret(c: C, name: str) -> SecretOut:
     """不含值。"""
     s = await c.vault.get(name)
@@ -417,7 +439,7 @@ async def get_secret(c: C, name: str) -> SecretOut:
     )
 
 
-@router.put("/items/secret/{name}", status_code=204)
+@router.put("/assets/secret/{name}", status_code=204)
 async def set_secret(c: C, name: str, body: SecretIn) -> None:
     """新建的归 owner（缺省为平台）；已有的改值与描述，owner 不变。"""
     await c.vault.set(
@@ -425,6 +447,6 @@ async def set_secret(c: C, name: str, body: SecretIn) -> None:
     )
 
 
-@router.delete("/items/secret/{name}", status_code=204)
+@router.delete("/assets/secret/{name}", status_code=204)
 async def delete_secret(c: C, name: str) -> None:
     await c.vault.delete(name, USER)

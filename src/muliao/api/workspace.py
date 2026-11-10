@@ -1,5 +1,5 @@
 """agent 工作目录的只读浏览（工作区领域 WorkspaceFiles）：agent 页「文件」列出一层目录、读一个文件（skill 页的文件浏览
-在 api/items.py，响应形状同这里）；设置页的 skill 脚本
+在 api/assets.py，响应形状同这里）；设置页的 skill 脚本
 「始终允许」（ScriptGrants）：列出与撤销。
 
 文件内容是 agent 写的，与界面同源、带着登录 cookie，所以和对话里的文件下载（api/files.py）一样按不可信处理

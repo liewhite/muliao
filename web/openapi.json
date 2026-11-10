@@ -125,7 +125,7 @@
     "/api/agent-preview": {
       "post": {
         "summary": "Preview Agent",
-        "description": "agent 配置（还没保存的也行）最终能用的：自己的条目 + base + 角色 + allow / deny 放行的，与运行时同一套计算，\n与保存时同样校验（不合法 422）。",
+        "description": "agent 配置（还没保存的也行）最终能用的：自己的资产 + base + 角色 + allow / deny 放行的，与运行时同一套计算，\n与保存时同样校验（不合法 422）。",
         "operationId": "preview_agent_api_agent_preview_post",
         "requestBody": {
           "content": {
@@ -1482,11 +1482,11 @@
         }
       }
     },
-    "/api/items": {
+    "/api/assets": {
       "get": {
-        "summary": "List Items",
+        "summary": "List Assets",
         "description": "全部资源：内置工具（按登记顺序，仅当前配置下注册的）在前，存成文件的按种类、名称；每种带自己的\n详情（工具的读写与管理类、MCP 的配置与启停）。",
-        "operationId": "list_items_api_items_get",
+        "operationId": "list_assets_api_assets_get",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -1496,34 +1496,34 @@
                   "items": {
                     "oneOf": [
                       {
-                        "$ref": "#/components/schemas/ToolItemOut"
+                        "$ref": "#/components/schemas/CatalogToolOut"
                       },
                       {
-                        "$ref": "#/components/schemas/SkillItemOut"
+                        "$ref": "#/components/schemas/CatalogSkillOut"
                       },
                       {
-                        "$ref": "#/components/schemas/McpItemOut"
+                        "$ref": "#/components/schemas/CatalogMcpOut"
                       },
                       {
-                        "$ref": "#/components/schemas/SecretItemOut"
+                        "$ref": "#/components/schemas/CatalogSecretOut"
                       },
                       {
-                        "$ref": "#/components/schemas/MemoryItemOut"
+                        "$ref": "#/components/schemas/CatalogMemoryOut"
                       }
                     ],
                     "discriminator": {
                       "propertyName": "kind",
                       "mapping": {
-                        "tool": "#/components/schemas/ToolItemOut",
-                        "skill": "#/components/schemas/SkillItemOut",
-                        "mcp": "#/components/schemas/McpItemOut",
-                        "secret": "#/components/schemas/SecretItemOut",
-                        "memory": "#/components/schemas/MemoryItemOut"
+                        "tool": "#/components/schemas/CatalogToolOut",
+                        "skill": "#/components/schemas/CatalogSkillOut",
+                        "mcp": "#/components/schemas/CatalogMcpOut",
+                        "secret": "#/components/schemas/CatalogSecretOut",
+                        "memory": "#/components/schemas/CatalogMemoryOut"
                       }
                     }
                   },
                   "type": "array",
-                  "title": "Response List Items Api Items Get"
+                  "title": "Response List Assets Api Assets Get"
                 }
               }
             }
@@ -1531,11 +1531,11 @@
         }
       }
     },
-    "/api/items/{kind}/{name}/owner": {
+    "/api/assets/{kind}/{name}/owner": {
       "put": {
-        "summary": "Transfer Item",
+        "summary": "Transfer Asset",
         "description": "挪到另一个 owner 的目录下；内容与收录它的角色不变。内置工具归平台，不在这里（kind 不接受 tool）。",
-        "operationId": "transfer_item_api_items__kind___name__owner_put",
+        "operationId": "transfer_asset_api_assets__kind___name__owner_put",
         "parameters": [
           {
             "name": "kind",
@@ -1582,10 +1582,10 @@
         }
       }
     },
-    "/api/items/memory/{name}": {
+    "/api/assets/memory/{name}": {
       "get": {
         "summary": "Get Memory",
-        "operationId": "get_memory_api_items_memory__name__get",
+        "operationId": "get_memory_api_assets_memory__name__get",
         "parameters": [
           {
             "name": "name",
@@ -1623,7 +1623,7 @@
       "put": {
         "summary": "Put Memory",
         "description": "新建的归 owner（归平台的名字要是 slug；agent 的私有记忆名字就是 agent 名）；已有的整体改写正文，owner 不变。谁能用由\n角色收录它（`use:memory:<名>`）。",
-        "operationId": "put_memory_api_items_memory__name__put",
+        "operationId": "put_memory_api_assets_memory__name__put",
         "parameters": [
           {
             "name": "name",
@@ -1671,7 +1671,7 @@
       "delete": {
         "summary": "Delete Memory",
         "description": "全局记忆不能删（422）。",
-        "operationId": "delete_memory_api_items_memory__name__delete",
+        "operationId": "delete_memory_api_assets_memory__name__delete",
         "parameters": [
           {
             "name": "name",
@@ -1700,10 +1700,10 @@
         }
       }
     },
-    "/api/items/skill/{name}": {
+    "/api/assets/skill/{name}": {
       "get": {
         "summary": "Get Skill",
-        "operationId": "get_skill_api_items_skill__name__get",
+        "operationId": "get_skill_api_assets_skill__name__get",
         "parameters": [
           {
             "name": "name",
@@ -1741,7 +1741,7 @@
       "put": {
         "summary": "Put Skill",
         "description": "新建的归 owner；已有的整体改写正文与描述（附件不变），owner 不变。",
-        "operationId": "put_skill_api_items_skill__name__put",
+        "operationId": "put_skill_api_assets_skill__name__put",
         "parameters": [
           {
             "name": "name",
@@ -1788,7 +1788,7 @@
       },
       "delete": {
         "summary": "Delete Skill",
-        "operationId": "delete_skill_api_items_skill__name__delete",
+        "operationId": "delete_skill_api_assets_skill__name__delete",
         "parameters": [
           {
             "name": "name",
@@ -1817,11 +1817,11 @@
         }
       }
     },
-    "/api/items/skill/{name}/files": {
+    "/api/assets/skill/{name}/files": {
       "get": {
         "summary": "List Skill Files",
         "description": "skill 目录里 path（相对 skill 目录，空为根）这一层，同工作目录浏览：目录在前，各自按名称排序。",
-        "operationId": "list_skill_files_api_items_skill__name__files_get",
+        "operationId": "list_skill_files_api_assets_skill__name__files_get",
         "parameters": [
           {
             "name": "name",
@@ -1853,7 +1853,7 @@
                   "items": {
                     "$ref": "#/components/schemas/EntryOut"
                   },
-                  "title": "Response List Skill Files Api Items Skill  Name  Files Get"
+                  "title": "Response List Skill Files Api Assets Skill  Name  Files Get"
                 }
               }
             }
@@ -1871,11 +1871,11 @@
         }
       }
     },
-    "/api/items/skill/{name}/file": {
+    "/api/assets/skill/{name}/file": {
       "get": {
         "summary": "Read Skill File",
         "description": "skill 目录里一个文件的内容（同工作目录浏览：图片 inline，其余作为附件）。",
-        "operationId": "read_skill_file_api_items_skill__name__file_get",
+        "operationId": "read_skill_file_api_assets_skill__name__file_get",
         "parameters": [
           {
             "name": "name",
@@ -1918,11 +1918,11 @@
         }
       }
     },
-    "/api/items/skill/{name}/package": {
+    "/api/assets/skill/{name}/package": {
       "get": {
         "summary": "Export Skill",
-        "description": "下载标准 .skill 文件（zip：`<name>/SKILL.md` 与附件）。",
-        "operationId": "export_skill_api_items_skill__name__package_get",
+        "description": "下载标准 .skill 文件（zip：`<name>/SKILL.md` 与附件）；没打进包的文件同导入一样逐个列出（响应头 X-Skipped-Files）。",
+        "operationId": "export_skill_api_assets_skill__name__package_get",
         "parameters": [
           {
             "name": "name",
@@ -1939,6 +1939,14 @@
             "description": "<name>.skill",
             "content": {
               "application/zip": {}
+            },
+            "headers": {
+              "X-Skipped-Files": {
+                "description": "没打进包的文件（二进制等）：JSON 数组，每项 {path, reason}",
+                "schema": {
+                  "type": "string"
+                }
+              }
             }
           },
           "422": {
@@ -1954,11 +1962,11 @@
         }
       }
     },
-    "/api/items/skill": {
+    "/api/assets/skill": {
       "post": {
         "summary": "Import Skill",
         "description": "请求体是一个标准 .skill 文件，导入为 skill（名字取自包；新建的归 owner，缺省为平台），一次提交、改的人 user。同名\nskill 已存在时 409，replace=true 覆盖。包的结构不对（路径越界、符号链接、顶层目录不唯一、名字与目录不一致……）422，\n超限 413。",
-        "operationId": "import_skill_api_items_skill_post",
+        "operationId": "import_skill_api_assets_skill_post",
         "parameters": [
           {
             "name": "owner",
@@ -2011,10 +2019,10 @@
         }
       }
     },
-    "/api/items/mcp/{name}": {
+    "/api/assets/mcp/{name}": {
       "get": {
         "summary": "Get Mcp",
-        "operationId": "get_mcp_api_items_mcp__name__get",
+        "operationId": "get_mcp_api_assets_mcp__name__get",
         "parameters": [
           {
             "name": "name",
@@ -2052,7 +2060,7 @@
       "put": {
         "summary": "Add Mcp",
         "description": "新增（启用的）server；同名的已存在 409（名字全局唯一，配置不能原地改写：删了再建）。",
-        "operationId": "add_mcp_api_items_mcp__name__put",
+        "operationId": "add_mcp_api_assets_mcp__name__put",
         "parameters": [
           {
             "name": "name",
@@ -2099,7 +2107,7 @@
       },
       "delete": {
         "summary": "Delete Mcp",
-        "operationId": "delete_mcp_api_items_mcp__name__delete",
+        "operationId": "delete_mcp_api_assets_mcp__name__delete",
         "parameters": [
           {
             "name": "name",
@@ -2128,10 +2136,10 @@
         }
       }
     },
-    "/api/items/mcp/{name}/enabled": {
+    "/api/assets/mcp/{name}/enabled": {
       "put": {
         "summary": "Set Mcp Enabled",
-        "operationId": "set_mcp_enabled_api_items_mcp__name__enabled_put",
+        "operationId": "set_mcp_enabled_api_assets_mcp__name__enabled_put",
         "parameters": [
           {
             "name": "name",
@@ -2177,11 +2185,11 @@
         }
       }
     },
-    "/api/items/mcp/{name}/tools": {
+    "/api/assets/mcp/{name}/tools": {
       "post": {
         "summary": "Probe Mcp",
         "description": "连接一次，列出它的工具（测试连接）。",
-        "operationId": "probe_mcp_api_items_mcp__name__tools_post",
+        "operationId": "probe_mcp_api_assets_mcp__name__tools_post",
         "parameters": [
           {
             "name": "name",
@@ -2203,7 +2211,7 @@
                   "items": {
                     "type": "string"
                   },
-                  "title": "Response Probe Mcp Api Items Mcp  Name  Tools Post"
+                  "title": "Response Probe Mcp Api Assets Mcp  Name  Tools Post"
                 }
               }
             }
@@ -2221,11 +2229,11 @@
         }
       }
     },
-    "/api/items/secret/{name}": {
+    "/api/assets/secret/{name}": {
       "get": {
         "summary": "Get Secret",
         "description": "不含值。",
-        "operationId": "get_secret_api_items_secret__name__get",
+        "operationId": "get_secret_api_assets_secret__name__get",
         "parameters": [
           {
             "name": "name",
@@ -2263,7 +2271,7 @@
       "put": {
         "summary": "Set Secret",
         "description": "新建的归 owner（缺省为平台）；已有的改值与描述，owner 不变。",
-        "operationId": "set_secret_api_items_secret__name__put",
+        "operationId": "set_secret_api_assets_secret__name__put",
         "parameters": [
           {
             "name": "name",
@@ -2303,7 +2311,7 @@
       },
       "delete": {
         "summary": "Delete Secret",
-        "operationId": "delete_secret_api_items_secret__name__delete",
+        "operationId": "delete_secret_api_assets_secret__name__delete",
         "parameters": [
           {
             "name": "name",
@@ -4406,6 +4414,379 @@
         ],
         "title": "Attachment"
       },
+      "CatalogMcpOut": {
+        "properties": {
+          "transport": {
+            "$ref": "#/components/schemas/McpTransport"
+          },
+          "command": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Command"
+          },
+          "args": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Args"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          },
+          "env": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Env"
+          },
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Headers"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Roles"
+          },
+          "shared": {
+            "type": "boolean",
+            "title": "Shared"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "kind": {
+            "type": "string",
+            "const": "mcp",
+            "title": "Kind"
+          }
+        },
+        "type": "object",
+        "required": [
+          "transport",
+          "command",
+          "args",
+          "url",
+          "env",
+          "headers",
+          "enabled",
+          "name",
+          "owner",
+          "description",
+          "roles",
+          "shared",
+          "updated_at",
+          "path",
+          "kind"
+        ],
+        "title": "CatalogMcpOut"
+      },
+      "CatalogMemoryOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Roles"
+          },
+          "shared": {
+            "type": "boolean",
+            "title": "Shared"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "kind": {
+            "type": "string",
+            "const": "memory",
+            "title": "Kind"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "owner",
+          "description",
+          "roles",
+          "shared",
+          "updated_at",
+          "path",
+          "kind"
+        ],
+        "title": "CatalogMemoryOut",
+        "description": "正文不在列表里（GET /assets/memory/{name} 读）。"
+      },
+      "CatalogSecretOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Roles"
+          },
+          "shared": {
+            "type": "boolean",
+            "title": "Shared"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "kind": {
+            "type": "string",
+            "const": "secret",
+            "title": "Kind"
+          },
+          "allow_shell": {
+            "type": "boolean",
+            "title": "Allow Shell"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "owner",
+          "description",
+          "roles",
+          "shared",
+          "updated_at",
+          "path",
+          "kind",
+          "allow_shell"
+        ],
+        "title": "CatalogSecretOut",
+        "description": "值不返回。"
+      },
+      "CatalogSkillOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Roles"
+          },
+          "shared": {
+            "type": "boolean",
+            "title": "Shared"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "kind": {
+            "type": "string",
+            "const": "skill",
+            "title": "Kind"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "owner",
+          "description",
+          "roles",
+          "shared",
+          "updated_at",
+          "path",
+          "kind"
+        ],
+        "title": "CatalogSkillOut"
+      },
+      "CatalogToolOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Roles"
+          },
+          "shared": {
+            "type": "boolean",
+            "title": "Shared"
+          },
+          "kind": {
+            "type": "string",
+            "const": "tool",
+            "title": "Kind"
+          },
+          "updated_at": {
+            "type": "null",
+            "title": "Updated At"
+          },
+          "access": {
+            "type": "string",
+            "enum": [
+              "read",
+              "write"
+            ],
+            "title": "Access"
+          },
+          "admin": {
+            "type": "boolean",
+            "title": "Admin"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "owner",
+          "description",
+          "roles",
+          "shared",
+          "kind",
+          "updated_at",
+          "access",
+          "admin"
+        ],
+        "title": "CatalogToolOut",
+        "description": "内置工具：归平台、代码里定义，不能改。"
+      },
       "CodeBlock": {
         "properties": {
           "kind": {
@@ -5862,123 +6243,6 @@
         ],
         "title": "McpIn"
       },
-      "McpItemOut": {
-        "properties": {
-          "transport": {
-            "$ref": "#/components/schemas/McpTransport"
-          },
-          "command": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Command"
-          },
-          "args": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Args"
-          },
-          "url": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Url"
-          },
-          "env": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "type": "object",
-            "title": "Env"
-          },
-          "headers": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "type": "object",
-            "title": "Headers"
-          },
-          "enabled": {
-            "type": "boolean",
-            "title": "Enabled"
-          },
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
-          "owner": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Owner"
-          },
-          "description": {
-            "type": "string",
-            "title": "Description"
-          },
-          "roles": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Roles"
-          },
-          "shared": {
-            "type": "boolean",
-            "title": "Shared"
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Updated At"
-          },
-          "path": {
-            "type": "string",
-            "title": "Path"
-          },
-          "kind": {
-            "type": "string",
-            "const": "mcp",
-            "title": "Kind"
-          }
-        },
-        "type": "object",
-        "required": [
-          "transport",
-          "command",
-          "args",
-          "url",
-          "env",
-          "headers",
-          "enabled",
-          "name",
-          "owner",
-          "description",
-          "roles",
-          "shared",
-          "updated_at",
-          "path",
-          "kind"
-        ],
-        "title": "McpItemOut"
-      },
       "McpOut": {
         "properties": {
           "transport": {
@@ -6100,67 +6364,6 @@
           "content"
         ],
         "title": "MemoryIn"
-      },
-      "MemoryItemOut": {
-        "properties": {
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
-          "owner": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Owner"
-          },
-          "description": {
-            "type": "string",
-            "title": "Description"
-          },
-          "roles": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Roles"
-          },
-          "shared": {
-            "type": "boolean",
-            "title": "Shared"
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Updated At"
-          },
-          "path": {
-            "type": "string",
-            "title": "Path"
-          },
-          "kind": {
-            "type": "string",
-            "const": "memory",
-            "title": "Kind"
-          }
-        },
-        "type": "object",
-        "required": [
-          "name",
-          "owner",
-          "description",
-          "roles",
-          "shared",
-          "updated_at",
-          "path",
-          "kind"
-        ],
-        "title": "MemoryItemOut",
-        "description": "正文不在列表里（GET /items/memory/{name} 读）。"
       },
       "MemoryOut": {
         "properties": {
@@ -6699,18 +6902,18 @@
             "type": "array",
             "title": "Tools"
           },
-          "items": {
+          "assets": {
             "items": {
               "type": "string"
             },
             "type": "array",
-            "title": "Items"
+            "title": "Assets"
           }
         },
         "type": "object",
         "required": [
           "tools",
-          "items"
+          "assets"
         ],
         "title": "ReachOut",
         "description": "一份配置能用（use）的内置工具与资产（skill、MCP server、secret、记忆，`kind:name`）。"
@@ -7312,72 +7515,6 @@
         ],
         "title": "SecretIn"
       },
-      "SecretItemOut": {
-        "properties": {
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
-          "owner": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Owner"
-          },
-          "description": {
-            "type": "string",
-            "title": "Description"
-          },
-          "roles": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Roles"
-          },
-          "shared": {
-            "type": "boolean",
-            "title": "Shared"
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Updated At"
-          },
-          "path": {
-            "type": "string",
-            "title": "Path"
-          },
-          "kind": {
-            "type": "string",
-            "const": "secret",
-            "title": "Kind"
-          },
-          "allow_shell": {
-            "type": "boolean",
-            "title": "Allow Shell"
-          }
-        },
-        "type": "object",
-        "required": [
-          "name",
-          "owner",
-          "description",
-          "roles",
-          "shared",
-          "updated_at",
-          "path",
-          "kind",
-          "allow_shell"
-        ],
-        "title": "SecretItemOut",
-        "description": "值不返回。"
-      },
       "SecretOut": {
         "properties": {
           "owner": {
@@ -7870,66 +8007,6 @@
           "body"
         ],
         "title": "SkillIn"
-      },
-      "SkillItemOut": {
-        "properties": {
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
-          "owner": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Owner"
-          },
-          "description": {
-            "type": "string",
-            "title": "Description"
-          },
-          "roles": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Roles"
-          },
-          "shared": {
-            "type": "boolean",
-            "title": "Shared"
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Updated At"
-          },
-          "path": {
-            "type": "string",
-            "title": "Path"
-          },
-          "kind": {
-            "type": "string",
-            "const": "skill",
-            "title": "Kind"
-          }
-        },
-        "type": "object",
-        "required": [
-          "name",
-          "owner",
-          "description",
-          "roles",
-          "shared",
-          "updated_at",
-          "path",
-          "kind"
-        ],
-        "title": "SkillItemOut"
       },
       "SkillOut": {
         "properties": {
@@ -8555,75 +8632,6 @@
           "token"
         ],
         "title": "TokenOut"
-      },
-      "ToolItemOut": {
-        "properties": {
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
-          "owner": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Owner"
-          },
-          "description": {
-            "type": "string",
-            "title": "Description"
-          },
-          "roles": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Roles"
-          },
-          "shared": {
-            "type": "boolean",
-            "title": "Shared"
-          },
-          "kind": {
-            "type": "string",
-            "const": "tool",
-            "title": "Kind"
-          },
-          "updated_at": {
-            "type": "null",
-            "title": "Updated At"
-          },
-          "access": {
-            "type": "string",
-            "enum": [
-              "read",
-              "write"
-            ],
-            "title": "Access"
-          },
-          "admin": {
-            "type": "boolean",
-            "title": "Admin"
-          }
-        },
-        "type": "object",
-        "required": [
-          "name",
-          "owner",
-          "description",
-          "roles",
-          "shared",
-          "kind",
-          "updated_at",
-          "access",
-          "admin"
-        ],
-        "title": "ToolItemOut",
-        "description": "内置工具：归平台、代码里定义，不能改。"
       },
       "ToolOut": {
         "properties": {

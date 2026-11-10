@@ -44,7 +44,7 @@ export const ADMIN_GROUPS: readonly { title: string; items: readonly NavItem[] }
   {
     title: '资源',
     items: [
-      { to: '/items', label: 'AI 资产', Icon: Boxes },
+      { to: '/ai-assets', label: 'AI 资产', Icon: Boxes },
       { to: '/roles', label: '角色', Icon: ShieldCheck },
     ],
   },

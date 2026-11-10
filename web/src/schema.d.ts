@@ -88,7 +88,7 @@ export interface paths {
         put?: never;
         /**
          * Preview Agent
-         * @description agent 配置（还没保存的也行）最终能用的：自己的条目 + base + 角色 + allow / deny 放行的，与运行时同一套计算，
+         * @description agent 配置（还没保存的也行）最终能用的：自己的资产 + base + 角色 + allow / deny 放行的，与运行时同一套计算，
          *     与保存时同样校验（不合法 422）。
          */
         post: operations["preview_agent_api_agent_preview_post"];
@@ -559,7 +559,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/items": {
+    "/api/assets": {
         parameters: {
             query?: never;
             header?: never;
@@ -567,11 +567,11 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List Items
+         * List Assets
          * @description 全部资源：内置工具（按登记顺序，仅当前配置下注册的）在前，存成文件的按种类、名称；每种带自己的
          *     详情（工具的读写与管理类、MCP 的配置与启停）。
          */
-        get: operations["list_items_api_items_get"];
+        get: operations["list_assets_api_assets_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -580,7 +580,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/items/{kind}/{name}/owner": {
+    "/api/assets/{kind}/{name}/owner": {
         parameters: {
             query?: never;
             header?: never;
@@ -589,10 +589,10 @@ export interface paths {
         };
         get?: never;
         /**
-         * Transfer Item
+         * Transfer Asset
          * @description 挪到另一个 owner 的目录下；内容与收录它的角色不变。内置工具归平台，不在这里（kind 不接受 tool）。
          */
-        put: operations["transfer_item_api_items__kind___name__owner_put"];
+        put: operations["transfer_asset_api_assets__kind___name__owner_put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -600,7 +600,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/items/memory/{name}": {
+    "/api/assets/memory/{name}": {
         parameters: {
             query?: never;
             header?: never;
@@ -608,25 +608,25 @@ export interface paths {
             cookie?: never;
         };
         /** Get Memory */
-        get: operations["get_memory_api_items_memory__name__get"];
+        get: operations["get_memory_api_assets_memory__name__get"];
         /**
          * Put Memory
          * @description 新建的归 owner（归平台的名字要是 slug；agent 的私有记忆名字就是 agent 名）；已有的整体改写正文，owner 不变。谁能用由
          *     角色收录它（`use:memory:<名>`）。
          */
-        put: operations["put_memory_api_items_memory__name__put"];
+        put: operations["put_memory_api_assets_memory__name__put"];
         post?: never;
         /**
          * Delete Memory
          * @description 全局记忆不能删（422）。
          */
-        delete: operations["delete_memory_api_items_memory__name__delete"];
+        delete: operations["delete_memory_api_assets_memory__name__delete"];
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/items/skill/{name}": {
+    "/api/assets/skill/{name}": {
         parameters: {
             query?: never;
             header?: never;
@@ -634,21 +634,21 @@ export interface paths {
             cookie?: never;
         };
         /** Get Skill */
-        get: operations["get_skill_api_items_skill__name__get"];
+        get: operations["get_skill_api_assets_skill__name__get"];
         /**
          * Put Skill
          * @description 新建的归 owner；已有的整体改写正文与描述（附件不变），owner 不变。
          */
-        put: operations["put_skill_api_items_skill__name__put"];
+        put: operations["put_skill_api_assets_skill__name__put"];
         post?: never;
         /** Delete Skill */
-        delete: operations["delete_skill_api_items_skill__name__delete"];
+        delete: operations["delete_skill_api_assets_skill__name__delete"];
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/items/skill/{name}/files": {
+    "/api/assets/skill/{name}/files": {
         parameters: {
             query?: never;
             header?: never;
@@ -659,7 +659,7 @@ export interface paths {
          * List Skill Files
          * @description skill 目录里 path（相对 skill 目录，空为根）这一层，同工作目录浏览：目录在前，各自按名称排序。
          */
-        get: operations["list_skill_files_api_items_skill__name__files_get"];
+        get: operations["list_skill_files_api_assets_skill__name__files_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -668,7 +668,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/items/skill/{name}/file": {
+    "/api/assets/skill/{name}/file": {
         parameters: {
             query?: never;
             header?: never;
@@ -679,7 +679,7 @@ export interface paths {
          * Read Skill File
          * @description skill 目录里一个文件的内容（同工作目录浏览：图片 inline，其余作为附件）。
          */
-        get: operations["read_skill_file_api_items_skill__name__file_get"];
+        get: operations["read_skill_file_api_assets_skill__name__file_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -688,7 +688,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/items/skill/{name}/package": {
+    "/api/assets/skill/{name}/package": {
         parameters: {
             query?: never;
             header?: never;
@@ -697,9 +697,9 @@ export interface paths {
         };
         /**
          * Export Skill
-         * @description 下载标准 .skill 文件（zip：`<name>/SKILL.md` 与附件）。
+         * @description 下载标准 .skill 文件（zip：`<name>/SKILL.md` 与附件）；没打进包的文件同导入一样逐个列出（响应头 X-Skipped-Files）。
          */
-        get: operations["export_skill_api_items_skill__name__package_get"];
+        get: operations["export_skill_api_assets_skill__name__package_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -708,7 +708,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/items/skill": {
+    "/api/assets/skill": {
         parameters: {
             query?: never;
             header?: never;
@@ -723,14 +723,14 @@ export interface paths {
          *     skill 已存在时 409，replace=true 覆盖。包的结构不对（路径越界、符号链接、顶层目录不唯一、名字与目录不一致……）422，
          *     超限 413。
          */
-        post: operations["import_skill_api_items_skill_post"];
+        post: operations["import_skill_api_assets_skill_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/items/mcp/{name}": {
+    "/api/assets/mcp/{name}": {
         parameters: {
             query?: never;
             header?: never;
@@ -738,21 +738,21 @@ export interface paths {
             cookie?: never;
         };
         /** Get Mcp */
-        get: operations["get_mcp_api_items_mcp__name__get"];
+        get: operations["get_mcp_api_assets_mcp__name__get"];
         /**
          * Add Mcp
          * @description 新增（启用的）server；同名的已存在 409（名字全局唯一，配置不能原地改写：删了再建）。
          */
-        put: operations["add_mcp_api_items_mcp__name__put"];
+        put: operations["add_mcp_api_assets_mcp__name__put"];
         post?: never;
         /** Delete Mcp */
-        delete: operations["delete_mcp_api_items_mcp__name__delete"];
+        delete: operations["delete_mcp_api_assets_mcp__name__delete"];
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/items/mcp/{name}/enabled": {
+    "/api/assets/mcp/{name}/enabled": {
         parameters: {
             query?: never;
             header?: never;
@@ -761,7 +761,7 @@ export interface paths {
         };
         get?: never;
         /** Set Mcp Enabled */
-        put: operations["set_mcp_enabled_api_items_mcp__name__enabled_put"];
+        put: operations["set_mcp_enabled_api_assets_mcp__name__enabled_put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -769,7 +769,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/items/mcp/{name}/tools": {
+    "/api/assets/mcp/{name}/tools": {
         parameters: {
             query?: never;
             header?: never;
@@ -782,14 +782,14 @@ export interface paths {
          * Probe Mcp
          * @description 连接一次，列出它的工具（测试连接）。
          */
-        post: operations["probe_mcp_api_items_mcp__name__tools_post"];
+        post: operations["probe_mcp_api_assets_mcp__name__tools_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/items/secret/{name}": {
+    "/api/assets/secret/{name}": {
         parameters: {
             query?: never;
             header?: never;
@@ -800,15 +800,15 @@ export interface paths {
          * Get Secret
          * @description 不含值。
          */
-        get: operations["get_secret_api_items_secret__name__get"];
+        get: operations["get_secret_api_assets_secret__name__get"];
         /**
          * Set Secret
          * @description 新建的归 owner（缺省为平台）；已有的改值与描述，owner 不变。
          */
-        put: operations["set_secret_api_items_secret__name__put"];
+        put: operations["set_secret_api_assets_secret__name__put"];
         post?: never;
         /** Delete Secret */
-        delete: operations["delete_secret_api_items_secret__name__delete"];
+        delete: operations["delete_secret_api_assets_secret__name__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1607,6 +1607,161 @@ export interface components {
             /** Inline */
             inline: boolean;
         };
+        /** CatalogMcpOut */
+        CatalogMcpOut: {
+            transport: components["schemas"]["McpTransport"];
+            /** Command */
+            command: string | null;
+            /** Args */
+            args: string[];
+            /** Url */
+            url: string | null;
+            /** Env */
+            env: {
+                [key: string]: string;
+            };
+            /** Headers */
+            headers: {
+                [key: string]: string;
+            };
+            /** Enabled */
+            enabled: boolean;
+            /** Name */
+            name: string;
+            /** Owner */
+            owner: string | null;
+            /** Description */
+            description: string;
+            /** Roles */
+            roles: string[];
+            /** Shared */
+            shared: boolean;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Path */
+            path: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "mcp";
+        };
+        /**
+         * CatalogMemoryOut
+         * @description 正文不在列表里（GET /assets/memory/{name} 读）。
+         */
+        CatalogMemoryOut: {
+            /** Name */
+            name: string;
+            /** Owner */
+            owner: string | null;
+            /** Description */
+            description: string;
+            /** Roles */
+            roles: string[];
+            /** Shared */
+            shared: boolean;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Path */
+            path: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "memory";
+        };
+        /**
+         * CatalogSecretOut
+         * @description 值不返回。
+         */
+        CatalogSecretOut: {
+            /** Name */
+            name: string;
+            /** Owner */
+            owner: string | null;
+            /** Description */
+            description: string;
+            /** Roles */
+            roles: string[];
+            /** Shared */
+            shared: boolean;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Path */
+            path: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "secret";
+            /** Allow Shell */
+            allow_shell: boolean;
+        };
+        /** CatalogSkillOut */
+        CatalogSkillOut: {
+            /** Name */
+            name: string;
+            /** Owner */
+            owner: string | null;
+            /** Description */
+            description: string;
+            /** Roles */
+            roles: string[];
+            /** Shared */
+            shared: boolean;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Path */
+            path: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "skill";
+        };
+        /**
+         * CatalogToolOut
+         * @description 内置工具：归平台、代码里定义，不能改。
+         */
+        CatalogToolOut: {
+            /** Name */
+            name: string;
+            /** Owner */
+            owner: string | null;
+            /** Description */
+            description: string;
+            /** Roles */
+            roles: string[];
+            /** Shared */
+            shared: boolean;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "tool";
+            /** Updated At */
+            updated_at: null;
+            /**
+             * Access
+             * @enum {string}
+             */
+            access: "read" | "write";
+            /** Admin */
+            admin: boolean;
+        };
         /**
          * CodeBlock
          * @description 一段代码或文件内容（等宽），title 多为文件路径。
@@ -2129,48 +2284,6 @@ export interface components {
              */
             probe: boolean;
         };
-        /** McpItemOut */
-        McpItemOut: {
-            transport: components["schemas"]["McpTransport"];
-            /** Command */
-            command: string | null;
-            /** Args */
-            args: string[];
-            /** Url */
-            url: string | null;
-            /** Env */
-            env: {
-                [key: string]: string;
-            };
-            /** Headers */
-            headers: {
-                [key: string]: string;
-            };
-            /** Enabled */
-            enabled: boolean;
-            /** Name */
-            name: string;
-            /** Owner */
-            owner: string | null;
-            /** Description */
-            description: string;
-            /** Roles */
-            roles: string[];
-            /** Shared */
-            shared: boolean;
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
-            /** Path */
-            path: string;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "mcp";
-        };
         /** McpOut */
         McpOut: {
             transport: components["schemas"]["McpTransport"];
@@ -2211,34 +2324,6 @@ export interface components {
             owner?: string | null;
             /** Content */
             content: string;
-        };
-        /**
-         * MemoryItemOut
-         * @description 正文不在列表里（GET /items/memory/{name} 读）。
-         */
-        MemoryItemOut: {
-            /** Name */
-            name: string;
-            /** Owner */
-            owner: string | null;
-            /** Description */
-            description: string;
-            /** Roles */
-            roles: string[];
-            /** Shared */
-            shared: boolean;
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
-            /** Path */
-            path: string;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "memory";
         };
         /** MemoryOut */
         MemoryOut: {
@@ -2457,8 +2542,8 @@ export interface components {
         ReachOut: {
             /** Tools */
             tools: components["schemas"]["ToolOut"][];
-            /** Items */
-            items: string[];
+            /** Assets */
+            assets: string[];
         };
         /** RejectIn */
         RejectIn: {
@@ -2688,36 +2773,6 @@ export interface components {
             /** Allow Shell */
             allow_shell?: boolean | null;
         };
-        /**
-         * SecretItemOut
-         * @description 值不返回。
-         */
-        SecretItemOut: {
-            /** Name */
-            name: string;
-            /** Owner */
-            owner: string | null;
-            /** Description */
-            description: string;
-            /** Roles */
-            roles: string[];
-            /** Shared */
-            shared: boolean;
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
-            /** Path */
-            path: string;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "secret";
-            /** Allow Shell */
-            allow_shell: boolean;
-        };
         /** SecretOut */
         SecretOut: {
             /** Owner */
@@ -2870,31 +2925,6 @@ export interface components {
             description: string;
             /** Body */
             body: string;
-        };
-        /** SkillItemOut */
-        SkillItemOut: {
-            /** Name */
-            name: string;
-            /** Owner */
-            owner: string | null;
-            /** Description */
-            description: string;
-            /** Roles */
-            roles: string[];
-            /** Shared */
-            shared: boolean;
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
-            /** Path */
-            path: string;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "skill";
         };
         /** SkillOut */
         SkillOut: {
@@ -3110,36 +3140,6 @@ export interface components {
         TokenOut: {
             /** Token */
             token: string;
-        };
-        /**
-         * ToolItemOut
-         * @description 内置工具：归平台、代码里定义，不能改。
-         */
-        ToolItemOut: {
-            /** Name */
-            name: string;
-            /** Owner */
-            owner: string | null;
-            /** Description */
-            description: string;
-            /** Roles */
-            roles: string[];
-            /** Shared */
-            shared: boolean;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "tool";
-            /** Updated At */
-            updated_at: null;
-            /**
-             * Access
-             * @enum {string}
-             */
-            access: "read" | "write";
-            /** Admin */
-            admin: boolean;
         };
         /**
          * ToolOut
@@ -4465,7 +4465,7 @@ export interface operations {
             };
         };
     };
-    list_items_api_items_get: {
+    list_assets_api_assets_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -4480,12 +4480,12 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": (components["schemas"]["ToolItemOut"] | components["schemas"]["SkillItemOut"] | components["schemas"]["McpItemOut"] | components["schemas"]["SecretItemOut"] | components["schemas"]["MemoryItemOut"])[];
+                    "application/json": (components["schemas"]["CatalogToolOut"] | components["schemas"]["CatalogSkillOut"] | components["schemas"]["CatalogMcpOut"] | components["schemas"]["CatalogSecretOut"] | components["schemas"]["CatalogMemoryOut"])[];
                 };
             };
         };
     };
-    transfer_item_api_items__kind___name__owner_put: {
+    transfer_asset_api_assets__kind___name__owner_put: {
         parameters: {
             query?: never;
             header?: never;
@@ -4519,7 +4519,7 @@ export interface operations {
             };
         };
     };
-    get_memory_api_items_memory__name__get: {
+    get_memory_api_assets_memory__name__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -4550,7 +4550,7 @@ export interface operations {
             };
         };
     };
-    put_memory_api_items_memory__name__put: {
+    put_memory_api_assets_memory__name__put: {
         parameters: {
             query?: never;
             header?: never;
@@ -4585,7 +4585,7 @@ export interface operations {
             };
         };
     };
-    delete_memory_api_items_memory__name__delete: {
+    delete_memory_api_assets_memory__name__delete: {
         parameters: {
             query?: never;
             header?: never;
@@ -4614,7 +4614,7 @@ export interface operations {
             };
         };
     };
-    get_skill_api_items_skill__name__get: {
+    get_skill_api_assets_skill__name__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -4645,7 +4645,7 @@ export interface operations {
             };
         };
     };
-    put_skill_api_items_skill__name__put: {
+    put_skill_api_assets_skill__name__put: {
         parameters: {
             query?: never;
             header?: never;
@@ -4680,7 +4680,7 @@ export interface operations {
             };
         };
     };
-    delete_skill_api_items_skill__name__delete: {
+    delete_skill_api_assets_skill__name__delete: {
         parameters: {
             query?: never;
             header?: never;
@@ -4709,7 +4709,7 @@ export interface operations {
             };
         };
     };
-    list_skill_files_api_items_skill__name__files_get: {
+    list_skill_files_api_assets_skill__name__files_get: {
         parameters: {
             query?: {
                 path?: string;
@@ -4742,7 +4742,7 @@ export interface operations {
             };
         };
     };
-    read_skill_file_api_items_skill__name__file_get: {
+    read_skill_file_api_assets_skill__name__file_get: {
         parameters: {
             query: {
                 path: string;
@@ -4775,7 +4775,7 @@ export interface operations {
             };
         };
     };
-    export_skill_api_items_skill__name__package_get: {
+    export_skill_api_assets_skill__name__package_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -4789,6 +4789,8 @@ export interface operations {
             /** @description <name>.skill */
             200: {
                 headers: {
+                    /** @description 没打进包的文件（二进制等）：JSON 数组，每项 {path, reason} */
+                    "X-Skipped-Files"?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -4806,7 +4808,7 @@ export interface operations {
             };
         };
     };
-    import_skill_api_items_skill_post: {
+    import_skill_api_assets_skill_post: {
         parameters: {
             query?: {
                 owner?: string | null;
@@ -4838,7 +4840,7 @@ export interface operations {
             };
         };
     };
-    get_mcp_api_items_mcp__name__get: {
+    get_mcp_api_assets_mcp__name__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -4869,7 +4871,7 @@ export interface operations {
             };
         };
     };
-    add_mcp_api_items_mcp__name__put: {
+    add_mcp_api_assets_mcp__name__put: {
         parameters: {
             query?: never;
             header?: never;
@@ -4904,7 +4906,7 @@ export interface operations {
             };
         };
     };
-    delete_mcp_api_items_mcp__name__delete: {
+    delete_mcp_api_assets_mcp__name__delete: {
         parameters: {
             query?: never;
             header?: never;
@@ -4933,7 +4935,7 @@ export interface operations {
             };
         };
     };
-    set_mcp_enabled_api_items_mcp__name__enabled_put: {
+    set_mcp_enabled_api_assets_mcp__name__enabled_put: {
         parameters: {
             query?: never;
             header?: never;
@@ -4968,7 +4970,7 @@ export interface operations {
             };
         };
     };
-    probe_mcp_api_items_mcp__name__tools_post: {
+    probe_mcp_api_assets_mcp__name__tools_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -4999,7 +5001,7 @@ export interface operations {
             };
         };
     };
-    get_secret_api_items_secret__name__get: {
+    get_secret_api_assets_secret__name__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -5030,7 +5032,7 @@ export interface operations {
             };
         };
     };
-    set_secret_api_items_secret__name__put: {
+    set_secret_api_assets_secret__name__put: {
         parameters: {
             query?: never;
             header?: never;
@@ -5063,7 +5065,7 @@ export interface operations {
             };
         };
     };
-    delete_secret_api_items_secret__name__delete: {
+    delete_secret_api_assets_secret__name__delete: {
         parameters: {
             query?: never;
             header?: never;

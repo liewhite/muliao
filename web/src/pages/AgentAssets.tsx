@@ -68,7 +68,7 @@ export function AgentAssetsView({ agent }: { agent: AgentId }) {
         <div className="flex flex-col gap-3">
           <p className="text-sm text-muted">
             它运行时能用的资产与来源（自有＝它名下的；角色＝分发规则放行；allow＝它自己的规则）。改分发在「配置」，改内容在{' '}
-            <Link to="/items" className="text-accent">
+            <Link to="/ai-assets" className="text-accent">
               AI 资产
             </Link>
             。

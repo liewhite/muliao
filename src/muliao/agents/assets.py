@@ -3,13 +3,13 @@
 ```
 <root>/
   platform/                     归平台（owner 为 None）
-    access.toml                 角色定义、各 agent 的角色与 allow / deny（分发规则的唯一来源）
+    access.toml                 角色定义、各 agent 的角色与 allow / deny（分发规则的唯一来源，agents.access_file）
     memory/<名>.md              全局记忆（global）与共享记忆
     skills/<名>/SKILL.md …      公共 skill
     mcp/<名>.json               MCP server（mcp_config.parse_mcp_file）
     secrets/<KEY>.toml          secret：description、Fernet 密文 ciphertext（agents.secrets 加解密）与 allow_shell
   <agent 名>/                   归这个 agent
-    agent.toml                  id、description、model、thinking、group（AgentFile）
+    agent.toml                  id、description、model、thinking、group（agents.agent_file）
     memory.md                   私有记忆，记忆名就是 agent 名
     skills/<名>/  mcp/<名>.json  secrets/<KEY>.toml
 ```
@@ -28,20 +28,17 @@ from __future__ import annotations
 import logging
 import os
 import shutil
-import tomllib
-import unicodedata
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, ValidationError
-
-from muliao.agents.agent_rules import AgentRules
+from muliao.agents import access_file, agent_file
+from muliao.agents.agent_file import AGENT_FILE
 from muliao.agents.kinds import StoredKind, label
 from muliao.agents.mcp_config import McpConfig, parse_mcp_file
-from muliao.agents.naming import file_name, validate_slug
-from muliao.agents.permissions import ADMIN, BASE, FIXED_RULES, Role, Rules, check_patterns
+from muliao.agents.naming import file_name, nfc, validate_slug
+from muliao.agents.permissions import ADMIN, AgentRules, Role
 from muliao.agents.secrets_format import SecretFile, parse_secret_file
 from muliao.agents.skill_package import SKILL_FILE, parse_frontmatter
 from muliao.agents.thinking import Thinking
@@ -51,46 +48,11 @@ log = logging.getLogger(__name__)
 
 PLATFORM = "platform"
 ACCESS_FILE = "access.toml"
-AGENT_FILE = "agent.toml"
 PRIVATE_MEMORY_FILE = "memory.md"
 MEMORY_DIR = "memory"
 SKILLS_DIR = "skills"
 MCP_DIR = "mcp"
 SECRETS_DIR = "secrets"
-
-# 内置角色没写描述时的描述
-BUILTIN_DESCRIPTIONS: dict[str, str] = {
-    BASE: "每个 agent 都有：全部非管理工具与全局记忆，加上这里收录的 skill、MCP server、secret、记忆",
-    "admin": "全部工具（含管理 agent 与角色），并且能改任何 AI 资源",
-}
-
-
-class AgentFile(BaseModel):
-    """`<agent 名>/agent.toml`。名字不在这里：目录名就是名字。"""
-
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    id: str
-    description: str
-    model: str
-    thinking: Thinking = "default"
-    group: str | None = None
-
-
-class _RoleEntry(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    description: str = ""
-    allow: list[str] = []
-    deny: list[str] = []
-
-
-class _AgentEntry(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    roles: list[str] = []
-    allow: list[str] = []
-    deny: list[str] = []
 
 
 @dataclass(frozen=True)
@@ -222,7 +184,7 @@ class Snapshot:
         return [p for p in self.problems if p.owner == agent_id or (p.owner is None and admin)]
 
     @property
-    def access_file(self) -> Path:
+    def access_path(self) -> Path:
         return self.root / PLATFORM / ACCESS_FILE
 
 
@@ -232,10 +194,6 @@ def updated(path: Path) -> datetime:
 
 def _visible(entries: list[Path]) -> list[Path]:
     return sorted((p for p in entries if not p.name.startswith(".")), key=lambda p: p.name)
-
-
-def _nfc(name: str) -> str:
-    return unicodedata.normalize("NFC", name)
 
 
 class _Reader:
@@ -300,21 +258,17 @@ class _Reader:
                     "its last known name, description and model, without private memory and own assets",
                     agent_id,
                 )
-        access = self.root / PLATFORM / ACCESS_FILE
-        text = None
-        if access.is_file():
-            try:
-                text = access.read_text(encoding="utf-8")
-            except UnicodeDecodeError as e:
-                self.problem(access, f"cannot parse: {e}; only the fixed parts of built-in roles apply", None)
-        roles, rules = self.access(agents, text)
+        path = self.root / PLATFORM / ACCESS_FILE
+        access = access_file.read(path, {a.name: a.id for a in agents.values()})
+        for p in access.problems:
+            self.problem(path, p.reason, p.agent_id)
         return Snapshot(
             self.root,
             dict(self.known),
             agents,
             {kind: self.resolved(kind) for kind in StoredKind},
-            roles,
-            rules,
+            access.roles,
+            access.rules,
             tuple(self.problems),
             {k: frozenset(v) for k, v in self.unloaded.items()},
             {k: dict(v) for k, v in self.shadowed.items()},
@@ -378,13 +332,13 @@ class _Reader:
         )
 
     def agent_dir(self, path: Path) -> AgentDir | None:
-        name = _nfc(path.name)
+        name = nfc(path.name)
         file = path / AGENT_FILE
         if not file.is_file():
             self.problem(path, f"no {AGENT_FILE}: not an agent directory", None)
             return None
         try:
-            data = parse_agent_file(file.read_text(encoding="utf-8"))
+            data = agent_file.parse(file.read_text(encoding="utf-8"))
         except (InvalidInput, UnicodeDecodeError) as e:
             self.problem(file, str(e), None)
             return None
@@ -506,114 +460,6 @@ class _Reader:
             )
 
         self.guarded(StoredKind.SECRET, path.stem, path, owner, load)
-
-    def access(
-        self, agents: Mapping[str, AgentDir], text: str | None
-    ) -> tuple[dict[str, Role], dict[str, AgentRules]]:
-        """access.toml 的内容 text（没有这个文件为 None）：坏掉的单条规则、不认识的角色各自跳过并记一条，其余照常（不让
-        一个笔误拿掉一个 agent 的全部角色）。整个文件读不出来时只剩内置角色的固定部分，没有任何 agent 的规则。"""
-        path = self.root / PLATFORM / ACCESS_FILE
-        data: dict[str, object] = {}
-        if text is not None:
-            try:
-                data = tomllib.loads(text)
-            except tomllib.TOMLDecodeError as e:
-                self.problem(path, f"cannot parse: {e}; only the fixed parts of built-in roles apply", None)
-        extra = sorted(set(data) - {"roles", "agents"})
-        if extra:
-            self.problem(path, f"unknown top-level tables {extra} (expected roles, agents)", None)
-        roles: dict[str, Role] = {
-            n: Role(n, BUILTIN_DESCRIPTIONS[n], Rules(), fixed) for n, fixed in FIXED_RULES.items()
-        }
-        for name, raw in sorted(_table(data.get("roles"))):
-            entry = self.entry(_RoleEntry, raw, path, f"role {name!r}")
-            if entry is None:
-                continue
-            try:
-                validate_slug("role", name)
-            except InvalidInput as e:
-                self.problem(path, str(e), None)
-                continue
-            fixed = FIXED_RULES.get(name, Rules())
-            description = entry.description.strip() or BUILTIN_DESCRIPTIONS.get(name, "")
-            if not description:
-                self.problem(path, f"role {name!r}: description must not be empty", None)
-                continue
-            rules = Rules(
-                self.patterns(entry.allow, path, f"role {name!r}"),
-                self.patterns(entry.deny, path, f"role {name!r}"),
-            )
-            roles[name] = Role(name, description, rules, fixed)
-        by_name = {a.name: a.id for a in agents.values()}
-        rules_by_id: dict[str, AgentRules] = {}
-        for name, raw in sorted(_table(data.get("agents"))):
-            what = f"agent {name!r}"
-            entry = self.entry(_AgentEntry, raw, path, what)
-            if entry is None:
-                continue
-            agent_id = by_name.get(_nfc(name))
-            if agent_id is None:
-                self.problem(path, f"[agents.{name}]: no loaded agent directory has this name", None)
-                continue
-            kept = []
-            for r in dict.fromkeys(entry.roles):
-                if r not in roles or not roles[r].assignable:
-                    self.problem(path, f"{what}: role {r!r} is unknown or implicit; skipped", agent_id)
-                else:
-                    kept.append(r)
-            rules_by_id[agent_id] = AgentRules.of(
-                kept,
-                self.patterns(entry.allow, path, what, agent_id),
-                self.patterns(entry.deny, path, what, agent_id),
-            )
-        return roles, rules_by_id
-
-    def entry[T: BaseModel](self, model: type[T], raw: object, path: Path, what: str) -> T | None:
-        try:
-            return model.model_validate(raw)
-        except ValidationError as e:
-            self.problem(path, f"{what}: {_brief(e)}", None)
-            return None
-
-    def patterns(
-        self, patterns: list[str], path: Path, what: str, owner: str | None = None
-    ) -> tuple[str, ...]:
-        kept = []
-        for p in dict.fromkeys(patterns):
-            try:
-                check_patterns([p])
-            except InvalidInput as e:
-                self.problem(path, f"{what}: {e}; skipped", owner)
-                continue
-            kept.append(p)
-        return tuple(kept)
-
-
-def _table(value: object) -> list[tuple[str, object]]:
-    return list(value.items()) if isinstance(value, dict) else []
-
-
-def _brief(e: Exception) -> str:
-    if isinstance(e, ValidationError):
-        return "; ".join(
-            f"{'.'.join(str(x) for x in err['loc']) or '(root)'}: {err['msg']}" for err in e.errors()
-        )
-    return str(e)
-
-
-def parse_agent_file(text: str) -> AgentFile:
-    """agent.toml 的格式（不含与数据库的对应）；不合规则时 InvalidInput。"""
-    try:
-        return AgentFile.model_validate(tomllib.loads(text))
-    except (tomllib.TOMLDecodeError, ValidationError) as e:
-        raise InvalidInput(f"invalid {AGENT_FILE}: {_brief(e)}") from e
-
-
-def access_problems(snapshot: Snapshot, text: str) -> list[str]:
-    """access.toml 若写成 text，按读树的同一套规则会报的问题（对照 snapshot 里的 agent 与角色）。"""
-    reader = _Reader(snapshot.root, snapshot.names, 0)
-    reader.access(snapshot.agents, text)
-    return [p.reason for p in reader.problems]
 
 
 def load_tree(root: Path, known: Mapping[str, str], memory_max_chars: int) -> Snapshot:
