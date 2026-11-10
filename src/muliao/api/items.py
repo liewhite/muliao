@@ -98,7 +98,7 @@ class SecretItemOut(_StoredItemBase):
     """值不返回。"""
 
     kind: Literal["secret"]
-    # false：agent 自己写的命令不能注入，只有 skill_run 的 skill 脚本、MCP 配置与内置工具能用（#528）
+    # false：agent 自己写的命令不能注入，只有 skill_run 的 skill 脚本与 MCP 配置能用（#528）
     allow_shell: bool
 
 
