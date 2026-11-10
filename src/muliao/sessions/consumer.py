@@ -153,7 +153,7 @@ def settled_end(history: list[ModelMessage], handed: HandedOut) -> RunEnd:
         return paused_end(
             [c for c in calls if c.tool_call_id not in handed.approvals],
             [c for c in calls if c.tool_call_id in handed.approvals],
-            # 等批准的正是按 approval_requests 的记录认出来的：之前的尝试收尾时已记下（连同 pin），没有新请求
+            # 等批准的正是按 approval_requests 的记录认出来的：之前的尝试结束时已记下（Steps.save_end，连同 pin），没有新请求
             {},
         )
     last = history[-1]
