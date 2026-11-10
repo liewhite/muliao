@@ -186,6 +186,21 @@ class TriggerDisabled(Conflict):
     """触发器已停用，不触发。"""
 
 
+class TriggerAgentArchived(Conflict):
+    """触发器所属的 agent 已归档：这次不触发，触发器保持启用，取消归档后照常触发。"""
+
+
+async def _own_agent_in(s: AsyncSession, trigger: Trigger) -> None:
+    """触发器自己的 agent 能不能接这次触发：归档时 TriggerAgentArchived；正在删除时它的触发器随之删除
+    （on_agent_deleting），按触发器已不存在（TriggerNotFound）。投递之前在同一事务里查，投递里出的错就都是目标的问题。"""
+    try:
+        await runnable_agent_in(s, trigger.agent_id)
+    except AgentArchived as e:
+        raise TriggerAgentArchived(f"trigger {trigger.name!r}: {e}") from e
+    except NotFound as e:
+        raise TriggerNotFound(f"trigger {trigger.name!r}: its agent is being deleted") from e
+
+
 def set_state(trigger: Trigger, **values: Any) -> None:
     """激活机制维护自己的运行状态（触发器领域内部用，在调用方事务里改这一行）。JSON 列只在整体赋值时被追踪。"""
     trigger.state = {**trigger.state, **values}
@@ -518,15 +533,15 @@ class TriggerService:
     async def fire_activated(self, trigger_id: int, payload: str | None = None) -> None:
         """没有调用方等着结果的激活机制（到期扫描、流式）用的 fire：失败按统一的规则处理，不上抛领域错误。
         - 前置检查失败：已记在触发器上；脚本的故障往往是暂时的，保持启用；
-        - agent 已归档（AgentArchived）：跳过，触发器保持启用；一次性触发器那一次已用掉，推送告诉用户任务没做；
+        - 它的 agent 已归档（TriggerAgentArchived）：跳过，触发器保持启用；一次性触发器那一次已用掉，推送告诉用户任务没做；
         - 被停用或删除（TriggerDisabled / TriggerNotFound）：不是触发失败，只记日志，不覆盖失败原因；
-        - 其余领域错误（如来信被拒绝）：停用并记 disabled_reason。
+        - 其余领域错误（如目标不合法：地址写错、目标 agent 归档或不在了）：停用并记 disabled_reason。
         契约之外的异常照常上抛。webhook 的调用方在等结果，直接用 fire。"""
         try:
             await self.fire(trigger_id, payload)
         except PrecheckFailed:
             pass
-        except AgentArchived as e:
+        except TriggerAgentArchived as e:
             # 定时与流式的只是跳过这一次；一次性触发器已用掉它那一次（到期时已结束），任务没做，agent 也收不到信：告诉用户
             log.info("activated fire skipped: %s", e, extra={"trigger_id": trigger_id})
             await self._tell_user_once_skipped(trigger_id)
@@ -561,13 +576,8 @@ class TriggerService:
             trigger = await trigger_in(s, trigger_id)
             if not trigger.enabled:
                 raise TriggerDisabled(f"trigger {trigger.name!r} is disabled")
-            # 归档的 agent（AgentArchived，即 Conflict）：不跑前置检查、不触发；激活机制的 fire_activated 只记日志，触发器
-            # 保持启用，取消归档后照常触发
-            try:
-                await runnable_agent_in(s, trigger.agent_id)
-            except NotFound as e:
-                # agent 正在删除：它的触发器随之删除（on_agent_deleting），按触发器已不存在跳过，不停用
-                raise TriggerNotFound(f"trigger {trigger.name!r}: its agent is being deleted") from e
+            # 归档的 agent 不跑前置检查、不触发；检查结束后投递前再查一次（检查期间可能被归档）
+            await _own_agent_in(s, trigger)
             if trigger.precheck is None:
                 return await self._deliver_in(s, trigger, payload, to)
             name, agent_id, stored = trigger.name, trigger.agent_id, trigger.precheck
@@ -585,6 +595,7 @@ class TriggerService:
             trigger = await current_in(s, trigger_id, stored)
             if trigger is None:
                 return None
+            await _own_agent_in(s, trigger)
             try:
                 decision = passed(trigger, precheck, output, self._precheck.max_bytes, self._clock())
             except PrecheckFailed as e:

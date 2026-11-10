@@ -12,6 +12,7 @@
 """
 
 import re
+from collections.abc import Mapping
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
@@ -102,19 +103,41 @@ def parse_address(text: str) -> Address:
 _ROUTE_LINE = re.compile(r"^@route[ \t]+(\S+)[ \t]*$")
 
 
+def route_line(line: str) -> str | None:
+    """顶格的 `@route <地址>` 行里的地址（还没解析）；不是这种行时为 None。"""
+    m = _ROUTE_LINE.match(line)
+    return None if m is None else m.group(1)
+
+
+def route_header(address: str) -> str:
+    """把后面的内容投到 address 的那一行（route_line 的逆）。"""
+    return f"@route {address}"
+
+
 def split_routed(text: str) -> list[tuple[str | None, str]]:
-    """把事件文本按 `@route <地址>` 行（必须顶格）分段：[(地址或 None（默认目标）, 内容)]，按出现顺序，没有内容的段丢掉
-    （同一目标的合并在解析成目标之后，见 router.plan_in）。没有 `@route` 行时原样是一段（不改动现有的事件）。"""
+    """把事件文本按 `@route <地址>` 行（必须顶格）分段：[(地址或 None（默认目标）, 内容)]，按出现顺序；没有内容的段也
+    留着，地址照样要解析（写错的地址不因后面没内容就不报错；空段不投，同一目标的合并在解析成目标之后，见 router.plan_in）。
+    没有 `@route` 行时原样是一段（不改动现有的事件）。"""
     lines = text.splitlines()
-    if not any(_ROUTE_LINE.match(line) for line in lines):
+    if not any(route_line(line) is not None for line in lines):
         return [(None, text)]
     sections: list[tuple[str | None, list[str]]] = [(None, [])]
     for line in lines:
-        if m := _ROUTE_LINE.match(line):
-            sections.append((m.group(1), []))
+        if (address := route_line(line)) is not None:
+            sections.append((address, []))
         else:
             sections[-1][1].append(line)
-    return [(address, "\n".join(body).strip("\n")) for address, body in sections if "".join(body).strip()]
+    return [(address, "\n".join(body).strip("\n")) for address, body in sections]
+
+
+def routed_text(sections: Mapping[str | None, list[str]]) -> str:
+    """按目标分好的行合成一段事件文本（split_routed 的逆，同一目标的行已合并）：默认目标（None）的行在最前，其后每个地址
+    一行 route_header 接它的行。流式触发按行到达顺序分好目标、攒批后用它合成一次触发的事件。"""
+    parts = list(sections.get(None, []))
+    for address, lines in sections.items():
+        if address is not None:
+            parts += [route_header(address), *lines]
+    return "\n".join(parts)
 
 
 def describe(target: NewTo | LatestOf | IssueTo, names: AgentNames) -> str:

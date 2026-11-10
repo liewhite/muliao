@@ -14,7 +14,8 @@
 - stderr 逐块脱敏后追加进工作目录下的 trigger-logs/<名称>.stderr.log（与后台任务共用 platform.output；每次启动前
   超过 1 MiB 就轮换一份 .1），agent 可以自己读。
 - 事件按 debounce 窗口合并：第一行到达后再等 debounce_seconds，期间到达的一起成为一次触发，事件内容是这些行
-  （以换行分隔）。上一次触发的会话还没做完（previous_fire_state_in，与定时触发同一个定义）时事件排队、不重叠，
+  （以换行分隔）。`@route` 行按到达顺序给之后的行定目标（跨批次保持，与把整条流当一段文本相同），攒批只合并同一目标
+  的行（_Pending）。上一次触发的会话还没做完（previous_fire_state_in，与定时触发同一个定义）时事件排队、不重叠，
   它结束后合并投递；挡路的会话在等待（可能永远等不到，如没人回答的提问）时通知用户一次（这一份托管进程里每个挡路
   会话一次）。排队的事件以事件上限为界：排满了就不再读命令的输出，管道写满后命令自己阻塞——不丢、不重叠，内存与
   并行会话都有界。单行超过事件上限的丢弃并记日志。
@@ -49,6 +50,7 @@ from muliao.platform.output import CHUNK, record_output, tail
 from muliao.platform.sandbox import Confinement
 from muliao.platform.shell import DRAIN_SECONDS, kill_group, redact, spawn_bash, wait_exit_code
 from muliao.platform.tasks import Clock
+from muliao.routing.api import route_header, route_line, routed_text
 from muliao.sessions.api import SessionActivity, WorkState
 from muliao.triggers.service import (
     TriggerService,
@@ -163,35 +165,56 @@ class _Spec:
 
 @dataclass
 class _Pending:
-    """排队等投递的事件（只在内存里），总量不超过事件上限：排满时读取方等着，命令的输出留在管道里。"""
+    """排队等投递的事件（只在内存里），总量不超过事件上限：排满时读取方等着，命令的输出留在管道里。
+
+    `@route` 行按到达顺序给后面的行定目标，这个状态跨批次保持：整条流的分段与把它当一段文本时相同，不取决于在哪里
+    分批。攒批只合并同一目标的行，取出时合成一段事件文本（routing.routed_text），投递时照常按 `@route` 行分到各目标。"""
 
     max_bytes: int
-    lines: list[str] = field(default_factory=list)
+    # 最近一个 `@route` 行的地址（None 为默认目标）
+    address: str | None = None
+    # 这一批按目标攒的行；只有 `@route` 行、还没有内容的目标也在（地址照样要校验）
+    sections: dict[str | None, list[str]] = field(default_factory=dict)
+    # 这一批有内容的行数与合成后事件文本的字节数
+    lines: int = 0
     size: int = 0
-    # 这一批第一行到达的时间（anyio 时钟），debounce 从它算起
+    # 这一批第一行内容到达的时间（anyio 时钟），debounce 从它算起
     first_at: float = 0.0
     changed: asyncio.Event = field(default_factory=asyncio.Event)
 
     async def put(self, line: str) -> None:
-        n = len(line.encode()) + 1
-        while self.lines and self.size + n > self.max_bytes:
+        address = route_line(line)
+        if address is not None:
+            self.address = address
+        while True:
+            # 合成文本里这一行占的字节：新出现的目标多一行 `@route`，`@route` 行本身不进文本
+            n = 0 if address is not None else len(line.encode()) + 1
+            if self.address is not None and self.address not in self.sections:
+                n += len(route_header(self.address).encode()) + 1
+            if not self.lines or self.size + n <= self.max_bytes:
+                break
             self.changed.clear()
             await self.changed.wait()
-        if not self.lines:
-            self.first_at = anyio.current_time()
-        self.lines.append(line)
+        body = self.sections.setdefault(self.address, [])
+        if address is None:
+            if not self.lines:
+                self.first_at = anyio.current_time()
+            body.append(line)
+            self.lines += 1
         self.size += n
         self.changed.set()
 
     async def ready(self, debounce: float) -> None:
-        """等到有事件、且第一行到达后过了 debounce 秒。"""
+        """等到有内容、且第一行内容到达后过了 debounce 秒。"""
         while not self.lines:
             self.changed.clear()
             await self.changed.wait()
         await anyio.sleep(max(0.0, self.first_at + debounce - anyio.current_time()))
 
-    def take(self) -> list[str]:
-        batch, self.lines, self.size = self.lines, [], 0
+    def take(self) -> tuple[str, int]:
+        """取出这一批：(事件文本, 内容行数)。最近的 `@route` 地址留着，继续给之后的行定目标。"""
+        batch = (routed_text(self.sections), self.lines)
+        self.sections, self.lines, self.size = {}, 0, 0
         self.changed.set()
         return batch
 
@@ -385,7 +408,7 @@ class StreamRunner:
         while True:
             await pending.ready(config.debounce_seconds)
             try:
-                await self._wait_previous(spec, len(pending.lines), notified)
+                await self._wait_previous(spec, pending.lines, notified)
             except Exception:
                 # 契约之外的失败（如数据库暂时不可用）：事件留在队列里，稍后再试，不拖垮进程的监督
                 log.exception(
@@ -393,13 +416,13 @@ class StreamRunner:
                 )
                 await anyio.sleep(self._busy_poll_seconds)
                 continue
-            batch = pending.take()
+            event, lines = pending.take()
             try:
-                await self._triggers.fire_activated(spec.trigger_id, "\n".join(batch))
+                await self._triggers.fire_activated(spec.trigger_id, event)
             except Exception:
                 # 一旦开始触发就不重试这一批（至多一次）：fire 可能已经提交了投递才抛出，重试会重复触发
                 log.exception(
-                    "stream delivery failed, batch dropped", extra={"trigger": spec.name, "lines": len(batch)}
+                    "stream delivery failed, batch dropped", extra={"trigger": spec.name, "lines": lines}
                 )
                 await anyio.sleep(self._busy_poll_seconds)
 

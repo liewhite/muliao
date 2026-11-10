@@ -10,6 +10,7 @@ from muliao.issues.api import IssueStatus
 from muliao.sessions.api import NewChat, Origin, UserMessage
 from muliao.sessions.tables import Session
 from muliao.triggers.api import Precheck
+from muliao.triggers.service import TriggerAgentArchived
 from tests.conftest import agent_update, login
 from tests.test_flow import deliver, drain
 
@@ -137,7 +138,7 @@ async def test_triggers_of_an_archived_agent_neither_run_their_precheck_nor_fire
     )
     await container.agent_lifecycle.set_archived(alpha.id, True)
 
-    with pytest.raises(AgentArchived):
+    with pytest.raises(TriggerAgentArchived):
         await container.triggers.fire(trigger.id)
     # 激活机制：只跳过，不停用、不记失败
     await container.triggers.fire_activated(trigger.id)

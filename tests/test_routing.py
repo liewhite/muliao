@@ -3,10 +3,10 @@
 import pytest
 from sqlalchemy import select
 
-from muliao.agents.api import USER
+from muliao.agents.api import USER, AgentArchived
 from muliao.errors import InvalidInput
 from muliao.issues.api import ActivityKind, IssueStatus
-from muliao.routing.targets import parse_address, split_routed
+from muliao.routing.targets import parse_address, routed_text, split_routed
 from muliao.sessions.api import Origin
 from muliao.sessions.tables import Mail, Session
 from muliao.triggers.api import Precheck, route_address
@@ -18,14 +18,23 @@ def test_text_without_route_lines_is_one_part_for_the_default_target_unchanged()
     assert split_routed(text) == [(None, text)]
 
 
-def test_route_lines_split_the_text_in_order_and_drop_empty_parts():
+def test_route_lines_split_the_text_in_order_and_keep_empty_parts_so_their_address_is_checked():
     text = "head\n@route agent:beta\nb1\n@route issue:7\ni1\n@route agent:beta\nb2\n@route session\n\n"
     assert split_routed(text) == [
         (None, "head"),
         ("agent:beta", "b1"),
         ("issue:7", "i1"),
         ("agent:beta", "b2"),
+        ("session", ""),
     ]
+
+
+def test_routed_text_puts_the_default_lines_first_and_splits_back_the_same():
+    sections = {"issue:7": ["i1", "i2"], None: ["d1"], "agent:beta": []}
+    text = routed_text(sections)
+    assert text == "d1\n@route issue:7\ni1\ni2\n@route agent:beta"
+    assert split_routed(text) == [(None, "d1"), ("issue:7", "i1\ni2"), ("agent:beta", "")]
+    assert routed_text({None: ["a", "b"]}) == "a\nb"
 
 
 def test_only_route_lines_at_the_start_count_so_scripts_can_escape_outside_text():
@@ -206,3 +215,34 @@ async def test_the_default_route_is_checked_when_set_and_again_when_its_target_i
     await container.issues.delete(issue.id)
     with pytest.raises(InvalidInput, match="route target not found or gone"):
         await container.triggers.fire(trigger.id, "x")
+
+
+async def test_an_address_without_content_is_still_checked(container, make_agent):
+    alpha = await make_agent("alpha")
+    trigger = await _webhook(container, alpha.id)
+    with pytest.raises(InvalidInput, match="no agent named 'nobody'"):
+        await container.triggers.fire(trigger.id, "x\n@route agent:nobody\n")
+    assert await _sessions(container) == []
+
+
+async def test_a_route_to_an_archived_agent_is_a_bad_target_not_the_trigger_being_archived(
+    container, make_agent
+):
+    """目标 agent 归档是目标不合法：整次不投、激活的触发停用并记原因；不当成触发器自己的 agent 归档而静默跳过。"""
+    alpha, beta = await make_agent("alpha"), await make_agent("beta")
+    trigger = await container.triggers.create(
+        name="later", agent_id=alpha.id, kind="once", prompt="p", config={"at": "2099-01-01T00:00"}
+    )
+    stored = await _webhook(container, alpha.id, route="agent:beta")
+    await container.agent_lifecycle.set_archived(beta.id, True)
+
+    with pytest.raises(AgentArchived, match="beta.*archived"):
+        await container.triggers.fire(stored.id, "x")
+    with pytest.raises(InvalidInput, match="invalid route 'session:beta'.*archived"):
+        await container.triggers.update(stored.id, route="session:beta")
+
+    await container.triggers.fire_activated(trigger.id, "mine\n@route agent:beta\nfor beta")
+    await deliver(container)
+    assert await _sessions(container) == []  # 默认目标那段也不投
+    after = await container.triggers.get_by_name("later")
+    assert not after.enabled and "archived" in (after.disabled_reason or "")
