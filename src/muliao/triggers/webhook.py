@@ -4,7 +4,8 @@
   且只能由用户在界面上生成（agent 创建的 webhook 在用户生成 token 之前收不到事件）。不放进 vault——vault
   存的是外部系统发给我们的凭证。
 - 先鉴权再读请求体；触发器不存在、不是 webhook、没有 token、token 不匹配，都返回同一个 401，不暴露哪些名称存在。
-- 不带 session_id 新建会话，响应返回会话 id；带上它的后续事件在同一会话里继续（只能续写本触发器发起的会话）。
+- 不带 session_id 按触发器的投递目标投递（默认新建会话），响应返回会话 id；带上它的后续事件以那个会话为默认目标继续
+  （routing.Continue，只能续写本触发器发起的会话），内容里的 `@route` 行照样分到别处。
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from sqlalchemy import select
 
 from muliao.errors import InvalidInput, Unauthorized
 from muliao.platform.db import Database
+from muliao.routing.api import Continue
 from muliao.triggers.service import Fired, TriggerService, parse_config, set_state, trigger_in
 from muliao.triggers.tables import Trigger
 
@@ -96,10 +98,12 @@ class Webhooks:
             return trigger.id
 
     async def deliver(self, trigger_id: int, payload: str, session_id: str | None) -> Fired | None:
-        """None 表示前置检查判定这次不触发。"""
+        """session_id 给出时它是默认目标（续写），否则按触发器的 route。None 表示这次没有触发（前置检查判定没事，或内容按
+        `@route` 分完都是空的）。"""
         if not payload.strip():
             raise InvalidInput("event payload must not be empty")
-        return await self._triggers.fire(trigger_id, payload, session_id)
+        to = None if session_id is None else Continue(session_id=session_id)
+        return await self._triggers.fire(trigger_id, payload, to=to)
 
     async def generate_token(self, trigger_id: int) -> str:
         """生成（或重新生成）token：旧 token 立即失效。只由用户在界面上调用。"""

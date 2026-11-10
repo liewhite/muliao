@@ -40,7 +40,17 @@ from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tables import Task
 from muliao.platform.tasks import Clock, Commit
 from muliao.platform.values import KEEP, Keep, local_time
-from muliao.routing.api import DEFAULT, TARGET, Sender, Target, describe, plan_in, resolve_in, routed_in
+from muliao.routing.api import (
+    DEFAULT,
+    TARGET,
+    Destination,
+    Sender,
+    Target,
+    describe,
+    plan_in,
+    resolve_in,
+    routed_in,
+)
 from muliao.sessions.api import (
     NewConversation,
     Origin,
@@ -431,47 +441,36 @@ class TriggerService:
             raise NotFound(f"trigger {name!r} not found")
 
     async def _deliver_in(
-        self, s: AsyncSession, trigger: Trigger, payload: str | None, session_id: str | None
+        self, s: AsyncSession, trigger: Trigger, payload: str | None, to: Destination | None
     ) -> _Fired | None:
         """组装成事件按投递目标交出去（只由 fire 调用）。
 
-        payload 为事件内容（无则只有处理说明）。session_id 为空时按目标投递（routing）：内容里的 `@route` 行把各段分到各自的
-        目标，其余投到触发器的默认目标（route，没设是新开它的 agent 的会话），每段前面都带处理说明；各段都是空的时不触发（None）。
-        session_id 不为空时整段续写那个会话（webhook 的续写）——只能续写本触发器发起的会话，不按 `@route` 分。
+        payload 为事件内容（无则只有处理说明），按目标投递（routing）：内容里的 `@route` 行把各段分到各自的目标，其余投到
+        默认目标：调用方给出的 to（如 webhook 续写的会话），否则是触发器的 route（没设是新开它的 agent 的会话）。每段前面都
+        带处理说明；各段都是空的时不触发（None）。
         在这个事务里校验来信与目标（不合规的当场报错给调用方，整次不投）、记下触发，同一事务发出各次投递：触发记下了就一定
         投递，投递恰好一次。新建的会话 id 在这里预先分配，投递之后（通常毫秒级）会话才出现。
         """
         now = self._clock()
-        if session_id is not None:
-            inbound = SenderMail(
-                origin=Origin.TRIGGER,
-                origin_ref=str(trigger.id),
-                content=event_prompt(trigger.prompt, payload),
-                session=session_id,
+        planned = await plan_in(s, payload, route_of(trigger) if to is None else to, trigger.agent_id)
+        if not planned:
+            log.info(
+                "trigger event has no content after routing, not firing", extra={"trigger": trigger.name}
             )
-            sessions: list[str | None] = [session_id]
-            tasks = [self._messaging.send_in(s, await receive_command_in(s, inbound))]
-        else:
-            planned = await plan_in(s, payload, route_of(trigger), trigger.agent_id)
-            if not planned:
-                log.info(
-                    "trigger event has no content after routing, not firing", extra={"trigger": trigger.name}
-                )
-                return None
-            sender = Sender(
-                origin=Origin.TRIGGER,
-                origin_ref=str(trigger.id),
-                agent_id=trigger.agent_id,
-                source=f"trigger {trigger.name}",
-                title=f"{trigger.name} · {local_time(now, self._tz)}",
-                latest_title=trigger.name,
-            )
-            routed = [
-                await routed_in(s, sender, target, event_prompt(trigger.prompt, body))
-                for target, body in planned
-            ]
-            sessions = [r.session_id for r in routed]
-            tasks = [self._messaging.send_in(s, r.command) for r in routed]
+            return None
+        sender = Sender(
+            origin=Origin.TRIGGER,
+            origin_ref=str(trigger.id),
+            agent_id=trigger.agent_id,
+            source=f"trigger {trigger.name}",
+            title=f"{trigger.name} · {local_time(now, self._tz)}",
+            latest_title=trigger.name,
+        )
+        routed = [
+            await routed_in(s, sender, target, event_prompt(trigger.prompt, body)) for target, body in planned
+        ]
+        sessions = [r.session_id for r in routed]
+        tasks = [self._messaging.send_in(s, r.command) for r in routed]
         trigger.last_fired_at = now
         # 这次开出或续写的第一个已知会话（定时跳过、流式排队看它的工作状态）；只投进了 issue、或续写的会话还没建出来时
         # 留着上一次的，不清空
@@ -496,8 +495,8 @@ class TriggerService:
         self,
         trigger_id: int,
         payload: str | None = None,
-        session_id: str | None = None,
         *,
+        to: Destination | None = None,
         record_failure: bool = True,
     ) -> Fired | None:
         """所有触发方式的唯一出口，返回投出去的信。有前置检查时先跑检查：不触发返回 None（这次不调用 agent）；
@@ -507,8 +506,9 @@ class TriggerService:
         一次性触发器那时已经结束。管理操作的「立即运行」走 run。
 
         触发记下之后马上执行投信（run_now），通常返回时会话已经存在，调用方可以立即续写；做不到时由 worker 稍后投递。
+        to 是这次替代触发器 route 的默认目标（如 webhook 续写的会话），内容里的 `@route` 行照样生效。
         record_failure 为假时检查失败只上抛、不记在触发器上也不告警（见 run）。"""
-        fired = await self._fire(trigger_id, payload, session_id, record_failure)
+        fired = await self._fire(trigger_id, payload, to, record_failure)
         if fired is None:
             return None
         for task in fired.deliveries:
@@ -555,7 +555,7 @@ class TriggerService:
         await self._run_now(delivery.id)
 
     async def _fire(
-        self, trigger_id: int, payload: str | None, session_id: str | None, record_failure: bool
+        self, trigger_id: int, payload: str | None, to: Destination | None, record_failure: bool
     ) -> _Fired | None:
         async with self._db.transaction() as s:
             trigger = await trigger_in(s, trigger_id)
@@ -569,7 +569,7 @@ class TriggerService:
                 # agent 正在删除：它的触发器随之删除（on_agent_deleting），按触发器已不存在跳过，不停用
                 raise TriggerNotFound(f"trigger {trigger.name!r}: its agent is being deleted") from e
             if trigger.precheck is None:
-                return await self._deliver_in(s, trigger, payload, session_id)
+                return await self._deliver_in(s, trigger, payload, to)
             name, agent_id, stored = trigger.name, trigger.agent_id, trigger.precheck
         precheck = Precheck.model_validate(stored)
 
@@ -597,7 +597,7 @@ class TriggerService:
                         extra={"trigger": name, "baseline": decision.baseline},
                     )
                     return None
-                return await self._deliver_in(s, trigger, decision.event, session_id)
+                return await self._deliver_in(s, trigger, decision.event, to)
         if record_failure:
             await self._record_failure(trigger_id, stored, str(failure))
         raise failure

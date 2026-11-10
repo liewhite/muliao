@@ -17,7 +17,16 @@ from muliao.issues.api import check_issue_in
 from muliao.issues.events import PostIssueEvent
 from muliao.platform.ids import new_id
 from muliao.platform.messaging import Command
-from muliao.routing.targets import IssueTo, LatestOf, NewTo, Target, parse_address, split_routed
+from muliao.routing.targets import (
+    Continue,
+    Destination,
+    IssueTo,
+    LatestOf,
+    NewTo,
+    Target,
+    parse_address,
+    split_routed,
+)
 from muliao.sessions.api import (
     NewConversation,
     Origin,
@@ -69,20 +78,20 @@ async def resolve_in(s: AsyncSession, address: str, sender_agent: str) -> Target
 
 
 async def plan_in(
-    s: AsyncSession, payload: str | None, default: Target, sender_agent: str
-) -> list[tuple[Target, str | None]]:
+    s: AsyncSession, payload: str | None, default: Destination, sender_agent: str
+) -> list[tuple[Destination, str | None]]:
     """事件内容按 `@route` 行分到各目标（targets.split_routed）：[(目标, 这段内容)]，同一目标的各段按出现顺序合并。
     没有内容（payload 为 None，如定时触发）时是默认目标的一次投递；有内容但各段都是空的时为空列表。只读。"""
     if payload is None:
         return [(default, None)]
-    planned: dict[Target, list[str]] = {}
+    planned: dict[Destination, list[str]] = {}
     for address, body in split_routed(payload):
         target = default if address is None else await resolve_in(s, address, sender_agent)
         planned.setdefault(target, []).append(body)
     return [(target, "\n".join(bodies)) for target, bodies in planned.items()]
 
 
-async def routed_in(s: AsyncSession, sender: Sender, target: Target, content: str) -> Routed:
+async def routed_in(s: AsyncSession, sender: Sender, target: Destination, content: str) -> Routed:
     """把 content 投到目标的命令（只读地校验，不合规时当场报错，见 sessions.api.receive_command_in）。存下的目标后来没了
     （agent 或 issue 被删除）是目标不合法（InvalidInput），不是发送方自己不在了。"""
     try:
@@ -96,8 +105,13 @@ async def routed_in(s: AsyncSession, sender: Sender, target: Target, content: st
     return routed
 
 
-async def _routed_in(s: AsyncSession, sender: Sender, target: Target, content: str) -> Routed:
+async def _routed_in(s: AsyncSession, sender: Sender, target: Destination, content: str) -> Routed:
     match target:
+        case Continue(session_id=session_id):
+            mail = SenderMail(
+                origin=sender.origin, origin_ref=sender.origin_ref, content=content, session=session_id
+            )
+            return Routed(command=await receive_command_in(s, mail), session_id=session_id)
         case NewTo(agent_id=agent_id):
             session_id = new_id()
             mail = SenderMail(

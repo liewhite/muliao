@@ -128,6 +128,30 @@ async def test_event_can_continue_the_session_it_started(client, container, make
     assert len(await container.sessions.list(agent_id=alpha, origins=None, limit=10, offset=0)) == 1
 
 
+async def test_continued_event_still_splits_route_lines(client, container, make_agent):
+    """续写只是换了默认目标：内容里的 `@route` 行照样把那段投到别处。"""
+    alpha = (await make_agent("alpha")).id
+    await login(client)
+    _, token = await _create(client, alpha)
+    first = (await client.post("/api/hooks/github", content="opened #1", headers=_bearer(token))).json()
+
+    resp = await client.post(
+        f"/api/hooks/github?session_id={first['session_id']}",
+        content="commented on #1\n@route new\nunrelated",
+        headers=_bearer(token),
+    )
+    assert resp.status_code == 202 and resp.json() == first
+    await drain(container)
+
+    assert last_user_prompt(await history_of(container, first["session_id"])).endswith(
+        "<event>\ncommented on #1\n</event>"
+    )
+    sessions = await container.sessions.list(agent_id=alpha, origins=None, limit=10, offset=0)
+    others = [s.session.id for s in sessions if s.session.id != first["session_id"]]
+    assert len(others) == 1
+    assert last_user_prompt(await history_of(container, others[0])).endswith("<event>\nunrelated\n</event>")
+
+
 async def test_event_cannot_write_into_sessions_it_did_not_start(client, container, make_agent):
     alpha = (await make_agent("alpha")).id
     await login(client)
@@ -145,7 +169,8 @@ async def test_event_cannot_write_into_sessions_it_did_not_start(client, contain
         assert resp.status_code == 403, resp.text
         assert "github" not in resp.text and "slack" not in resp.text
     missing = await client.post("/api/hooks/github?session_id=nope", content="x", headers=_bearer(github))
-    assert missing.status_code == 404
+    # 续写的会话不存在：和存下的目标没了一样是目标不合法（routing.routed_in）
+    assert missing.status_code == 422
 
 
 async def test_recreated_trigger_cannot_continue_sessions_of_the_deleted_one(client, make_agent):

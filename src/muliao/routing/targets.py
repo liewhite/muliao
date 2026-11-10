@@ -1,10 +1,11 @@
 """投递目标：一个事件交给谁（纯逻辑）。
 
-目标有三种，存的是 id（agent 改名不影响已存的目标），对模型与脚本用文字地址（按名称指代 agent）：
+存下的目标（Target）有三种，存的是 id（agent 改名不影响已存的目标），对模型与脚本用文字地址（按名称指代 agent）：
 - 新会话 `new` / `agent:<名>`：新开一个会话（默认是发送方自己的 agent）；
 - 最近的会话 `session` / `session:<名>`：续写这个发送方最近一次给该 agent 开的会话（会话领域按发送方定位，SessionKey），
   没有就新建；长度靠会话的压缩；
 - issue `issue:<N>`：记进 issue 的时间线，由 issue 领域按它的规则投给接手的 agent（没人接手时给 owner）。
+此外调用方可以当场指定续写某个会话（Continue，如 webhook 的续写），它没有文字地址、不能存下。
 
 事件文本里可以按段指定目标（split_routed）：单独一行 `@route <地址>`，从它到下一个 `@route` 之间的内容投到这个地址；
 第一个 `@route` 之前的内容投到默认目标。渠道（Slack、Telegram……）的逻辑都在产出事件的脚本里，这里只认地址。
@@ -45,6 +46,18 @@ class IssueTo(BaseModel):
 
 Target = Annotated[NewTo | LatestOf | IssueTo, Field(discriminator="to")]
 TARGET = TypeAdapter[NewTo | LatestOf | IssueTo](Target)
+
+
+class Continue(BaseModel):
+    """续写指定的会话（只能是这个发送方开出的，会话领域校验）。只由调用方当场给出（如 webhook 带上之前返回的会话 id），
+    没有文字地址，也不能存成默认目标（不在 Target 里）。"""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    session_id: str
+
+
+# 一次投递可以交给的目标：存下的 Target，或调用方当场指定要续写的会话
+Destination = NewTo | LatestOf | IssueTo | Continue
 
 # 默认目标：新开发送方自己的 agent 的会话
 DEFAULT: NewTo = NewTo()
