@@ -1,4 +1,5 @@
-"""agent 工作目录的只读浏览（工作区领域 WorkspaceFiles）：agent 页「文件」列出一层目录、读一个文件；设置页的 skill 脚本
+"""agent 工作目录的只读浏览（工作区领域 WorkspaceFiles）：agent 页「文件」列出一层目录、读一个文件（skill 页的文件浏览
+在 api/items.py，响应形状同这里）；设置页的 skill 脚本
 「始终允许」（ScriptGrants）：列出与撤销。
 
 文件内容是 agent 写的，与界面同源、带着登录 cookie，所以和对话里的文件下载（api/files.py）一样按不可信处理
@@ -15,7 +16,7 @@ from pydantic import BaseModel
 
 from muliao.api.deps import C
 from muliao.files.api import UNTRUSTED_CONTENT_HEADERS
-from muliao.workspace.api import Entry, GrantInfo
+from muliao.workspace.api import Entry, GrantInfo, WorkspaceFile
 
 router = APIRouter()
 
@@ -48,7 +49,11 @@ async def list_workspace(c: C, agent_id: str, path: str = "") -> list[EntryOut]:
 async def read_workspace_file(c: C, agent_id: str, path: str) -> FileResponse:
     """工作目录里一个文件的内容。"""
     await c.agents.get(agent_id)
-    f = await anyio.to_thread.run_sync(c.workspace_files.file, agent_id, path)
+    return file_response(await anyio.to_thread.run_sync(c.workspace_files.file, agent_id, path))
+
+
+def file_response(f: WorkspaceFile) -> FileResponse:
+    """浏览中的一个文件（工作目录、skill 目录）：只有能内联的图片 inline，其余作为附件，按不可信内容返回。"""
     return FileResponse(
         f.path,
         media_type=f.media_type,

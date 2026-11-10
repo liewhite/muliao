@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { Button, Card, toast } from '@heroui/react'
 import { Download, Plus, Trash2, Upload } from 'lucide-react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { api, ApiError, asAgentId, type AgentId, type ItemOf, type Schemas, type Skill } from '../api'
+import { api, ApiError, asAgentId, skillFileUrl, type AgentId, type ItemOf, type Schemas, type Skill } from '../api'
+import { FileBrowser } from './FileBrowser'
 import { ItemAccess, OwnerSelect } from './itemParts'
 import { ActionButton,
   CollapsibleForm,
@@ -180,56 +181,73 @@ export function SkillEditor() {
     <Page title={existing ?? '新建 skill'} back={back}>
       <Loading state={loaded}>
         {() => (
-          <Card>
-            <Card.Content className="flex flex-col gap-4">
-              {existing ? (
-                <div className="text-sm text-muted">
-                  归属：{skill.owner === null ? '平台' : agentLabel(agents.data, asAgentId(skill.owner))}
-                </div>
-              ) : (
-                <OwnerSelect
-                  value={skill.owner === null ? null : asAgentId(skill.owner)}
-                  onChange={(owner) => set({ owner })}
-                />
-              )}
-              {!existing && (
+          <div className="flex flex-col gap-4">
+            <Card>
+              <Card.Content className="flex flex-col gap-4">
+                {existing ? (
+                  <div className="text-sm text-muted">
+                    归属：{skill.owner === null ? '平台' : agentLabel(agents.data, asAgentId(skill.owner))}
+                  </div>
+                ) : (
+                  <OwnerSelect
+                    value={skill.owner === null ? null : asAgentId(skill.owner)}
+                    onChange={(owner) => set({ owner })}
+                  />
+                )}
+                {!existing && (
+                  <TextInput
+                    label="名称"
+                    hint="小写字母、数字、- 或 _"
+                    value={skill.name}
+                    onChange={(name) => set({ name })}
+                    mono
+                    isRequired
+                  />
+                )}
                 <TextInput
-                  label="名称"
-                  hint="小写字母、数字、- 或 _"
-                  value={skill.name}
-                  onChange={(name) => set({ name })}
-                  mono
+                  label="描述"
+                  hint="何时使用这个 skill，会出现在 agent 的 skill 索引里"
+                  value={skill.description}
+                  onChange={(description) => set({ description })}
                   isRequired
                 />
-              )}
-              <TextInput
-                label="描述"
-                hint="何时使用这个 skill，会出现在 agent 的 skill 索引里"
-                value={skill.description}
-                onChange={(description) => set({ description })}
-                isRequired
-              />
-              <TextAreaInput label="内容（Markdown）" value={skill.body} onChange={(body) => set({ body })} rows={18} mono />
-              <ErrorAlert error={action.error} />
-              <div className="flex gap-2">
-                <ActionButton isPending={action.busy} onPress={() => void save()}>
-                  保存
-                </ActionButton>
-                {existing && (
-                  <Button variant="secondary" isDisabled={action.busy} onPress={() => void exportPackage()}>
-                    <Download className="size-4" />
-                    导出 .skill
-                  </Button>
-                )}
-                {existing && (
-                  <Button variant="danger-soft" isDisabled={action.busy} onPress={() => void remove()}>
-                    <Trash2 className="size-4" />
-                    删除
-                  </Button>
-                )}
-              </div>
-            </Card.Content>
-          </Card>
+                <TextAreaInput label="内容（Markdown）" value={skill.body} onChange={(body) => set({ body })} rows={18} mono />
+                <ErrorAlert error={action.error} />
+                <div className="flex gap-2">
+                  <ActionButton isPending={action.busy} onPress={() => void save()}>
+                    保存
+                  </ActionButton>
+                  {existing && (
+                    <Button variant="secondary" isDisabled={action.busy} onPress={() => void exportPackage()}>
+                      <Download className="size-4" />
+                      导出 .skill
+                    </Button>
+                  )}
+                  {existing && (
+                    <Button variant="danger-soft" isDisabled={action.busy} onPress={() => void remove()}>
+                      <Trash2 className="size-4" />
+                      删除
+                    </Button>
+                  )}
+                </div>
+              </Card.Content>
+            </Card>
+            {existing && (
+              <section className="flex flex-col gap-2">
+                <h2 className="text-base font-semibold">文件</h2>
+                <FileBrowser
+                  key={existing}
+                  source={{
+                    id: existing,
+                    list: (path) => api.skillFiles(existing, path),
+                    fileUrl: (path) => skillFileUrl(existing, path),
+                  }}
+                  label="skill 目录"
+                  emptyText="skill 目录是空的"
+                />
+              </section>
+            )}
+          </div>
         )}
       </Loading>
     </Page>

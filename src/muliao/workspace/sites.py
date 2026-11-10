@@ -16,7 +16,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from muliao.errors import NotFound
-from muliao.workspace.browse import WorkspaceFile, media_type_of, real, resolve_within
+from muliao.platform.fs import real, resolve_within
+from muliao.workspace.browse import WorkspaceFile, media_type_of
 
 SITE_DIR = "site"
 INDEX = "index.html"

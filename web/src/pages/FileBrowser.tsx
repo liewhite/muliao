@@ -1,11 +1,12 @@
-// agent 页「文件」：只读浏览 agent 的工作目录。左边目录树（展开时才加载那一层），右边预览（Markdown 渲染、代码高亮、图片）。
+// 目录的只读浏览：agent 页「文件」（工作目录）与 skill 页（skill 目录）。左边目录树（展开时才加载那一层），右边预览
+// （Markdown 渲染、代码高亮、图片）。
 // 树用 react-aria-components 的 Tree（键盘导航、展开收起、无障碍），高亮用按需加载的 highlight.js。
 
 import { useState } from 'react'
 import { Button, Card } from '@heroui/react'
 import { ChevronRight, Download, File, Folder, RefreshCw } from 'lucide-react'
 import { Button as AriaButton, Tree, TreeItem, TreeItemContent, type Key } from 'react-aria-components'
-import { api, workspaceFileUrl, type AgentId, type WorkspaceEntry } from '../api'
+import { api, type WorkspaceEntry } from '../api'
 import { CODE_BLOCK, EmptyHint, ErrorAlert, Loading, Markdown, errorMessage, formatTime, useLoad } from '../ui'
 import {
   MAX_HIGHLIGHT_BYTES,
@@ -18,8 +19,15 @@ import {
   splitPath,
 } from '../workspaceFiles'
 
-export function WorkspaceBrowser({ agent }: { agent: AgentId }) {
-  const root = useLoad(() => api.workspace(agent, ''), [agent])
+/** 浏览的是哪个目录：id 换了就重新读；list 列出 path（相对目录，空为根）这一层，fileUrl 是一个文件的内容地址 */
+export type DirSource = {
+  id: string
+  list: (path: string) => Promise<WorkspaceEntry[]>
+  fileUrl: (path: string) => string
+}
+
+export function FileBrowser({ source, label, emptyText }: { source: DirSource; label: string; emptyText: string }) {
+  const root = useLoad(() => source.list(''), [source.id])
   // 展开过的子目录的内容（键是相对路径）；收起时保留，再展开不重新请求，点刷新才重新读
   const [dirs, setDirs] = useState<Record<string, WorkspaceEntry[]>>({})
   const [expanded, setExpanded] = useState<Set<Key>>(new Set())
@@ -31,7 +39,7 @@ export function WorkspaceBrowser({ agent }: { agent: AgentId }) {
 
   async function loadDir(path: string) {
     try {
-      const entries = await api.workspace(agent, path)
+      const entries = await source.list(path)
       setDirs((d) => ({ ...d, [path]: entries }))
     } catch (e) {
       setError(errorMessage(e))
@@ -110,8 +118,8 @@ export function WorkspaceBrowser({ agent }: { agent: AgentId }) {
     // 所在目录还在读（刷新中）
     if (listing === undefined) return null
     const entry = listing.find((e) => e.name === name)
-    if (entry === undefined) return <EmptyHint>{path} 已不在工作目录里</EmptyHint>
-    return <FilePreview key={`${path}-${version}`} agent={agent} path={path} entry={entry} />
+    if (entry === undefined) return <EmptyHint>{path} 已不在{label}里</EmptyHint>
+    return <FilePreview key={`${path}-${version}`} url={source.fileUrl(path)} path={path} entry={entry} />
   }
 
   return (
@@ -129,10 +137,10 @@ export function WorkspaceBrowser({ agent }: { agent: AgentId }) {
           <Loading state={root}>
             {(entries) =>
               entries.length === 0 ? (
-                <EmptyHint>工作目录是空的</EmptyHint>
+                <EmptyHint>{emptyText}</EmptyHint>
               ) : (
                 <Tree
-                  aria-label="工作目录"
+                  aria-label={label}
                   expandedKeys={expanded}
                   onExpandedChange={changeExpanded}
                   className="outline-none"
@@ -149,13 +157,12 @@ export function WorkspaceBrowser({ agent }: { agent: AgentId }) {
   )
 }
 
-function FilePreview({ agent, path, entry }: { agent: AgentId; path: string; entry: WorkspaceEntry }) {
+function FilePreview({ url, path, entry }: { url: string; path: string; entry: WorkspaceEntry }) {
   const size = entry.size ?? 0
   const kind = previewKind(entry)
-  const url = workspaceFileUrl(agent, path)
   const text = useLoad(
-    async () => (kind === 'markdown' || kind === 'text' ? (await api.workspaceFile(agent, path)).text() : ''),
-    [agent, path, kind],
+    async () => (kind === 'markdown' || kind === 'text' ? (await api.fileBlob(url)).text() : ''),
+    [url, kind],
   )
 
   return (

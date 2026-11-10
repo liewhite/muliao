@@ -247,6 +247,10 @@ export type SitePage = WithAgentId<Schemas['SitePageOut'], 'agent_id'>
 export const workspaceFileUrl = (agentId: AgentId, path: string) =>
   `/api/agents/${encodeURIComponent(agentId)}/workspace/file?${new URLSearchParams({ path })}`
 
+/** skill 目录里一个文件的内容（path 相对 skill 目录），同 workspaceFileUrl */
+export const skillFileUrl = (name: string, path: string) =>
+  `/api/items/skill/${encodeURIComponent(name)}/file?${new URLSearchParams({ path })}`
+
 export const api = {
   login: (password: string) => call('post', '/api/auth/login', { body: { password } }),
   logout: () => call('post', '/api/auth/logout'),
@@ -279,9 +283,8 @@ export const api = {
   /** agent 工作目录里 path（相对工作目录，空为根）这一层：目录在前，各自按名称 */
   workspace: (agent_id: AgentId, path: string) =>
     call('get', '/api/agents/{agent_id}/workspace', { path: { agent_id }, query: { path } }),
-  /** 工作目录里一个文件的内容（响应体是文件本身，接口描述里没有 JSON 响应体） */
-  workspaceFile: (agent_id: AgentId, path: string) =>
-    send<Blob>('GET', workspaceFileUrl(agent_id, path), undefined, undefined, true),
+  /** 浏览中的一个文件的内容（workspaceFileUrl / skillFileUrl；响应体是文件本身，接口描述里没有 JSON 响应体） */
+  fileBlob: (url: string) => send<Blob>('GET', url, undefined, undefined, true),
   /** 全部 agent 的自定义页面（工作目录 site/<名>/index.html），各带打开它的签名地址 */
   pages: () => branded<SitePage[]>(call('get', '/api/pages')),
   /** 服务端配置决定的可选能力（如语音输入）与默认值（如压缩阈值） */
@@ -320,6 +323,9 @@ export const api = {
   /** 新建的归 owner；已有的整体改写正文与描述，owner 不变 */
   saveSkill: (name: string, body: Schemas['SkillIn']) => call('put', '/api/items/skill/{name}', { path: { name }, body }),
   deleteSkill: (name: string) => call('delete', '/api/items/skill/{name}', { path: { name } }),
+  /** skill 目录里 path（相对 skill 目录，空为根）这一层，同工作目录浏览 */
+  skillFiles: (name: string, path: string) =>
+    call('get', '/api/items/skill/{name}/files', { path: { name }, query: { path } }),
   /** 标准 .skill 文件（zip）；失败时与其他调用一样抛 ApiError，不会把错误体当成文件存下 */
   exportSkill: (name: string) =>
     send<Blob>('GET', `/api/items/skill/${encodeURIComponent(name)}/package`, undefined, undefined, true),

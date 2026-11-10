@@ -1,6 +1,6 @@
 """Skill：AI 资源的一种，一个目录（`skills/<名>/`，在 owner 的资源目录下，agents.assets）：SKILL.md（YAML frontmatter：
 description，可选 name 须与目录同名）加任意附件。agent 直接用文件工具读、改、执行里面的文件；这里是平台自己的读写：
-skill 索引、界面的编辑页（只改 SKILL.md）、标准 .skill 文件的导入导出与删除。
+skill 索引、界面的编辑页（只改 SKILL.md；整个目录的只读浏览是 workspace.browse）、标准 .skill 文件的导入导出与删除。
 """
 
 from __future__ import annotations
@@ -147,6 +147,10 @@ class SkillStore:
         asset = (await self._source.snapshot()).asset(_KIND, name)
         text = await asyncio.to_thread((asset.path / SKILL_FILE).read_text, encoding="utf-8")
         return Skill(_meta(asset), frontmatter.loads(text).content)
+
+    async def directory(self, name: str) -> Path:
+        """skill 的目录（界面只读浏览它的文件用）。"""
+        return (await self._source.snapshot()).asset(_KIND, name).path
 
     async def write(
         self, name: str, description: str, body: str, *, actor: str, owner: str | None

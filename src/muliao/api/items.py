@@ -8,7 +8,9 @@
 from datetime import datetime
 from typing import Annotated, Literal
 
+import anyio
 from fastapi import APIRouter, Request, Response
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from muliao.agents.api import (
@@ -25,6 +27,8 @@ from muliao.agents.api import (
     mcp_config,
 )
 from muliao.api.deps import C, read_limited
+from muliao.api.workspace import EntryOut, file_response
+from muliao.workspace.api import file_in, list_dir
 
 router = APIRouter()
 
@@ -250,6 +254,20 @@ async def put_skill(c: C, name: str, body: SkillIn) -> SkillOut:
 @router.delete("/items/skill/{name}", status_code=204)
 async def delete_skill(c: C, name: str) -> None:
     await c.skills.delete(name, USER)
+
+
+@router.get("/items/skill/{name}/files")
+async def list_skill_files(c: C, name: str, path: str = "") -> list[EntryOut]:
+    """skill 目录里 path（相对 skill 目录，空为根）这一层，同工作目录浏览：目录在前，各自按名称排序。"""
+    root = await c.skills.directory(name)
+    return [EntryOut.of(e) for e in await anyio.to_thread.run_sync(list_dir, root, path)]
+
+
+@router.get("/items/skill/{name}/file")
+async def read_skill_file(c: C, name: str, path: str) -> FileResponse:
+    """skill 目录里一个文件的内容（同工作目录浏览：图片 inline，其余作为附件）。"""
+    root = await c.skills.directory(name)
+    return file_response(await anyio.to_thread.run_sync(file_in, root, path))
 
 
 SKILL_PACKAGE_TYPE = "application/zip"

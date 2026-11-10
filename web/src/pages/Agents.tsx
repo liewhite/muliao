@@ -7,6 +7,7 @@ import {
   api,
   asAgentId,
   newSessionRoute,
+  workspaceFileUrl,
   type Agent,
   type AgentDefaults,
   type AgentInput,
@@ -31,7 +32,7 @@ import { PermissionsInput } from './Permissions'
 import { AgentMemories } from './Memory'
 import { AgentAssetsView } from './AgentAssets'
 import { HistoryList } from './History'
-import { WorkspaceBrowser } from './Workspace'
+import { FileBrowser } from './FileBrowser'
 import { SitePageList } from './SitePages'
 import { refreshUnreadLogged } from '../unread'
 import { announceChange } from '../events'
@@ -440,7 +441,16 @@ export function AgentDetail() {
               <HistoryList agent={a.id} />
             </Tabs.Panel>
             <Tabs.Panel id="files" className="pt-3">
-              <WorkspaceBrowser agent={a.id} />
+              <FileBrowser
+                key={a.id}
+                source={{
+                  id: a.id,
+                  list: (path) => api.workspace(a.id, path),
+                  fileUrl: (path) => workspaceFileUrl(a.id, path),
+                }}
+                label="工作目录"
+                emptyText="工作目录是空的"
+              />
             </Tabs.Panel>
             <Tabs.Panel id="pages" className="pt-3">
               <SitePageList agent={a.id} />
