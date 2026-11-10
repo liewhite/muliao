@@ -1,5 +1,5 @@
 import { createContext, useContext } from 'react'
-import { useLocation } from 'react-router-dom'
+import { useLocation, useParams } from 'react-router-dom'
 import {
   Activity,
   BarChart3,
@@ -88,4 +88,11 @@ export const AdminMenuContext = createContext<() => void>(() => {
 
 export function useOpenAdminMenu(): () => void {
   return useContext(AdminMenuContext)
+}
+
+/** 路由参数（路由表里声明了的）：取不到说明组件挂在了不带这个参数的路由下，当场报错，不当成空字符串去请求 */
+export function useRouteParam(name: string): string {
+  const value = useParams()[name]
+  if (value === undefined) throw new Error(`route parameter ${name} is missing`)
+  return value
 }

@@ -4,6 +4,7 @@ import { ChevronDown, ChevronRight, Hourglass } from 'lucide-react'
 import { Link, useMatch } from 'react-router-dom'
 import { api, type AgentId, type SessionListItem, sessionRoute } from '../api'
 import { useRefetch } from '../events'
+import { parseStringList, useStoredState } from '../storedState'
 import { FILTERS, ORIGIN_LABEL, groupByAgent, parseFilter, splitActive, type Filter } from '../sessionGroups'
 import {
   EmptyHint,
@@ -21,15 +22,6 @@ const FILTER_KEY = 'muliao.sessions.filter'
 
 // 折叠起来的 agent 分组，跨刷新记住
 const COLLAPSED_KEY = 'muliao.sessions.collapsed'
-
-function loadCollapsed(): Set<string> {
-  try {
-    const raw = localStorage.getItem(COLLAPSED_KEY)
-    return new Set(raw ? (JSON.parse(raw) as string[]) : [])
-  } catch {
-    return new Set()
-  }
-}
 
 // 在运行的会话：卡片左侧描强调色边、标题前转圈、带「运行中」标签；在等待的（后台任务、委派、用户回答）：
 // 浅色边、沙漏、「等待中」。置顶区里不在 agent 分组下，带上 agent 名
@@ -87,21 +79,12 @@ function SessionCard({ s, agentName }: { s: SessionListItem; agentName?: string 
 }
 
 export default function Sessions() {
-  const [filter, setFilterState] = useState(() => parseFilter(localStorage.getItem(FILTER_KEY)))
-  const setFilter = (f: Filter) => {
-    localStorage.setItem(FILTER_KEY, f)
-    setFilterState(f)
-  }
+  const [filter, setFilter] = useStoredState(FILTER_KEY, parseFilter)
   const agents = useAgents()
-  const [collapsed, setCollapsed] = useState(loadCollapsed)
+  const [collapsedList, setCollapsed] = useStoredState(COLLAPSED_KEY, parseStringList, JSON.stringify)
+  const collapsed = new Set(collapsedList)
   const toggle = (id: AgentId) =>
-    setCollapsed((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next]))
-      return next
-    })
+    setCollapsed(collapsed.has(id) ? collapsedList.filter((x) => x !== id) : [...collapsedList, id])
   // 关键字输入停下 300ms 后才查（搜消息全文），空白等于不搜
   const [text, setText] = useState('')
   const [keyword, setKeyword] = useState('')

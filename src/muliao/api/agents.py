@@ -95,14 +95,21 @@ async def _out(c: C, a: AgentInfo) -> AgentOut:
     return AgentOut.of(*await c.agents.get_with_rules(a.id))
 
 
-class AgentDefaultsOut(BaseModel):
-    model: str
-
-
 @router.get("/agent-defaults")
-async def agent_defaults(c: C) -> AgentDefaultsOut:
-    """新建 agent 时表单预填的默认值（与创建时套用的是同一份 AgentService.defaults）。"""
-    return AgentDefaultsOut(model=c.agents.defaults.model)
+async def agent_defaults(c: C) -> AgentUpdate:
+    """新建 agent 时表单预填的值：创建时套用的同一份缺省（AgentSpec 的字段缺省，模型取 AgentService.defaults），
+    前端不另写一份。"""
+    spec = AgentSpec(name="", description="")
+    return AgentUpdate(
+        name=spec.name,
+        description=spec.description,
+        model=c.agents.defaults.model,
+        roles=list(spec.roles),
+        allow=list(spec.allow),
+        deny=list(spec.deny),
+        thinking=spec.thinking,
+        group=spec.group,
+    )
 
 
 class ToolOut(BaseModel):

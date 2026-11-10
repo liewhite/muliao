@@ -4,9 +4,9 @@
 import { useState } from 'react'
 import { Button, Card } from '@heroui/react'
 import { ExternalLink, RefreshCw } from 'lucide-react'
-import { Link, useParams } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import { api, asAgentId, sitePageRoute, type AgentId, type SitePage } from '../api'
-import { useReturnState } from '../nav'
+import { useReturnState, useRouteParam } from '../nav'
 import { groupPagesByAgent } from '../pageGroups'
 import { CardGrid, EmptyHint, ErrorAlert, GroupSection, Loading, Page, agentLabel, relativeTime, useAgents, useLoad } from '../ui'
 
@@ -70,9 +70,8 @@ export default function SitePages() {
 }
 
 export function SitePageView() {
-  const params = useParams()
-  const agent = asAgentId(params.agent ?? '')
-  const name = params.name ?? ''
+  const agent = asAgentId(useRouteParam('agent'))
+  const name = useRouteParam('name')
   const agents = useAgents()
   const pages = useLoad(() => api.pages(), [])
   // 刷新时递增：iframe 换 key 重新加载

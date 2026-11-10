@@ -17,7 +17,7 @@ import {
   SquareTerminal,
   Trash2,
 } from 'lucide-react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import {
   agentRoute,
   api,
@@ -60,7 +60,7 @@ import { VoiceButton } from '../VoiceButton'
 import { isSendShortcut, SEND_HINT } from '../sendKey'
 import { announceChange, isTaskOf, liveItems, mergeLive, useRefetch, useServerEvents, withoutCovered, type RunEvent } from '../events'
 import { STATUS_LABEL, issueIdOf, issueRoute } from '../issues'
-import { useReturnState } from '../nav'
+import { useReturnState, useRouteParam } from '../nav'
 import { StatusDot } from './Issues'
 import { refreshUnread, refreshUnreadLogged } from '../unread'
 import { CODE_BLOCK, ErrorAlert, Loading, Markdown, Page, agentLabel, formatTime, useAction, useAgents, useConfirm, useLoad } from '../ui'
@@ -274,17 +274,9 @@ function AskBlock({ block, ctx }: { block: AskBlockData; ctx: SessionContext }) 
  * 不再问，设置页可撤销）
  */
 function ApprovalBlock({ block, ctx }: { block: ApprovalBlockData; ctx: SessionContext }) {
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const decide = (choice: ApprovalChoice) => {
-    setBusy(true)
-    setError(null)
-    // 失败（如新消息先把这次调用关掉了，409）要让人看到，不吞掉
-    ctx
-      .approve(block.callId, choice)
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
-      .finally(() => setBusy(false))
-  }
+  const { busy, error, run } = useAction()
+  // 失败（如新消息先把这次调用关掉了，409）要让人看到，不吞掉
+  const decide = (choice: ApprovalChoice) => void run(() => ctx.approve(block.callId, choice))
   return (
     // 等待项里的「去批准」滚到这里
     <div
@@ -847,7 +839,7 @@ function markSessionRead(id: string) {
 }
 
 export default function SessionView() {
-  const { id = '' } = useParams()
+  const id = useRouteParam('id')
   const navigate = useNavigate()
   const confirm = useConfirm()
   const detail = useLoad(() => api.session(id), [id])

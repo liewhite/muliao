@@ -290,7 +290,16 @@ async def test_default_agent_is_at_most_one_and_goes_with_the_agent(client):
 async def test_agent_defaults_endpoint_matches_config(client, container):
     await login(client)
     defaults = (await client.get("/api/agent-defaults")).json()
-    assert defaults == {"model": container.settings.llm.default_model}
+    assert defaults == {
+        "name": "",
+        "description": "",
+        "model": container.settings.llm.default_model,
+        "roles": [],
+        "allow": [],
+        "deny": [],
+        "thinking": "default",
+        "group": None,
+    }
 
 
 async def test_marking_notifications_read_stops_at_the_one_the_user_saw(client):

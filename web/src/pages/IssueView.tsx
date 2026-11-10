@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Button, Card } from '@heroui/react'
 import { MessageSquare, Pencil, Play, Trash2 } from 'lucide-react'
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   SYSTEM_ACTOR,
   USER,
@@ -14,7 +14,7 @@ import {
   type IssueStatus,
 } from '../api'
 import { useRefetch } from '../events'
-import { useReturnState } from '../nav'
+import { useReturnState, useRouteParam } from '../nav'
 import { refreshUnread } from '../unread'
 import {
   PRIORITIES,
@@ -384,7 +384,7 @@ function Issue({ detail, reload }: { detail: IssueDetail; reload: () => Promise<
 }
 
 export default function IssueView() {
-  const { id = '' } = useParams()
+  const id = useRouteParam('id')
   const issueId = Number(id)
   const detail = useLoad(() => api.issue(issueId), [issueId])
   useRefetch('issues', detail.reload)

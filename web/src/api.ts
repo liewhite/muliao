@@ -113,7 +113,8 @@ export type IssuePriority = Schemas['IssuePriority']
 export type Issue = Schemas['IssueOut']
 export type IssueActivity = Schemas['ActivityOut']
 export type IssueDetail = Schemas['IssueDetailOut']
-export type AgentDefaults = Schemas['AgentDefaultsOut']
+// 新建表单预填的值，形状同整体替换的 AgentInput
+export type AgentDefaults = Schemas['AgentUpdate']
 /** agent 工作目录里的一项；目录的 size 为 null */
 export type WorkspaceEntry = Schemas['EntryOut']
 

@@ -65,7 +65,8 @@ export interface paths {
         };
         /**
          * Agent Defaults
-         * @description 新建 agent 时表单预填的默认值（与创建时套用的是同一份 AgentService.defaults）。
+         * @description 新建 agent 时表单预填的值：创建时套用的同一份缺省（AgentSpec 的字段缺省，模型取 AgentService.defaults），
+         *     前端不另写一份。
          */
         get: operations["agent_defaults_api_agent_defaults_get"];
         put?: never;
@@ -1418,11 +1419,6 @@ export interface components {
             thinking: "default" | "off" | "low" | "medium" | "high" | "xhigh";
             /** Group */
             group?: string | null;
-        };
-        /** AgentDefaultsOut */
-        AgentDefaultsOut: {
-            /** Model */
-            model: string;
         };
         /** AgentOut */
         AgentOut: {
@@ -3462,7 +3458,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["AgentDefaultsOut"];
+                    "application/json": components["schemas"]["AgentUpdate"];
                 };
             };
         };

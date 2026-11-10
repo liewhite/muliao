@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { Button, Card, Chip, Tabs, toast, type Key } from '@heroui/react'
 import { Archive, ArchiveRestore, Copy, MessageSquarePlus, Plus, Star, Trash2 } from 'lucide-react'
-import { Link, NavLink, useNavigate, useParams } from 'react-router-dom'
+import { Link, NavLink, useNavigate } from 'react-router-dom'
+import { useRouteParam } from '../nav'
 import {
   agentRoute,
   api,
@@ -128,16 +129,7 @@ function initialInput(agent: Agent | undefined, defaults: AgentDefaults): AgentI
     const { name, description, model, roles, allow, deny, thinking, group } = agent
     return { name, description, model, roles, allow, deny, thinking, group }
   }
-  return {
-    name: '',
-    description: '',
-    model: defaults.model,
-    roles: [],
-    allow: [],
-    deny: [],
-    thinking: 'default',
-    group: null,
-  }
+  return defaults
 }
 
 type Thinking = AgentInput['thinking']
@@ -291,7 +283,7 @@ const DETAIL_TABS = [
 ] as const
 
 export function AgentDetail() {
-  const id = asAgentId(useParams().id ?? '')
+  const id = asAgentId(useRouteParam('id'))
   const navigate = useNavigate()
   const confirm = useConfirm()
   const agent = useLoad(() => api.agent(id), [id])

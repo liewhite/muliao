@@ -28,6 +28,7 @@ import {
   parseIssueRefs,
 } from '../issues'
 import { NODE_HEIGHT, NODE_WIDTH, edgePath, graphIssues, layoutIssueGraph, type GraphScope } from '../issueGraph'
+import { oneOf, useStoredState } from '../storedState'
 import {
   ActionButton,
   CollapsibleForm,
@@ -462,7 +463,7 @@ function NewIssueForm({ agents, onCreated }: { agents: Agent[] | undefined; onCr
 }
 
 export default function Issues() {
-  const [view, setView] = useState<View>(() => (localStorage.getItem(VIEW_KEY) as View | null) ?? 'board')
+  const [view, changeView] = useStoredState(VIEW_KEY, oneOf<View>(['board', 'list', 'graph'], 'board'))
   const agents = useAgents()
   // 按负责项目筛选：看一个项目的全部 issue（含已完成、已取消）
   const [owner, setOwner] = useState(ALL_OWNERS)
@@ -474,17 +475,7 @@ export default function Issues() {
   const [moveError, setMoveError] = useState<string | null>(null)
   // agent 的运行里可能改了 issue：运行结束、或重连后重新拉取
   useRefetch('issues', loaded.reload)
-  const changeView = (v: View) => {
-    localStorage.setItem(VIEW_KEY, v)
-    setView(v)
-  }
-  const [graphScope, setGraphScope] = useState<GraphScope>(
-    () => (localStorage.getItem(GRAPH_SCOPE_KEY) as GraphScope | null) ?? 'open',
-  )
-  const changeGraphScope = (s: GraphScope) => {
-    localStorage.setItem(GRAPH_SCOPE_KEY, s)
-    setGraphScope(s)
-  }
+  const [graphScope, changeGraphScope] = useStoredState(GRAPH_SCOPE_KEY, oneOf<GraphScope>(['open', 'all'], 'open'))
   const onMove = (id: number, status: IssueStatus) => {
     const pending: PendingMove = { status, at: new Date().toISOString() }
     if (moving.size === 0) setMoveError(null)

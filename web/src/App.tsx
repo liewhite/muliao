@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, useTheme } from '@heroui/react'
 import { Menu } from 'lucide-react'
-import { NavLink, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
+import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { api, unauthorizedEvent } from './api'
 import { closeServerEvents, useUiOutdated } from './events'
 import { useUnreadCount, useUnreadSync } from './unread'
@@ -25,7 +25,7 @@ import { ErrorAlert, errorMessage } from './ui'
 import { AdminDrawer, AdminNav } from './AdminMenu'
 import { ErrorBoundary } from './ErrorBoundary'
 import { ListDetail } from './ListDetail'
-import { ACTIVITY_TABS, AdminMenuContext, isAdminPath } from './nav'
+import { ACTIVITY_TABS, AdminMenuContext, isAdminPath, useRouteParam } from './nav'
 
 type AuthState = 'checking' | 'in' | 'out'
 
@@ -95,19 +95,19 @@ export default function App() {
 
 /** 每个会话一个独立的页面实例：会话之间跳转（thread 链接、点通知）时，草稿、附件、运行中的事件与报错不带到另一个会话 */
 function SessionRoute() {
-  const { id = '' } = useParams()
+  const id = useRouteParam('id')
   return <SessionView key={id} />
 }
 
 /** 每个 agent 一个独立的页面实例：分屏切换 agent 时，标签页与表单草稿不带到另一个 agent */
 function AgentRoute() {
-  const { id = '' } = useParams()
+  const id = useRouteParam('id')
   return <AgentDetail key={id} />
 }
 
 /** 每个 issue 一个独立的页面实例：编辑中的草稿不带到另一个 issue */
 function IssueRoute() {
-  const { id = '' } = useParams()
+  const id = useRouteParam('id')
   return <IssueView key={id} />
 }
 

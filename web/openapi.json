@@ -106,7 +106,7 @@
     "/api/agent-defaults": {
       "get": {
         "summary": "Agent Defaults",
-        "description": "新建 agent 时表单预填的默认值（与创建时套用的是同一份 AgentService.defaults）。",
+        "description": "新建 agent 时表单预填的值：创建时套用的同一份缺省（AgentSpec 的字段缺省，模型取 AgentService.defaults），\n前端不另写一份。",
         "operationId": "agent_defaults_api_agent_defaults_get",
         "responses": {
           "200": {
@@ -114,7 +114,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AgentDefaultsOut"
+                  "$ref": "#/components/schemas/AgentUpdate"
                 }
               }
             }
@@ -3905,19 +3905,6 @@
           "description"
         ],
         "title": "AgentCreate"
-      },
-      "AgentDefaultsOut": {
-        "properties": {
-          "model": {
-            "type": "string",
-            "title": "Model"
-          }
-        },
-        "type": "object",
-        "required": [
-          "model"
-        ],
-        "title": "AgentDefaultsOut"
       },
       "AgentOut": {
         "properties": {
