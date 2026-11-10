@@ -1,8 +1,10 @@
 """流式触发：平台托管常驻命令，stdout 每行一个事件（triggers/stream.py）。"""
 
 import os
+import re
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from zoneinfo import ZoneInfo
 
 import anyio
 import pytest
@@ -11,7 +13,7 @@ from pydantic_ai.messages import UserPromptPart
 from muliao.errors import InvalidInput, NotFound
 from muliao.sessions.api import Origin, SessionActivity
 from muliao.sessions.mailbox import queued_in
-from muliao.triggers.faults import FaultSource
+from muliao.triggers.faults import Faults, FaultSource
 from muliao.triggers.service import EVENT_MAX_BYTES
 from muliao.triggers.stream import StreamRunner, _Pending, _Spec
 from tests.test_flow import drain, history_of
@@ -26,7 +28,7 @@ def _runner(container, **kw) -> StreamRunner:
         container.agents.workspace,
         container.confiner.of,
         container.messaging,
-        container.trigger_faults,
+        Faults(container.messaging, ZoneInfo("UTC")),
         kw.pop("max_bytes", EVENT_MAX_BYTES),
         backoff=kw.pop("backoff", lambda _n: 0.05),
         stable_seconds=kw.pop("stable_seconds", 60.0),
@@ -505,6 +507,8 @@ async def test_a_waiting_previous_session_holds_events_and_notifies_once(contain
         await drain(container)
         notes = [n for n in await container.notifications.list(10) if "feed" in n.title]
         assert [n.session_id for n in notes] == [first]
+        # 正文只报排队的条数，不带事件内容
+        assert re.search(r"现在有 [12] 条。", notes[0].body), notes[0].body
         assert len(await _sessions(container, alpha)) == 1
 
         async with container.db.transaction() as s:

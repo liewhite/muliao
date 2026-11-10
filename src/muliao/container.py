@@ -162,8 +162,6 @@ class Assembly:
     notifications: Notifications
     mcp: McpRegistry
     triggers: TriggerService
-    # 触发器脚本出错的记录与告警（流式托管与触发共用）
-    trigger_faults: Faults
     due_triggers: DueRunner
     # 流式触发器托管的常驻命令
     streams: StreamRunner
@@ -502,7 +500,6 @@ def assemble(
         notifications=notifications,
         mcp=mcp,
         triggers=triggers,
-        trigger_faults=faults,
         due_triggers=due_triggers,
         streams=streams,
         webhooks=webhooks,

@@ -2,10 +2,11 @@
 
 触发方式是多态的，分两部分实现，新增一种方式（例如消息队列）只需各加一个实现并在组合根注册：
 - TriggerKind：纯逻辑——校验配置、推导运行状态，注册给 TriggerService；
-- 激活机制：怎么被触发——到期扫描循环（due.DueRunner，定时与一次性共用）、HTTP 入口（webhook.Webhooks）、
-  消费循环……它们都只调用 TriggerService.fire，组装成事件交给会话领域的统一入口。
+- 激活机制：怎么被触发——到期扫描循环（due.DueRunner，定时与一次性共用）、流式托管（stream.StreamRunner）、HTTP 入口
+  （webhook.Webhooks）……没有调用方等结果的调用 TriggerService.fire_activated，调用方在等结果的（webhook）调用 fire，
+  组装成事件交给会话领域的统一入口；两者只差脚本出错怎么处理（_By）。
 
-fire 先跑触发器的前置检查（若有，见 triggers.precheck）：没有事件就不调用 agent。检查在数据库事务之外执行。
+触发先跑触发器的前置检查（若有，见 triggers.precheck）：没有事件就不调用 agent。检查在数据库事务之外执行。
 用户与 agent 的「立即运行一次」走 run：那是管理操作（见它的说明），不消耗一次性触发器预定的那一次。
 
 结束（finished_at）是所有触发方式共用的概念：这个触发器不会再触发了（一次性触发器用掉了它那一次）。已结束的

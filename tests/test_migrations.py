@@ -1878,7 +1878,7 @@ def test_sessions_lose_kind_and_downgrade_derives_it_from_origin(tmp_path):
 
 
 def test_trigger_errors_become_one_faults_list_and_downgrade_restores_them(tmp_path):
-    """#580：precheck_error、route_error 与流式 state.error 换算成 faults 列表（坏地址每行一条），两列删掉；降级反算回去。"""
+    """#580：precheck_error、route_error 与流式 state.error 换算成 faults 列表（坏地址每个地址一条、留最后的原因，流式够 3 次连续失败才算），两列删掉；降级反算回去。"""
     import json
 
     from alembic import command
@@ -1892,7 +1892,13 @@ def test_trigger_errors_become_one_faults_list_and_downgrade_restores_them(tmp_p
         conn.execute(
             f"insert into triggers ({cols}) values ('w', 'a1', 'p', 'webhook', '{{}}', '{{}}', 1, "
             "'2026-01-01 00:00:00', 'precheck exited with 1: x', "
-            "'@route agent:nobody: invalid route ''agent:nobody'': no agent\n@route issue:9: gone')"
+            "'@route issue:9: old reason\n@route agent:nobody: invalid route ''agent:nobody'': no agent\n"
+            "@route issue:9: gone')"
+        )
+        # 流式旧的第 1 次退出就记原因：没到 3 次连续失败的不算出错
+        conn.execute(
+            f"insert into triggers ({cols}) values ('early', 'a1', 'p', 'stream', '{{}}', "
+            """'{"generation": "g", "error": "exited with 1", "failures": 1}', 1, '2026-01-01 00:00:00', NULL, NULL)"""
         )
         conn.execute(
             f"insert into triggers ({cols}) values ('s', 'a1', 'p', 'stream', '{{}}', "
@@ -1908,9 +1914,10 @@ def test_trigger_errors_become_one_faults_list_and_downgrade_restores_them(tmp_p
         }
     assert rows["w"][0] == [
         {"source": "precheck", "error": "precheck exited with 1: x"},
-        {"source": "route", "error": "invalid route 'agent:nobody': no agent", "address": "agent:nobody"},
         {"source": "route", "error": "gone", "address": "issue:9"},
+        {"source": "route", "error": "invalid route 'agent:nobody': no agent", "address": "agent:nobody"},
     ]
+    assert rows["early"] == ([], {"generation": "g", "failures": 1})
     assert rows["s"] == ([{"source": "stream", "error": "exited with 3"}], {"generation": "g", "failures": 4})
     with _migration_engine(path).begin() as connection:
         command.downgrade(alembic_config(connection), "a7d3e5c91b04")
@@ -1920,6 +1927,6 @@ def test_trigger_errors_become_one_faults_list_and_downgrade_restores_them(tmp_p
         }
     assert back["w"][:2] == (
         "precheck exited with 1: x",
-        "@route agent:nobody: invalid route 'agent:nobody': no agent\n@route issue:9: gone",
+        "@route issue:9: gone\n@route agent:nobody: invalid route 'agent:nobody': no agent",
     )
     assert back["s"][:2] == (None, None) and json.loads(back["s"][2])["error"] == "exited with 3"

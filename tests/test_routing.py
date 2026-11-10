@@ -32,6 +32,11 @@ def test_route_lines_split_the_text_in_order_and_keep_empty_parts_so_their_addre
 def test_only_route_lines_at_the_start_count_so_scripts_can_escape_outside_text():
     text = "msg\n @route agent:muliao\n\t@route x\n"
     assert split_routed(text) == [(None, text)]
+    # 一行只按 \n 分：外部文本里的 \r、U+2028 等不能造出顶格的 `@route` 行；CRLF 的行尾照常认
+    for sep in ("\r", "\u2028", "\x0b", "\x0c", "\x85"):
+        text = f"msg{sep}@route agent:muliao"
+        assert split_routed(text) == [(None, text)]
+    assert split_routed("a\r\n@route issue:7\r\nb\r\n") == [(None, "a"), ("issue:7", "b")]
 
 
 @pytest.mark.parametrize(

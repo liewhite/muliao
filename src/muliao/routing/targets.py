@@ -116,8 +116,10 @@ def route_header(address: str) -> str:
 def split_routed(text: str) -> list[tuple[str | None, str]]:
     """把事件文本按 `@route <地址>` 行（必须顶格）分段：[(地址或 None（默认目标）, 内容)]，按出现顺序；没有内容的段也
     留着，地址照样要解析（写错的地址不因后面没内容就不报错；空段不投，同一目标的合并在解析成目标之后，见 router.plan_in）。
-    没有 `@route` 行时原样是一段（不改动现有的事件）。"""
-    lines = text.splitlines()
+    没有 `@route` 行时原样是一段（不改动现有的事件）。行只按 `\n` 分（行尾的 `\r` 去掉），与按行读输出的流式触发、脚本缩进
+    外部文本时对「一行」的看法一致：str.splitlines 还会在 `\r`、U+2028 等处断行，外部文本夹一个这样的字符就能造出顶格的
+    `@route` 行。"""
+    lines = [line.removesuffix("\r") for line in text.split("\n")]
     if not any(route_line(line) is not None for line in lines):
         return [(None, text)]
     sections: list[tuple[str | None, list[str]]] = [(None, [])]

@@ -162,8 +162,8 @@ class _Spec:
 
 @dataclass
 class _Pending:
-    """排队等投递的事件（只在内存里）：命令输出的原行（含 `@route` 行），总量不超过事件上限：排满时读取方等着，
-    命令的输出留在管道里。
+    """排队等投递的事件（只在内存里）：命令输出的原行（含 `@route` 行），以事件上限为界：已有内容、再加一行会超过上限时
+    读取方等着，命令的输出留在管道里（第一行内容总是收下，所以一批最多是上限再加补在前面的一行 `@route`）。
 
     `@route` 行按到达顺序给后面的行定目标，这个状态跨批次保持：取走一批时，最近的地址补成下一批的第一行，整条流的
     分段因此与把它当一段文本时相同，不取决于在哪里分批。连着的 `@route` 行只留最后一个，一批末尾的 `@route` 行不进这一批
@@ -403,7 +403,7 @@ class StreamRunner:
         while True:
             await pending.ready(config.debounce_seconds)
             try:
-                await self._wait_previous(spec, pending.lines, notified)
+                await self._wait_previous(spec, pending.content, notified)
             except Exception:
                 # 契约之外的失败（如数据库暂时不可用）：事件留在队列里，稍后再试，不拖垮进程的监督
                 log.exception(

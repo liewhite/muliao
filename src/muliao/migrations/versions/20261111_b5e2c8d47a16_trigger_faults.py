@@ -1,5 +1,5 @@
 """触发器脚本出错收成一列 faults（#580）：precheck_error、route_error 两列与流式 state["error"] 换算成 TriggerFault 列表
-（{"source", "error", "address"?}），再删掉两列与 state 里的 error。降级反算回去（route 各条按「@route 地址: 原因」一行一条）。
+（{"source", "error", "address"?}；同一地址只留最后一行，流式没到 3 次连续失败的不转），再删掉两列与 state 里的 error。降级反算回去（route 各条按「@route 地址: 原因」一行一条）。
 
 Revision ID: b5e2c8d47a16
 Revises: a7d3e5c91b04
@@ -31,16 +31,18 @@ def upgrade() -> None:
         faults = []
         if precheck_error is not None:
             faults.append({"source": "precheck", "error": precheck_error})
+        # 旧的按「地址: 原因」整行去重，同一地址可能有几行；新的每个地址一条，留最后一行的原因
+        routes: dict[str | None, str] = {}
         for line in (route_error or "").splitlines():
             m = _ROUTE_LINE.match(line)
             # 写入时总是这个格式；对不上的整行当原因、地址留空，不丢
-            faults.append(
-                {"source": "route", "error": m.group(2), "address": m.group(1)}
-                if m
-                else {"source": "route", "error": line, "address": None}
-            )
+            routes[m.group(1) if m else None] = m.group(2) if m else line
+        faults += [
+            {"source": "route", "error": error, "address": address} for address, error in routes.items()
+        ]
         stream_error = state.pop("error", None) if kind == "stream" else None
-        if stream_error is not None:
+        # 旧的第 1 次退出就记原因；新的连续 3 次才算出错（triggers.stream._ALERT_AFTER）：没到的不转，之后到了照常告警
+        if stream_error is not None and state.get("failures", 0) >= 3:
             faults.append({"source": "stream", "error": stream_error})
         conn.execute(
             sa.text("UPDATE triggers SET faults = :faults, state = :state WHERE id = :id"),
