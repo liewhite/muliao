@@ -479,7 +479,6 @@ class IssueService:
                         assignee=item.assignee,
                         creator=actor,
                         created_at=now,
-                        updated_at=now,
                     )
                 s.add(issue)
                 created.append(issue)

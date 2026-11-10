@@ -262,7 +262,7 @@ def issues_toolset(board: IssueService, agents: AgentService) -> FunctionToolset
         )
         if issues:
             # 缺省值与领域同源（NewIssue）：单个的字段都是缺省值，就是没给（显式传缺省值与不传等价）
-            if single != NewIssueItem(title="", owner=""):
+            if title is not None or owner is not None or single != NewIssueItem(title="", owner=""):
                 raise InvalidInput("pass either one issue (title/owner/...) or issues, not both")
             new = [await new_issue(item, len(issues), n) for n, item in enumerate(issues)]
         else:

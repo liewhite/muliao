@@ -132,7 +132,7 @@ def handed_to_user(actor: str, issue_assignee: str | None, happened: Sequence[Is
     for a in happened:
         if a.kind == ActivityKind.CREATED and issue_assignee == USER:
             return agent
-        if a.kind == ActivityKind.ASSIGNEE and a.change is not None and a.change["to"] == USER:
+        if a.kind == ActivityKind.ASSIGNEE and a.change["to"] == USER:
             return agent
     return None
 
@@ -140,7 +140,7 @@ def handed_to_user(actor: str, issue_assignee: str | None, happened: Sequence[Is
 def finishing(happened: Sequence[IssueActivity]) -> IssueStatus | None:
     """这次的状态变更让 issue 进入 done / cancelled（下游因此少等一个上游）：返回进入前的状态，否则 None。"""
     for a in happened:
-        if a.kind == ActivityKind.STATUS and a.change is not None:
+        if a.kind == ActivityKind.STATUS:
             was, now = IssueStatus(a.change["from"]), IssueStatus(a.change["to"])
             if not finished(was) and finished(now):
                 return was
