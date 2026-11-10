@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
+from functools import partial
 
 from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, ToolCallPart, UserContent
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -307,10 +308,9 @@ class Consumer:
 
     async def _stopped(self, run_id: int, session_id: str) -> Commit:
         state = self._active.get(session_id)
-        if state is not None:
-            await self._steps.save_tail(state)
         log.info("run stopped by user", extra={"session_id": session_id, "run_id": run_id})
-        if await self._halt(session_id) == Halted.GONE:
+        save_tail = None if state is None else partial(self._steps.save_tail_in, state=state)
+        if await self._halt(session_id, first=save_tail) == Halted.GONE:
             # 正在运行的会话忙，不能被删除：走到这里是 bug
             raise RuntimeError(f"session {session_id} was deleted while its run was being stopped")
         if state is None:

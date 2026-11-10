@@ -563,7 +563,11 @@ class TriggerService:
                 raise TriggerDisabled(f"trigger {trigger.name!r} is disabled")
             # 归档的 agent（AgentArchived，即 Conflict）：不跑前置检查、不触发；激活机制的 fire_activated 只记日志，触发器
             # 保持启用，取消归档后照常触发
-            await runnable_agent_in(s, trigger.agent_id)
+            try:
+                await runnable_agent_in(s, trigger.agent_id)
+            except NotFound as e:
+                # agent 正在删除：它的触发器随之删除（on_agent_deleting），按触发器已不存在跳过，不停用
+                raise TriggerNotFound(f"trigger {trigger.name!r}: its agent is being deleted") from e
             if trigger.precheck is None:
                 return await self._deliver_in(s, trigger, payload, session_id)
             name, agent_id, stored = trigger.name, trigger.agent_id, trigger.precheck

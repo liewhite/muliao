@@ -44,8 +44,8 @@ log = logging.getLogger(__name__)
 
 
 async def close_history_in(s: AsyncSession, queue: TaskQueue, session_id: str) -> None:
-    """停止时让会话历史停在不会被续跑的地方（唯一事实源是库里的历史）。运行中被停止时运行先把当前这一步已产生的部分存库
-    （Steps.save_tail），补结果与停止标记都在这里一处做。
+    """停止时让会话历史停在不会被续跑的地方（唯一事实源是库里的历史）。运行中被停止时同一事务里先把当前这一步已产生的部分存库
+    （Steps.save_tail_in），补结果与停止标记都在这里一处做。
     只看最后一条模型回复起的那一段（history.since_last_response）：没出结果的调用只可能在那里。"""
     history = await since_last_response(s, session_id)
     if closing := stopped_results(history):
@@ -54,7 +54,8 @@ async def close_history_in(s: AsyncSession, queue: TaskQueue, session_id: str) -
             raise RuntimeError(f"session {session_id} has tool calls but no run")
         await append_in(s, session_id, run.id, [marked_stopped(closing[0])])
         return
-    # 没得到回复的请求，或生成到一半被打断的回复（pydantic-ai 记 state='interrupted'）：标上停止；完整的回复不标
+    # 没得到回复的请求，或生成到一半被打断的回复（pydantic-ai 记 state='interrupted'）：标上停止。完整的回复有意不标
+    # （它确实是完整的；空闲会话被停止时也停在它上）
     if history and not is_stopped(last := history[-1]):
         if isinstance(last, ModelRequest) or last.state == "interrupted":
             await mark_last_stopped_in(s, session_id)
@@ -79,12 +80,18 @@ class SessionHalt:
         self._queue = queue
         self._messaging = messaging
 
-    async def __call__(self, session_id: str) -> Halted:
+    async def __call__(
+        self, session_id: str, *, first: Callable[[AsyncSession], Awaitable[None]] | None = None
+    ) -> Halted:
+        """first：运行中被停止时，消费者保存这一步还没保存的部分（Steps.save_tail_in），和停止放在同一个事务里：两者
+        之间不会因关停留下没结果、没标停止、会被续跑的历史。"""
         async with self._db.transaction() as s:
             session = await s.get(Session, session_id)
             if session is None:
                 log.info("stopping a deleted session: nothing to do", extra={"session_id": session_id})
                 return Halted.GONE
+            if first is not None:
+                await first(s)
             await close_history_in(s, self._queue, session_id)
             dropped = [
                 t.id for t in await self._queue.finish_pending_in(s, session_lane(session_id), RUN_TASK)

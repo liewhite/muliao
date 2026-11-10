@@ -10,6 +10,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agent_runtime.api import StepHooks, redact_messages, with_notices
 from muliao.agents.api import AgentInfo
@@ -185,11 +186,16 @@ class Steps:
         state.saved = len(messages)
 
     async def save_tail(self, state: RunState) -> None:
-        """保存运行中的历史里还没保存的部分：运行停在挂起的调用上时，挂起之外已经执行完的工具结果在最后一条请求里；被停止时
-        是当前这一步已产生的部分（包括生成到一半的回答），没出结果的调用与停止标记由停止从库里补齐（sessions.halt）。
-        开头取走、还没随请求交给模型的信件（state.taken）不算处理过。"""
+        """运行停在挂起的调用上时，挂起之外已经执行完的工具结果在最后一条请求里，一起保存。"""
+        async with self._db.transaction() as s:
+            await self.save_tail_in(s, state)
+
+    async def save_tail_in(self, s: AsyncSession, state: RunState) -> None:
+        """在调用方事务里保存运行中的历史里还没保存的部分。被停止时由停止事务调用（sessions.halt 的 first）：当前这一步
+        已产生的部分（包括生成到一半的回答）原样存库，没出结果的调用与停止标记由同一事务里的停止从库里补齐。开头取走、
+        还没随请求交给模型的信件（state.taken）不算处理过。"""
         if state.live is not None and len(state.live) > state.saved:
-            await self._save(state, state.live[state.saved :], consumed=[])
+            await self._save_in(s, state, state.live[state.saved :], consumed=[])
             state.saved = len(state.live)
 
     async def save_interrupted(self, state: RunState, messages: Sequence[ModelMessage]) -> int:
@@ -204,12 +210,17 @@ class Steps:
         self, state: RunState, messages: Sequence[ModelMessage], *, consumed: Sequence[Mail]
     ) -> None:
         """一步：这些消息与它们带上的信件（记为已处理）在同一个事务里提交。"""
-        stored = redact_messages(list(messages))
         async with self._db.transaction() as s:
-            if await s.get(Session, state.session.id) is None:
-                raise RuntimeError(f"session {state.session.id} vanished during its run")
-            rows = await append_in(s, state.session.id, state.run_id, stored)
-            await consume_in(s, [m.id for m in consumed], state.run_id)
+            await self._save_in(s, state, messages, consumed=consumed)
+
+    async def _save_in(
+        self, s: AsyncSession, state: RunState, messages: Sequence[ModelMessage], *, consumed: Sequence[Mail]
+    ) -> None:
+        stored = redact_messages(list(messages))
+        if await s.get(Session, state.session.id) is None:
+            raise RuntimeError(f"session {state.session.id} vanished during its run")
+        rows = await append_in(s, state.session.id, state.run_id, stored)
+        await consume_in(s, [m.id for m in consumed], state.run_id)
         log.info(
             "step saved",
             extra={

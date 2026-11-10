@@ -20,9 +20,12 @@ from pathlib import Path
 from muliao.agents import asset_files
 from muliao.agents.active import Mirrored, agent_names_in, sync_mirror_in
 from muliao.agents.assets import AGENT_FILE, Problem, Snapshot, fingerprint, load_tree
+from muliao.agents.kinds import StoredKind
+from muliao.agents.permissions import GLOBAL_MEMORY
 from muliao.agents.thinking import Thinking, check_thinking_level
 from muliao.errors import InvalidInput
 from muliao.platform.db import Database
+from muliao.platform.fs import write_atomic
 
 log = logging.getLogger(__name__)
 
@@ -100,6 +103,14 @@ class AssetSource:
         await asyncio.to_thread(
             asset_files.vet, snapshot, path, text, self.memory_max_chars, self._check_model
         )
+
+    async def ensure_global_memory(self) -> None:
+        """全局记忆归平台、base 固定收录、不能删：资源目录里没有它（全新安装）时建一个空的。启动时调用。"""
+        async with self.writing() as snapshot:
+            path = snapshot.path_of(StoredKind.MEMORY, GLOBAL_MEMORY, None)
+            if not path.exists():
+                await asyncio.to_thread(write_atomic, path, "")
+                log.info("empty global memory created", extra={"path": str(path)})
 
     @asynccontextmanager
     async def writing(self) -> AsyncIterator[Snapshot]:

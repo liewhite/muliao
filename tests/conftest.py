@@ -74,10 +74,8 @@ async def container(settings: Settings, models: ModelSlot) -> AsyncIterator[Asse
         check_writes=single_domain_writes,
     )
     migrate(settings.db_path)
-    # 已安装的平台都有全局记忆文件（base 固定收录）
-    global_memory = settings.assets_dir / "platform" / "memory" / "global.md"
-    global_memory.parent.mkdir(parents=True)
-    global_memory.write_text("")
+    # 同服务启动（Assembly._prepare）：全新的资源目录建上空的全局记忆
+    await c.assets.ensure_global_memory()
     # 后台任务的监督者需要它的任务组（服务里由 Assembly.running 打开）；worker 等循环由测试自己驱动
     async with c.jobs.running():
         yield c

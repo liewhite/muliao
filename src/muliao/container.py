@@ -248,6 +248,7 @@ class Assembly:
 
     async def _prepare(self) -> None:
         await asyncio.to_thread(migrate, self.settings.db_path)
+        await self.assets.ensure_global_memory()
         # 第一次读资源目录，同步 agent 配置的镜像列
         await self.assets.snapshot()
         await self.agents.verify_stored()
