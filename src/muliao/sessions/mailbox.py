@@ -4,7 +4,8 @@
 - 投信（post_in）：用户消息、对挂起调用的回答（用户回答提问、被问的 agent 交回结局）、触发器事件、委派来的任务、
   后台任务与 thread 的事件、运行中检查。
 - 一封信件在交给模型的那一步保存时记为已处理（consume_in，与那一步的消息同一个事务）。
-- 用户停止会话时信箱清空（discard_in）：没交给模型的信件记为被丢弃，留着记录。
+- 用户停止会话时信箱清空（discard_in）：没交给模型的信件记为被丢弃，留着记录；对仍挂着的提问的回答在此之前
+  已由停止写进历史、记为已处理（sessions.halt.close_history_in）。
 - 唤醒（wake_in，唯一规则）：会话里有排队的信件、没有排队或运行中的运行，并且有信件在最近一次运行之后才到；
   会话停在挂起的调用上时按 sessions.pending.waiting 等回答或新消息，事件等它们一起交给模型。调用方：投信时、运行
   结束时（含最终失败，RunHandler.failed_in 结清之后）、定期对账（MailReconciler，兜住投递时事务失败与重启）。
@@ -296,10 +297,10 @@ async def consume_in(s: AsyncSession, ids: Sequence[int], run_id: int) -> None:
         )
 
 
-async def discard_in(s: AsyncSession, session_id: str, mail: Sequence[Mail] | None = None) -> list[int]:
-    """还没交给模型的信件记为被丢弃，不再处理：用户停止会话时清空整个信箱；给出 mail 时只丢弃这些（最终失败时已经
-    交回了失败的委派）。返回丢弃的信件 id。"""
-    ids = [m.id for m in (await queued_in(s, session_id) if mail is None else mail)]
+async def discard_in(s: AsyncSession, session_id: str, mail: Sequence[Mail]) -> list[int]:
+    """这些还没交给模型的信件记为被丢弃，不再处理（丢哪些由 sessions.settlement 的停止与最终失败定）。返回丢弃的
+    信件 id。"""
+    ids = [m.id for m in mail]
     if ids:
         await s.execute(update(Mail).where(Mail.id.in_(ids)).values(state=MailState.DISCARDED))
         log.info("mailbox cleared", extra={"session_id": session_id, "discarded": ids})

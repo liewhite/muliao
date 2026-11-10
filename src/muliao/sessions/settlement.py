@@ -15,7 +15,7 @@ from muliao.agent_runtime.api import Attachment
 from muliao.platform.db import Database
 from muliao.platform.tasks import TaskQueue, TaskView
 from muliao.sessions.delegation import Ending, hand_back_in
-from muliao.sessions.mailbox import discard_in, mark_settled, unsettled_in, with_unsettled_in
+from muliao.sessions.mailbox import discard_in, mark_settled, queued_in, unsettled_in, with_unsettled_in
 from muliao.sessions.runs import failure_of, handed_to, latest_run
 from muliao.sessions.tables import Mail, MailState, Session
 
@@ -64,7 +64,8 @@ async def settle_stopped_in(
     s: AsyncSession, queue: TaskQueue, session: Session, answer: str
 ) -> tuple[list[str], list[int]]:
     """用户停止（sessions.halt）：交给这个会话、还没结清的委派（排着的与已交给模型的）以「停止」结清，带上最近的
-    回答；然后清空信箱（mailbox.discard_in）。返回结清的关联与丢弃的信件。"""
+    回答；然后清空信箱（mailbox.discard_in）。对仍挂着的提问的回答已由停止写进历史、记为已处理（halt.close_history_in），
+    不在信箱里。返回结清的关联与丢弃的信件。"""
     settled = await _settle_in(
         s,
         queue,
@@ -73,7 +74,7 @@ async def settle_stopped_in(
         Ending.STOPPED,
         answer,
     )
-    return settled, await discard_in(s, session.id)
+    return settled, await discard_in(s, session.id, await queued_in(s, session.id))
 
 
 async def settle_deleted_in(s: AsyncSession, queue: TaskQueue, session: Session) -> list[str]:

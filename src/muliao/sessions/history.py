@@ -6,7 +6,6 @@ sessions.mailbox；tests/test_boundaries.py 核对。"""
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
-from typing import Literal
 
 from pydantic_ai.messages import (
     ModelMessage,
@@ -28,9 +27,7 @@ from muliao.sessions.conventions import (
     answer_text,
     measured_responses,
     run_context_index,
-    unanswered_calls,
 )
-from muliao.sessions.deferred import kept_open_on_stop
 from muliao.sessions.tables import Compaction, Message, MessageText
 
 
@@ -289,29 +286,19 @@ def _answer_of(tail: Sequence[ModelMessage]) -> str:
     return answer_text(tail[0]) if tail and isinstance(tail[0], ModelResponse) else ""
 
 
-def _results_for(
-    calls: Sequence[ToolCallPart], content: str, outcome: Literal["success", "interrupted"]
+def _request_of(parts: Sequence[ToolReturnPart]) -> list[ModelMessage]:
+    """补上的结果合成一条请求；没有则为空。"""
+    return [ModelRequest(parts=list(parts))] if parts else []
+
+
+def stopped_results(
+    stopped: Sequence[ToolCallPart], answered: Sequence[tuple[ToolCallPart, object]] = ()
 ) -> list[ModelMessage]:
-    """给这些没出结果的调用补上同一个结果，合成一条请求；没有调用则为空。"""
-    if not calls:
-        return []
-    return [
-        ModelRequest(
-            parts=[
-                ToolReturnPart(c.tool_name, content, tool_call_id=c.tool_call_id, outcome=outcome)
-                for c in calls
-            ]
-        )
-    ]
-
-
-def stopped_results(history: Sequence[ModelMessage]) -> list[ModelMessage]:
-    """没出结果的工具调用补上「被用户停止、可能已部分执行」的结果；等用户回答的提问除外（它在等人回答，不是没做完
-    的调用，用户仍可回答）。"""
-    return _results_for(
-        [c for c in unanswered_calls(history) if not kept_open_on_stop(c)],
-        STOPPED_TOOL_RESULT,
-        "success",
+    """用户停止时关闭没出结果的调用（sessions.pending.StopClosing）：stopped 补上「被用户停止、可能已部分执行」的
+    结果；answered 是回答已提交、还没交给模型的挂起调用及其结果。合成一条请求。"""
+    return _request_of(
+        [ToolReturnPart(c.tool_name, STOPPED_TOOL_RESULT, tool_call_id=c.tool_call_id) for c in stopped]
+        + [ToolReturnPart(c.tool_name, value, tool_call_id=c.tool_call_id) for c, value in answered]
     )
 
 
@@ -319,7 +306,14 @@ def interrupted_results(calls: Sequence[ToolCallPart]) -> list[ModelMessage]:
     """一步在执行工具时被打断，这些调用没有结果：补上「被中断、没有重新执行」的结果。它们不重新执行——副作用
     （shell、通知、委派、改记忆）可能已经发生，而我们无从知道——由模型看着结果决定要不要再做一次。哪些调用走这条
     路由 Consumer 决定（sessions.consumer.interrupted_calls），设计见 docs/architecture.md「从哪里开始」。"""
-    return _results_for(calls, INTERRUPTED_TOOL_RESULT, "interrupted")
+    return _request_of(
+        [
+            ToolReturnPart(
+                c.tool_name, INTERRUPTED_TOOL_RESULT, tool_call_id=c.tool_call_id, outcome="interrupted"
+            )
+            for c in calls
+        ]
+    )
 
 
 def marked_stopped(message: ModelMessage) -> ModelMessage:

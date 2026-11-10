@@ -2,7 +2,8 @@
 种类分支。挂起、唤醒与交回的流程见 sessions.pending，设计见 docs/architecture.md「挂起的调用」。
 
 前两种按工具名认（DEFERRED_TOOLS，工具注册时用这里的名字 `@ts.tool(name=...)`，函数改名不会让挂起判断悄悄失效）；
-等批准的不按工具名认（同一个工具多数调用不用批准），按记录认（sessions.approvals，见 pending.kind_of）。
+等批准的不按工具名认（同一个工具多数调用不用批准），按记录认（sessions.approvals）。一次调用是哪一种只经
+pending.kind_of 认，挂起、停止、续跑都查它认出的种类的表项。
 
 每种的回答信封（回答信件 mail.answers 的值）带着种类名（tool 字段），自己给出：交给模型的结果（tool_return）、
 没等到回答就继续时的结果（skipped）、调用结束后才到的回答怎么写（late_lines）。"""
@@ -81,7 +82,7 @@ class DeferredKind:
     # 没有挂起、也没有结果的调用可以原样重新执行（按调用 id 幂等，没有别的副作用），续跑时不补「被中断」；
     # 只有要占用的工具才会有没挂起的调用
     replayable: bool
-    # 用户停止运行时不补「已停止」的结果，仍挂着等回答
+    # 用户停止运行时不补「已停止」的结果，仍挂着等回答；回答已提交、还排着的写上那份回答（pending.closing_on_stop）
     kept_open_on_stop: bool
     # 调用里是给用户的提问时，从调用参数取出问题（停下时告诉用户，界面按提问展示），参数不合法时为空；不是提问为 None
     questions: Callable[[ToolCallPart], list[Question]] | None
@@ -102,8 +103,7 @@ ASK_USER_KIND: Final = DeferredKind(
 ASK_AGENT_KIND: Final = DeferredKind(
     answer=AgentAnswered, needs_hold=True, replayable=True, kept_open_on_stop=False, questions=None
 )
-# 等批准的调用。replayable、kept_open_on_stop 两项不被读取：等批准的调用按工具名走普通工具的规则（被打断不重放，
-# 用户停止时补「已停止」），这里填的是与之一致的值
+# 等批准的调用：用户停止时补「已停止」（停止不留着没批准的工具调用）
 AWAITING_APPROVAL: Final = DeferredKind(
     answer=ApprovalAnswered, needs_hold=False, replayable=False, kept_open_on_stop=False, questions=None
 )
@@ -142,14 +142,3 @@ def questions_in(call: ToolCallPart) -> list[Question]:
     就是提问：要的是问题时只用它判断，不再先问 asks_user。"""
     tool = deferred_tool(call.tool_name)
     return [] if tool is None or tool.questions is None else tool.questions(call)
-
-
-def replayable(name: str) -> bool:
-    """没挂起、也没结果的这个工具的调用可以原样重新执行（DeferredKind.replayable）。"""
-    return _flag(name, lambda t: t.replayable)
-
-
-def kept_open_on_stop(call: ToolCallPart) -> bool:
-    """用户停止运行时这次调用仍挂着（DeferredKind.kept_open_on_stop，按 deferred_call 认）。"""
-    tool = deferred_call(call)
-    return tool is not None and tool.kept_open_on_stop

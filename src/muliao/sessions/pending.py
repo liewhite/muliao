@@ -15,7 +15,7 @@ from collections.abc import Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 
-from pydantic_ai.messages import ModelMessage, ToolCallPart
+from pydantic_ai.messages import ModelMessage, ToolCallPart, ToolReturn
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.sessions import approvals
@@ -70,6 +70,57 @@ def kind_of(call: ToolCallPart, handed: HandedOut) -> DeferredKind | None:
 def _is_pending(call: ToolCallPart, handed: HandedOut) -> bool:
     kind = kind_of(call, handed)
     return kind is not None and (not kind.needs_hold or call.tool_call_id in handed.delegated)
+
+
+def replayable(call: ToolCallPart, handed: HandedOut) -> bool:
+    """没挂起、也没结果的这次调用可以原样重新执行（DeferredKind.replayable，按 kind_of 认）。"""
+    kind = kind_of(call, handed)
+    return kind is not None and kind.replayable
+
+
+@dataclass(frozen=True)
+class StopClosing:
+    """用户停止时怎么关闭没出结果的调用（sessions.halt.close_history_in）：
+
+    - stopped：补「已停止」的结果——停止后不再挂着的调用（DeferredKind.kept_open_on_stop 为假，按 kind_of 认）；
+    - answered：停止后本该仍挂着、但回答已提交还排着的调用 -> 交给模型的结果。回答属于它回答的调用，是停止前用户
+      已经给出的部分，照常写进历史（同「停止前已经产生的部分照常保存」），不留在信箱里等以后唤醒；
+    - used：answered 的回答所在的信件，随之记为已处理（整封信：同一封里对等批准调用的决定也算已处理，那个调用
+      已补「已停止」，只影响界面不划掉它，不拆信）。其余仍挂着、没有回答的调用照旧挂着，用户仍可回答。"""
+
+    stopped: list[ToolCallPart]
+    answered: list[tuple[ToolCallPart, object]]
+    used: list[Mail]
+
+
+def closing_on_stop(
+    history: Sequence[ModelMessage], handed: HandedOut, queued: Sequence[Mail]
+) -> StopClosing:
+    kept = {
+        k: c
+        for k, c in pending_calls(history, handed).items()
+        if (kind := kind_of(c, handed)) is not None and kind.kept_open_on_stop
+    }
+    answers: dict[str, CallResult] = {}
+    used: list[Mail] = []
+    for m in queued:
+        if m.kind != MailKind.ANSWER or not (mine := [k for k in m.answers if k in kept]):
+            continue
+        used.append(m)
+        answers.update({k: call_result(m.answers[k]) for k in mine})
+    # 回答怎么变成调用的结果只在 deferred_results 一处定
+    results = deferred_results({k: kept[k] for k in answers}, answers, handed)
+    for call_id, value in results.items():
+        if isinstance(value, ToolReturn):
+            # 停止时结果直接写进历史；ToolReturn 要由 pydantic-ai 转换成消息，停止后仍挂着的种类不能交回它
+            raise RuntimeError(
+                f"call {call_id} of {kept[call_id].tool_name}: a ToolReturn cannot be saved on stop"
+            )
+    return StopClosing(
+        stopped=[c for c in unanswered_calls(history) if c.tool_call_id not in kept],
+        answered=[(kept[k], v) for k, v in results.items()],
+        used=used,
+    )
 
 
 def pending_questions(history: Sequence[ModelMessage]) -> dict[str, list[Question]]:

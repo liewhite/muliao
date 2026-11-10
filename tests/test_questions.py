@@ -170,6 +170,89 @@ async def test_an_answer_behind_a_queued_message_still_answers_the_questions(
     assert "先看看别的" in str(history[-2].parts[-1].content)
 
 
+async def test_stopping_keeps_a_submitted_answer_with_the_question_it_answers(
+    client, container, make_agent, models
+):
+    # 回答属于它回答的提问：已提交、还排着的回答是停止前用户已给出的部分，停止把它写成提问的结果（不丢、提问也不
+    # 变回待回答）；同时排着的别的信件照常丢弃。回答不留在信箱里，对账不会再唤醒运行，模型在下一封信时看到它
+    session_id, asker = await _asked(client, container, make_agent, models)
+    url = f"/api/sessions/{session_id}/messages"
+    await client.post(url, json={"prompt": "先看看别的"})
+    answers = {"q1": [{"selected": ["日线"]}, {"selected": ["成交量"]}]}
+    assert (await client.post(url, json={"prompt": "", "answers": answers})).status_code == 202
+    assert (await client.post(f"/api/sessions/{session_id}/stop")).status_code < 300
+    await drain(container)
+    await container.mail.reconcile()
+    await drain(container)
+
+    assert asker.requests == 1
+    detail = (await client.get(f"/api/sessions/{session_id}")).json()
+    assert ask_states(detail) == {"q1": "answered"} and detail["state"] == "idle"
+    assert (await client.post(url, json={"prompt": "", "answers": answers})).status_code == 409
+
+    await client.post(url, json={"prompt": "继续"})
+    await drain(container)
+    assert asker.requests == 2
+    history = await history_of(container, session_id)
+    [result] = [
+        p for m in history for p in m.parts if isinstance(p, ToolReturnPart) and p.tool_call_id == "q1"
+    ]
+    assert json.loads(result.model_response_str())["answered"] is True
+    assert "继续" in str(history[-2].parts[-1].content)
+    assert "先看看别的" not in str(history)
+
+
+async def test_after_a_stop_with_one_of_two_questions_answered_the_other_can_still_be_answered(
+    client, container, make_agent, models
+):
+    # 停止写上已提交的那个提问的回答，另一个仍挂着；之后回答它，作为它的结果交回、运行正常继续
+    seen: list[list[ModelMessage]] = []
+
+    def two_asks(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        seen.append(messages)
+        if len(seen) == 1:
+            return ModelResponse(
+                parts=[
+                    ToolCallPart("ask_user", {"questions": QUESTIONS[:1]}, tool_call_id="q1"),
+                    ToolCallPart("ask_user", {"questions": QUESTIONS[1:]}, tool_call_id="q2"),
+                ]
+            )
+        return ModelResponse(parts=[TextPart("好的。")])
+
+    await login(client)
+    agent = await make_agent("analyst", model="two")
+    models.models["two"] = scripted(two_asks)
+    session_id = (await client.post("/api/sessions", json={"agent_id": agent.id, "prompt": "分析"})).json()[
+        "id"
+    ]
+    await drain(container)
+    url = f"/api/sessions/{session_id}/messages"
+    first = {"q1": [{"selected": ["日线"]}]}
+    assert (await client.post(url, json={"prompt": "", "answers": first})).status_code == 202
+    assert (await client.post(f"/api/sessions/{session_id}/stop")).status_code < 300
+    await drain(container)
+    assert ask_states((await client.get(f"/api/sessions/{session_id}")).json()) == {
+        "q1": "answered",
+        "q2": "pending",
+    }
+
+    second = {"q2": [{"selected": ["成交量"]}]}
+    assert (await client.post(url, json={"prompt": "", "answers": second})).status_code == 202
+    await drain(container)
+    assert len(seen) == 2
+    returns = {
+        p.tool_call_id: json.loads(p.model_response_str())
+        for m in seen[-1]
+        for p in m.parts
+        if isinstance(p, ToolReturnPart)
+    }
+    assert returns["q1"]["answered"] and returns["q2"]["answered"]
+    assert ask_states((await client.get(f"/api/sessions/{session_id}")).json()) == {
+        "q1": "answered",
+        "q2": "answered",
+    }
+
+
 def test_an_answer_arriving_after_the_questions_closed_reaches_the_model_as_text():
     """回答投信后、交给模型前，提问已被别的运行结束（它带着「没回答」继续了）：回答作为一段文字交给模型。"""
     from muliao.sessions.pending import late_text
@@ -600,8 +683,7 @@ def test_an_ask_with_unchecked_arguments_left_by_an_interruption_is_an_ordinary_
     from pydantic_ai.messages import ModelResponse, ToolCallPart
 
     from muliao.sessions.consumer import interrupted_calls, resumable
-    from muliao.sessions.history import stopped_results
-    from muliao.sessions.pending import HandedOut, open_asks_of, pending_calls
+    from muliao.sessions.pending import HandedOut, closing_on_stop, open_asks_of, pending_calls
 
     handed = HandedOut(frozenset(), frozenset())
     bad = ToolCallPart("ask_user", {"questions": []}, tool_call_id="bad")
@@ -611,10 +693,9 @@ def test_an_ask_with_unchecked_arguments_left_by_an_interruption_is_an_ordinary_
     assert open_asks_of(history, [], frozenset()).answerable == {}
     assert [c.tool_call_id for c in interrupted_calls(history, handed)] == ["bad"]
     assert resumable(history, handed)
-    (stopped,) = stopped_results(history)
-    assert [p.tool_call_id for p in stopped.parts] == ["bad"]
+    assert [c.tool_call_id for c in closing_on_stop(history, handed, []).stopped] == ["bad"]
 
     # 参数合法的提问照旧挂着：停止时不补结果
     good = ToolCallPart("ask_user", {"questions": QUESTIONS}, tool_call_id="good")
-    assert stopped_results([ModelResponse(parts=[good])]) == []
+    assert closing_on_stop([ModelResponse(parts=[good])], handed, []).stopped == []
     assert list(pending_calls([ModelResponse(parts=[good])], handed)) == ["good"]

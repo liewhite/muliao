@@ -32,7 +32,7 @@ from muliao.sessions.codec import load_messages
 from muliao.sessions.compaction import Compactor, Verdict
 from muliao.sessions.content import Content, ContentBuilder
 from muliao.sessions.conventions import answer_text, is_stopped, unanswered_calls
-from muliao.sessions.deferred import DEFERRED_TOOLS, CallResult, questions_in, replayable
+from muliao.sessions.deferred import DEFERRED_TOOLS, CallResult, questions_in
 from muliao.sessions.events import RunFailed
 from muliao.sessions.finish import RunEnd, RunFinisher
 from muliao.sessions.halt import Halted, SessionHalt
@@ -55,6 +55,7 @@ from muliao.sessions.pending import (
     handed_out_in,
     is_on_time,
     pending_calls,
+    replayable,
     waiting,
 )
 from muliao.sessions.questions import waiting_text
@@ -105,7 +106,7 @@ def interrupted_calls(history: list[ModelMessage], handed: HandedOut) -> list[To
     pending = pending_calls(history, handed)
     calls = [c for c in unanswered_calls(history) if c.tool_call_id not in pending]
     replays = bool(history) and isinstance(history[-1], ModelResponse)
-    return [] if replays and all(replayable(c.tool_name) for c in calls) else calls
+    return [] if replays and all(replayable(c, handed) for c in calls) else calls
 
 
 def paused_end(

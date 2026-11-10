@@ -433,6 +433,31 @@ def test_only_a_step_whose_unfinished_calls_are_all_idempotent_asks_is_replayed(
     assert interrupted_calls(history(ask), HandedOut(delegated={"a1"}, approvals=frozenset())) == []
 
 
+def test_stopping_and_resuming_read_the_kind_the_call_is_recognised_as():
+    """停止、续跑都按 pending.kind_of 认出的种类查表（#574），不按工具名另查：等批准的调用停止时补「已停止」，提问
+    仍挂着，回答已提交的写上回答（一封信同时带提问回答与批准决定时也按调用逐个认）；还没交出去的 ask_agent 可重放。"""
+    from muliao.sessions.pending import closing_on_stop, replayable
+    from muliao.sessions.tables import Mail, MailKind
+
+    ask = ToolCallPart("ask_agent", {"agent": "beta", "task": "check"}, tool_call_id="a1")
+    questions = {"questions": [{"question": "q", "header": "h", "options": [{"label": "a"}, {"label": "b"}]}]}
+    q1 = ToolCallPart("ask_user", questions, tool_call_id="q1")
+    q2 = ToolCallPart("ask_user", questions, tool_call_id="q2")
+    gated = ToolCallPart("skill_run", {"skill": "x", "script": "y"}, tool_call_id="g1")
+    history = [ModelResponse(parts=[q1, q2, gated])]
+    handed = HandedOut(delegated=frozenset(), approvals={"g1"})
+    answer = {"tool": "ask_user", "result": {"answered": True, "answers": [], "note": None}}
+    approval = {"tool": "approval", "result": {"approved": True}}
+    mixed = Mail(id=1, kind=MailKind.ANSWER, answers={"q1": answer, "g1": approval})
+    other = Mail(id=2, kind=MailKind.MESSAGE, answers={})
+
+    closing = closing_on_stop(history, handed, [mixed, other])
+    assert closing.stopped == [gated]
+    assert [(c.tool_call_id, v["answered"]) for c, v in closing.answered] == [("q1", True)]
+    assert closing.used == [mixed]
+    assert replayable(ask, handed) and not replayable(gated, handed)
+
+
 async def test_a_tool_call_interrupted_alongside_a_question_is_not_executed_again(
     client, container, make_agent, models
 ):

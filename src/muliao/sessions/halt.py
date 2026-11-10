@@ -1,7 +1,8 @@
 """停止会话（docs/architecture.md「停止会话」）：消费停止、信箱清空，连带停下它发起的异步工作。运行中被停止时在
 运行退出之后执行，没在运行时直接执行；停止是会话状态的迁移，一个事务，只写会话自己的数据：
 
-1. 让库里的历史停在不会被续跑的地方：悬空的工具调用（等用户回答的提问除外，用户仍可回答）补上「被停止」的结果，
+1. 让库里的历史停在不会被续跑的地方：悬空的工具调用补上「被停止」的结果（等用户回答的提问除外：
+   回答已提交的写上回答，没回答的留着，用户仍可回答），
    末尾没得到回复的请求标上停止。
 2. 排队与等重试的运行记为完成，不再执行。
 3. 全部 active 占用记为 cleared：之后才到的结局（后台任务、委派）一律不投（sessions.work.deliver_in）。
@@ -35,6 +36,8 @@ from muliao.sessions.history import (
 )
 from muliao.sessions.holds import clear_in
 from muliao.sessions.lanes import RUN_TASK, session_lane
+from muliao.sessions.mailbox import consume_in, queued_in
+from muliao.sessions.pending import closing_on_stop, handed_out_in
 from muliao.sessions.runs import latest_run
 from muliao.sessions.settlement import settle_stopped_in
 from muliao.sessions.stopping import StoppableRuns
@@ -45,14 +48,17 @@ log = logging.getLogger(__name__)
 
 async def close_history_in(s: AsyncSession, queue: TaskQueue, session_id: str) -> None:
     """停止时让会话历史停在不会被续跑的地方（唯一事实源是库里的历史）。运行中被停止时同一事务里先把当前这一步已产生的部分存库
-    （steps.save_tail_in），补结果与停止标记都在这里一处做。
+    （steps.save_tail_in），补结果与停止标记都在这里一处做：哪些调用补「已停止」、哪些写上已提交的回答由 pending.closing_on_stop
+    定，用上的回答信件随之记为已处理。
     只看最后一条模型回复起的那一段（history.since_last_response）：没出结果的调用只可能在那里。"""
     history = await since_last_response(s, session_id)
-    if closing := stopped_results(history):
+    closing = closing_on_stop(history, await handed_out_in(s, session_id), await queued_in(s, session_id))
+    if results := stopped_results(closing.stopped, closing.answered):
         run = await latest_run(s, queue, session_id)
         if run is None:
             raise RuntimeError(f"session {session_id} has tool calls but no run")
-        await append_in(s, session_id, run.id, [marked_stopped(closing[0])])
+        await append_in(s, session_id, run.id, [marked_stopped(results[0])])
+        await consume_in(s, [m.id for m in closing.used], run.id)
         return
     # 没得到回复的请求，或生成到一半被打断的回复（pydantic-ai 记 state='interrupted'）：标上停止。完整的回复有意不标
     # （它确实是完整的；空闲会话被停止时也停在它上）

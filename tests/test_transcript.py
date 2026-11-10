@@ -32,8 +32,7 @@ def test_without_a_save_time_a_call_has_no_start():
 
 def test_results_made_up_on_stop_or_interruption_have_no_end_time():
     # 补上的结果是停止、重启时才合成的，它的 timestamp 不是调用结束的时间
-    history = [ModelResponse(parts=[CALL])]
-    for made_up in (stopped_results(history), interrupted_results([CALL])):
+    for made_up in (stopped_results([CALL]), interrupted_results([CALL])):
         part = made_up[0].parts[0]
         assert isinstance(part, ToolReturnPart) and result_item(part, NO_RENDERS).at is None
 
@@ -60,7 +59,7 @@ def test_a_call_points_at_the_thread_it_opened():
 def test_a_call_points_at_its_thread_whoever_made_up_its_result():
     # 停止、中断补上的结果不影响关联：只看调用 id
     history = [ModelResponse(parts=[ASK])]
-    for made_up in (stopped_results(history), interrupted_results([ASK])):
+    for made_up in (stopped_results([ASK]), interrupted_results([ASK])):
         items = to_items(history, NO_RENDERS) + to_items(made_up, NO_RENDERS)
         assert [(i.type, i.threads) for i in annotate_threads(items, {"ask": "th"})] == [
             ("tool_call", ["th"]),
