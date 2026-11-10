@@ -20,7 +20,7 @@ from muliao.agents.access import usable
 from muliao.agents.kinds import StoredKind
 from muliao.agents.skill_package import SKILL_FILE, SkillFile, Skipped, parse_frontmatter
 from muliao.agents.source import AssetSource
-from muliao.errors import NotFound
+from muliao.errors import Conflict, NotFound
 from muliao.platform.fs import write_atomic
 
 log = logging.getLogger(__name__)
@@ -213,7 +213,7 @@ class SkillStore:
         async with self._source.writing() as snapshot:
             existing = snapshot.existing(_KIND, name)
             if existing is not None and not replace:
-                snapshot.check_free(_KIND, name)
+                raise Conflict(f"skill {name!r} already exists; import it with replace to overwrite it")
             directory = existing.path if existing is not None else snapshot.path_of(_KIND, name, owner)
             await asyncio.to_thread(_replace_dir, directory, package.files)
         meta = _meta((await self._source.snapshot()).asset(_KIND, name))
