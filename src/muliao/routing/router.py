@@ -83,8 +83,9 @@ async def resolve_in(s: AsyncSession, address: str, sender_agent: str) -> Target
 
 @dataclass(frozen=True)
 class Segment:
-    """一次投递：目标与投给它的内容（同一目标的各段已合并）。address 是内容里给它定目标的第一个地址；有一段投到默认
-    目标时为 None：投不进去时那是默认目标的问题，不是内容的。"""
+    """一次投递：目标与投给它的内容（同一目标的各段已合并）。address 是内容里给它定目标的第一个地址（几个地址解析到同一
+    目标时只记第一个，报错里也只显示它）；只要有一段来自默认目标就是 None，之后再合并进来的段也不改它：投不进去时那是
+    默认目标的问题，不是内容的。"""
 
     target: Destination
     body: str | None

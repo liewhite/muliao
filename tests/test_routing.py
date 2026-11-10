@@ -178,7 +178,7 @@ async def test_a_bad_route_rejects_a_firing_someone_waits_for_and_drops_just_its
     container, make_agent
 ):
     """#569：调用方在等的（webhook、trigger_run）整次报错；激活机制只丢那一段、其余照投，触发器保持启用，记在 route_error，
-    只在从没有变为有时给触发器的 agent 开一个告警会话；一次没丢段的触发清除它。"""
+    每种坏地址只给触发器的 agent 开一个告警会话（好坏批次交替不重复告警）；改了配置或重新启用时清除。"""
     alpha = await make_agent("alpha")
     trigger = await _webhook(container, alpha.id)
     bad = "ok\n@route agent:nobody\nlost"
@@ -193,25 +193,37 @@ async def test_a_bad_route_rejects_a_firing_someone_waits_for_and_drops_just_its
     after = await container.triggers.get_by_name("feed")
     assert after.enabled and after.disabled_reason is None
     assert after.route_error is not None and "@route agent:nobody" in after.route_error
-    [alert] = [x for x in await _sessions(container) if "投递地址出错" in x.title]
+    [alert] = [x for x in await _sessions(container) if "投递地址写错" in x.title]
     [event] = [x for x in await _sessions(container) if x.id != alert.id]
     assert await _mail(container, event.id) == ["Handle it.\n\n<event>\nok\n</event>"]
     assert alert.agent_id == alpha.id
     [letter] = await _mail(container, alert.id)
     assert "`@route agent:nobody`" in letter and "lost" in letter
 
-    # 还在出错：照样丢段、不再告警；各段都丢了就不触发
+    # 同一种错：照样丢段、不再告警；各段都丢了就不触发；中间有好的批次也一样
     await container.triggers.fire_activated(trigger.id, "@route agent:nobody\nlost again")
-    await deliver(container)
-    assert len(await _sessions(container)) == 2
-
     await container.triggers.fire_activated(trigger.id, "fine")
-    await deliver(container)
-    assert (await container.triggers.get_by_name("feed")).route_error is None
-
     await container.triggers.fire_activated(trigger.id, bad)
     await deliver(container)
-    assert len(await _sessions(container)) == 5  # 又一次事件 + 重新出错的一次告警
+    assert len(await _sessions(container)) == 4  # 另两次事件
+
+    # 新的一种坏地址告警一次，只说新的，route_error 两种都记着
+    await container.triggers.fire_activated(trigger.id, "@route issue:999\nnope")
+    await deliver(container)
+    alerts = [x for x in await _sessions(container) if "投递地址写错" in x.title]
+    assert len(alerts) == 2
+    newest = [m for x in alerts if x.id != alert.id for m in await _mail(container, x.id)]
+    assert "issue:999" in newest[0] and "nobody" not in newest[0]
+    error = (await container.triggers.get_by_name("feed")).route_error or ""
+    assert "nobody" in error and "issue:999" in error
+
+    # 重新启用（改配置同理）清除，再出错重新告警
+    await container.triggers.update(trigger.id, enabled=False)
+    await container.triggers.update(trigger.id, enabled=True)
+    assert (await container.triggers.get_by_name("feed")).route_error is None
+    await container.triggers.fire_activated(trigger.id, bad)
+    await deliver(container)
+    assert len([x for x in await _sessions(container) if "投递地址写错" in x.title]) == 3
 
 
 async def test_a_part_whose_target_refuses_it_is_dropped_but_a_bad_default_target_still_disables(

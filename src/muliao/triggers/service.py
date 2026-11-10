@@ -379,6 +379,7 @@ class TriggerService:
             trigger = await self._manageable_in(s, trigger_id)
             if not isinstance(precheck, Keep):
                 set_precheck(trigger, precheck)
+                trigger.route_error = None  # 换了产出事件的脚本：旧的错不再作数，再出错重新告警
             if prompt is not None:
                 trigger.prompt = prompt
             if route is not None:
@@ -388,6 +389,7 @@ class TriggerService:
                 derived_config, derived = rederived
                 # JSON 列只在整体赋值时被追踪
                 trigger.config, trigger.state = derived_config, {**trigger.state, **derived}
+                trigger.route_error = None  # 配置（如流式命令）换了或重新启用
             if enabled is not None:
                 trigger.enabled = enabled
                 # 重新启用只清停用的原因；前置检查的错误留着（界面一直显示它），它恢复之前不会再告警一次
@@ -521,27 +523,29 @@ class TriggerService:
     async def _route_errors_in(
         self, s: AsyncSession, trigger: Trigger, rejected: list[Rejected]
     ) -> Task | None:
-        """记下这次触发丢掉的段（route_error，没有丢的清除）；只在从没有变为有时告警一次，返回告警的投递任务。
+        """记下这次触发丢掉的段：route_error 是自脚本上次改过以来出过的各种错（一行一个「地址: 原因」，去重），只在出现新的一种时
+        告警，返回告警的投递任务。换前置检查或改配置（含重新启用）时清除（update）。
 
-        地址写在触发器脚本（前置检查、流式命令）的输出里，和前置检查失败一样交给脚本的主人：触发器所属的 agent。脚本的
-        bug 会让每次触发都丢段，按状态变化告警才不每次开新会话。
+        地址写在触发器脚本（前置检查、流式命令）的输出里，和前置检查失败一样交给脚本的主人：触发器所属的 agent。不像前置检查
+        那样一次没丢段就清除：丢不丢取决于内容，流式里坏地址与好地址的批次常常交替，那样会一遍遍告警同一个问题。
         """
-        error = "\n".join(f"@route {r.address}: {r.error}" for r in rejected) or None
-        healthy_before = trigger.route_error is None
-        trigger.route_error = error
-        if error is None:
+        seen = (trigger.route_error or "").splitlines()
+        new = [r for r in rejected if _route_error_line(r) not in seen]
+        new_lines = list(dict.fromkeys(_route_error_line(r) for r in new))
+        if rejected:
+            log.warning(
+                "trigger event parts dropped",
+                extra={"trigger": trigger.name, "dropped": [_route_error_line(r) for r in rejected]},
+            )
+        if not new_lines:
             return None
-        log.warning(
-            "trigger event parts dropped: %s", error, extra={"trigger": trigger.name, "alert": healthy_before}
-        )
-        if not healthy_before:
-            return None
+        trigger.route_error = "\n".join([*seen, *new_lines])
         return await self._alert_in(
             s,
             trigger,
-            content=route_alert(trigger, rejected),
-            title=f"{trigger.name} 投递地址出错",
-            error=error,
+            content=route_alert(trigger, new),
+            title=f"{trigger.name} 投递地址写错",
+            error="\n".join(new_lines),
         )
 
     async def run(self, trigger_id: int) -> Fired | None:
@@ -575,8 +579,6 @@ class TriggerService:
         record_failure 为假时检查失败只上抛、不记在触发器上也不告警（见 run）。drop_bad_routes 为真时内容里写错的地址只丢
         那一段并告警，否则整次报错（见 _deliver_in）。"""
         fired = await self._fire(trigger_id, payload, to, record_failure, drop_bad_routes)
-        if fired is None:
-            return None
         for task in fired.deliveries:
             await self._run_now(task.id)
         return fired.fired
@@ -628,7 +630,7 @@ class TriggerService:
         to: Destination | None,
         record_failure: bool,
         drop_bad_routes: bool,
-    ) -> _Fired | None:
+    ) -> _Fired:
         async with self._db.transaction() as s:
             trigger = await trigger_in(s, trigger_id)
             if not trigger.enabled:
@@ -651,7 +653,7 @@ class TriggerService:
         async with self._db.transaction() as s:
             trigger = await current_in(s, trigger_id, stored)
             if trigger is None:
-                return None
+                return _NOT_FIRED
             await _own_agent_in(s, trigger)
             try:
                 decision = passed(trigger, precheck, output, self._precheck.max_bytes, self._clock())
@@ -664,7 +666,7 @@ class TriggerService:
                         "trigger precheck: nothing to do, not firing",
                         extra={"trigger": name, "baseline": decision.baseline},
                     )
-                    return None
+                    return _NOT_FIRED
                 return await self._deliver_in(s, trigger, decision.event, to, drop_bad_routes)
         if record_failure:
             await self._record_failure(trigger_id, stored, str(failure))
@@ -732,10 +734,13 @@ class TriggerService:
 
 @dataclass(frozen=True)
 class _Fired:
-    # 投出去的信；各段都空、或内容里的地址全写错而一段也没投时为 None（没有触发）
+    # 投出去的信；没有触发（前置检查判定没事、各段都空、内容里的地址全写错而一段也没投）时为 None
     fired: Fired | None
     # 提交后要马上执行的投递任务（投信的定向命令 Receive、issue 动态的投递、告警）
     deliveries: list[Task]
+
+
+_NOT_FIRED = _Fired(fired=None, deliveries=[])
 
 
 def route_alert(trigger: Trigger, rejected: list[Rejected]) -> str:
@@ -756,7 +761,12 @@ def route_alert(trigger: Trigger, rejected: list[Rejected]) -> str:
         "- The line was outside text your script passes on (a message, a web page) that happens to start with "
         "`@route`: make the script indent such lines, so outside content cannot pick where events go.",
         "- If the dropped part matters, handle it yourself now.",
-        "You are told only when the trigger goes from no dropped parts to some; `trigger_list` shows the latest as "
-        "`route_error`, cleared by the next firing that drops nothing.",
+        "You are told once per distinct bad address; `trigger_list` shows them all as `route_error`, cleared when "
+        "you change the trigger's precheck or config (or re-enable it).",
     ]
     return "\n".join(lines)
+
+
+def _route_error_line(r: Rejected) -> str:
+    """route_error 里的一行：地址与原因（换行压成空格，按行去重）。"""
+    return " ".join(f"@route {r.address}: {r.error}".split())
