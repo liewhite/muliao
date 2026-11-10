@@ -9,7 +9,7 @@ import pytest
 from muliao.agents.api import AgentPatch, Rules, WriteScope
 from muliao.agents.assets import load_tree
 from muliao.errors import Forbidden, InvalidInput
-from muliao.platform.sandbox import Category, Confinement, Sandbox, WritablePaths, sandbox_for
+from muliao.platform.sandbox import Category, Confinement, Sandbox, WritablePaths, real_forms, sandbox_for
 from muliao.platform.shell import run_bash
 from muliao.workspace.writable import DEFAULT_WRITABLE, Confiner, check_write, denial_note
 from tests.test_tools import run_tools
@@ -135,6 +135,33 @@ async def test_report_mode_lets_writes_outside_through(platform, tmp_path):
     assert not c.enforcing
 
 
+async def test_unreadable_paths_hide_their_contents_from_commands_and_children(platform, tmp_path):
+    secret, backups, other = tmp_path / "config.toml", tmp_path / "backups", tmp_path / "other"
+    backups.mkdir()
+    secret.write_text("key\n"), (backups / "db").write_text("db\n"), other.write_text("ok\n")
+    (tmp_path / "link").symlink_to(secret)
+    c = Confinement(
+        sandbox_for("enforce", Path.home(), platform),
+        WritablePaths.of([(True, tmp_path), (True, Path("/dev"))], "agent-x"),
+        Path.home(),
+        lambda p: "",
+        (*real_forms(secret), *real_forms(backups)),
+    )
+    result = await _sh(
+        c,
+        tmp_path,
+        f"cat {secret}; cat link; python3 -c \"open('{backups}/db').read()\"; ls {backups}; "
+        f"(nohup sh -c 'cat {secret} > leak' >/dev/null 2>&1 &); sleep 0.5; "
+        f"test -f {secret} && echo exists; cat {other}",
+    )
+    assert "key" not in result.stdout and "db\n" not in result.stdout
+    assert result.stdout.count("Operation not permitted") == 4
+    assert result.stdout.endswith("exists\nok\n")
+    assert (tmp_path / "leak").read_text() == ""
+    assert not c.readable(secret) and not c.readable(tmp_path / "link") and not c.readable(backups / "db")
+    assert c.readable(other)
+
+
 def _adapter(platform: str) -> Sandbox:
     return sandbox_for("enforce", Path.home(), platform)
 
@@ -201,7 +228,7 @@ async def test_an_agent_writes_its_workspace_the_defaults_and_its_grants_minus_p
             tree, (tree / "a1",), ("~/proj",), ("~/proj/secret",), agent, load_tree(tree, {}, 4000)
         )
 
-    confiner = Confiner(sandbox, lambda a: tmp_path / "ws" / a, scope_of, home=home)
+    confiner = Confiner(sandbox, lambda a: tmp_path / "ws" / a, scope_of, home=home, private=())
     w = (await confiner.of("a1")).writable
     assert w.owner == "a1"
     assert w.permits(tmp_path / "ws/a1/x")
@@ -426,3 +453,67 @@ async def test_a_precheck_refused_a_write_gets_the_note_after_its_error(containe
     with pytest.raises(PrecheckFailed, match=r"Operation not permitted\n\[.*is outside"):
         await runner.run(me.id, Precheck(command=f"echo x > {blocked}/state"), None)
     assert await runner.run(me.id, Precheck(command="echo x > state && cat state"), None) == "x\n"
+
+
+# ---- 平台的私有文件只有 admin 能读写（#539） ----
+
+
+@pytest.fixture
+def settings(settings):
+    """配置文件在 data 目录旁边（同 load_settings 读入的），它与备份目录、推送私钥是平台的私有文件。"""
+    settings._file = settings.data_dir.parent / "config.toml"
+    return settings
+
+
+async def test_private_files_are_readable_and_writable_only_by_an_admin(container, make_agent, models):
+    config = container.settings.data_dir.parent / "config.toml"
+    backups = config.parent / "backups"
+    backups.mkdir()
+    config.write_text("password = 'hunter22'\n")
+    (backups / "config.toml.1").write_text("password = 'hunter22'\n")
+    assert container.settings.private_files == (
+        config,
+        config.with_name("config.toml.prev"),
+        backups,
+        container.settings.vapid_key_path,
+    )
+    carol = await make_agent("carol", model="tools")
+    root = await make_agent("root", model="tools", roles=("admin",))
+    # 祖先目录的 write:path 授权也放不开
+    await container.agents.update(carol.id, AgentPatch(allow=[f"write:path:{config.parent}"]), actor="user")
+    calls = [
+        (
+            "run_shell",
+            {"command": f"cat {config}; cat {backups}/config.toml.1; echo x >> {config}", "timeout": 30},
+        ),
+        ("read_file", {"path": str(config)}),
+        ("read_file", {"reads": [{"path": str(backups / "config.toml.1")}, {"path": "/dev/null"}]}),
+        ("edit_file", {"path": str(config), "old_text": "hunter22", "new_text": "x"}),
+    ]
+    outputs = await run_tools(container, models, carol.id, calls)
+    assert not any("hunter22" in o for o in outputs)
+    assert outputs[0].count("Operation not permitted") == 3
+    assert outputs[0].count("one of the platform's private files") == 1
+    for o in outputs[1:]:
+        assert "Operation not permitted" in o and "only an agent with the admin role" in o
+    assert config.read_text() == "password = 'hunter22'\n"
+    # 别的地方照常
+    assert (await container.confiner.of(carol.id)).writable.permits(config.parent / "elsewhere")
+    outputs = await run_tools(
+        container,
+        models,
+        root.id,
+        [("run_shell", {"command": f"cat {config} {backups}/config.toml.1", "timeout": 30}), calls[1]],
+    )
+    assert outputs[0].count("hunter22") == 2 and "hunter22" in outputs[1]
+
+
+async def test_a_precheck_cannot_read_a_private_file(container, make_agent):
+    from muliao.triggers.precheck import Precheck, PrecheckFailed, PrecheckRunner
+
+    config = container.settings.data_dir.parent / "config.toml"
+    config.write_text("password = 'hunter22'\n")
+    me = await make_agent("watcher")
+    runner = PrecheckRunner(container.vault, container.agents.workspace, container.confiner.of, 30, 1000)
+    with pytest.raises(PrecheckFailed, match=r"Operation not permitted\n\[.*private files"):
+        await runner.run(me.id, Precheck(command=f"cat {config}"), None)

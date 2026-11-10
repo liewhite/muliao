@@ -7,7 +7,7 @@ import tomllib
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, SecretStr, model_validator
 
 from muliao.platform.sandbox import Mode
 
@@ -178,6 +178,17 @@ class Settings(_Section):
     web: WebConfig | None = None
     transcription: TranscriptionConfig | None = None
     runtime: RuntimeConfig = RuntimeConfig()
+    # 读入的配置文件（load_settings 填；直接构造的没有）
+    _file: Path | None = PrivateAttr(default=None)
+
+    @property
+    def private_files(self) -> tuple[Path, ...]:
+        """只有 admin 能读写的平台文件（#539，workspace.writable）：配置文件（登录密码、cookie 签名密钥、vault 解密 key、
+        LLM key）与改它时留的 `.prev`、它旁边的备份目录 backups/（部署前备份的数据库、配置、资源树）、推送私钥。"""
+        if self._file is None:
+            return (self.vapid_key_path,)
+        f = self._file
+        return (f, f.with_name(f"{f.name}.prev"), f.parent / "backups", self.vapid_key_path)
 
     @property
     def db_path(self) -> Path:
@@ -214,4 +225,5 @@ def load_settings(path: Path) -> Settings:
         settings = settings.model_copy(update={"assets_dir": path.parent / settings.assets_dir})
     if settings.log_file is not None and not settings.log_file.is_absolute():
         settings = settings.model_copy(update={"log_file": path.parent / settings.log_file})
+    settings._file = path
     return settings

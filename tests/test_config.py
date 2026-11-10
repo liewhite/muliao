@@ -32,6 +32,13 @@ def test_example_config_is_valid_once_required_fields_are_filled(tmp_path):
     assert settings.server.port == 1080
     assert settings.data_dir == tmp_path / "data"  # 相对配置文件所在目录
     assert settings.llm.default_model == "claude:claude-sonnet-5-5"
+    # 只有 admin 能读写的（#539）：配置文件与 .prev、旁边的备份目录、推送私钥
+    assert settings.private_files == (
+        tmp_path / "config.toml",
+        tmp_path / "config.toml.prev",
+        tmp_path / "backups",
+        tmp_path / "data/vapid_private.pem",
+    )
 
 
 def test_log_file_is_off_by_default_and_relative_to_the_config_file(tmp_path):

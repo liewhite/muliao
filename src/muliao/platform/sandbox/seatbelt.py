@@ -1,7 +1,7 @@
 """macOS 的适配器：sandbox-exec 加一份按可写路径生成的 Seatbelt 配置（SBPL）。
 
 配置：先放开一切（只限制写，读、网络、进程照旧；在沙箱里跑不起来的几种程序放到沙箱外执行），再禁止一切文件写，然后按 WritablePaths 的顺序逐条放开或收回（SBPL 里
-后写的规则优先，与 WritablePaths 的「最后一条覆盖它的规则」同义）。沙箱由子进程继承，nohup、python 起的后代同样受限。
+后写的规则优先，与 WritablePaths 的「最后一条覆盖它的规则」同义），最后禁止读不可读的路径的内容（#539）。沙箱由子进程继承，nohup、python 起的后代同样受限。
 report 模式下「禁止」换成「放行并记进系统日志」：`allow file-write-… <路径>`，后面附 `muliao write sandbox agent=<id>`。
 这些记录不落盘（`log show` 事后查不到），只能实时看：试跑期间另挂一个脱离会话的
 `log stream --style compact --predicate 'eventMessage CONTAINS "muliao write sandbox"' >> 文件`。
@@ -85,12 +85,13 @@ class Seatbelt:
             case Category.PLATFORM_INSTALL:
                 return platform_install()
 
-    def profile(self, writable: WritablePaths) -> str:
+    def profile(self, writable: WritablePaths, unreadable: tuple[Path, ...]) -> str:
         message = f'(with message "{LOG_MESSAGE} agent={writable.owner}")'
-        refuse = (
-            f"(deny file-write* {message}"
-            if self.mode == "enforce"
-            else f"(allow file-write* (with report) {message}"
+        enforce = self.mode == "enforce"
+        refuse = f"(deny file-write* {message}" if enforce else f"(allow file-write* (with report) {message}"
+        # 只禁读内容（file-read-data：文件内容与列目录），stat 照常：`ls -l` 上级目录、`test -f` 不报错
+        hide = (
+            f"(deny file-read-data {message}" if enforce else f"(allow file-read-data (with report) {message}"
         )
         programs = " ".join(f"(literal {_quote(Path(p))})" for p in _UNSANDBOXED_LITERALS)
         lines = [
@@ -102,7 +103,8 @@ class Seatbelt:
         for allowed, path in writable.rules:
             matcher = f"(subpath {_quote(path)})"
             lines.append(f"(allow file-write* {matcher})" if allowed else f"{refuse} {matcher})")
+        lines.extend(f"{hide} (subpath {_quote(path)}))" for path in unreadable)
         return "\n".join(lines)
 
-    def wrap(self, argv: Sequence[str], writable: WritablePaths) -> list[str]:
-        return [os.fspath(SANDBOX_EXEC), "-p", self.profile(writable), *argv]
+    def wrap(self, argv: Sequence[str], writable: WritablePaths, unreadable: tuple[Path, ...]) -> list[str]:
+        return [os.fspath(SANDBOX_EXEC), "-p", self.profile(writable, unreadable), *argv]

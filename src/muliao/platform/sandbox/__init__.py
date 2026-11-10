@@ -52,6 +52,12 @@ def real_forms(path: Path) -> tuple[Path, ...]:
     return tuple(dict.fromkeys(forms))
 
 
+def covers(paths: Iterable[Path], path: Path) -> bool:
+    """path（绝对路径）按它的真实路径落在 paths（真实路径）的某一个里：就是它，或在它下面。"""
+    target = Path(os.path.realpath(path))
+    return any(target == p or p in target.parents for p in paths)
+
+
 @dataclass(frozen=True)
 class WritablePaths:
     """一组可写路径：按顺序的 (可写, 路径)，路径都是真实路径（real_forms）。一个路径能不能写看最后一条覆盖它的规则（规则的
@@ -90,8 +96,9 @@ class Sandbox(Protocol):
         """这一类在本系统的具体路径（不存在的也列出：以后建出来就能写）。"""
         ...
 
-    def wrap(self, argv: Sequence[str], writable: WritablePaths) -> list[str]:
-        """把命令包进沙箱：返回实际要执行的 argv，它与它起的所有子进程只能写 writable 允许的路径。"""
+    def wrap(self, argv: Sequence[str], writable: WritablePaths, unreadable: tuple[Path, ...]) -> list[str]:
+        """把命令包进沙箱：返回实际要执行的 argv，它与它起的所有子进程只能写 writable 允许的路径，读不了 unreadable
+        里的文件内容（真实路径，是文件或目录；存不存在、大小这些元数据照样看得到）。"""
         ...
 
 
@@ -116,11 +123,17 @@ class Confinement:
     writable: WritablePaths
     # 家目录：规则与报错里的 ~/ 按它展开（expand）
     home: Path
-    # 写到可写路径外的一个路径被拒时，补在系统报错后面的说明（领域给的：为什么不让写、找谁授权）
+    # 一个路径被拒（写到可写路径外、读不可读的）时，补在系统报错后面的说明（领域给的：为什么不让、找谁）
     explain: Callable[[Path], str]
+    # 读不了的文件或目录（真实路径，real_forms）
+    unreadable: tuple[Path, ...] = ()
 
     def wrap(self, argv: Sequence[str]) -> list[str]:
-        return self.sandbox.wrap(argv, self.writable)
+        return self.sandbox.wrap(argv, self.writable, self.unreadable)
+
+    def readable(self, path: Path) -> bool:
+        """path（绝对路径）的内容能不能读：按它真正读到的真实路径判断。"""
+        return not covers(self.unreadable, path)
 
     @property
     def enforcing(self) -> bool:

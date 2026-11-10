@@ -188,6 +188,11 @@ class WriteScope:
     agent_id: str
     snapshot: Snapshot = field(repr=False, compare=False)
 
+    @property
+    def admin(self) -> bool:
+        """agent 有 admin 角色：另外还能读写平台的私有文件（配置、备份、推送私钥，#539）。"""
+        return self.snapshot.administers(self.agent_id)
+
     def refusal(self, path: Path) -> str | None:
         """资源树里的 path 被拒时补的说明：是谁的、找谁授权；不在树里为 None（用通用的说明）。"""
         tree = Path(os.path.realpath(self.tree))

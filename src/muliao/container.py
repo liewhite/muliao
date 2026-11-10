@@ -337,7 +337,11 @@ def assemble(
     # agent 的命令与文件工具只能写它的可写路径（#416）：当前系统没有写沙箱时在这里拒绝启动
     home = Path.home()
     confiner = Confiner(
-        sandbox_for(settings.runtime.write_sandbox, home), agents.workspace, distribution.write_scope, home
+        sandbox_for(settings.runtime.write_sandbox, home),
+        agents.workspace,
+        distribution.write_scope,
+        home,
+        settings.private_files,
     )
     # MCP 的配置归 agent 领域，连接归运行时：新增时的连接验证注入给配置，运行时按 agent 可用的 server 连接；
     # stdio server 的进程与 agent 的命令关在同一个写沙箱里（#499）

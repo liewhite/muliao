@@ -1,5 +1,5 @@
-"""文件工具：read_file / write_file / edit_file / share_file。相对路径以 agent 工作目录为基准；读不限，写只能写 agent 的可写路径（writable，防误操作不防故意，
-见架构文档）。组合进运行的是 tools.workspace_toolset，它在此之上加上 run_shell 与后台任务。edit_file 的定位与拼接规则在
+"""文件工具：read_file / write_file / edit_file / share_file。相对路径以 agent 工作目录为基准；读只拦平台的私有文件（非 admin），写只能写 agent 的可写路径
+（writable，防误操作不防故意，见架构文档）。组合进运行的是 tools.workspace_toolset，它在此之上加上 run_shell 与后台任务。edit_file 的定位与拼接规则在
 file_edit / syntax_edit。
 """
 
@@ -16,17 +16,18 @@ from pydantic_ai import BinaryContent, FunctionToolset, RunContext, ToolReturn
 
 from muliao.agent_runtime.api import TOOL_ATTACHMENTS, attachment_of
 from muliao.agents.api import AssetSource
-from muliao.errors import InvalidInput, NotFound
+from muliao.errors import Forbidden, InvalidInput, NotFound
 from muliao.files.api import INLINE_IMAGE_TYPES, FileStore
 from muliao.platform import text_edit
 from muliao.platform.fs import write_atomic
+from muliao.platform.sandbox import Confinement
 from muliao.platform.text_edit import truncate
 from muliao.platform.tool_views import Args, CodeBlock, ToolRender, ViewBlock, diff, rendered_by
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 from muliao.workspace import file_edit
 from muliao.workspace.file_edit import numbered
 from muliao.workspace.syntax_edit import PatternEdit, language_of
-from muliao.workspace.writable import Confiner, check_write
+from muliao.workspace.writable import Confiner, check_read, check_write
 
 log = logging.getLogger(__name__)
 
@@ -187,10 +188,12 @@ def file_toolset(
         """
         if reads and (path is not None or offset != 1 or limit != _DEFAULT_READ_LIMIT):
             raise InvalidInput("pass either path/offset/limit or reads, not both")
+        confinement = await confiner.of(ctx.deps.agent_id)
         if not reads:
             if path is None:
                 raise InvalidInput("path is required (or pass reads)")
             target = resolve(ctx.deps, path)
+            check_read(confinement, target)
             if media_type := _image_type(target):
                 if offset != 1 or limit != _DEFAULT_READ_LIMIT:
                     raise InvalidInput(f"offset/limit do not apply to an image file: {target}")
@@ -199,7 +202,7 @@ def file_toolset(
             excerpt = _read_range(target, offset, limit, limits.max_output_chars - _PART_OVERHEAD)
             # 按行截断后正文已在预算内；只有第一行就比整个预算还长时这里才会再截
             return truncate(excerpt.body, limits.max_output_chars) + excerpt.more_note
-        return _read_parts(ctx.deps, reads, limits.max_output_chars)
+        return _read_parts(ctx.deps, confinement, reads, limits.max_output_chars)
 
     @ts.tool(sequential=True, metadata=rendered_by(_WRITE_RENDER))
     @_io_errors_returned
@@ -449,7 +452,9 @@ def _check_fresh(scope: RunScope, target: Path) -> None:
         )
 
 
-def _read_parts(scope: RunScope, reads: tuple[FileRange, ...], max_chars: int) -> str:
+def _read_parts(
+    scope: RunScope, confinement: Confinement, reads: tuple[FileRange, ...], max_chars: int
+) -> str:
     """read_file 的多段读取：按次序读，共用一个输出预算。预算用完的那段在整行处停下并写明续读的 offset；之后
     的段不再读，最后一行逐个列出（这一行不参与截断），模型照着另起一次调用、不必猜。"""
     sections: list[tuple[FileRange, str]] = []
@@ -462,11 +467,12 @@ def _read_parts(scope: RunScope, reads: tuple[FileRange, ...], max_chars: int) -
             skipped.append(part)
             continue
         try:
+            check_read(confinement, target)
             if _image_type(target):
                 raise InvalidInput("an image file cannot be read in reads; read it alone with path")
             _remember(scope, target)
             excerpt = _read_range(target, part.offset, part.limit, body_budget)
-        except (InvalidInput, NotFound, OSError) as e:
+        except (InvalidInput, NotFound, Forbidden, OSError) as e:
             # 标题用模型给的路径认出是哪一段（有的错误信息里不带路径）
             section = f"==> {part.path}: {e} <=="
         else:

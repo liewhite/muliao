@@ -4,8 +4,11 @@
 
 可写路径 = 它的工作目录 + 默认可写的几类路径（DEFAULT_WRITABLE）− 受保护的（PROTECTED）+ 它的 `write:path:<目录>` 授权
 − 它的 deny 里的 `write:path:<目录>` − 整棵 AI 资源树 + 树里它能改的资源（agents.access.write_scope：自己的目录、角色
-授予 write 的、admin 整棵树，#499），后面的覆盖前面的。「能不能改某项资源」由此完全由沙箱回答。类别换成具体路径、命令怎么关进沙箱由执行层按当前系统做
-（platform.sandbox）。
+授予 write 的、admin 整棵树，#499）− 平台的私有文件（非 admin），后面的覆盖前面的。「能不能改某项资源」由此完全由沙箱回答。
+类别换成具体路径、命令怎么关进沙箱由执行层按当前系统做（platform.sandbox）。
+
+读只拦一处（#539）：平台的私有文件（config.Settings.private_files：配置、备份、推送私钥）只有 admin 能读，命令由沙箱拒绝、
+read_file 由 check_read 拒绝，补的说明同样走 Confinement.explain。防误操作（把密钥打进会话记录），不防故意。
 """
 
 from __future__ import annotations
@@ -19,7 +22,7 @@ import anyio
 
 from muliao.agents.api import WriteScope
 from muliao.errors import Forbidden
-from muliao.platform.sandbox import Category, Confinement, Sandbox, WritablePaths, expand
+from muliao.platform.sandbox import Category, Confinement, Sandbox, WritablePaths, covers, expand, real_forms
 
 log = logging.getLogger(__name__)
 
@@ -46,6 +49,14 @@ def _note(path: Path) -> str:
     )
 
 
+def _private_note(path: Path) -> str:
+    return (
+        f"[{path} is one of the platform's private files (its config with the login password and keys, its "
+        "backups, its push key): only an agent with the admin role may read or write them, so the sandbox "
+        "refused it. If you need something from them, ask the user or an admin agent.]"
+    )
+
+
 class Confiner:
     """按 agent 现在的分发规则与资源归属算出它的 Confinement：每次起命令、写文件时现算，改了授权下一条命令就生效。
     受保护的排在授权之前：`write:path` 授权它本身或它的上级目录都会放开它；资源树排在授权之后，只按归属。"""
@@ -57,14 +68,18 @@ class Confiner:
         scope_of: Callable[[str], Awaitable[WriteScope]],
         # 服务运行用户的家目录，与适配器的是同一个（组合根注入）
         home: Path,
+        # 平台的私有文件（config.Settings.private_files）：只有 admin 能读写
+        private: tuple[Path, ...],
     ):
         self._sandbox = sandbox
         self._workspace_of = workspace_of
         self._scope_of = scope_of
         self._home = home
+        self._private = private
 
     async def of(self, agent_id: str) -> Confinement:
         scope = await self._scope_of(agent_id)
+        private = () if scope.admin else self._private
         # 规则的形式已在读入时校验（agents.permissions.kind_of）：绝对路径或 ~/ 开头
         rules = [
             (True, self._workspace_of(agent_id)),
@@ -75,10 +90,20 @@ class Confiner:
             # 资源树只按归属管：排在 write:path 之后，祖先目录的授权（如 ~/.muliao）不放开 access.toml
             (False, scope.tree),
             *((True, p) for p in scope.assets),
+            # 平台的私有文件排在最后：任何授权都放不开
+            *((False, p) for p in private),
         ]
         # 换成真实路径要读文件系统
-        writable = await anyio.to_thread.run_sync(WritablePaths.of, rules, agent_id)
-        return Confinement(self._sandbox, writable, self._home, lambda p: scope.refusal(p) or _note(p))
+        writable, unreadable = await anyio.to_thread.run_sync(
+            lambda: (WritablePaths.of(rules, agent_id), tuple(f for p in private for f in real_forms(p)))
+        )
+
+        def explain(path: Path) -> str:
+            if covers(unreadable, path):
+                return _private_note(path)
+            return scope.refusal(path) or _note(path)
+
+        return Confinement(self._sandbox, writable, self._home, explain, unreadable)
 
 
 def check_write(confinement: Confinement, path: Path) -> None:
@@ -90,6 +115,19 @@ def check_write(confinement: Confinement, path: Path) -> None:
         raise Forbidden(f"[Errno 1] Operation not permitted: '{path}'\n{confinement.explain(path)}")
     log.warning(
         "write outside writable paths (report mode)",
+        extra={"agent": confinement.writable.owner, "path": str(path)},
+    )
+
+
+def check_read(confinement: Confinement, path: Path) -> None:
+    """read_file 读 path 之前：是它读不了的（平台的私有文件）时 Forbidden，说法与命令里被沙箱拒绝时一样。只记录不拦的
+    模式下记一条日志放行。"""
+    if confinement.readable(path):
+        return
+    if confinement.enforcing:
+        raise Forbidden(f"[Errno 1] Operation not permitted: '{path}'\n{confinement.explain(path)}")
+    log.warning(
+        "read of a private file (report mode)",
         extra={"agent": confinement.writable.owner, "path": str(path)},
     )
 
