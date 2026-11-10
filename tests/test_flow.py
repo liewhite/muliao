@@ -333,7 +333,8 @@ async def test_delegate_task_opens_public_thread_and_notifies_user(container, ma
     assert len(children) == 1
     child = children[0].session
     assert child.origin == Origin.DELEGATION and child.parent_session_id == parent.id
-    assert child.thread == "x"
+    # thread 不记发送方身份：按发送方定位会话（directory.keyed_rows_among）因此找不到它
+    assert child.thread == "x" and child.origin_ref is None
     assert (await history_of(container, child.id))[-1].parts[0].content == "summary of X"
     assert [n.session_id for n in await container.notifications.list(10)] == [child.id]
 

@@ -277,7 +277,7 @@ class Consumer:
         # Steps.compact。放在确认有要交给模型的之后（没事可做的运行不花一次总结），交出信件与批准之前（压缩失败重试时，
         # 批准不会被当成已经交过、不再执行）
         state.stale_responses = context.stale_responses
-        verdict = self._compactor.verdict(session, history, context.stale_responses)
+        verdict = self._compactor.verdict(session, history, state.stale_responses)
         state.compaction_exhausted = verdict == Verdict.HOPELESS
         if verdict == Verdict.DUE:
             context = await self._steps.compact(state, config, run_context)
