@@ -393,8 +393,8 @@ def test_the_fingerprint_skips_skill_md_and_what_scripts_generate_but_sees_helpe
     (tmp_path / "__pycache__" / "run.cpython-312.pyc").write_bytes(b"x")
     (tmp_path / ".venv" / "bin").mkdir(parents=True)
     (tmp_path / ".venv" / "bin" / "python").write_bytes(b"x")
-    (tmp_path / "node_modules").mkdir()
-    (tmp_path / "node_modules" / "x.js").write_text("x")
+    (tmp_path / ".cache").mkdir()
+    (tmp_path / ".cache" / "x.json").write_text("x")
     (tmp_path / ".DS_Store").write_bytes(b"x")
     assert scripts.fingerprint() == first
     (tmp_path / "lib").mkdir()

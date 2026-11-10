@@ -404,7 +404,7 @@ async def test_an_unexpected_failure_of_one_due_trigger_is_logged_without_disabl
 
 
 async def test_a_slow_due_fire_does_not_hold_up_the_next_scan(container, make_agent, monkeypatch):
-    """扫描循环不等触发做完：一个慢的前置检查还在跑时，下一轮照常触发别的到期触发器，慢的那个已消耗、不会再触发。"""
+    """扫描循环不等触发做完：一个慢的前置检查还在跑时，下一轮照常触发别的到期触发器；慢的那个在跑着时不重叠触发。"""
     import anyio
 
     alpha = (await make_agent()).id
@@ -431,8 +431,10 @@ async def test_a_slow_due_fire_does_not_hold_up_the_next_scan(container, make_ag
             name="quick", agent_id=alpha, kind="schedule", prompt="y", config={"cron": "* * * * *"}
         )
         await _make_due(container, quick.id)
+        # 慢的那个在前置检查跑着时又到期：只消耗、不重叠触发
+        await _make_due(container, slow.id)
         with anyio.fail_after(5):
-            assert await schedules._fire_due_in(group) == 1
+            assert await schedules._fire_due_in(group) == 2
             await other_fired.wait()
         release.set()
     assert fired == [slow.id, quick.id]

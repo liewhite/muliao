@@ -70,6 +70,9 @@ class DueRunner:
         self._kinds = {k.kind: k for k in kinds}
         self._clock = clock
         self._changed = triggers.watch()
+        # 触发还没做完的触发器（前置检查在跑时还没有会话，定时的「上一次会话不空闲就跳过」看不到它）：它再到期时只消耗不触发，
+        # 同一个触发器不重叠。只在内存：服务重启时在跑的触发随进程结束
+        self._firing: set[int] = set()
 
     async def _pending(self) -> list[tuple[Trigger, datetime]]:
         """还会到期的触发器与它们的到期时间（已结束与停用的不在列表里）。
@@ -97,8 +100,15 @@ class DueRunner:
         now = self._clock()
         due = [t.id for t, at in await self._pending() if at <= now]
         for trigger_id in due:
-            if await self._consume_one(trigger_id, now):
-                group.start_soon(self._fire, trigger_id)
+            if not await self._consume_one(trigger_id, now):
+                continue
+            if trigger_id in self._firing:
+                log.info(
+                    "due fire skipped: its previous fire is still running", extra={"trigger_id": trigger_id}
+                )
+                continue
+            self._firing.add(trigger_id)
+            group.start_soon(self._fire, trigger_id)
         return len(due)
 
     async def _consume_one(self, trigger_id: int, now: datetime) -> bool:
@@ -122,6 +132,8 @@ class DueRunner:
             await self._triggers.fire_activated(trigger_id)
         except Exception:
             log.exception("due fire failed", extra={"trigger_id": trigger_id})
+        finally:
+            self._firing.discard(trigger_id)
 
     async def _consume(self, trigger_id: int, now: datetime) -> bool:
         """按最新的行消耗这次到期；返回是否应当触发。"""

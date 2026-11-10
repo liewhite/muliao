@@ -43,15 +43,11 @@ _HIDDEN = "."
 NOT_ATTACHMENT_DIRS = ("node_modules", "venv", "site-packages", "__pycache__")
 
 
-def is_generated_dir(name: str) -> bool:
-    """skill 目录里这个名字的子目录不属于 skill 本身：隐藏目录与依赖、虚拟环境、缓存目录（脚本运行时自己生成的）。"""
-    return name.startswith(_HIDDEN) or name in NOT_ATTACHMENT_DIRS
-
-
 def is_attachment(rel: str) -> bool:
     """skill 目录里的这个相对路径（如 `scripts/run.py`、`SKILL.md`）是不是会存进 skill 的文件类型。"""
-    *dirs, name = rel.split("/")
-    if name.startswith(_HIDDEN) or any(is_generated_dir(d) for d in dirs):
+    parts = rel.split("/")
+    *dirs, name = parts
+    if any(p.startswith(_HIDDEN) for p in parts) or any(d in NOT_ATTACHMENT_DIRS for d in dirs):
         return False
     stem, dot, suffix = name.rpartition(".")
     return bool(dot) and bool(stem) and suffix in ATTACHMENT_SUFFIXES
