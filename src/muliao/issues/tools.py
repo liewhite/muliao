@@ -45,8 +45,8 @@ class IssueSummary(BaseModel):
 
 
 class NewIssueItem(BaseModel):
-    # issue_create 一次建多个时的一项（类 docstring 会进 schema，所以用注释）；字段与 issue_create 的单个参数一致（含义、
-    # 默认值以这里为准，说明只写在 issue_create 的 Args 里），另加 key
+    # issue_create 的一项（类 docstring 会进 schema，所以用注释）；字段与 issue_create 的单个参数一致（说明只写在
+    # issue_create 的 Args 里），另加 key；缺省值以领域的 NewIssue 为准
     model_config = ConfigDict(extra="forbid")
 
     key: str | None = Field(
@@ -54,12 +54,12 @@ class NewIssueItem(BaseModel):
     )
     title: str
     owner: str
-    description: str = ""
-    status: IssueStatus = IssueStatus.BACKLOG
-    priority: IssuePriority = IssuePriority.NONE
-    assignee: str | None = None
+    description: str = NewIssue.description
+    status: IssueStatus = NewIssue.status
+    priority: IssuePriority = NewIssue.priority
+    assignee: str | None = NewIssue.assignee
     depends_on: tuple[int | str, ...] = Field(
-        default=(),
+        default=NewIssue.depends_on,
         description="What this one waits for: keys of other items of this batch and/or existing issue numbers.",
     )
 
@@ -216,11 +216,11 @@ def issues_toolset(board: IssueService, agents: AgentService) -> FunctionToolset
         ctx: RunContext[RunScope],
         title: str | None = None,
         owner: str | None = None,
-        description: str = "",
-        status: IssueStatus = IssueStatus.BACKLOG,
-        priority: IssuePriority = IssuePriority.NONE,
-        assignee: str | None = None,
-        depends_on: tuple[int, ...] = (),
+        description: str = NewIssue.description,
+        status: IssueStatus = NewIssue.status,
+        priority: IssuePriority = NewIssue.priority,
+        assignee: str | None = NewIssue.assignee,
+        depends_on: tuple[int, ...] = NewIssue.depends_on,
         issues: tuple[NewIssueItem, ...] = (),
     ) -> str:
         """Create an issue. Each agent works on an issue in one conversation dedicated to it; while the issue is
@@ -251,31 +251,24 @@ def issues_toolset(board: IssueService, agents: AgentService) -> FunctionToolset
             issues: Several issues to create at once, each with the fields above plus an optional `key`; in
                 their `depends_on`, a string is the key of another item of this batch, a number an existing issue.
         """
+        single = NewIssueItem(
+            title=title or "",
+            owner=owner or "",
+            description=description,
+            status=status,
+            priority=priority,
+            assignee=assignee,
+            depends_on=depends_on,
+        )
         if issues:
-            optional = {
-                "description": description,
-                "status": status,
-                "priority": priority,
-                "assignee": assignee,
-                "depends_on": depends_on,
-            }
-            defaults = {k: NewIssueItem.model_fields[k].default for k in optional}
-            if title is not None or owner is not None or optional != defaults:
+            # 缺省值与领域同源（NewIssue）：单个的字段都是缺省值，就是没给（显式传缺省值与不传等价）
+            if single != NewIssueItem(title="", owner=""):
                 raise InvalidInput("pass either one issue (title/owner/...) or issues, not both")
             new = [await new_issue(item, len(issues), n) for n, item in enumerate(issues)]
         else:
             if title is None or owner is None:
                 raise InvalidInput("title and owner are required (or pass issues)")
-            item = NewIssueItem(
-                title=title,
-                owner=owner,
-                description=description,
-                status=status,
-                priority=priority,
-                assignee=assignee,
-                depends_on=depends_on,
-            )
-            new = [await new_issue(item, 1, 0)]
+            new = [await new_issue(single, 1, 0)]
         created = await board.create_many(ctx.deps.agent_id, new, session_id=ctx.deps.session_id)
         if not issues:
             return f"created issue #{created[0].id}"

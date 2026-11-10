@@ -342,6 +342,7 @@ READ_ONLY_IN_CALLER_TRANSACTION = {
     "sessions": {
         "session_in",
         "receive_command_in",
+        "keyed_session_in",
         "keyed_sessions_among",
         "hold_registered_in",
         "SessionActivity.work_state_in",

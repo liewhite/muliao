@@ -1,7 +1,7 @@
 """会话领域的公开接口：别的领域只经这里（与 sessions.events）使用会话领域（docs/architecture.md 第 7 节、2.3）。
 
 - 来信：界面的 UserMessage 经 SessionService.receive；别的领域的 SenderMail 由发送方在自己的事务里 receive_command_in（校验来信、得到定向命令 Receive，在同一事务 send_in，sessions.events）；目标会话可以按发送方
-  定位（SessionKey），keyed_sessions_among 查这样的会话；
+  定位（SessionKey），keyed_session_in 查一个、keyed_sessions_among 查一批这样的会话；
 - 后台任务：SessionWork.hold（在会话领域自己的事务里登记占用），hold_registered_in；运行中检查的间隔规则 check_interval / CheckBeats；结局与运行中检查经定向命令
   WorkEnded / WorkCheckIn（sessions.events）；
 - HTTP 层用的会话门面（SessionService：会话的读写、停止、手动压缩）；别的领域停止会话经端口 StopSession（结果 Halted），返回时
@@ -27,7 +27,7 @@ from muliao.sessions.inbound import (
     UserMessage,
     receive_command_in,
 )
-from muliao.sessions.info import SessionInfo, keyed_sessions_among, session_in
+from muliao.sessions.info import SessionInfo, keyed_session_in, keyed_sessions_among, session_in
 from muliao.sessions.kinds import SessionKind
 from muliao.sessions.lanes import COMPACTION_TASK, RUN_TASK
 from muliao.sessions.live import LiveSegment, RunDeltaEvent, RunEvent, RunItemEvent, SavedEvent
@@ -87,6 +87,7 @@ __all__ = [
     "UserMessage",
     "SessionInfo",
     "SessionKey",
+    "keyed_session_in",
     "keyed_sessions_among",
     "receive_command_in",
     "SessionWork",

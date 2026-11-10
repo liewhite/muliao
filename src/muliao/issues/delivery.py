@@ -1,7 +1,7 @@
 """issue 动态的投递：按 rules.recipient 判定这次的动态投给谁，在调用方的事务里发出定向命令 Receive，提交后马上
 执行（run_now）。信投进这个 agent 在这个 issue 上唯一的会话：会话领域按发送方（Origin.ISSUE，origin_ref 为
-issue id）与 agent 定位，没有就新建（sessions.api.SessionKey）；这里不存会话 id。agent 把 issue 交给用户时同一事务
-发通知（Notify）。"""
+issue id）与 agent 定位，没有就新建（sessions.api.SessionKey）；这里不存会话 id。这次的动态里 agent 把 issue 交给了
+用户（rules.handed_to_user）时同一事务发通知（Notify）。"""
 
 import logging
 from collections.abc import Awaitable, Callable, Sequence
@@ -9,15 +9,15 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agents.api import USER, AgentArchived, agent_names_in
-from muliao.issues.graph import Links, links_in, snapshot
+from muliao.agents.api import AgentArchived, agent_names_in
+from muliao.issues.graph import links_in, snapshot
 from muliao.issues.render import delivery_message, issue_view
-from muliao.issues.rules import agent_actor, recipient
-from muliao.issues.tables import ActivityKind, Issue, IssueActivity
+from muliao.issues.rules import agent_actor, from_outside, handed_to_user, recipient
+from muliao.issues.tables import Issue, IssueActivity
 from muliao.notifications.events import Notify
 from muliao.platform.messaging import Messaging
 from muliao.platform.tables import Task
-from muliao.sessions.api import Origin, SenderMail, SessionKey, keyed_sessions_among, receive_command_in
+from muliao.sessions.api import Origin, SenderMail, SessionKey, keyed_session_in, receive_command_in
 
 log = logging.getLogger(__name__)
 
@@ -29,19 +29,22 @@ class IssueDelivery:
         # 马上执行一个已提交的投递任务（Worker.run_now）
         self._run_now = run_now
 
-    async def notify_and_deliver_in(
+    async def post_in(
         self,
         s: AsyncSession,
-        assignee_before: str | None,
         issue: Issue,
         actor: str,
         session_id: str | None,
         happened: Sequence[IssueActivity],
+        *,
+        to: str | None = None,
     ) -> Task | None:
-        """issue 的字段变了（或刚建）：agent 把它交给用户时推送通知，再投递这些动态。"""
-        if (agent := agent_actor(actor)) is not None and issue.assignee == USER and assignee_before != USER:
-            # agent 把 issue 交给用户：推送通知，点开是 issue（在那里通过或打回）；也带上它交出 issue 的那个会话
-            # （打开会话即已读，会话删除时通知随之删除）
+        """在调用方的事务里发出这次动态带出的消息：agent 把 issue 交给用户时推送通知；把动态投给该收到的 agent
+        （rules.recipient），进它在这个 issue 上唯一的会话。to：直接投给这个 agent，不按 rules.recipient 判定
+        （issue_stop 的收尾消息投给被停下的 agent，不论 issue 的新状态）。返回要提交后马上执行的投递（run）。"""
+        if (agent := handed_to_user(actor, issue.assignee, happened)) is not None:
+            # 推送通知，点开是 issue（在那里通过或打回）；也带上它交出 issue 的那个会话（打开会话即已读，会话删除时
+            # 通知随之删除）
             self._messaging.send_in(
                 s,
                 Notify(
@@ -52,57 +55,22 @@ class IssueDelivery:
                     issue_id=issue.id,
                 ),
             )
-        return await self.deliver_in(s, issue, actor, session_id, happened)
-
-    async def deliver_in(
-        self,
-        s: AsyncSession,
-        issue: Issue,
-        actor: str,
-        session_id: str | None,
-        happened: Sequence[IssueActivity],
-    ) -> Task | None:
-        """在调用方的事务里把这次的动态投给该收到的 agent（rules.recipient），进它在这个 issue 上唯一的会话。返回要
-        提交后马上执行的投递（run）。"""
         links = (await links_in(s, [issue.id]))[issue.id]
-        from_outside = any(
-            a.kind == ActivityKind.EVENT or (actor == USER and a.kind == ActivityKind.COMMENT)
-            for a in happened
-        )
-        agent = recipient(
-            snapshot(issue, links),
-            from_outside=from_outside,
-            from_its_session=await _from_its_session_in(s, issue, actor, session_id),
-        )
-        if agent is None:
+        if to is None:
+            to = recipient(
+                snapshot(issue, links),
+                from_outside=from_outside(actor, happened),
+                from_its_session=await _from_its_session_in(s, issue, actor, session_id),
+            )
+        if to is None:
             return None
-        return await self._send_in(s, issue, agent, actor, happened, links)
-
-    async def deliver_to_in(
-        self, s: AsyncSession, issue: Issue, agent: str, actor: str, happened: Sequence[IssueActivity]
-    ) -> Task | None:
-        """把这次的动态投进 agent 在这个 issue 上唯一的会话，不按 rules.recipient 判定收件人：issue_stop 带收尾消息时
-        直接投给被停下的 agent（不论 issue 的新状态）。"""
-        return await self._send_in(
-            s, issue, agent, actor, happened, (await links_in(s, [issue.id]))[issue.id]
-        )
-
-    async def _send_in(
-        self,
-        s: AsyncSession,
-        issue: Issue,
-        agent: str,
-        actor: str,
-        happened: Sequence[IssueActivity],
-        links: Links,
-    ) -> Task | None:
         # 信里只有摘要和这次的动态：只渲染 happened，不读整条时间线
         letter = issue_view(issue, happened, links, await agent_names_in(s), self._tz)
         inbound = SenderMail(
             origin=Origin.ISSUE,
             origin_ref=str(issue.id),
             content=delivery_message(letter),
-            session=SessionKey(agent_id=agent, title=f"#{issue.id} {issue.title}"),
+            session=SessionKey(agent_id=to, title=f"#{issue.id} {issue.title}"),
         )
         try:
             command = await receive_command_in(s, inbound)
@@ -110,11 +78,11 @@ class IssueDelivery:
             # 已有 issue 的指派人或 owner 后来被归档：动态照常记进时间线，不投递（否则用户在这类 issue 上的评论、改动
             # 都会报错）；取消归档后由 agent 自己 issue_show 看
             log.info(
-                "issue activity not delivered: agent archived", extra={"issue_id": issue.id, "agent": agent}
+                "issue activity not delivered: agent archived", extra={"issue_id": issue.id, "agent": to}
             )
             return None
         delivery = self._messaging.send_in(s, command)
-        log.info("issue activity delivered", extra={"issue_id": issue.id, "agent": agent, "actor": actor})
+        log.info("issue activity delivered", extra={"issue_id": issue.id, "agent": to, "actor": actor})
         return delivery
 
     async def run(self, *wake: Task | None) -> None:
@@ -130,6 +98,5 @@ async def _from_its_session_in(
     """动作是不是 agent 在它自己这个 issue 会话里做的：是则返回它（这次动态不投回那里）。"""
     if agent_actor(actor) is None or session_id is None:
         return None
-    ref = str(issue.id)
-    its_session = (await keyed_sessions_among(s, Origin.ISSUE, [ref]))[ref].get(actor)
+    its_session = await keyed_session_in(s, Origin.ISSUE, str(issue.id), actor)
     return actor if its_session is not None and its_session.id == session_id else None

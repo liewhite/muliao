@@ -1,10 +1,11 @@
-"""issue 的纯规则：动态投给谁、什么算停滞、谁能审核、展示名。依赖图在 graph，给模型看的文本在 render。"""
+"""issue 的纯规则：动态投给谁、一次改动带出什么（通知用户、放行下游）、什么算停滞、哪些操作此刻做不了（返回拒绝原因）、
+展示名。依赖图在 graph，给模型看的文本在 render。"""
 
 from collections.abc import Sequence
 from dataclasses import dataclass
 
 from muliao.agents.api import USER, AgentNames
-from muliao.issues.tables import IssueStatus
+from muliao.issues.tables import ActivityKind, IssueActivity, IssueStatus
 from muliao.sessions.api import WorkState
 
 # 指派人的取值：agent id，或 USER（定义在 agents/ids.py、经 agents.api 导出，全系统指代用户的那个值）；None 为未指派。agent id 是 12 位十六进制，
@@ -62,7 +63,7 @@ SESSION_NOTE = (
 FINISHED = frozenset({IssueStatus.DONE, IssueStatus.CANCELLED})
 
 # issue_stop 叫停之后 issue 可以进入的状态：停下不是做完，不能交审（in_review）或完成（done）；in_progress 是打断后改方向
-STOP_STATUSES = frozenset(
+_STOP_STATUSES = frozenset(
     {IssueStatus.BACKLOG, IssueStatus.BLOCKED, IssueStatus.CANCELLED, IssueStatus.IN_PROGRESS}
 )
 
@@ -84,14 +85,66 @@ def finished(status: IssueStatus) -> bool:
     return status in FINISHED
 
 
-def reviewable(status: IssueStatus, assignee: str | None) -> bool:
-    """用户能审核（通过或打回）的 issue：当前指派给用户、还没结束。"""
-    return assignee == USER and not finished(status)
+def cannot_review(status: IssueStatus, assignee: str | None) -> str | None:
+    """用户此刻不能审核（通过或打回）这个 issue 的原因（接在「issue #N」之后）；能审核为 None。只审当前指派给用户、
+    还没结束的：已经审过、又被改派或取消（连点、两台设备、通知过时）时拒绝，不覆盖别人刚做的事。"""
+    if assignee != USER:
+        return f"is not assigned to you (assignee: {assignee}), nothing to review"
+    if finished(status):
+        return f"is already {status}, nothing to review"
+    return None
 
 
-def startable(status: IssueStatus, owner: str | None) -> bool:
-    """用户能一键开工（指派给 owner 并进入 in_progress）的 issue：还在 backlog、有负责项目的 agent。"""
-    return status == IssueStatus.BACKLOG and owner is not None
+def cannot_start(status: IssueStatus, owner: str | None) -> str | None:
+    """用户此刻不能一键开工（指派给 owner 并进入 in_progress）的原因（接在「issue #N」之后）；能开工为 None。
+    只开工还在 backlog、有负责项目的 agent 的。"""
+    if owner is None:
+        return "has no owner: assign it to an agent yourself"
+    if status != IssueStatus.BACKLOG:
+        return f"is already {status}, not in the backlog"
+    return None
+
+
+def cannot_stop_into(status: IssueStatus, with_message: bool) -> str | None:
+    """issue_stop 不能把 issue 改成 status 的原因；能为 None。停下不是做完（只能进 _STOP_STATUSES）；留在
+    in_progress（打断后改方向）必须带消息告诉 agent 现在做什么。"""
+    if status not in _STOP_STATUSES:
+        allowed = ", ".join(sorted(_STOP_STATUSES))
+        return f"status must be one of {allowed}: stopping is not finishing"
+    if status == IssueStatus.IN_PROGRESS and not with_message:
+        return "give a message when the issue stays in_progress: it tells the agent what to do now"
+    return None
+
+
+def from_outside(actor: str, happened: Sequence[IssueActivity]) -> bool:
+    """这次的动态里有外来的输入（用户的评论、投到 issue 的事件）：没有 agent 接手时也唤起 owner（见 recipient）。"""
+    return any(
+        a.kind == ActivityKind.EVENT or (actor == USER and a.kind == ActivityKind.COMMENT) for a in happened
+    )
+
+
+def handed_to_user(actor: str, issue_assignee: str | None, happened: Sequence[IssueActivity]) -> str | None:
+    """这次是 agent 把 issue 交给了用户（建时就指派给用户，或把指派人改成用户）：返回这个 agent（以它的名义通知用户），
+    否则 None。用户、系统自己改的不通知。"""
+    agent = agent_actor(actor)
+    if agent is None:
+        return None
+    for a in happened:
+        if a.kind == ActivityKind.CREATED and issue_assignee == USER:
+            return agent
+        if a.kind == ActivityKind.ASSIGNEE and a.change is not None and a.change["to"] == USER:
+            return agent
+    return None
+
+
+def finishing(happened: Sequence[IssueActivity]) -> IssueStatus | None:
+    """这次的状态变更让 issue 进入 done / cancelled（下游因此少等一个上游）：返回进入前的状态，否则 None。"""
+    for a in happened:
+        if a.kind == ActivityKind.STATUS and a.change is not None:
+            was, now = IssueStatus(a.change["from"]), IssueStatus(a.change["to"])
+            if not finished(was) and finished(now):
+                return was
+    return None
 
 
 def handed_by(creator: str, assigners: Sequence[str]) -> str | None:

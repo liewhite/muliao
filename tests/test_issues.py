@@ -13,7 +13,21 @@ from muliao.agents.events import AgentDeleting
 from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.issues.api import SESSION_NOTE, ActivityKind, IssuePriority, IssueStatus, WorkState
 from muliao.issues.graph import cycle_through
-from muliao.issues.rules import SYSTEM_ACTOR, Snapshot, ask_to_settle, handed_by, recipient, stalled
+from muliao.issues.rules import (
+    SYSTEM_ACTOR,
+    Snapshot,
+    ask_to_settle,
+    cannot_review,
+    cannot_start,
+    cannot_stop_into,
+    finishing,
+    from_outside,
+    handed_by,
+    handed_to_user,
+    recipient,
+    stalled,
+)
+from muliao.issues.tables import IssueActivity
 from muliao.platform.messaging import Delivery
 from muliao.sessions.api import Origin, OriginNotes
 from muliao.sessions.tables import Mail, Session
@@ -286,6 +300,65 @@ def test_the_agent_that_handed_an_issue_to_the_user_is_the_last_assigner():
     assert handed_by("creator", ["a", None]) is None
     assert handed_by(None, []) is None
     assert handed_by("creator", [SYSTEM_ACTOR]) is None
+
+
+def test_what_a_change_brings_is_read_from_its_activities():
+    def act(kind: ActivityKind, change: tuple | None = None) -> IssueActivity:
+        recorded = None if change is None else {"from": change[0], "to": change[1]}
+        return IssueActivity(kind=kind, change=recorded)
+
+    to_user = act(ActivityKind.ASSIGNEE, ("a", USER))
+    # agent 把指派人改成用户、或建时就指派给用户：以它的名义通知；用户、系统自己改的不通知
+    assert handed_to_user("a", USER, [to_user]) == "a"
+    assert handed_to_user("a", USER, [act(ActivityKind.CREATED)]) == "a"
+    assert handed_to_user("a", "b", [act(ActivityKind.CREATED)]) is None
+    assert handed_to_user(USER, USER, [to_user]) is None
+    assert handed_to_user(SYSTEM_ACTOR, USER, [to_user]) is None
+    assert handed_to_user("a", "b", [act(ActivityKind.ASSIGNEE, (USER, "b"))]) is None
+    # 从未结束进入 done / cancelled 才放行下游，返回进入前的状态
+    assert finishing([act(ActivityKind.STATUS, (PROGRESS, DONE))]) == PROGRESS
+    assert finishing([act(ActivityKind.STATUS, (DONE, IssueStatus.CANCELLED))]) is None
+    assert finishing([act(ActivityKind.STATUS, (BACKLOG, PROGRESS))]) is None
+    assert finishing([act(ActivityKind.COMMENT)]) is None
+    # 外来的输入：用户的评论、事件；agent 的评论不算
+    assert from_outside(USER, [act(ActivityKind.COMMENT)])
+    assert from_outside("a", [act(ActivityKind.EVENT)])
+    assert not from_outside("a", [act(ActivityKind.COMMENT)])
+
+
+def test_refusals_say_why():
+    assert cannot_review(REVIEW, USER) is None
+    assert "not assigned to you" in cannot_review(REVIEW, "a")
+    assert "already done" in cannot_review(DONE, USER)
+    assert cannot_start(BACKLOG, "a") is None
+    assert "no owner" in cannot_start(BACKLOG, None)
+    assert "not in the backlog" in cannot_start(PROGRESS, "a")
+    assert cannot_stop_into(IssueStatus.CANCELLED, with_message=False) is None
+    assert "stopping is not finishing" in cannot_stop_into(DONE, with_message=True)
+    assert "give a message" in cannot_stop_into(PROGRESS, with_message=False)
+    assert cannot_stop_into(PROGRESS, with_message=True) is None
+
+
+async def test_an_agent_creating_an_issue_for_the_user_notifies_them(container, make_agent):
+    alpha = (await make_agent()).id
+    chat = await start(container, alpha, "work")
+    issue = await container.issues.create(
+        alpha, session_id=chat.id, owner=alpha, title="Check", assignee=USER
+    )
+    await deliver(container)
+    [note] = await _notifications(container)
+    assert note.issue_id == issue.id and note.session_id == chat.id
+
+
+async def test_stopping_into_cancelled_releases_the_downstream(container, make_agent):
+    alpha = (await make_agent()).id
+    up = await container.issues.create(USER, owner=alpha, title="up", status=BACKLOG, assignee=alpha)
+    down = await container.issues.create(USER, owner=alpha, title="down", depends_on=[up.id])
+    await container.issues.stop(USER, up.id, session_id=None, status=IssueStatus.CANCELLED, message=None)
+    last = (await container.issues.get(down.id)).activities[-1]
+    assert last.kind == ActivityKind.DEPENDENCY
+    assert last.change == {"issue": up.id, "from": BACKLOG, "to": IssueStatus.CANCELLED}
+    assert (await container.issues.get(down.id)).issue.updated_at == last.created_at
 
 
 async def _handed_to_user(container, agent: str):

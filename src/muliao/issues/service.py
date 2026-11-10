@@ -1,7 +1,8 @@
 """issue 看板：人与 agent 协作的事项（docs/architecture.md「issue 看板」一节）。
 
-每次修改在一个事务里写 issue、记时间线，并交给 delivery 在同一事务里投递这次的动态（投给谁见 rules.recipient），
-提交后马上执行。依赖图在 graph，给模型看的文本在 render，这里编排它们。
+每次修改在一个事务里写 issue、记时间线（_record，同时更新 updated_at），再把这次的动态交给 _post_in：它从动态本身
+推出要发的通知、投给谁（rules.recipient）、要不要放行下游（rules.finishing），在同一事务里发出，提交后马上执行。
+依赖图在 graph，给模型看的文本在 render，这里编排它们。
 
 actor 是做这件事的 agent id，用户为 USER，系统自己的清理（删除 agent）为 rules.SYSTEM_ACTOR；session_id 是 agent 动手时所在的会话。它在自己这个 issue 会话里的动作
 不投回那个会话（避免自激）；issue 只在它自己的会话里做，普通对话只建、派 issue。
@@ -43,16 +44,17 @@ from muliao.issues.graph import (
 )
 from muliao.issues.render import activity_views, issue_view, render_activity, render_issue
 from muliao.issues.rules import (
-    STOP_STATUSES,
     SYSTEM_ACTOR,
     USER,
     agent_assignee,
     ask_to_settle,
+    cannot_review,
+    cannot_start,
+    cannot_stop_into,
     finished,
+    finishing,
     handed_by,
-    reviewable,
     stalled,
-    startable,
 )
 from muliao.issues.tables import (
     ActivityKind,
@@ -72,6 +74,7 @@ from muliao.sessions.api import (
     SessionActivity,
     StopSession,
     WorkState,
+    keyed_session_in,
     keyed_sessions_among,
     session_in,
 )
@@ -115,7 +118,7 @@ class IssueWork:
     depends_on: list[Dependency]
     blocks: list[Dependency]
     waiting_on: tuple[int, ...]
-    # 已结束（rules.finished）、用户能审核（rules.reviewable）、用户能一键开工（rules.startable）
+    # 已结束（rules.finished）、用户能审核（rules.cannot_review 为 None）、用户能一键开工（rules.cannot_start 为 None）
     finished: bool
     reviewable: bool
     startable: bool
@@ -141,16 +144,10 @@ def _title(title: str) -> str:
     return title
 
 
-def _check_handed_to_user(issue: Issue) -> None:
-    """审核只对当前指派给用户、还没结束（不在 FINISHED）的 issue：已经审过、又被改派或取消（连点、两台设备、通知
-    过时）时拒绝，不覆盖别人刚做的事。"""
-    if reviewable(issue.status, issue.assignee):
-        return
-    if issue.assignee != USER:
-        raise Conflict(
-            f"issue #{issue.id} is not assigned to you (assignee: {issue.assignee}), nothing to review"
-        )
-    raise Conflict(f"issue #{issue.id} is already {issue.status}, nothing to review")
+def _refuse(issue_id: int, reason: str | None) -> None:
+    """rules.cannot_* 给出了拒绝原因时报 Conflict（用户看到的是过时的状态：连点、两台设备、通知过时）。"""
+    if reason is not None:
+        raise Conflict(f"issue #{issue_id} {reason}")
 
 
 @dataclass(frozen=True)
@@ -251,7 +248,7 @@ class IssueService:
             if issue is None:
                 return
             ref = str(issue_id)
-            current = (await keyed_sessions_among(s, Origin.ISSUE, [ref]))[ref].get(event.agent_id)
+            current = await keyed_session_in(s, Origin.ISSUE, ref, event.agent_id)
             if current is None or current.id != event.session_id:
                 # 事件迟到（人工重试）时会话已被删除或换了新的：那次运行已不是它在这个 issue 上的会话，不问
                 return
@@ -261,9 +258,8 @@ class IssueService:
             if not ask_to_settle(snap, event.agent_id, state):
                 return
             activity = self._record(s, issue, event.agent_id, event.session_id, ActivityKind.UNSETTLED)
-            issue.updated_at = utcnow()
             # 投递任务随这个事务提交，由 worker 照常执行（订阅方的事务里没有「提交后马上执行」）
-            await self._delivery.deliver_in(s, issue, event.agent_id, None, [activity])
+            await self._post_in(s, issue, event.agent_id, None, [activity])
             log.info("issue left unsettled, asked", extra={"issue_id": issue_id, "run_id": event.run_id})
 
         return commit
@@ -287,9 +283,8 @@ class IssueService:
                 body=command.body,
                 change=(None, command.source),
             )
-            issue.updated_at = utcnow()
             # 投递任务随这个事务提交，由 worker 照常执行（订阅方的事务里没有「提交后马上执行」，同 on_run_ended）
-            await self._delivery.deliver_in(s, issue, command.agent_id, None, [activity])
+            await self._post_in(s, issue, command.agent_id, None, [activity])
             log.info("issue event posted", extra={"issue_id": command.issue_id, "source": command.source})
 
         return commit
@@ -313,7 +308,6 @@ class IssueService:
             # 那时不再指向它（之后不会再有它的 SessionDeleted 来置空）。会话只会从存在变为删除，本事务里检查没有竞态。
             session = event.session_id if await session_in(s, event.session_id) is not None else None
             self._record(s, issue, event.agent_id, session, ActivityKind.RUN_FAILED, body=event.summary)
-            issue.updated_at = utcnow()
             log.info("issue run failure recorded", extra={"issue_id": issue_id, "run_id": event.run_id})
 
         return commit
@@ -337,7 +331,6 @@ class IssueService:
                     self._record(
                         s, issue, SYSTEM_ACTOR, None, ActivityKind.OWNER, change=(event.agent_id, None)
                     )
-                issue.updated_at = utcnow()
 
         return commit
 
@@ -387,8 +380,8 @@ class IssueService:
                 blocks=links[i.id].blocks,
                 waiting_on=snap.waiting_on,
                 finished=finished(i.status),
-                reviewable=reviewable(i.status, i.assignee),
-                startable=startable(i.status, i.owner_agent_id),
+                reviewable=cannot_review(i.status, i.assignee) is None,
+                startable=cannot_start(i.status, i.owner_agent_id) is None,
             )
         return work
 
@@ -443,13 +436,13 @@ class IssueService:
         session_id: str | None = None,
         owner: str,
         title: str,
-        description: str = "",
-        status: IssueStatus = IssueStatus.BACKLOG,
-        priority: IssuePriority = IssuePriority.NONE,
-        assignee: str | None = None,
+        description: str = NewIssue.description,
+        status: IssueStatus = NewIssue.status,
+        priority: IssuePriority = NewIssue.priority,
+        assignee: str | None = NewIssue.assignee,
         depends_on: Sequence[int] = (),
     ) -> Issue:
-        """depends_on：它依赖的上游 issue；不能成环。"""
+        """建一个 issue（缺省值以 NewIssue 为准）。depends_on：它依赖的上游 issue；不能成环。"""
         new = NewIssue(
             owner=owner,
             title=title,
@@ -501,9 +494,7 @@ class IssueService:
             wake = []
             for issue in created:
                 happened = [self._record(s, issue, actor, session_id, ActivityKind.CREATED)]
-                wake.append(
-                    await self._delivery.notify_and_deliver_in(s, None, issue, actor, session_id, happened)
-                )
+                wake += await self._post_in(s, issue, actor, session_id, happened)
         for issue in created:
             log.info(
                 "issue created", extra={"issue_id": issue.id, "actor": actor, "assignee": issue.assignee}
@@ -529,7 +520,6 @@ class IssueService:
         字段记一条时间线。issue 进入 done / cancelled 时通知它的下游（_unblock_in）。"""
         async with self._db.transaction() as s:
             issue = await self._get_in(s, issue_id)
-            before = issue.status, issue.assignee
             happened = await self._apply_in(
                 s,
                 issue,
@@ -545,7 +535,7 @@ class IssueService:
             )
             if not happened:
                 return issue
-            wake = await self._changed_in(s, issue, before, actor, session_id, happened)
+            wake = await self._post_in(s, issue, actor, session_id, happened)
         log.info("issue updated", extra={"issue_id": issue_id, "actor": actor, "status": issue.status})
         await self._delivery.run(*wake)
         return issue
@@ -554,12 +544,9 @@ class IssueService:
         """用户审核通过交给自己的 issue：设为 done（有下游时照常放行）。"""
         async with self._db.transaction() as s:
             issue = await self._get_in(s, issue_id)
-            _check_handed_to_user(issue)
-            before = issue.status, issue.assignee
+            _refuse(issue_id, cannot_review(issue.status, issue.assignee))
             happened = await self._apply_in(s, issue, USER, None, status=IssueStatus.DONE)
-            if not happened:
-                return issue
-            wake = await self._changed_in(s, issue, before, USER, None, happened)
+            wake = await self._post_in(s, issue, USER, None, happened)
         log.info("issue approved", extra={"issue_id": issue_id})
         await self._delivery.run(*wake)
         return issue
@@ -569,15 +556,11 @@ class IssueService:
         （连点、两台设备）或没有 owner 时拒绝。"""
         async with self._db.transaction() as s:
             issue = await self._get_in(s, issue_id)
-            if not startable(issue.status, issue.owner_agent_id):
-                if issue.owner_agent_id is None:
-                    raise Conflict(f"issue #{issue_id} has no owner: assign it to an agent yourself")
-                raise Conflict(f"issue #{issue_id} is already {issue.status}, not in the backlog")
-            before = issue.status, issue.assignee
+            _refuse(issue_id, cannot_start(issue.status, issue.owner_agent_id))
             happened = await self._apply_in(
                 s, issue, USER, None, status=IssueStatus.IN_PROGRESS, assignee=issue.owner_agent_id
             )
-            wake = await self._changed_in(s, issue, before, USER, None, happened)
+            wake = await self._post_in(s, issue, USER, None, happened)
         log.info("issue started", extra={"issue_id": issue_id, "assignee": issue.assignee})
         await self._delivery.run(*wake)
         return issue
@@ -589,7 +572,7 @@ class IssueService:
             raise InvalidInput("the reason for sending an issue back must not be empty")
         async with self._db.transaction() as s:
             issue = await self._get_in(s, issue_id)
-            _check_handed_to_user(issue)
+            _refuse(issue_id, cannot_review(issue.status, issue.assignee))
             activities = await self._activities_in(s, issue_id)
             assigners = [a.actor for a in activities if a.kind == ActivityKind.ASSIGNEE]
             agent = handed_by(issue.creator, assigners)
@@ -604,12 +587,11 @@ class IssueService:
                     f"the agent that handed issue #{issue_id} to you no longer exists: "
                     "assign it to an agent yourself"
                 ) from None
-            before = issue.status, issue.assignee
             happened = [self._record(s, issue, USER, None, ActivityKind.COMMENT, body=reason)]
             happened += await self._apply_in(
                 s, issue, USER, None, status=IssueStatus.IN_PROGRESS, assignee=agent
             )
-            wake = await self._changed_in(s, issue, before, USER, None, happened)
+            wake = await self._post_in(s, issue, USER, None, happened)
         log.info("issue sent back", extra={"issue_id": issue_id, "assignee": agent})
         await self._delivery.run(*wake)
         return issue
@@ -627,7 +609,7 @@ class IssueService:
         改成 status，时间线记 STOPPED 与状态变更。有 message 时记成评论，连同这次的动态投进被停下的会话跑一轮（收尾或改方向），
         不论新状态是什么。
 
-        规则：status 只能是 rules.STOP_STATUSES（停下不是做完，不能交审或完成）；in_progress（打断后改方向）必须带 message。
+        规则见 rules.cannot_stop_into（停下不是做完；留在 in_progress 必须带 message）。
         没有 agent 指派人时报 Conflict（没有会话可停，改状态用 update）；在要停的那个会话里调用报 InvalidInput。指派人还没有
         这个会话（或它刚被删除）时没有可停的：只改状态、记评论，按 rules.recipient 投递，不为收尾新建会话。
 
@@ -635,16 +617,10 @@ class IssueService:
         被改了也不改目标：STOPPED 记的、收尾消息投的都是被停下的那个 agent。从被停会话开出去的 thread 里调用时，
         那个 thread 随停止被逐层停掉，可能在第二个事务之前就被取消：会话停了而状态没改，调用方看不到结果（契约之外的
         用法，不另拦）。"""
-        if status not in STOP_STATUSES:
-            allowed = ", ".join(sorted(STOP_STATUSES))
-            raise InvalidInput(f"status must be one of {allowed}: stopping is not finishing")
         if message is not None and not message.strip():
             raise InvalidInput("message must not be empty")
-        if status == IssueStatus.IN_PROGRESS and message is None:
-            raise InvalidInput(
-                "give a message when the issue stays in_progress: it tells the agent what to do now"
-            )
-        ref = str(issue_id)
+        if (reason := cannot_stop_into(status, message is not None)) is not None:
+            raise InvalidInput(reason)
         async with self._db.transaction() as s:
             issue = await self._get_in(s, issue_id)
             agent = agent_assignee(issue.assignee)
@@ -653,7 +629,7 @@ class IssueService:
                     f"issue #{issue_id} is not assigned to an agent: there is no conversation to stop "
                     "(use issue_update to change it)"
                 )
-            target = (await keyed_sessions_among(s, Origin.ISSUE, [ref]))[ref].get(agent)
+            target = await keyed_session_in(s, Origin.ISSUE, str(issue_id), agent)
         if target is not None and target.id == session_id:
             raise InvalidInput(
                 f"this is the conversation of issue #{issue_id} itself: change the issue with issue_update instead"
@@ -661,7 +637,6 @@ class IssueService:
         stopped = target is not None and await self._stop_session(target.id) == Halted.STOPPED
         async with self._db.transaction() as s:
             issue = await self._get_in(s, issue_id)
-            before = issue.status, issue.assignee
             happened = []
             if stopped:
                 happened.append(
@@ -671,14 +646,13 @@ class IssueService:
             if message is not None:
                 happened.append(self._record(s, issue, actor, session_id, ActivityKind.COMMENT, body=message))
             wake = (
-                await self._changed_in(
+                await self._post_in(
                     s,
                     issue,
-                    before,
                     actor,
                     session_id,
                     happened,
-                    deliver_to=agent if stopped and message is not None else None,
+                    to=agent if stopped and message is not None else None,
                 )
                 if happened
                 else []
@@ -743,28 +717,22 @@ class IssueService:
             issue.assignee = assignee
         return happened
 
-    async def _changed_in(
+    async def _post_in(
         self,
         s: AsyncSession,
         issue: Issue,
-        before: tuple[IssueStatus, str | None],
         actor: str,
         session_id: str | None,
-        happened: list[IssueActivity],
+        happened: Sequence[IssueActivity],
         *,
-        deliver_to: str | None = None,
+        to: str | None = None,
     ) -> list[Task | None]:
-        """issue 变了（happened 非空）之后：更新时间，投递这些动态；从（改动前的状态, 指派人）进入 done / cancelled 时
-        通知下游。返回要马上执行的投递。deliver_to：直接投给这个 agent，不按 rules.recipient 判定（stop 的收尾消息）。"""
-        issue.updated_at = utcnow()
-        if deliver_to is not None:
-            wake = [await self._delivery.deliver_to_in(s, issue, deliver_to, actor, happened)]
-        else:
-            wake = [
-                await self._delivery.notify_and_deliver_in(s, before[1], issue, actor, session_id, happened)
-            ]
-        if not finished(before[0]) and finished(issue.status):
-            wake += await self._unblock_in(s, issue, before[0], actor, session_id)
+        """记下的这次动态（非空）带出的一切，只从动态本身推出：通知与投递（IssueDelivery.post_in，to 同它），
+        进入 done / cancelled 时放行下游（rules.finishing）。记了动态却没有交给它的，只有不投递的 on_run_failed 与
+        系统清理 on_agent_deleting。返回要提交后马上执行的投递。"""
+        wake = [await self._delivery.post_in(s, issue, actor, session_id, happened, to=to)]
+        if (was := finishing(happened)) is not None:
+            wake += await self._unblock_in(s, issue, was, actor, session_id)
         return wake
 
     async def comment(
@@ -775,10 +743,9 @@ class IssueService:
         async with self._db.transaction() as s:
             issue = await self._get_in(s, issue_id)
             activity = self._record(s, issue, actor, session_id, ActivityKind.COMMENT, body=body)
-            issue.updated_at = utcnow()
-            wake = await self._delivery.deliver_in(s, issue, actor, session_id, [activity])
+            wake = await self._post_in(s, issue, actor, session_id, [activity])
         log.info("issue commented", extra={"issue_id": issue_id, "actor": actor})
-        await self._delivery.run(wake)
+        await self._delivery.run(*wake)
         return activity
 
     async def delete(self, issue_id: int) -> None:
@@ -795,8 +762,7 @@ class IssueService:
                 old = ids_of(before[down_id].depends_on)
                 change = (old, [i for i in old if i != issue_id])
                 happened = [self._record(s, down, USER, None, ActivityKind.DEPENDS_ON, change=change)]
-                down.updated_at = utcnow()
-                wake.append(await self._delivery.deliver_in(s, down, USER, None, happened))
+                wake += await self._post_in(s, down, USER, None, happened)
         log.info("issue deleted", extra={"issue_id": issue_id, "downstream": downstream})
         await self._delivery.run(*wake)
 
@@ -827,8 +793,7 @@ class IssueService:
                     upstream=issue.id,
                 )
             ]
-            downstream.updated_at = utcnow()
-            wake.append(await self._delivery.deliver_in(s, downstream, actor, session_id, happened))
+            wake += await self._post_in(s, downstream, actor, session_id, happened)
         if wake:
             log.info("issue unblocked downstream", extra={"issue_id": issue.id, "status": issue.status})
         return wake
@@ -868,4 +833,6 @@ class IssueService:
             session_id=session_id,
         )
         s.add(activity)
+        # 时间线上多一条就是 issue 变了：updated_at 只在这里更新
+        issue.updated_at = activity.created_at
         return activity

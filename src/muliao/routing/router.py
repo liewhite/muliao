@@ -23,7 +23,7 @@ from muliao.sessions.api import (
     Origin,
     SenderMail,
     SessionKey,
-    keyed_sessions_among,
+    keyed_session_in,
     receive_command_in,
 )
 
@@ -118,9 +118,7 @@ async def _routed_in(s: AsyncSession, sender: Sender, target: Target, content: s
                 session=SessionKey(agent_id=agent, title=sender.latest_title),
             )
             command = await receive_command_in(s, mail)
-            existing = (await keyed_sessions_among(s, sender.origin, [sender.origin_ref]))[
-                sender.origin_ref
-            ].get(agent)
+            existing = await keyed_session_in(s, sender.origin, sender.origin_ref, agent)
             return Routed(command=command, session_id=None if existing is None else existing.id)
         case IssueTo(issue_id=issue_id):
             await check_issue_in(s, issue_id)

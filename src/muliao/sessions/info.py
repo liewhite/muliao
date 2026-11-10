@@ -35,6 +35,14 @@ async def session_in(s: AsyncSession, session_id: str) -> SessionInfo | None:
     return info_of(session)
 
 
+async def keyed_session_in(
+    s: AsyncSession, origin: Origin, origin_ref: str, agent_id: str
+) -> SessionInfo | None:
+    """这个发送方给这个 agent 开的会话（规则见 directory.keyed_rows_among）；还没有（或已删除）为 None。"""
+    session = (await keyed_rows_among(s, origin, [origin_ref], agent_id)).get((origin_ref, agent_id))
+    return None if session is None else info_of(session)
+
+
 async def keyed_sessions_among(
     s: AsyncSession, origin: Origin, origin_refs: Collection[str]
 ) -> dict[str, dict[str, SessionInfo]]:

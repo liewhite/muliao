@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 from muliao.agents.api import USER
 from muliao.api.deps import C
-from muliao.issues.api import ActivityKind, IssuePriority, IssueStatus, IssueWork, WorkState
+from muliao.issues.api import ActivityKind, IssuePriority, IssueStatus, IssueWork, NewIssue, WorkState
 from muliao.issues.tables import Issue, IssueActivity
 from muliao.platform.values import KEEP, Keep
 
@@ -106,11 +106,12 @@ class IssueCreate(BaseModel):
     title: str
     # 负责的项目（agent id），必填
     owner: str
-    description: str = ""
-    status: IssueStatus = IssueStatus.BACKLOG
-    priority: IssuePriority = IssuePriority.NONE
+    # 缺省值以领域的 NewIssue 为准
+    description: str = NewIssue.description
+    status: IssueStatus = NewIssue.status
+    priority: IssuePriority = NewIssue.priority
     # agent id、"user"，或 null
-    assignee: str | None = None
+    assignee: str | None = NewIssue.assignee
     # 依赖的上游 issue id；不能成环
     depends_on: list[int] = []
 
