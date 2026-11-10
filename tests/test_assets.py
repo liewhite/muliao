@@ -273,20 +273,29 @@ async def test_an_unparsable_access_toml_keeps_the_last_rules_and_reports_to_the
 ):
     """access.toml 整个读不出来时沿用上次读到的规则（#550）：否则谁都没了 admin，这条问题报不到人，也没人能改回文件。"""
     boss = await make_agent("boss", roles=("admin",))
-    await make_agent("alpha")
+    await container.distribution.create(RoleSpec("readers", "r", [], []), actor="user")
+    await make_agent("alpha", roles=("readers",))
     assert (await container.assets.snapshot()).administers(boss.id)
     path = root(container) / "platform" / "access.toml"
     good = path.read_text()
+    # alpha 的目录也坏着：原文里 [agents.alpha] 那一节本身就有一条问题
+    write(root(container) / "alpha" / "agent.toml", "broken")
     write(path, good + "\n[agents.alpha\n")
     snapshot = await container.assets.snapshot()
     assert snapshot.administers(boss.id)
-    [reported] = [p.reason for p in snapshot.problems_for(boss.id)]
-    assert reported.startswith("cannot parse") and "last read successfully stay in effect" in reported
-    # 坏着时 admin 用文件工具改回来：格式校验只拦新问题，改好的照常写入
+    reported = [p.reason for p in snapshot.problems_for(boss.id) if p.path == path]
+    assert len(reported) == 1 and reported[0].startswith("cannot parse")
+    assert "last read successfully stay in effect" in reported[0]
+    # 坏着时 admin 用文件工具改回原文：读得出来就放行（原文那条单节问题不挡），仍读不出的照样拦
+    with pytest.raises(InvalidInput, match="cannot parse"):
+        await container.assets.vet(path, good + "\n[agents.beta\n")
     await container.assets.vet(path, good)
     write(path, good)
     snapshot = await container.assets.snapshot()
-    assert snapshot.administers(boss.id) and snapshot.problems == ()
+    assert snapshot.administers(boss.id)
+    assert [p.reason for p in snapshot.problems if p.path == path] == [
+        "[agents.alpha]: no loaded agent directory has this name"
+    ]
 
 
 def test_an_unparsable_access_toml_without_an_earlier_read_leaves_only_the_fixed_parts(tmp_path):

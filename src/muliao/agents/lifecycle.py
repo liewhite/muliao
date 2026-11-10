@@ -133,6 +133,11 @@ def _retire_assets(snapshot: Snapshot, agent_id: str) -> None:
     照样按数据库里的名字删目录与那一节，不留下占着这个名字的残留。"""
     directory = snapshot.own_dir(agent_id)
     assert directory is not None, "an agent being deleted is still in the database"
+    if agent_id not in snapshot.agents and directory.exists():
+        # 没加载出的资源无从判断别人用不用，随目录删掉：记下路径，事后好从备份里找
+        log.warning(
+            "directory of a deleted agent removed without being loaded", extra={"path": str(directory)}
+        )
     sharing = sharing_of(snapshot)
     for kind in StoredKind:
         for a in snapshot.of_kind(kind):

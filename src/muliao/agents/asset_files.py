@@ -173,11 +173,15 @@ def _agent(agent_id: str, text: str, check_model: Callable[[str, Thinking], None
 
 
 def _access(snapshot: Snapshot, text: str) -> None:
-    """按读树的同一套规则读一遍；只拦这次新出现的问题（文件里原有的、与这次改动无关的不挡，比如某个 agent 的目录暂时
-    读坏了）。"""
-    existing = {p.reason for p in snapshot.problems if p.path == snapshot.access_path}
+    """按读树的同一套规则读一遍；只拦这次新出现的问题（与磁盘上现在的文件比，原有的、与这次改动无关的不挡，比如某个 agent
+    的目录暂时读坏了）。现在的文件整个读不出来时，新内容读得出来就放行（#550：让 admin 能把它改回来，单条问题写入后照常报出）。"""
     agents = {a.name: a.id for a in snapshot.agents.values()}
-    new = [p.reason for p in access_file.parse(text, agents).problems if p.reason not in existing]
+    after = access_file.parse(text, agents)
+    before = access_file.read(snapshot.access_path, agents)
+    if after.readable and not before.readable:
+        return
+    existing = {p.reason for p in before.problems}
+    new = [p.reason for p in after.problems if p.reason not in existing]
     if new:
         raise _Rejected("; ".join(new), "Roles and permissions")
 
