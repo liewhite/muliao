@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Literal, get_args
@@ -32,6 +31,7 @@ from muliao.agents.secrets_format import parse_secret_file, validate_key
 from muliao.agents.skill_package import SKILL_FILE, parse_frontmatter
 from muliao.agents.thinking import Thinking
 from muliao.errors import Conflict, InvalidInput
+from muliao.platform.fs import real
 
 # 讲资源目录怎么改的公共 skill（#501）；报错里指向它的小节，小节标题（`## <名>`）与 Section 逐字一致，改这里要同步改 skill
 SKILL = "assets-files"
@@ -44,10 +44,6 @@ SECTIONS: tuple[Section, ...] = get_args(Section)
 class _Rejected(Exception):
     def __init__(self, reason: str, section: Section):
         self.reason, self.section = reason, section
-
-
-def real(path: Path) -> Path:
-    return Path(os.path.realpath(path))
 
 
 def in_tree(root: Path, path: Path) -> bool:

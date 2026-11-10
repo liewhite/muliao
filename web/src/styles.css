@@ -42,7 +42,7 @@ select {
   --owner-bg: oklch(0.3 0.06 var(--owner-hue));
 }
 
-/* 文件预览的代码高亮（highlight.js 的类名，pages/Workspace.tsx）：配色取 GitHub 亮/暗主题，跟随界面主题 */
+/* 文件预览的代码高亮（highlight.js 的类名，pages/FileBrowser.tsx）：配色取 GitHub 亮/暗主题，跟随界面主题 */
 .hljs-comment,
 .hljs-quote {
   color: #6e7781;
