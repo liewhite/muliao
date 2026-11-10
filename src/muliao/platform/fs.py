@@ -83,7 +83,11 @@ def _entry(directory: str, name: str) -> str | None:
             got = fcntl.fcntl(fd, fcntl.F_GETPATH, bytes(_MAXPATHLEN))
         finally:
             os.close(fd)
-        return os.path.basename(os.fsdecode(got.split(b"\0", 1)[0]))
+        found = os.path.basename(os.fsdecode(got.split(b"\0", 1)[0]))
+        if _fold(found) != _fold(name):
+            # 有多个硬链接的文件可能报出另一个链接的名字
+            raise OSError(f"cannot tell how {path} is named on disk (got {found!r})") from None
+        return found
     if name in names:
         return name
     key = _fold(name)
