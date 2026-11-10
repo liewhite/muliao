@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -100,7 +100,6 @@ class SessionService:
         messaging: Messaging,
         stop_session: StopSession,
         compactor: Compactor,
-        run_now: Callable[[int], Awaitable[None]],
         renders: ToolRenders,
     ):
         # 工具的展示规则（Toolbox.renders）：历史条目用
@@ -111,8 +110,6 @@ class SessionService:
         self._messaging = messaging
         self._stop_session = stop_session
         self._compactor = compactor
-        # 马上执行一个已提交的投递任务（Worker.run_now）
-        self._run_now = run_now
 
     async def detail(self, session_id: str) -> SessionView:
         # 先取快照再读库：快照这一段已在展示的消息不在历史里重复；之间换了段时，新保存的消息照旧由旧快照展示，
@@ -225,13 +222,11 @@ class SessionService:
 
     async def mark_read(self, session_id: str) -> None:
         """用户看过了会话：发布 SessionRead（会话的未读就是指向它的未读通知，通知领域据此把它们标为已读；会话不存在时
-        NotFound）。提交后马上投递，通常返回时界面重新取的未读数已经反映；同一 lane 上还有更早的投递时留给 worker
+        NotFound）。提交后马上投递（Messaging），通常返回时界面重新取的未读数已经反映；同一 lane 上还有更早的投递时留给 worker
         稍后处理（界面在事件投递完成时再取未读数）。订阅者的处理必须短小（在请求里执行）。"""
         async with self._db.transaction() as s:
             await self._get(s, session_id)
-            deliveries = self._messaging.publish_in(s, SessionRead(session_id=session_id))
-        for task in deliveries:
-            await self._run_now(task.id)
+            self._messaging.publish_in(s, SessionRead(session_id=session_id))
 
     def subscribe(self, messaging: Messaging) -> None:
         messaging.handle(StopThread, "sessions.stop_thread", self.on_stop_thread)

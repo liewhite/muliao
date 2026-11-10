@@ -3,6 +3,7 @@
 import asyncio
 import re
 
+import pytest
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import (
     ModelMessage,
@@ -202,6 +203,7 @@ async def test_turn_runs_tools_persists_messages_and_queues_notification(
     assert await container.notifications.unread_sessions([session.id]) == set()
 
 
+@pytest.mark.usefixtures("deliveries_later")
 async def test_a_session_read_before_its_run_ended_event_is_handled_still_reads_that_runs_notification(
     container, make_agent
 ):

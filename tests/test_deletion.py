@@ -87,6 +87,7 @@ async def test_a_workspace_that_cannot_be_fully_removed_does_not_block_deleting_
     assert leftover.agent_ids == [agent.id]
 
 
+@pytest.mark.usefixtures("deliveries_later")
 async def test_the_startup_check_does_not_report_an_agent_still_being_deleted(container, make_agent, caplog):
     agent = await make_agent("alpha")
     container.agents.workspace(agent.id).mkdir(parents=True, exist_ok=True)
@@ -98,6 +99,7 @@ async def test_the_startup_check_does_not_report_an_agent_still_being_deleted(co
     assert "deleted agents remain" not in caplog.text
 
 
+@pytest.mark.usefixtures("deliveries_later")
 async def test_deleting_an_agent_removes_its_sessions_triggers_and_secrets(container, make_agent):
     agent = await make_agent("alpha")
     await container.vault.set("TOKEN", "x", "", actor="user", owner=agent.id)
@@ -149,6 +151,7 @@ async def test_an_agent_with_a_busy_session_is_not_deleted(container, make_agent
     await wait_until_done(container, job.id)
 
 
+@pytest.mark.usefixtures("deliveries_later")
 async def test_deleting_an_agent_twice_is_a_conflict(container, make_agent):
     agent = await make_agent("alpha")
     await container.agent_lifecycle.delete(agent.id, actor="user")
@@ -160,6 +163,7 @@ async def test_deleting_an_agent_twice_is_a_conflict(container, make_agent):
     await drain(container)
 
 
+@pytest.mark.usefixtures("deliveries_later")
 async def test_a_run_rerun_after_the_mark_is_stopped_and_the_agent_deleted(container, make_agent, models):
     """标记删除之后会话不再收到来信，人为重跑它的任务仍会让会话变忙：删除流程停止它（排队的运行不再执行）再删除。"""
 
@@ -226,6 +230,7 @@ async def test_notifications_of_a_deleted_agents_sessions_go_with_them(container
     assert await container.notifications.list(10) == []
 
 
+@pytest.mark.usefixtures("deliveries_later")
 async def test_check_ins_do_not_wake_a_stopped_session(container, make_agent, models):
     from muliao.sessions.tables import HoldStatus, Mail, SessionHold
 
@@ -246,6 +251,7 @@ async def test_check_ins_do_not_wake_a_stopped_session(container, make_agent, mo
     await wait_until_done(container, job.id)
 
 
+@pytest.mark.usefixtures("deliveries_later")
 async def test_deleting_a_session_before_its_run_ended_is_delivered_leaves_no_notification(
     container, make_agent, models
 ):
@@ -299,6 +305,7 @@ async def test_a_session_of_an_agent_marked_for_deletion_cannot_be_compacted(con
         await container.compactor.request(session.id)
 
 
+@pytest.mark.usefixtures("deliveries_later")
 async def test_a_failed_run_ended_retried_after_the_session_was_deleted_writes_no_notification(
     container, make_agent, models, monkeypatch
 ):
@@ -372,6 +379,7 @@ async def test_deleting_an_agent_whose_run_is_executing_stops_it_and_completes(
     assert await _failed_tasks(container) == []
 
 
+@pytest.mark.usefixtures("deliveries_later")
 async def test_agent_names_cover_agents_being_deleted_and_label_deleted_ones(container, make_agent, models):
     """名称映射（AgentNames）包括正在删除的 agent：删除流程还没清掉它的 trigger、issue 时列出它们不报错；
     删完之后留下的 id 显示为 deleted agent。"""

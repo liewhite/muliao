@@ -82,6 +82,17 @@ async def container(settings: Settings, models: ModelSlot) -> AsyncIterator[Asse
     await c.db.engine.dispose()
 
 
+@pytest.fixture
+def deliveries_later(container: Assembly, monkeypatch: pytest.MonkeyPatch) -> None:
+    """投递不在发送方提交后马上执行，都留给 worker（测试用 deliver / drain 驱动）：测投递之前的中间状态，或模拟马上执行
+    没能执行（lane 被挡住、调用方被取消）。"""
+
+    async def later(_task_id: int) -> None:
+        return None
+
+    monkeypatch.setattr(container.messaging, "_run_now", later)
+
+
 async def restart(container: Assembly) -> None:
     """模拟进程重启后的启动恢复（服务里在 Container.running 的启动阶段、任何循环开始之前执行）。"""
     await container.worker.recover()

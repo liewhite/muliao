@@ -77,6 +77,7 @@ async def test_a_keyed_receive_command_round_trips(container, make_agent):
     assert inbound_of(command) == inbound.inbound()
 
 
+@pytest.mark.usefixtures("deliveries_later")
 async def test_a_key_with_undelivered_mail_and_no_session_yet_is_running(container, make_agent):
     alpha = (await make_agent()).id
     activity = SessionActivity(container.queue)

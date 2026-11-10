@@ -324,9 +324,9 @@ def assemble(
     live = LiveSegments(bus)
     queue = TaskQueue(db, retries=retries_of(settings.runtime))
     # 领域事件与定向命令：订阅与命令处理者在下面各领域构造之后登记
-    messaging = Messaging(queue)
-    # 马上执行已提交的投递（Worker.run_now）：worker 由各领域的处理器组成，在最后构造、绑定
+    # 提交后马上执行投递（Worker.run_now）：worker 由各领域的处理器组成，在最后构造、绑定
     run_now = RunNow()
+    messaging = Messaging(queue, run_now)
     check_model = model_checker or models.check
     assets = AssetSource(
         db,
@@ -374,7 +374,7 @@ def assemble(
     precheck = PrecheckRunner(
         vault, agents.workspace, confiner.of, settings.runtime.precheck_timeout_seconds, EVENT_MAX_BYTES
     )
-    issues = IssueService(db, messaging, tz, run_now, activity, ports.stopper)
+    issues = IssueService(db, messaging, tz, activity, ports.stopper)
     triggers = TriggerService(
         db,
         {
@@ -385,7 +385,6 @@ def assemble(
         vault,
         precheck,
         messaging,
-        run_now,
     )
     # 按到期时间触发的方式共用一个扫描循环，各自给出到期时间与这次到期被用掉之后这一行怎么变
     due_triggers = DueRunner(db, triggers, [ScheduleDue(activity, schedule_kind, messaging), OnceDue()])
@@ -448,7 +447,6 @@ def assemble(
         queue=queue,
         live=live,
         messaging=messaging,
-        run_now=run_now,
         runtime=runtime,
         toolbox=toolbox,
         files=files,

@@ -5,6 +5,8 @@
 - 事件（publish_in）：发送方不知道谁在订阅。每个订阅者一条投递任务，默认每个订阅者一条 lane（按发布顺序逐条处理）。
 - 定向命令（send_in）：接收方由发送方指定，只有一个处理者。用于「先在自己的事务里提交了状态，又必须保证一条指定的
   命令执行」；其余命令直接同步调用对方接口。
+- 发送方的事务提交之后，在它的任务里马上执行这些投递（Worker.run_now，经 db.when_committed_in）：发送方返回时效果通常已经生效（如新建
+  的会话已经存在），不靠各发送方自己收集。此刻不可领取（lane 被挡住、已被领取）、或马上执行本身出错时由 worker 照常执行。
 - 处理者返回 Commit：它对自己领域的写入与「这条投递完成」在同一个事务里提交（TaskQueue.complete），所以对自己领域
   是恰好一次；对别的领域只能调用命令（在 execute 里、带幂等键），不能在 Commit 里调用。
 - 消息的数据不合法、接收方没有登记，都是存下的数据与代码不一致（errors.CorruptState，例如跨版本部署），投递直接
@@ -22,6 +24,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.errors import CorruptState
+from muliao.platform.db import when_committed_in
 from muliao.platform.ids import new_id
 from muliao.platform.tables import EVENT_TASK, Task
 from muliao.platform.tasks import Commit, TaskQueue
@@ -66,8 +69,10 @@ class Messaging:
     # 事件与定向命令的投递完成后没有别的数据引用它
     prunable = True
 
-    def __init__(self, queue: TaskQueue):
+    def __init__(self, queue: TaskQueue, run_now: Callable[[int], Awaitable[None]]):
         self._queue = queue
+        # 马上执行一个已提交的投递任务（Worker.run_now，经组合根的 RunNow 端口）
+        self._run_now = run_now
         self._subscribers: dict[str, list[_Receiver]] = {}
         self._commands: dict[str, _Receiver] = {}
         self._receivers: dict[str, _Receiver] = {}
@@ -121,24 +126,21 @@ class Messaging:
 
     # ---- 发送（在发送方的事务里） ----
 
-    def publish_in(self, s: AsyncSession, event: DomainEvent) -> list[Task]:
-        """为每个订阅者插入一条投递任务，返回它们（发送方提交之后可以让它们马上执行，Worker.run_now）。没有订阅者时
-        什么都不插。"""
+    def publish_in(self, s: AsyncSession, event: DomainEvent) -> None:
+        """为每个订阅者插入一条投递任务，提交后马上执行。没有订阅者时什么都不插。"""
         message_id = new_id()
-        return [
+        for receiver in self._subscribers.get(event.TYPE, []):
             self._enqueue(s, receiver, event, message_id)
-            for receiver in self._subscribers.get(event.TYPE, [])
-        ]
 
-    def send_in(self, s: AsyncSession, command: Command) -> Task:
-        """返回投递任务：发送方提交之后可以让它马上执行（Worker.run_now）。"""
+    def send_in(self, s: AsyncSession, command: Command) -> None:
+        """插入一条投递任务，提交后马上执行。"""
         receiver = self._commands.get(command.TYPE)
         if receiver is None:
             raise RuntimeError(f"command {command.TYPE} has no handler")
-        return self._enqueue(s, receiver, command, new_id())
+        self._enqueue(s, receiver, command, new_id())
 
-    def _enqueue(self, s: AsyncSession, receiver: _Receiver, message: Message, message_id: str) -> Task:
-        return self._queue.enqueue(
+    def _enqueue(self, s: AsyncSession, receiver: _Receiver, message: Message, message_id: str) -> None:
+        task = self._queue.enqueue(
             s,
             kind=EVENT_TASK,
             lane=receiver.lane(message),
@@ -151,6 +153,17 @@ class Messaging:
                 "data": message.model_dump(mode="json"),
             },
         )
+        when_committed_in(s, lambda: self._run_committed(task))
+
+    async def _run_committed(self, task: Task) -> None:
+        """发送方提交之后马上执行。投递已经提交、worker 已被唤醒：马上执行本身出错（如领取时数据库暂时不可用）只是没能
+        马上执行，记下它、交给 worker，不当成发送方的失败上抛（发送方的写入已经提交）。取消照常抛出（run_now 已把任务放回）。"""
+        try:
+            await self._run_now(task.id)
+        except Exception:
+            log.exception(
+                "could not run a committed delivery at once; left to the worker", extra={"task_id": task.id}
+            )
 
     # ---- 投递（TaskHandler） ----
 

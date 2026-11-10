@@ -23,7 +23,7 @@ from muliao.platform.db import Database
 from muliao.platform.messaging import Messaging
 from muliao.platform.tasks import Commit, TaskQueue
 from muliao.platform.tooling import RunScope
-from muliao.platform.worker import RunNow, TaskHandler
+from muliao.platform.worker import TaskHandler
 from muliao.sessions.activity import SessionActivity
 from muliao.sessions.compaction import CompactionHandler, Compactor
 from muliao.sessions.consumer import Consumer, RunHandler
@@ -113,7 +113,6 @@ class SessionDomain:
         queue: TaskQueue,
         live: LiveSegments,
         messaging: Messaging,
-        run_now: RunNow,
         runtime: AgentRuntime,
         toolbox: Toolbox,
         files: FileStore,
@@ -143,7 +142,7 @@ class SessionDomain:
             notes,
         )
         return cls(
-            sessions=SessionService(db, queue, live, messaging, ports.stopper, compactor, run_now, renders),
+            sessions=SessionService(db, queue, live, messaging, ports.stopper, compactor, renders),
             compactor=compactor,
             consumer=consumer,
             mail=MailReconciler(db, queue),

@@ -1001,6 +1001,7 @@ async def test_an_mcp_server_that_fails_to_list_its_tools_is_skipped_and_the_mod
     assert "mcp server unavailable" in caplog.text
 
 
+@pytest.mark.usefixtures("deliveries_later")
 async def test_a_fire_delivered_later_is_dropped_when_its_agent_was_deleted_meanwhile(container, make_agent):
     """触发记下后投信不能马上执行时由 worker 稍后投递；其间 agent 被删除，这封信没有收件人，丢弃并记日志，不留失败。"""
     from sqlalchemy import select
@@ -1012,11 +1013,6 @@ async def test_a_fire_delivered_later_is_dropped_when_its_agent_was_deleted_mean
     trigger = await container.triggers.create(
         name="slack", agent_id=alpha, kind="schedule", prompt="check slack", config={"cron": "* * * * *"}
     )
-
-    async def later(_task_id: int) -> None:
-        return None
-
-    container.triggers._run_now = later  # noqa: SLF001  模拟投递没能马上执行
     session_id = (await container.triggers.fire(trigger.id)).sessions[0]
     await container.agent_lifecycle.delete(alpha, actor="user")
     await drain(container)
@@ -1027,6 +1023,7 @@ async def test_a_fire_delivered_later_is_dropped_when_its_agent_was_deleted_mean
     assert failed == []
 
 
+@pytest.mark.usefixtures("deliveries_later")
 async def test_a_fire_not_yet_delivered_counts_as_busy_so_the_schedule_does_not_pile_up(
     container, make_agent
 ):
@@ -1034,11 +1031,6 @@ async def test_a_fire_not_yet_delivered_counts_as_busy_so_the_schedule_does_not_
     trigger = await container.triggers.create(
         name="slack", agent_id=alpha, kind="schedule", prompt="check slack", config={"cron": "* * * * *"}
     )
-
-    async def later(_task_id: int) -> None:
-        return None
-
-    container.triggers._run_now = later  # noqa: SLF001  模拟投递没能马上执行
     await container.triggers.fire(trigger.id)
     async with container.db.transaction() as s:
         assert WorkState.IDLE != await previous_fire_state_in(

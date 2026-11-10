@@ -188,8 +188,8 @@ async def test_a_bad_route_rejects_a_firing_someone_waits_for_and_drops_just_its
     assert await _sessions(container) == []  # 整次都不投
     assert (await container.triggers.get_by_name("feed")).route_error is None
 
+    # 投信与告警都在返回时已投进会话（提交后马上执行）
     await container.triggers.fire_activated(trigger.id, bad)
-    await deliver(container)
     after = await container.triggers.get_by_name("feed")
     assert after.enabled and after.disabled_reason is None
     assert after.route_error is not None and "@route agent:nobody" in after.route_error

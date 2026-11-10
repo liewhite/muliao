@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal, Protocol
@@ -37,7 +37,6 @@ from muliao.notifications.events import Notify
 from muliao.platform.db import Database, utcnow
 from muliao.platform.ids import new_id
 from muliao.platform.messaging import Delivery, Messaging
-from muliao.platform.tables import Task
 from muliao.platform.tasks import Clock, Commit
 from muliao.platform.values import KEEP, Keep, local_time
 from muliao.routing.api import (
@@ -236,14 +235,11 @@ class TriggerService:
         vault: Vault,
         precheck: PrecheckRunner,
         messaging: Messaging,
-        run_now: Callable[[int], Awaitable[None]],
         clock: Clock = utcnow,
     ):
         self._vault = vault
         self._precheck = precheck
         self._messaging = messaging
-        # 马上执行一个已提交的投递任务（Worker.run_now）
-        self._run_now = run_now
         self._db = db
         self.kinds = dict(kinds)
         self._tz = tz
@@ -466,7 +462,7 @@ class TriggerService:
         payload: str | None,
         to: Destination | None,
         drop_bad_routes: bool,
-    ) -> _Fired:
+    ) -> Fired | None:
         """组装成事件按投递目标交出去（只由 fire 调用）。
 
         payload 为事件内容（无则只有处理说明），按目标投递（routing）：内容里的 `@route` 行把各段分到各自的目标，其余投到
@@ -501,16 +497,16 @@ class TriggerService:
                 if segment.address is None or not drop_bad_routes:
                     raise
                 rejected.append(Rejected(address=segment.address, body=segment.body or "", error=e))
-        alert = await self._route_errors_in(s, trigger, rejected)
-        alerts = [] if alert is None else [alert]
+        await self._route_errors_in(s, trigger, rejected)
         if not routed:
             log.info(
                 "trigger event has no content to deliver after routing, not firing",
                 extra={"trigger": trigger.name, "dropped": len(rejected)},
             )
-            return _Fired(fired=None, deliveries=tuple(alerts))
+            return None
         sessions = [r.session_id for r in routed]
-        tasks = [self._messaging.send_in(s, r.command) for r in routed]
+        for r in routed:
+            self._messaging.send_in(s, r.command)
         trigger.last_fired_at = now
         # 这次开出或续写的第一个已知会话（定时跳过、流式排队看它的工作状态）；只投进了 issue、或续写的会话还没建出来时
         # 留着上一次的，不清空
@@ -518,13 +514,11 @@ class TriggerService:
         if known:
             trigger.last_session_id = known[0]
         log.info("trigger fired", extra={"trigger": trigger.name, "kind": trigger.kind, "sessions": sessions})
-        return _Fired(fired=Fired(sessions=tuple(sessions)), deliveries=(*tasks, *alerts))
+        return Fired(sessions=tuple(sessions))
 
-    async def _route_errors_in(
-        self, s: AsyncSession, trigger: Trigger, rejected: list[Rejected]
-    ) -> Task | None:
+    async def _route_errors_in(self, s: AsyncSession, trigger: Trigger, rejected: list[Rejected]) -> None:
         """记下这次触发丢掉的段：route_error 是自脚本上次改过以来出过的各种错（一行一个「地址: 原因」，去重），只在出现新的一种时
-        告警，返回告警的投递任务。换前置检查或改配置（含重新启用）时清除（update）。
+        告警。换前置检查或改配置（含重新启用）时清除（update）。
 
         地址写在触发器脚本（前置检查、流式命令）的输出里，和前置检查失败一样交给脚本的主人：触发器所属的 agent。不像前置检查
         那样一次没丢段就清除：丢不丢取决于内容，流式里坏地址与好地址的批次常常交替，那样会一遍遍告警同一个问题。
@@ -538,9 +532,9 @@ class TriggerService:
                 extra={"trigger": trigger.name, "dropped": [_route_error_line(r) for r in rejected]},
             )
         if not new_lines:
-            return None
+            return
         trigger.route_error = "\n".join([*seen, *new_lines])
-        return await self._alert_in(
+        await self._alert_in(
             s,
             trigger,
             content=route_alert(trigger, new),
@@ -574,14 +568,11 @@ class TriggerService:
         这是激活机制的入口，不看触发器是否已结束（finished_at）：按到期时间触发的方式（triggers.due）在调用前就把这次到期消耗掉了，
         一次性触发器那时已经结束。管理操作的「立即运行」走 run。
 
-        触发记下之后马上执行投信（run_now），通常返回时会话已经存在，调用方可以立即续写；做不到时由 worker 稍后投递。
+        触发记下之后马上执行投信（Messaging 在提交后执行），通常返回时会话已经存在，调用方可以立即续写；做不到时由 worker 稍后投递。
         to 是这次替代触发器 route 的默认目标（如 webhook 续写的会话），内容里的 `@route` 行照样生效。
         record_failure 为假时检查失败只上抛、不记在触发器上也不告警（见 run）。drop_bad_routes 为真时内容里写错的地址只丢
         那一段并告警，否则整次报错（见 _deliver_in）。"""
-        fired = await self._fire(trigger_id, payload, to, record_failure, drop_bad_routes)
-        for task in fired.deliveries:
-            await self._run_now(task.id)
-        return fired.fired
+        return await self._fire(trigger_id, payload, to, record_failure, drop_bad_routes)
 
     async def fire_activated(self, trigger_id: int, payload: str | None = None) -> None:
         """没有调用方等着结果的激活机制（到期扫描、流式）用的 fire：失败按统一的规则处理，不上抛领域错误。
@@ -611,7 +602,7 @@ class TriggerService:
             trigger = await s.get(Trigger, trigger_id)
             if trigger is None or trigger.finished_at is None:
                 return
-            delivery = self._messaging.send_in(
+            self._messaging.send_in(
                 s,
                 Notify(
                     agent_id=None,
@@ -621,7 +612,6 @@ class TriggerService:
                     issue_id=None,
                 ),
             )
-        await self._run_now(delivery.id)
 
     async def _fire(
         self,
@@ -630,7 +620,7 @@ class TriggerService:
         to: Destination | None,
         record_failure: bool,
         drop_bad_routes: bool,
-    ) -> _Fired:
+    ) -> Fired | None:
         async with self._db.transaction() as s:
             trigger = await trigger_in(s, trigger_id)
             if not trigger.enabled:
@@ -653,7 +643,7 @@ class TriggerService:
         async with self._db.transaction() as s:
             trigger = await current_in(s, trigger_id, stored)
             if trigger is None:
-                return _NOT_FIRED
+                return None
             await _own_agent_in(s, trigger)
             try:
                 decision = passed(trigger, precheck, output, self._precheck.max_bytes, self._clock())
@@ -666,7 +656,7 @@ class TriggerService:
                         "trigger precheck: nothing to do, not firing",
                         extra={"trigger": name, "baseline": decision.baseline},
                     )
-                    return _NOT_FIRED
+                    return None
                 return await self._deliver_in(s, trigger, decision.event, to, drop_bad_routes)
         if record_failure:
             await self._record_failure(trigger_id, stored, str(failure))
@@ -677,15 +667,13 @@ class TriggerService:
             trigger = await current_in(s, trigger_id, checked)
             if trigger is None:
                 return
-            delivery = await self._fail_in(s, trigger, error)
-        if delivery is not None:
-            await self._run_now(delivery.id)
+            await self._fail_in(s, trigger, error)
 
-    async def _fail_in(self, s: AsyncSession, trigger: Trigger, error: str) -> Task | None:
-        """记下失败原因（precheck.failed）；要告警时返回告警的投递任务。"""
+    async def _fail_in(self, s: AsyncSession, trigger: Trigger, error: str) -> None:
+        """记下失败原因（precheck.failed），要告警时告警。"""
         if not failed(trigger, error, self._clock()):
-            return None
-        return await self._alert_in(
+            return
+        await self._alert_in(
             s,
             trigger,
             content=precheck_alert(trigger, error),
@@ -695,8 +683,8 @@ class TriggerService:
 
     async def _alert_in(
         self, s: AsyncSession, trigger: Trigger, *, content: str, title: str, error: str
-    ) -> Task:
-        """触发器脚本出错的告警（前置检查失败、事件里写错的投递地址），返回投递任务。
+    ) -> None:
+        """触发器脚本出错的告警（前置检查失败、事件里写错的投递地址）。
 
         脚本是触发器所属的 agent 写的，告警交给它（新会话，说明出错原因和怎么处理），由它修脚本或在自己解决不了时通知
         用户；这封信投不进去（如 agent 正在删除）时退回给用户发通知，不静默吞掉。
@@ -719,7 +707,7 @@ class TriggerService:
                 e,
                 extra={"trigger": trigger.name},
             )
-            return self._messaging.send_in(
+            self._messaging.send_in(
                 s,
                 Notify(
                     agent_id=None,
@@ -729,18 +717,8 @@ class TriggerService:
                     issue_id=None,
                 ),
             )
-        return self._messaging.send_in(s, command)
-
-
-@dataclass(frozen=True)
-class _Fired:
-    # 投出去的信；没有触发（前置检查判定没事、各段都空、内容里的地址全写错而一段也没投）时为 None
-    fired: Fired | None
-    # 提交后要马上执行的投递任务（投信的定向命令 Receive、issue 动态的投递、告警）
-    deliveries: tuple[Task, ...]
-
-
-_NOT_FIRED = _Fired(fired=None, deliveries=())
+            return
+        self._messaging.send_in(s, command)
 
 
 def route_alert(trigger: Trigger, rejected: list[Rejected]) -> str:

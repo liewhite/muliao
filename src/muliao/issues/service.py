@@ -17,7 +17,7 @@ done / cancelled 时，在同一事务里给每个下游记一条 DEPENDENCY 动
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable, Collection, Iterator, Sequence
+from collections.abc import Collection, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -65,7 +65,6 @@ from muliao.issues.tables import (
 )
 from muliao.platform.db import Database, utcnow
 from muliao.platform.messaging import Delivery, Messaging
-from muliao.platform.tables import Task
 from muliao.platform.tasks import Commit, no_commit
 from muliao.platform.values import KEEP, Keep
 from muliao.sessions.api import (
@@ -199,7 +198,6 @@ class IssueService:
         db: Database,
         messaging: Messaging,
         tz: ZoneInfo,
-        run_now: Callable[[int], Awaitable[None]],
         activity: SessionActivity,
         stop_session: StopSession,
     ):
@@ -207,7 +205,7 @@ class IssueService:
         self._stop_session = stop_session
         self._db = db
         self._tz = tz
-        self._delivery = IssueDelivery(messaging, tz, run_now)
+        self._delivery = IssueDelivery(messaging, tz)
 
     def subscribe(self, messaging: Messaging) -> None:
         messaging.subscribe(AgentDeleting, "issues.agent_deleting", self.on_agent_deleting)
@@ -258,7 +256,6 @@ class IssueService:
             if not ask_to_settle(snap, event.agent_id, state):
                 return
             activity = self._record(s, issue, event.agent_id, event.session_id, ActivityKind.UNSETTLED)
-            # 投递任务随这个事务提交，由 worker 照常执行（订阅方的事务里没有「提交后马上执行」）
             await self._post_in(s, issue, event.agent_id, None, [activity])
             log.info("issue left unsettled, asked", extra={"issue_id": issue_id, "run_id": event.run_id})
 
@@ -283,7 +280,6 @@ class IssueService:
                 body=command.body,
                 change=(None, command.source),
             )
-            # 投递任务随这个事务提交，由 worker 照常执行（订阅方的事务里没有「提交后马上执行」，同 on_run_ended）
             await self._post_in(s, issue, command.agent_id, None, [activity])
             log.info("issue event posted", extra={"issue_id": command.issue_id, "source": command.source})
 
@@ -490,15 +486,13 @@ class IssueService:
                 upstream = [ids[d] if isinstance(d, str) else d for d in item.depends_on]
                 with batch_item(len(new), n, item.key):
                     await set_depends_on_in(s, issue, upstream)
-            wake = []
             for issue in created:
                 happened = [self._record(s, issue, actor, session_id, ActivityKind.CREATED)]
-                wake += await self._post_in(s, issue, actor, session_id, happened)
+                await self._post_in(s, issue, actor, session_id, happened)
         for issue in created:
             log.info(
                 "issue created", extra={"issue_id": issue.id, "actor": actor, "assignee": issue.assignee}
             )
-        await self._delivery.run(*wake)
         return created
 
     async def update(
@@ -534,9 +528,8 @@ class IssueService:
             )
             if not happened:
                 return issue
-            wake = await self._post_in(s, issue, actor, session_id, happened)
+            await self._post_in(s, issue, actor, session_id, happened)
         log.info("issue updated", extra={"issue_id": issue_id, "actor": actor, "status": issue.status})
-        await self._delivery.run(*wake)
         return issue
 
     async def approve(self, issue_id: int) -> Issue:
@@ -545,9 +538,8 @@ class IssueService:
             issue = await self._get_in(s, issue_id)
             _refuse(issue_id, cannot_review(issue.status, issue.assignee))
             happened = await self._apply_in(s, issue, USER, None, status=IssueStatus.DONE)
-            wake = await self._post_in(s, issue, USER, None, happened)
+            await self._post_in(s, issue, USER, None, happened)
         log.info("issue approved", extra={"issue_id": issue_id})
-        await self._delivery.run(*wake)
         return issue
 
     async def start(self, issue_id: int) -> Issue:
@@ -559,9 +551,8 @@ class IssueService:
             happened = await self._apply_in(
                 s, issue, USER, None, status=IssueStatus.IN_PROGRESS, assignee=issue.owner_agent_id
             )
-            wake = await self._post_in(s, issue, USER, None, happened)
+            await self._post_in(s, issue, USER, None, happened)
         log.info("issue started", extra={"issue_id": issue_id, "assignee": issue.assignee})
-        await self._delivery.run(*wake)
         return issue
 
     async def reject(self, issue_id: int, reason: str) -> Issue:
@@ -590,9 +581,8 @@ class IssueService:
             happened += await self._apply_in(
                 s, issue, USER, None, status=IssueStatus.IN_PROGRESS, assignee=agent
             )
-            wake = await self._post_in(s, issue, USER, None, happened)
+            await self._post_in(s, issue, USER, None, happened)
         log.info("issue sent back", extra={"issue_id": issue_id, "assignee": agent})
-        await self._delivery.run(*wake)
         return issue
 
     async def stop(
@@ -644,7 +634,7 @@ class IssueService:
             happened += await self._apply_in(s, issue, actor, session_id, status=status)
             if message is not None:
                 happened.append(self._record(s, issue, actor, session_id, ActivityKind.COMMENT, body=message))
-            wake = (
+            if happened:
                 await self._post_in(
                     s,
                     issue,
@@ -653,9 +643,6 @@ class IssueService:
                     happened,
                     to=agent if stopped and message is not None else None,
                 )
-                if happened
-                else []
-            )
         log.info(
             "issue conversation stopped",
             extra={
@@ -666,7 +653,6 @@ class IssueService:
                 "status": status,
             },
         )
-        await self._delivery.run(*wake)
         return Stopping(issue=issue, agent=agent, stopped=stopped)
 
     async def _apply_in(
@@ -725,14 +711,13 @@ class IssueService:
         happened: Sequence[IssueActivity],
         *,
         to: str | None = None,
-    ) -> list[Task | None]:
+    ) -> None:
         """记下的这次动态（非空）带出的一切，只从动态本身推出：通知与投递（IssueDelivery.post_in，to 同它），
         进入 done / cancelled 时放行下游（rules.finishing）。记了动态却没有交给它的，只有不投递的 on_run_failed 与
-        系统清理 on_agent_deleting。返回要提交后马上执行的投递。"""
-        wake = [await self._delivery.post_in(s, issue, actor, session_id, happened, to=to)]
+        系统清理 on_agent_deleting。"""
+        await self._delivery.post_in(s, issue, actor, session_id, happened, to=to)
         if (was := finishing(happened)) is not None:
-            wake += await self._unblock_in(s, issue, was, actor, session_id)
-        return wake
+            await self._unblock_in(s, issue, was, actor, session_id)
 
     async def comment(
         self, actor: str, issue_id: int, body: str, *, session_id: str | None = None
@@ -742,9 +727,8 @@ class IssueService:
         async with self._db.transaction() as s:
             issue = await self._get_in(s, issue_id)
             activity = self._record(s, issue, actor, session_id, ActivityKind.COMMENT, body=body)
-            wake = await self._post_in(s, issue, actor, session_id, [activity])
+            await self._post_in(s, issue, actor, session_id, [activity])
         log.info("issue commented", extra={"issue_id": issue_id, "actor": actor})
-        await self._delivery.run(*wake)
         return activity
 
     async def delete(self, issue_id: int) -> None:
@@ -755,15 +739,13 @@ class IssueService:
             before = await links_in(s, downstream)
             await s.delete(issue)
             await s.flush()
-            wake = []
             for down_id in downstream:
                 down = await self._get_in(s, down_id)
                 old = ids_of(before[down_id].depends_on)
                 change = (old, [i for i in old if i != issue_id])
                 happened = [self._record(s, down, USER, None, ActivityKind.DEPENDS_ON, change=change)]
-                wake += await self._post_in(s, down, USER, None, happened)
+                await self._post_in(s, down, USER, None, happened)
         log.info("issue deleted", extra={"issue_id": issue_id, "downstream": downstream})
-        await self._delivery.run(*wake)
 
     # ---- 内部 ----
 
@@ -775,11 +757,11 @@ class IssueService:
 
     async def _unblock_in(
         self, s: AsyncSession, issue: Issue, was: IssueStatus, actor: str, session_id: str | None
-    ) -> list[Task | None]:
+    ) -> None:
         """issue 进入 done / cancelled：每个下游记一条 DEPENDENCY 动态，按 rules.recipient 投递——不再等别的上游时，
         这就是让它开工的那封信。"""
-        wake = []
-        for down in await downstream_in(s, issue.id):
+        downstream_ids = await downstream_in(s, issue.id)
+        for down in downstream_ids:
             downstream = await self._get_in(s, down)
             happened = [
                 self._record(
@@ -792,10 +774,9 @@ class IssueService:
                     upstream=issue.id,
                 )
             ]
-            wake += await self._post_in(s, downstream, actor, session_id, happened)
-        if wake:
+            await self._post_in(s, downstream, actor, session_id, happened)
+        if downstream_ids:
             log.info("issue unblocked downstream", extra={"issue_id": issue.id, "status": issue.status})
-        return wake
 
     async def _activities_in(self, s: AsyncSession, issue_id: int) -> list[IssueActivity]:
         query = select(IssueActivity).where(IssueActivity.issue_id == issue_id).order_by(IssueActivity.id)

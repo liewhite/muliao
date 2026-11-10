@@ -1,10 +1,10 @@
-"""issue 动态的投递：按 rules.recipient 判定这次的动态投给谁，在调用方的事务里发出定向命令 Receive，提交后马上
-执行（run_now）。信投进这个 agent 在这个 issue 上唯一的会话：会话领域按发送方（Origin.ISSUE，origin_ref 为
+"""issue 动态的投递：按 rules.recipient 判定这次的动态投给谁，在调用方的事务里发出定向命令 Receive（提交后由
+Messaging 马上执行）。信投进这个 agent 在这个 issue 上唯一的会话：会话领域按发送方（Origin.ISSUE，origin_ref 为
 issue id）与 agent 定位，没有就新建（sessions.api.SessionKey）；这里不存会话 id。这次的动态里 agent 把 issue 交给了
 用户（rules.handed_to_user）时同一事务发通知（Notify）。"""
 
 import logging
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Sequence
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,18 +16,15 @@ from muliao.issues.rules import agent_actor, from_outside, handed_to_user, recip
 from muliao.issues.tables import Issue, IssueActivity
 from muliao.notifications.events import Notify
 from muliao.platform.messaging import Messaging
-from muliao.platform.tables import Task
 from muliao.sessions.api import Origin, SenderMail, SessionKey, keyed_session_in, receive_command_in
 
 log = logging.getLogger(__name__)
 
 
 class IssueDelivery:
-    def __init__(self, messaging: Messaging, tz: ZoneInfo, run_now: Callable[[int], Awaitable[None]]):
+    def __init__(self, messaging: Messaging, tz: ZoneInfo):
         self._messaging = messaging
         self._tz = tz
-        # 马上执行一个已提交的投递任务（Worker.run_now）
-        self._run_now = run_now
 
     async def post_in(
         self,
@@ -38,10 +35,10 @@ class IssueDelivery:
         happened: Sequence[IssueActivity],
         *,
         to: str | None = None,
-    ) -> Task | None:
+    ) -> None:
         """在调用方的事务里发出这次动态带出的消息：agent 把 issue 交给用户时推送通知；把动态投给该收到的 agent
         （rules.recipient），进它在这个 issue 上唯一的会话。to：直接投给这个 agent，不按 rules.recipient 判定
-        （issue_stop 的收尾消息投给被停下的 agent，不论 issue 的新状态）。返回要提交后马上执行的投递（run）。"""
+        （issue_stop 的收尾消息投给被停下的 agent，不论 issue 的新状态）。"""
         if (agent := handed_to_user(actor, issue.assignee, happened)) is not None:
             # 推送通知，点开是 issue（在那里通过或打回）；也带上它交出 issue 的那个会话（打开会话即已读，会话删除时
             # 通知随之删除）
@@ -63,7 +60,7 @@ class IssueDelivery:
                 from_its_session=await _from_its_session_in(s, issue, actor, session_id),
             )
         if to is None:
-            return None
+            return
         # 信里只有摘要和这次的动态：只渲染 happened，不读整条时间线
         letter = issue_view(issue, happened, links, await agent_names_in(s), self._tz)
         inbound = SenderMail(
@@ -80,16 +77,9 @@ class IssueDelivery:
             log.info(
                 "issue activity not delivered: agent archived", extra={"issue_id": issue.id, "agent": to}
             )
-            return None
-        delivery = self._messaging.send_in(s, command)
+            return
+        self._messaging.send_in(s, command)
         log.info("issue activity delivered", extra={"issue_id": issue.id, "agent": to, "actor": actor})
-        return delivery
-
-    async def run(self, *wake: Task | None) -> None:
-        """事务提交之后马上执行这些投递。"""
-        for task in wake:
-            if task is not None:
-                await self._run_now(task.id)
 
 
 async def _from_its_session_in(

@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -143,6 +143,16 @@ def migrate(db_path: Path, target: str = "head") -> None:
 
 # 一个事务写过的表名 -> 不合规时报错
 WriteCheck = Callable[[frozenset[str]], None]
+# 事务里登记的、提交之后要做的事（when_committed_in）在 AsyncSession.info 里的键
+_WHEN_COMMITTED = "muliao.when_committed"
+
+
+def when_committed_in(s: AsyncSession, action: Callable[[], Awaitable[None]]) -> None:
+    """登记这个事务提交之后要做的事：释放事务锁之后，在开事务的任务里按登记顺序 await（可以开新的事务）；事务回滚时
+    丢弃。它抛出的异常照常交给开事务的一方，那时数据已经提交。"""
+    s.info.setdefault(_WHEN_COMMITTED, []).append(action)
+
+
 # 一个事务写过的表名（提交前）-> 提交成功后要做的事
 AfterCommit = Callable[[frozenset[str]], Callable[[], None]]
 
@@ -219,6 +229,7 @@ class Database:
         # 打断进行中的语句：SQLAlchemy 作废连接并在后台优雅关闭它，关闭又被再次取消而强制停掉 aiosqlite 的线程，
         # 留下一个永远等不到结果的关闭任务，事件循环关闭时卡住（实测：测试与关停时挂起）
         # 等锁可以被取消（不在任何语句中）；拿到锁之后整个事务屏蔽 anyio 的取消
+        committed: list[Callable[[], Awaitable[None]]] = []
         async with self._lock:
             with anyio.CancelScope(shield=True):
                 self._holder = current
@@ -232,7 +243,11 @@ class Database:
                         if self._check_writes is not None:
                             self._check_writes(tables)
                         then = self._after_commit(tables) if tables and self._after_commit else None
+                        committed = s.info.pop(_WHEN_COMMITTED, [])
                     if then is not None:
                         then()
                 finally:
                     self._holder = None
+        # 锁外、不屏蔽取消：它们可以开自己的事务，被取消时由各自处理（Messaging 的马上执行）
+        for action in committed:
+            await action()

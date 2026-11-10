@@ -119,8 +119,8 @@ class Worker:
 
     async def run_now(self, task_id: int) -> None:
         """在调用方的任务里立刻执行这一个投递任务（经同一个执行边界：重试或失败记账）。
-        用于发送方提交了定向命令之后希望它马上生效（例如触发器新建的会话在返回会话 id 之前就已存在）；只用于短小的
-        投递（EVENT_TASK）。此刻不可领取就什么都不做，照常由 worker 执行。
+        只由 Messaging 在发送方的事务提交之后调用（例如触发器新建的会话在返回会话 id 之前就已存在）；只执行投递
+        （EVENT_TASK）。此刻不可领取就什么都不做，照常由 worker 执行。
 
         取消语义与 worker 不同：worker 的任务只被关停取消，下次启动由 recover 复位；这里的调用方随时可能被取消（请求
         断开、调用它的运行被停止）。被取消时在屏蔽作用域里把还在 running 的它放回 pending 交给 worker，再照常抛出
@@ -210,10 +210,9 @@ class Worker:
 
 
 class RunNow:
-    """「马上执行这个已提交的投递任务」的端口（Worker.run_now），交给提交投递的领域。
+    """「马上执行这个已提交的投递任务」的端口（Worker.run_now），交给 Messaging。
 
-    worker 的处理器由各领域的对象组成，这些领域又要马上执行自己提交的投递：端口先构造、交给它们，组合根构造出 worker
-    之后 bind。绑定只在装配时发生一次；装配完成前（没有 bind）调用是组合根的 bug，当场报错。"""
+    worker 的处理器里有 Messaging 本身（及用它的各领域）：端口先构造、交给 Messaging，组合根构造出 worker 之后 bind。绑定只在装配时发生一次；装配完成前（没有 bind）调用是组合根的 bug，当场报错。"""
 
     def __init__(self) -> None:
         self._worker: Worker | None = None

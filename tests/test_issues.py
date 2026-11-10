@@ -345,7 +345,7 @@ async def test_an_agent_creating_an_issue_for_the_user_notifies_them(container, 
     issue = await container.issues.create(
         alpha, session_id=chat.id, owner=alpha, title="Check", assignee=USER
     )
-    await deliver(container)
+    # 返回时通知已经写下（提交后马上执行，不等 worker）
     [note] = await _notifications(container)
     assert note.issue_id == issue.id and note.session_id == chat.id
 
@@ -529,6 +529,7 @@ async def test_an_issue_the_user_assigned_to_themselves_cannot_be_sent_back(cont
     assert (await container.issues.get(issue.id)).issue.status == REVIEW
 
 
+@pytest.mark.usefixtures("deliveries_later")
 async def test_a_deleted_issue_session_is_replaced_on_the_next_delivery(container, make_agent):
     alpha = (await make_agent()).id
     issue = await container.issues.create(USER, owner=alpha, title="t", status=PROGRESS, assignee=alpha)
@@ -567,6 +568,7 @@ async def test_assigning_to_an_unknown_agent_is_refused(container, make_agent):
         await container.issues.create(USER, owner=alpha, title="t", assignee="nobody")
 
 
+@pytest.mark.usefixtures("deliveries_later")
 async def test_http_issue_lifecycle(client, container, make_agent):
     from tests.conftest import login
 
@@ -626,6 +628,7 @@ async def test_http_issue_lifecycle(client, container, make_agent):
     assert (await client.get(f"/api/issues/{issue_id}")).status_code == 404
 
 
+@pytest.mark.usefixtures("deliveries_later")
 async def test_work_of_the_assignee_session(container, make_agent):
     alpha = (await make_agent()).id
     issue = await container.issues.create(USER, owner=alpha, title="t", status=PROGRESS, assignee=alpha)
@@ -663,8 +666,12 @@ async def test_a_run_that_leaves_its_issue_in_progress_is_asked_until_it_settles
         await deliver(container)
         return [a.kind for a in (await container.issues.get(issue.id)).activities]
 
-    # 运行结束时还是 in_progress：记一条 UNSETTLED 投进它的 issue 会话
-    assert await one_round() == [ActivityKind.CREATED, ActivityKind.UNSETTLED]
+    # 运行结束时还是 in_progress：记一条 UNSETTLED 投进它的 issue 会话。运行结束事件在运行完成时马上处理，它的处理里
+    # 发出的投递也马上执行：只跑运行、不另外投递，信已在会话里
+    await deliver(container)
+    await run_only(container)
+    kinds = [a.kind for a in (await container.issues.get(issue.id)).activities]
+    assert kinds == [ActivityKind.CREATED, ActivityKind.UNSETTLED]
     [session] = await _issue_sessions(container)
     assert (await container.issues.get(issue.id)).activities[-1].session_id == session.id
     mails = await _mail(container, session.id)
@@ -902,13 +909,13 @@ async def test_a_batch_refers_to_its_own_keys_and_is_delivered_after_it_is_commi
     alpha, beta = (await make_agent("alpha")).id, (await make_agent("beta")).id
     existing = await container.issues.create(USER, owner=alpha, title="existing")
     seen: list[int] = []
-    run_now = container.issues._delivery._run_now  # noqa: SLF001
+    run_now = container.messaging._run_now  # noqa: SLF001
 
     async def spy(task_id: int) -> None:
         seen.append(await _issue_count(container))
         await run_now(task_id)
 
-    monkeypatch.setattr(container.issues._delivery, "_run_now", spy)  # noqa: SLF001
+    monkeypatch.setattr(container.messaging, "_run_now", spy)
     api, ui, parent = await container.issues.create_many(
         alpha,
         [

@@ -107,6 +107,7 @@ async def test_archiving_needs_the_agent_idle_and_not_default(container, make_ag
         await container.agents.set_default(alpha.id, True)
 
 
+@pytest.mark.usefixtures("deliveries_later")
 async def test_mail_validated_before_archiving_is_dropped_on_delivery(container, make_agent):
     alpha = await make_agent("alpha")
     trigger = await container.triggers.create(
@@ -117,11 +118,11 @@ async def test_mail_validated_before_archiving_is_dropped_on_delivery(container,
         fired = await container.triggers._deliver_in(  # noqa: SLF001
             s, await s.get(type(trigger), trigger.id), None, None, False
         )
-    assert fired.fired is not None
+    assert fired is not None
     await container.agent_lifecycle.set_archived(alpha.id, True)
     await deliver(container)
     async with container.db.transaction() as s:
-        assert await s.get(Session, fired.fired.sessions[0]) is None
+        assert await s.get(Session, fired.sessions[0]) is None
 
 
 async def test_triggers_of_an_archived_agent_neither_run_their_precheck_nor_fire(

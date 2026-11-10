@@ -9,7 +9,7 @@ from muliao.errors import TransientError
 from muliao.platform.messaging import Command, Delivery, DomainEvent, Messaging
 from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
 from muliao.platform.tasks import no_commit
-from muliao.platform.worker import Worker
+from muliao.platform.worker import RunNow, Worker
 from tests.test_flow import idle
 
 
@@ -21,6 +21,10 @@ class Happened(DomainEvent):
 class DoIt(Command):
     TYPE = "test.do_it"
     what: str
+
+
+async def _left_to_the_worker(_task_id: int) -> None:
+    """不马上执行：投递都留给 worker（测 worker 的执行规则）。"""
 
 
 async def run_worker(container, messaging: Messaging) -> None:
@@ -37,7 +41,7 @@ async def deliveries(container) -> list[Task]:
 
 
 async def test_each_subscriber_handles_a_committed_event_once_with_the_same_id(container):
-    messaging = Messaging(container.queue)
+    messaging = Messaging(container.queue, _left_to_the_worker)
     seen: dict[str, list[tuple[int, str]]] = {"a": [], "b": []}
 
     def recorder(name: str):
@@ -59,7 +63,7 @@ async def test_each_subscriber_handles_a_committed_event_once_with_the_same_id(c
 
 
 async def test_an_event_published_in_a_rolled_back_transaction_is_never_delivered(container):
-    messaging = Messaging(container.queue)
+    messaging = Messaging(container.queue, _left_to_the_worker)
     messaging.subscribe(Happened, "a", lambda _e, _d: pytest.fail("delivered"))
 
     with pytest.raises(RuntimeError, match="boom"):
@@ -71,7 +75,7 @@ async def test_an_event_published_in_a_rolled_back_transaction_is_never_delivere
 
 
 async def test_a_subscriber_sees_events_in_publish_order(container):
-    messaging = Messaging(container.queue)
+    messaging = Messaging(container.queue, _left_to_the_worker)
     order: list[int] = []
 
     async def handle(event: Happened, _d: Delivery):
@@ -90,7 +94,7 @@ async def test_a_subscriber_sees_events_in_publish_order(container):
 
 
 async def test_a_handlers_commit_is_atomic_with_the_delivery_and_a_retry_redelivers_the_same_id(container):
-    messaging = Messaging(container.queue)
+    messaging = Messaging(container.queue, _left_to_the_worker)
     attempts: list[str] = []
     committed: list[str] = []
 
@@ -113,7 +117,7 @@ async def test_a_handlers_commit_is_atomic_with_the_delivery_and_a_retry_redeliv
 
 
 async def test_a_command_goes_to_its_one_handler_and_needs_one(container):
-    messaging = Messaging(container.queue)
+    messaging = Messaging(container.queue, _left_to_the_worker)
     done: list[str] = []
 
     async def handle(command: DoIt, _d: Delivery):
@@ -134,7 +138,7 @@ async def test_a_command_goes_to_its_one_handler_and_needs_one(container):
 
 
 async def test_a_delivery_this_version_cannot_read_fails_at_once_and_can_be_retried_in_place(container):
-    messaging = Messaging(container.queue)
+    messaging = Messaging(container.queue, _left_to_the_worker)
     handled: list[int] = []
 
     async def handle(event: Happened, _d: Delivery):
@@ -171,7 +175,7 @@ def _now_worker(container, messaging: Messaging) -> Worker:
 
 
 async def test_run_now_executes_a_committed_command_at_once(container):
-    messaging = Messaging(container.queue)
+    messaging = Messaging(container.queue, _left_to_the_worker)
     done: list[str] = []
 
     async def handle(command: DoIt, _d: Delivery):
@@ -180,7 +184,8 @@ async def test_run_now_executes_a_committed_command_at_once(container):
 
     messaging.handle(DoIt, "do", handle)
     async with container.db.transaction() as s:
-        task = messaging.send_in(s, DoIt(what="x"))
+        messaging.send_in(s, DoIt(what="x"))
+    [task] = await deliveries(container)
     await _now_worker(container, messaging).run_now(task.id)
 
     assert done == ["x"]
@@ -189,9 +194,7 @@ async def test_run_now_executes_a_committed_command_at_once(container):
 
 async def test_the_run_now_port_runs_through_the_bound_worker_and_refuses_before_binding(container):
     """各领域拿到的是 RunNow 端口，worker 在装配的最后才绑定：绑定之前调用、重复绑定都是装配的 bug，当场报错。"""
-    from muliao.platform.worker import RunNow
-
-    messaging = Messaging(container.queue)
+    messaging = Messaging(container.queue, _left_to_the_worker)
     done: list[str] = []
 
     async def handle(command: DoIt, _d: Delivery):
@@ -200,7 +203,8 @@ async def test_the_run_now_port_runs_through_the_bound_worker_and_refuses_before
 
     messaging.handle(DoIt, "do", handle)
     async with container.db.transaction() as s:
-        task = messaging.send_in(s, DoIt(what="x"))
+        messaging.send_in(s, DoIt(what="x"))
+    [task] = await deliveries(container)
     run_now = RunNow()
     with pytest.raises(RuntimeError, match="before a worker was bound"):
         await run_now(task.id)
@@ -214,7 +218,7 @@ async def test_the_run_now_port_runs_through_the_bound_worker_and_refuses_before
 
 
 async def test_run_now_leaves_a_task_behind_an_earlier_one_on_its_lane_to_the_worker(container):
-    messaging = Messaging(container.queue)
+    messaging = Messaging(container.queue, _left_to_the_worker)
     done: list[str] = []
 
     async def handle(command: DoIt, _d: Delivery):
@@ -224,7 +228,8 @@ async def test_run_now_leaves_a_task_behind_an_earlier_one_on_its_lane_to_the_wo
     messaging.handle(DoIt, "do", handle, lane=lambda _c: "one-lane")
     async with container.db.transaction() as s:
         messaging.send_in(s, DoIt(what="first"))
-        second = messaging.send_in(s, DoIt(what="second"))
+        messaging.send_in(s, DoIt(what="second"))
+    _first, second = await deliveries(container)
     await _now_worker(container, messaging).run_now(second.id)
     assert done == []
 
@@ -233,17 +238,18 @@ async def test_run_now_leaves_a_task_behind_an_earlier_one_on_its_lane_to_the_wo
 
 
 async def test_run_now_does_nothing_for_a_task_the_worker_already_claimed(container):
-    messaging = Messaging(container.queue)
+    messaging = Messaging(container.queue, _left_to_the_worker)
     messaging.handle(DoIt, "do", lambda _c, _d: pytest.fail("executed twice"))
     async with container.db.transaction() as s:
-        task = messaging.send_in(s, DoIt(what="x"))
+        messaging.send_in(s, DoIt(what="x"))
+    [task] = await deliveries(container)
     assert await container.queue.claim([EVENT_TASK]) is not None
 
     await _now_worker(container, messaging).run_now(task.id)
 
 
 async def test_a_cancelled_run_now_hands_the_task_back_and_its_lane_moves_on(container):
-    messaging = Messaging(container.queue)
+    messaging = Messaging(container.queue, _left_to_the_worker)
     started, done = anyio.Event(), []
 
     async def handle(command: DoIt, _d: Delivery):
@@ -255,8 +261,9 @@ async def test_a_cancelled_run_now_hands_the_task_back_and_its_lane_moves_on(con
 
     messaging.handle(DoIt, "do", handle, lane=lambda _c: "one-lane")
     async with container.db.transaction() as s:
-        slow = messaging.send_in(s, DoIt(what="slow"))
+        messaging.send_in(s, DoIt(what="slow"))
         messaging.send_in(s, DoIt(what="after"))
+    slow, _after = await deliveries(container)
     async with anyio.create_task_group() as group:
         group.start_soon(_now_worker(container, messaging).run_now, slow.id)
         await started.wait()
@@ -271,15 +278,92 @@ async def test_a_cancelled_run_now_hands_the_task_back_and_its_lane_moves_on(con
 
 
 async def test_a_failing_run_now_is_recorded_like_any_task(container):
-    messaging = Messaging(container.queue)
+    messaging = Messaging(container.queue, _left_to_the_worker)
 
     async def handle(_c: DoIt, _d: Delivery):
         raise TransientError("try later")
 
     messaging.handle(DoIt, "do", handle)
     async with container.db.transaction() as s:
-        task = messaging.send_in(s, DoIt(what="x"))
+        messaging.send_in(s, DoIt(what="x"))
+    [task] = await deliveries(container)
     await _now_worker(container, messaging).run_now(task.id)
 
     [row] = await deliveries(container)
     assert row.status == TaskStatus.PENDING and row.attempts == 1 and "try later" in (row.error or "")
+
+
+def _assembled(container) -> Messaging:
+    """像组合根一样装配：马上执行接到处理这些投递的 worker 上。"""
+    run_now = RunNow()
+    messaging = Messaging(container.queue, run_now)
+    run_now.bind(_now_worker(container, messaging))
+    return messaging
+
+
+async def test_committed_deliveries_run_before_the_senders_transaction_returns(container):
+    """发送方不收集投递：事务提交后（事务锁已释放，处理者可以开自己的事务）按发送顺序马上执行，回滚的不执行。"""
+    messaging = _assembled(container)
+    done: list[str] = []
+
+    async def handle(command: DoIt, _d: Delivery):
+        async with container.db.transaction():
+            pass
+        done.append(command.what)
+        return no_commit
+
+    messaging.handle(DoIt, "do", handle)
+    with pytest.raises(RuntimeError, match="boom"):
+        async with container.db.transaction() as s:
+            messaging.send_in(s, DoIt(what="rolled back"))
+            raise RuntimeError("boom")
+    async with container.db.transaction() as s:
+        messaging.send_in(s, DoIt(what="a"))
+        messaging.send_in(s, DoIt(what="b"))
+        assert done == []
+    assert done == ["a", "b"]
+    assert [t.status for t in await deliveries(container)] == [TaskStatus.DONE] * 2
+
+
+async def test_deliveries_sent_from_a_handlers_commit_also_run_at_once(container):
+    """订阅方在 Commit 里发出的投递（与投递完成同一事务）同样在提交后马上执行，不必等 worker。"""
+    messaging = _assembled(container)
+    done: list[str] = []
+
+    async def first(_command: DoIt, _d: Delivery):
+        async def commit(s):
+            messaging.publish_in(s, Happened(n=2))
+
+        return commit
+
+    async def then(event: Happened, _d: Delivery):
+        done.append(f"event {event.n}")
+        return no_commit
+
+    messaging.handle(DoIt, "do", first)
+    messaging.subscribe(Happened, "then", then)
+    async with container.db.transaction() as s:
+        messaging.send_in(s, DoIt(what="x"))
+    assert done == ["event 2"]
+    assert [t.status for t in await deliveries(container)] == [TaskStatus.DONE] * 2
+
+
+async def test_a_delivery_that_cannot_run_at_once_does_not_fail_the_sender_and_the_worker_runs_it(container):
+    done: list[str] = []
+
+    async def broken(_task_id: int) -> None:
+        raise RuntimeError("database briefly unavailable")
+
+    messaging = Messaging(container.queue, broken)
+
+    async def handle(command: DoIt, _d: Delivery):
+        done.append(command.what)
+        return no_commit
+
+    messaging.handle(DoIt, "do", handle)
+    async with container.db.transaction() as s:
+        messaging.send_in(s, DoIt(what="x"))
+    assert done == []
+
+    await run_worker(container, messaging)
+    assert done == ["x"]

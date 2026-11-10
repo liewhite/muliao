@@ -353,7 +353,7 @@ def _receive_command(mail: SenderMail) -> Receive:
 async def receive_command_in(s: AsyncSession, mail: SenderMail) -> Receive:
     """别的领域投信的唯一入口（只读）：在发送方的事务里校验这封来信（不合规的当场报错给发送方），返回定向命令
     Receive。发送方在同一事务里 send_in 它，由会话领域在自己的事务里投进信箱——发送方记下的状态与投信一起提交，
-    投递恰好一次；提交后可以让投递任务马上执行（run_now）。校验读的都是只会单向变化或不变的事实（会话与 agent
+    投递恰好一次；提交后由 Messaging 马上执行投递。校验读的都是只会单向变化或不变的事实（会话与 agent
     是否还在、会话的发起方、文件），投递时只剩「期间被删除」这一种契约内的变化（docs/architecture.md 2.2）。"""
     await target_in(s, mail.inbound())
     return _receive_command(mail)
