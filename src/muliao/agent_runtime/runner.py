@@ -234,7 +234,7 @@ class AgentRuntime:
                     first = run.next_node
                     if not PaiAgent.is_user_prompt_node(first):
                         raise RuntimeError(f"agent run did not start with the user prompt node: {first!r}")
-                    await _step_through(run, first, hooks, resumed, scope.notices)
+                    await _step_through(run, first, hooks, resumed, scope.notices, history)
                     result = run.result
         if result is None:
             raise RuntimeError("agent run ended without a result")
@@ -337,13 +337,15 @@ async def _step_through(
     hooks: StepHooks,
     resumed: frozenset[str],
     notices: Sequence[str],
+    given: Sequence[ModelMessage],
 ) -> None:
     """从用户 prompt 节点把运行逐步驱动到结束，在每次请求模型之前、模型回复之后回调 hooks。notices 是这次驱动的
     scope 里的那份列表：工具组在进入 iter 时已经构建、连接，到这里已经齐了。"""
     node = await run.next(first)
     # 从末尾的请求续跑时 pydantic-ai 把它从历史里取出、放进第一次请求的节点，一起查
     _unrepaired(
-        [*run.ctx.state.message_history, *([node.request] if PaiAgent.is_model_request_node(node) else [])]
+        given,
+        [*run.ctx.state.message_history, *([node.request] if PaiAgent.is_model_request_node(node) else [])],
     )
     await hooks.started(run.ctx.state.message_history, notices)
     while not isinstance(node, End):
@@ -365,9 +367,9 @@ async def _step_through(
             node = await run.next(node)
 
 
-def _unrepaired(messages: Sequence[ModelMessage]) -> None:
-    """pydantic-ai 开始运行时没有给悬空的调用合成结果（它静默地补，只在内存里，例如重发的请求里）：有就是交进来的
-    历史不完整，当场失败。"""
+def _unrepaired(given: Sequence[ModelMessage], messages: Sequence[ModelMessage]) -> None:
+    """pydantic-ai 开始运行时规整历史（given → messages，含取出待重发的请求）没有动工具结果：没给悬空的调用合成结果，
+    也没丢掉找不到调用的结果。它静默地做、只在内存里：做了就是交进来的历史不合规则、和库里的对不上，当场失败。"""
     if made_up := [
         p.tool_call_id
         for m in messages
@@ -378,6 +380,19 @@ def _unrepaired(messages: Sequence[ModelMessage]) -> None:
         raise RuntimeError(
             f"pydantic-ai synthesized results for dangling tool calls in the history: {made_up}"
         )
+    if dropped := _result_ids(given) - _result_ids(messages):
+        raise RuntimeError(f"pydantic-ai dropped tool results from the history: {sorted(dropped)}")
+
+
+def _result_ids(messages: Sequence[ModelMessage]) -> set[str]:
+    """工具调用的结果 id（不带工具名的 RetryPromptPart 是对整条回复的重试提示，不针对调用）。"""
+    return {
+        p.tool_call_id
+        for m in messages
+        if isinstance(m, ModelRequest)
+        for p in m.parts
+        if isinstance(p, ToolReturnPart) or (isinstance(p, RetryPromptPart) and p.tool_name is not None)
+    }
 
 
 async def _forward_events(

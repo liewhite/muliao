@@ -69,7 +69,7 @@ log = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class Opening:
-    """一次运行开头要交给模型的（Consumer._opening）：取走的信件、挂起的调用与对它们的回答、其余信件的内容。"""
+    """一次运行开头要交给模型的（Consumer._opening，不改库）：取走的信件、挂起的调用与对它们的回答、其余信件的内容。"""
 
     queued: list[Mail]
     pending: dict[str, ToolCallPart]
@@ -299,8 +299,11 @@ class Consumer:
                 # 这次请求已经保存：压缩，再从库里加载上下文（摘要 + 切点之后），从它续跑
                 context = await self._steps.compact(state, config, self._runtime.run_context(audience))
                 history, prompt, deferred = context.messages, None, None
-        # 停在挂起的调用上时别的工具的结果还没保存：由收尾在同一个事务里保存（RunFinisher.commit）
-        return self._finisher.commit(state, end_of(outcome))
+        end = end_of(outcome)
+        # 停在挂起的调用上时别的工具的结果还没保存：和等批准的记录同一个事务，且在运行还登记可停止时做——之后才到的停止
+        # 直接从库里补齐历史，库里得已经是这次运行的完整结尾
+        await self._steps.save_end(state, end.requested)
+        return self._finisher.commit(state, end)
 
     async def _opening(
         self,
@@ -310,7 +313,7 @@ class Consumer:
         handed: HandedOut,
     ) -> Opening | None:
         """这次运行开头要交给模型的：新信件的内容，以及挂起调用的回答。从历史续跑、还在等挂起调用的回答、或信件里
-        没有内容时为 None。只读，交出去由 _hand_over 做。"""
+        没有内容时为 None。不改库（附件复制进工作目录是可重做的派生副本），交出去由 _hand_over 做。"""
         if resumable(history, handed) or waiting(history, queued, handed):
             return None
         pending = pending_calls(history, handed)

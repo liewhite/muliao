@@ -1,13 +1,13 @@
 """逐步保存：一次运行的每一步（一次模型请求及其返回的工具调用）各自提交。请求模型之前把新到的信件并进这条请求，请求与
 它带上的信件（记为已处理）同一个事务提交；模型回复之后提交这条回复。失败或重启后从上一步续跑，已经保存的步骤不会
 重放；中断那一步里正在执行的工具也不重新执行，而是补上「被中断」的结果（sessions.consumer，经 save_in）。停在挂起的调用上时最后
-一步的工具结果由收尾保存（save_tail_in）。实时展示按步换段
+一步的工具结果在运行结束时和等批准的记录一起保存（save_end）。实时展示按步换段
 （sessions.live.LiveSegments.step）。"""
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
 from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse
@@ -18,6 +18,7 @@ from muliao.agents.api import AgentDir, AgentInfo
 from muliao.platform.db import Database, utcnow
 from muliao.platform.text_edit import truncate
 from muliao.platform.tool_views import ToolRenders, truncated
+from muliao.sessions.approvals import record_in as record_approvals_in
 from muliao.sessions.compaction import Compactor, Verdict
 from muliao.sessions.content import Content, ContentBuilder, append_content, mark_events
 from muliao.sessions.conventions import attach_run_context
@@ -186,6 +187,15 @@ class Steps:
         await self._save(state, messages[state.saved :], consumed=[])
         state.saved = len(messages)
 
+    async def save_end(self, state: RunState, requested: Mapping[str, str]) -> None:
+        """运行结束（还登记着可停止）：停在挂起的调用上时，挂起之外已经执行完的工具结果在最后一条请求里，和这次新请求
+        批准的调用（requested：调用 id -> pin，sessions.approvals）同一个事务提交。分开提交时，进程在两者之间退出会留下一个
+        没有结果、又不算在等批准的调用；放到运行注销之后（收尾事务），这中间到的停止又会对着缺了结尾的历史补结果。"""
+        async with self._db.transaction() as s:
+            await save_tail_in(s, state)
+            if requested:
+                await record_approvals_in(s, state.session.id, requested)
+
     async def _save(
         self, state: RunState, messages: Sequence[ModelMessage], *, consumed: Sequence[Mail]
     ) -> None:
@@ -196,8 +206,7 @@ class Steps:
 
 async def save_tail_in(s: AsyncSession, state: RunState) -> None:
     """在调用方事务里保存运行中的历史里还没保存的部分，只在运行结束的那个事务里调用：
-    - 收尾（sessions.finish.RunFinisher.commit）：停在挂起的调用上时，挂起之外已经执行完的工具结果在最后一条请求里，和等批准
-      的记录、运行记为完成一起提交：分开提交时，进程在两者之间退出会留下一个没有结果、又不算在等批准的调用。
+    - 正常结束（Steps.save_end）：和等批准的记录一起。
     - 被停止时（sessions.halt 的 first）：当前这一步已产生的部分（包括生成到一半的回答）原样存库，没出结果的调用与停止标记
       由同一事务里的停止从库里补齐。
     开头取走、还没随请求交给模型的信件（state.taken）不算处理过。"""

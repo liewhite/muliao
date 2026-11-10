@@ -18,7 +18,7 @@ from sqlalchemy import delete, select
 from muliao.agent_runtime.runner import AgentRuntime, _unrepaired
 from muliao.agents.api import AgentPatch
 from muliao.platform.tables import Task, TaskStatus
-from muliao.sessions import finish
+from muliao.sessions import steps
 from muliao.sessions.api import Origin
 from muliao.sessions.compaction import COMPACTION_INSTRUCTIONS
 from muliao.sessions.conventions import INTERRUPTED_TOOL_RESULT, unanswered_calls
@@ -76,7 +76,7 @@ async def test_a_paused_run_commits_its_tail_and_approval_request_in_one_transac
     async def broken(*_args: object) -> None:
         raise RuntimeError("process exits here")
 
-    monkeypatch.setattr(finish, "record_approvals_in", broken)
+    monkeypatch.setattr(steps, "record_approvals_in", broken)
     session = await start(container, agent.id, "deploy", origin=Origin.TRIGGER)
     await drain(container)
     monkeypatch.undo()
@@ -149,9 +149,13 @@ def test_a_result_pydantic_ai_made_up_fails_the_run():
             )
         ]
     )
+    call = ModelResponse(parts=[ToolCallPart("run_shell", {}, tool_call_id="a")])
     with pytest.raises(RuntimeError, match="synthesized"):
-        _unrepaired([ModelResponse(parts=[ToolCallPart("run_shell", {}, tool_call_id="a")]), repaired])
-    _unrepaired([ModelRequest(parts=[ToolReturnPart("run_shell", "x", tool_call_id="a")])])
+        _unrepaired([call], [call, repaired])
+    answered = ModelRequest(parts=[ToolReturnPart("run_shell", "x", tool_call_id="a")])
+    with pytest.raises(RuntimeError, match=r"dropped tool results.*\['a'\]"):
+        _unrepaired([answered], [ModelRequest(parts=[])])
+    _unrepaired([call, answered], [call, answered])
 
 
 async def test_a_run_keeps_its_model_when_agent_toml_changes_mid_run(

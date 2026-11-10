@@ -13,13 +13,12 @@ from muliao.agent_runtime.api import shared_attachments
 from muliao.platform.db import utcnow
 from muliao.platform.messaging import Messaging
 from muliao.platform.tasks import Commit, TaskQueue
-from muliao.sessions.approvals import record_in as record_approvals_in
 from muliao.sessions.events import RunEnded as RunEndedEvent
 from muliao.sessions.holds import has_active_in
 from muliao.sessions.loading import load_session
 from muliao.sessions.mailbox import queued_in, wake_in
 from muliao.sessions.settlement import settle_finished_in
-from muliao.sessions.steps import RunState, save_tail_in
+from muliao.sessions.steps import RunState
 
 
 @dataclass(frozen=True)
@@ -35,7 +34,7 @@ class RunEnd:
     stopped: bool
     # 停下来等用户批准的调用 id：不论有没有人在等都要告诉用户
     approvals: tuple[str, ...] = ()
-    # 这次运行新请求批准的调用 id -> 工具定下的 pin：收尾时记下（sessions.approvals）。从历史收尾时为空：那些调用
+    # 这次运行新请求批准的调用 id -> 工具定下的 pin：和历史的结尾一起记下（Steps.save_end，sessions.approvals）。从历史收尾时为空：那些调用
     # 正是按已记下的记录认出来的，pin 已在库里
     requested: Mapping[str, str] = field(default_factory=dict)
 
@@ -68,14 +67,10 @@ class RunFinisher:
         return finish
 
     def commit(self, state: RunState, end: RunEnd) -> Commit:
-        """收尾是一个事务：这一步还没保存的部分（停在挂起的调用上时别的工具的结果）、等批准的记录、结清与唤醒，和运行
-        记为完成一起提交（steps.save_tail_in）。"""
+        """收尾：结清、推送与唤醒，和运行记为完成一起提交。历史的结尾与等批准的记录此前已在运行里一起提交（Steps.save_end）。"""
 
         async def finish(s: AsyncSession) -> None:
             session, agent = await load_session(s, state.session.id)
-            await save_tail_in(s, state)
-            if end.requested:
-                await record_approvals_in(s, session.id, end.requested)
             if state.messages:
                 session.updated_at = utcnow()
                 # 推送由通知领域订阅（运行结束后随即投递）
