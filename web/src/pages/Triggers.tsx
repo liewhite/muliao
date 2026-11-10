@@ -11,6 +11,7 @@ import {
   type Schemas,
   type Trigger,
   type TriggerKind,
+  type TriggerCreate,
   type TriggerKindName,
   sessionRoute,
 } from '../api'
@@ -41,24 +42,14 @@ import {
   useLoad,
 } from '../ui'
 
-/** 提交给接口的配置（由后端按 kind 校验）；读到的配置按 kind 有各自的类型，见 KindConfig */
-type Config = Record<string, unknown>
-
 /** 某种方式的触发器：收窄后 config 与 status 都是这种方式的类型 */
 type TriggerOf<K extends TriggerKindName> = Extract<Trigger, { kind: K }>
 
-/** 有服务端默认值的配置字段（StreamConfig 的 secrets、debounce_seconds）：读到的配置里总有，新建时可以不填（由服务端补上
- * 默认值，前端不另写一份值）。生成的类型只有读到的形状（这两个字段必填），所以在这里列出字段名 */
-type Defaulted = 'secrets' | 'debounce_seconds'
-
-/** 编辑中的配置：有默认值的字段可省 */
-type EditableConfig<C> = Omit<C, Defaulted> & Partial<Pick<C, Extract<keyof C, Defaulted>>>
-
-/** kind 与它的配置成对出现，编辑器按 kind 收窄 */
-type KindConfig = { [K in TriggerKindName]: { kind: K; config: EditableConfig<TriggerOf<K>['config']> } }[TriggerKindName]
+/** kind 与它的配置成对出现，形状同新建请求（有服务端默认值的配置项可省，读到的配置也合这个形状），编辑器按 kind 收窄 */
+type KindConfig = { [K in TriggerKindName]: Pick<Extract<TriggerCreate, { kind: K }>, 'kind' | 'config'> }[TriggerKindName]
 
 /** 配置编辑器以 config 为初始值、自己保存编辑中的内容；内容不合法时回调 null：保存按钮随之禁用，不会提交上一次的合法值 */
-type ConfigChange = (c: Config | null) => void
+type ConfigChange = (c: KindConfig | null) => void
 
 /** 各触发方式在界面上的名字；summary 是选择方式时的一句话说明（后端的 description 是写给 agent 的，太长） */
 const KIND_LABELS: Record<TriggerKindName, { label: string; summary: string }> = {
@@ -91,7 +82,7 @@ function CronEditor({ config, onChange }: { config: Schemas['ScheduleConfig']; o
       value={cron}
       onChange={(value) => {
         setCron(value)
-        onChange({ cron: value })
+        onChange({ kind: 'schedule', config: { cron: value } })
       }}
       mono
     />
@@ -108,13 +99,13 @@ function RunAtEditor({ config, onChange }: { config: Schemas['OnceConfig']; onCh
       value={at}
       onChange={(value) => {
         setAt(value)
-        onChange(value ? { at: value } : null)
+        onChange(value ? { kind: 'once', config: { at: value } } : null)
       }}
     />
   )
 }
 
-function StreamEditor({ config, onChange }: { config: EditableConfig<Schemas['StreamConfig']>; onChange: ConfigChange }) {
+function StreamEditor({ config, onChange }: { config: Schemas['StreamConfig-Input']; onChange: ConfigChange }) {
   const [command, setCommand] = useState(config.command)
   const [secrets, setSecrets] = useState((config.secrets ?? []).join(', '))
   const [debounce, setDebounce] = useState(config.debounce_seconds === undefined ? '' : String(config.debounce_seconds))
@@ -126,9 +117,12 @@ function StreamEditor({ config, onChange }: { config: EditableConfig<Schemas['St
     onChange(
       v.command.trim() && (seconds === undefined || Number.isFinite(seconds))
         ? {
-            command: v.command,
-            secrets: v.secrets.split(',').map((k) => k.trim()).filter((k) => k !== ''),
-            ...(seconds === undefined ? {} : { debounce_seconds: seconds }),
+            kind: 'stream',
+            config: {
+              command: v.command,
+              secrets: v.secrets.split(',').map((k) => k.trim()).filter((k) => k !== ''),
+              ...(seconds === undefined ? {} : { debounce_seconds: seconds }),
+            },
           }
         : null,
     )
@@ -266,10 +260,12 @@ function PrecheckEditor({ precheck, onChange }: { precheck: Precheck | null; onC
 }
 
 function RouteInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  // 地址格式的说明只在后端一份（与给 agent 的工具说明相同，是英文）
+  const help = useLoad(() => api.routeHelp(), [])
   return (
     <TextInput
       label="投递目标"
-      hint="new（默认，新会话）、agent:<名>（该 agent 的新会话）、session 或 session:<名>（续写本触发器最近的会话）、issue:<编号>（记进 issue 并投给处理它的 agent）。事件里单独一行 @route <目标> 可以把之后的内容投到别处"
+      hint={`可选地址：${help.data?.address_help ?? '…'}。事件里单独一行 @route <目标> 可以把之后的内容投到别处`}
       value={value}
       onChange={onChange}
       placeholder="new"
@@ -593,7 +589,7 @@ function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: 
   const confirm = useConfirm()
   const [editing, setEditing] = useState(false)
   const [prompt, setPrompt] = useState(trigger.prompt)
-  const [config, setConfig] = useState<Config | null>(trigger.config)
+  const [draft, setDraft] = useState<KindConfig | null>(trigger)
   const [precheck, setPrecheck] = useState<Precheck | null>(trigger.precheck)
   const [route, setRoute] = useState(trigger.route)
   const action = useAction()
@@ -601,7 +597,7 @@ function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: 
   // 每次进入编辑都从已保存的值开始：取消过的草稿不会在下一次保存时被提交
   function startEditing() {
     setPrompt(trigger.prompt)
-    setConfig(trigger.config)
+    setDraft(trigger)
     setPrecheck(trigger.precheck)
     setRoute(trigger.route)
     setEditing(true)
@@ -610,11 +606,11 @@ function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: 
   const precheckChanged = JSON.stringify(precheck) !== JSON.stringify(trigger.precheck)
   const save = () =>
     action.run(async () => {
-      if (config === null) throw new Error('配置不合法')
+      if (draft === null) throw new Error('配置不合法')
       // 前置检查没改就不提交：改了会重置 changed 模式的基线
       await api.updateTrigger(trigger.id, {
         prompt,
-        config,
+        config: draft.config,
         ...(precheckChanged ? { precheck } : {}),
         ...(route.trim() !== trigger.route ? { route: route.trim() || 'new' } : {}),
       })
@@ -662,7 +658,7 @@ function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: 
         )}
         {editing ? (
           <>
-            <ConfigEditor value={trigger} onChange={setConfig} />
+            <ConfigEditor value={trigger} onChange={setDraft} />
             <PrecheckEditor precheck={trigger.precheck} onChange={setPrecheck} />
             <RouteInput value={route} onChange={setRoute} />
             <TextAreaInput label="处理说明" value={prompt} onChange={setPrompt} rows={5} />
@@ -684,7 +680,7 @@ function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: 
           <>
             <ActionButton
               size="sm"
-              isDisabled={config === null || (precheck !== null && !precheck.command.trim())}
+              isDisabled={draft === null || (precheck !== null && !precheck.command.trim())}
               isPending={action.busy}
               onPress={() => void save()}
             >
@@ -735,7 +731,7 @@ function TriggerForm({ kinds, agents, onCreated }: { kinds: TriggerKind[]; agent
   const [name, setName] = useState('')
   const [agentId, setAgentId] = useState<string | null>(null)
   const [prompt, setPrompt] = useState('')
-  const [config, setConfig] = useState<Config | null>(initial?.config ?? null)
+  const [draft, setDraft] = useState<KindConfig | null>(initial)
   const [precheck, setPrecheck] = useState<Precheck | null>(null)
   const [route, setRoute] = useState('')
   const action = useAction()
@@ -743,13 +739,12 @@ function TriggerForm({ kinds, agents, onCreated }: { kinds: TriggerKind[]; agent
   async function create() {
     const ok = await action.run(async () => {
       if (kind === null || agentId === null) throw new Error('请选择触发方式和 agent')
-      if (config === null) throw new Error('配置不合法')
+      if (draft === null) throw new Error('配置不合法')
       await api.createTrigger({
+        ...draft,
         name,
         agent_id: asAgentId(agentId),
-        kind,
         prompt,
-        config,
         precheck,
         route: route.trim() || null,
       })
@@ -771,7 +766,7 @@ function TriggerForm({ kinds, agents, onCreated }: { kinds: TriggerKind[]; agent
           const k = kinds.find((x) => x.name === id)?.name
           const next = k ? emptyConfig(k) : null
           setInitial(next)
-          setConfig(next?.config ?? null)
+          setDraft(next)
         }}
         options={kinds.map((k) => ({ id: k.name, label: KIND_LABELS[k.name].label, description: KIND_LABELS[k.name].summary }))}
       />
@@ -790,7 +785,7 @@ function TriggerForm({ kinds, agents, onCreated }: { kinds: TriggerKind[]; agent
         placeholder="选择 agent"
         options={selectableAgents(agents, agentId).map((a) => ({ id: a.id, label: a.name }))}
       />
-      {initial && <ConfigEditor key={initial.kind} value={initial} onChange={setConfig} />}
+      {initial && <ConfigEditor key={initial.kind} value={initial} onChange={setDraft} />}
       <PrecheckEditor precheck={null} onChange={setPrecheck} />
       <RouteInput value={route} onChange={setRoute} />
       <TextAreaInput
@@ -802,7 +797,7 @@ function TriggerForm({ kinds, agents, onCreated }: { kinds: TriggerKind[]; agent
       />
       <ErrorAlert error={action.error} />
       <ActionButton
-        isDisabled={!name || !agentId || !prompt || !kind || config === null || (precheck !== null && !precheck.command.trim())}
+        isDisabled={!name || !agentId || !prompt || !kind || draft === null || (precheck !== null && !precheck.command.trim())}
         isPending={action.busy}
         onPress={() => void create()}
       >

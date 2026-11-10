@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, TypeAdapter
 from muliao.agents.api import AgentNames
 from muliao.api.deps import C
 from muliao.platform.values import KEEP
+from muliao.routing.api import ADDRESS_HELP
 from muliao.triggers.api import (
     Fired,
     OnceConfig,
@@ -39,17 +40,47 @@ class TriggerKindOut(BaseModel):
         return cls(name=k.name, description=k.description)
 
 
-class TriggerCreate(BaseModel):
+class _TriggerCreateBase(BaseModel):
+    """新建触发器的请求：kind 与 config 由各方式的子类给出类型（有默认值的配置项可以不填）。"""
+
     name: str
     agent_id: str
-    kind: TriggerKindName
     prompt: str
-    # 由 kind 校验，格式见 TriggerKindOut.description
-    config: dict[str, Any]
     # 触发前的前置检查（见 triggers.precheck）；不给则每次都交给 agent
     precheck: Precheck | None = None
-    # 事件的默认投递目标（文字地址，routing.api.ADDRESS_HELP）；不给是新开这个 agent 的会话
+    # 事件的默认投递目标（文字地址，RouteHelpOut.address_help）；不给是新开这个 agent 的会话
     route: str | None = None
+
+
+class ScheduleTriggerCreate(_TriggerCreateBase):
+    kind: Literal["schedule"]
+    config: ScheduleConfig
+
+
+class OnceTriggerCreate(_TriggerCreateBase):
+    kind: Literal["once"]
+    config: OnceConfig
+
+
+class WebhookTriggerCreate(_TriggerCreateBase):
+    kind: Literal["webhook"]
+    config: WebhookConfig
+
+
+class StreamTriggerCreate(_TriggerCreateBase):
+    kind: Literal["stream"]
+    config: StreamConfig
+
+
+TriggerCreate = Annotated[
+    ScheduleTriggerCreate | OnceTriggerCreate | WebhookTriggerCreate | StreamTriggerCreate,
+    Field(discriminator="kind"),
+]
+
+
+class RouteHelpOut(BaseModel):
+    # 投递目标文字地址的格式说明（与给 agent 的工具说明同一份）
+    address_help: str
 
 
 class TriggerPatch(BaseModel):
@@ -158,6 +189,11 @@ async def trigger_kinds(c: C) -> list[TriggerKindOut]:
     return [TriggerKindOut.of(k) for k in c.triggers.kinds.values()]
 
 
+@router.get("/trigger-routes/help")
+async def route_help() -> RouteHelpOut:
+    return RouteHelpOut(address_help=ADDRESS_HELP)
+
+
 @router.get("/triggers")
 async def list_triggers(
     c: C, finished: bool = Query(False, description="列已结束的（跑完的一次性触发器）而不是还会触发的")
@@ -173,7 +209,8 @@ async def create_trigger(c: C, body: TriggerCreate) -> TriggerOut:
         agent_id=body.agent_id,
         kind=body.kind,
         prompt=body.prompt,
-        config=body.config,
+        # 原样交给触发方式规范化（没填的默认值由它补上）
+        config=body.config.model_dump(mode="json", exclude_unset=True),
         precheck=body.precheck,
         route=body.route,
     )

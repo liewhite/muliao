@@ -75,7 +75,8 @@ LOG_DIR = "trigger-logs"
 
 
 class StreamConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    # 读到的配置里有默认值的项总在（接口描述里分成 -Input 与 -Output 两个类型：新建时可省，读到的必有）
+    model_config = ConfigDict(extra="forbid", json_schema_serialization_defaults_required=True)
 
     command: str = Field(min_length=1, max_length=4000)
     secrets: list[str] = []

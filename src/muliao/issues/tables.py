@@ -31,6 +31,7 @@ class IssuePriority(StrEnum):
 
 
 class ActivityKind(StrEnum):
+    # 各种类带的内容（body）与变化（change）的形状；HTTP 接口按种类给出的类型（api/issues.py 的 ActivityOut）照它写，改形状两边一起改
     CREATED = "created"
     COMMENT = "comment"
     STATUS = "status"

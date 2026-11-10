@@ -6,8 +6,9 @@ from typing import get_args
 import pytest
 
 from muliao.agents.api import AgentPatch, McpTransport, RoleSpec, mcp_config
-from muliao.api.triggers import TriggerOut
+from muliao.api.triggers import TriggerCreate, TriggerOut
 from muliao.errors import Conflict, InvalidInput
+from muliao.routing.api import ADDRESS_HELP
 from muliao.sessions.api import Origin, SessionActivity, WorkState
 from muliao.sessions.mailbox import queued_in
 from muliao.sessions.tables import MailKind
@@ -1005,10 +1006,30 @@ async def test_a_previous_fire_waiting_on_a_background_job_counts_as_busy(contai
 async def test_http_trigger_types_cover_exactly_the_registered_kinds(container):
     assert set(get_args(TriggerKindName)) == set(container.triggers.kinds)
     # 联合类型里每种方式恰有一个成员，列表接口才不会因为漏了某种方式而 500
-    members = get_args(get_args(TriggerOut)[0])
-    assert sorted(get_args(m.model_fields["kind"].annotation)[0] for m in members) == sorted(
-        get_args(TriggerKindName)
+    for union in (TriggerOut, TriggerCreate):
+        members = get_args(get_args(union)[0])
+        assert sorted(get_args(m.model_fields["kind"].annotation)[0] for m in members) == sorted(
+            get_args(TriggerKindName)
+        )
+
+
+async def test_http_create_checks_config_by_kind_and_fills_defaults(client, make_agent):
+    alpha = (await make_agent()).id
+    await login(client)
+    base = {"agent_id": alpha, "prompt": "p"}
+    # 有默认值的配置项可以不填，由触发方式补上
+    resp = await client.post(
+        "/api/triggers", json={**base, "name": "feed", "kind": "stream", "config": {"command": "echo hi"}}
     )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["config"] == {"command": "echo hi", "secrets": [], "debounce_seconds": 5.0}
+    # 配置按 kind 校验：别的方式的配置项被拒
+    resp = await client.post(
+        "/api/triggers", json={**base, "name": "s", "kind": "schedule", "config": {"command": "echo hi"}}
+    )
+    assert resp.status_code == 422
+    help_text = (await client.get("/api/trigger-routes/help")).json()["address_help"]
+    assert help_text == ADDRESS_HELP
 
 
 async def test_trigger_list_returns_each_kinds_typed_status(client, container, make_agent):

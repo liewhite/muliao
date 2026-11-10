@@ -602,6 +602,18 @@ async def test_http_issue_lifecycle(client, container, make_agent):
         issue_id
     ]
     assert (await client.post(f"/api/issues/{issue_id}/comments", json={"body": "hi"})).status_code == 201
+    # 时间线按种类给出各自的形状：没有变化的种类不带 change，评论不带空的 change
+    shapes = [
+        {k: a[k] for k in ("kind", "body", "change") if k in a}
+        for a in (await client.get(f"/api/issues/{issue_id}")).json()["activities"]
+    ]
+    assert shapes == [
+        {"kind": "created"},
+        {"kind": "status", "change": {"from": "backlog", "to": "in_progress"}},
+        {"kind": "assignee", "change": {"from": alpha, "to": None}},
+        {"kind": "assignee", "change": {"from": None, "to": "user"}},
+        {"kind": "comment", "body": "hi"},
+    ]
     # 审核：用户自己指派给自己的没有 agent 可以打回
     assert (await client.get(f"/api/issues/{issue_id}")).json()["issue"]["reviewable"]
     resp = await client.post(f"/api/issues/{issue_id}/reject", json={"reason": "no"})

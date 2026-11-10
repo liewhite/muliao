@@ -1,10 +1,10 @@
 """issue 看板接口：界面上的操作都以用户的身份（actor 为 USER）进行。"""
 
 from datetime import datetime
-from typing import Any
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, TypeAdapter
 
 from muliao.agents.api import USER
 from muliao.api.deps import C
@@ -71,30 +71,121 @@ class IssueOut(BaseModel):
         )
 
 
-class ActivityOut(BaseModel):
+class Change[T](BaseModel):
+    """属性从什么改成什么（时间线存的 {"from": ..., "to": ...}）。"""
+
+    before: T = Field(alias="from")
+    to: T
+
+
+class Arrival(BaseModel):
+    """不是属性变化、只有一个值的记法（存为 {"from": null, "to": 值}）。"""
+
+    before: None = Field(alias="from")
+    to: str
+
+
+class DependencyChange(Change[str]):
+    # 完成的那个上游
+    issue: int
+
+
+class _ActivityBase(BaseModel):
+    """时间线上的一条，按 kind 区分，各种类的内容与变化见 issues.tables.ActivityKind。"""
+
     id: int
     created_at: datetime
     # 做这件事的 agent id；用户为 "user"，系统自己的清理（删除 agent）为 "system"
     actor: str
-    kind: ActivityKind
-    # 评论内容
-    body: str | None
-    # 属性变化：{"from": ..., "to": ...}；指派人的取值同 IssueOut.assignee
-    change: dict[str, Any] | None
     # 这件事发生在哪个会话（agent 动手时所在的会话）；用户在界面上的操作、系统的清理、会话已删除时为 null
     session_id: str | None
 
-    @classmethod
-    def of(cls, a: IssueActivity) -> "ActivityOut":
-        return cls(
+
+class PlainActivityOut(_ActivityBase):
+    kind: Literal[ActivityKind.CREATED, ActivityKind.DESCRIPTION, ActivityKind.UNSETTLED]
+
+
+class TextActivityOut(_ActivityBase):
+    # 评论内容；运行失败的错误摘要
+    kind: Literal[ActivityKind.COMMENT, ActivityKind.RUN_FAILED]
+    body: str
+
+
+class EventActivityOut(_ActivityBase):
+    kind: Literal[ActivityKind.EVENT]
+    # 投递的内容；change.to 是来源的描述（如 "trigger slack-live"）
+    body: str
+    change: Arrival
+
+
+class StoppedActivityOut(_ActivityBase):
+    # change.to 是被停掉会话的 agent id
+    kind: Literal[ActivityKind.STOPPED]
+    change: Arrival
+
+
+class StatusActivityOut(_ActivityBase):
+    kind: Literal[ActivityKind.STATUS]
+    # 状态是 str 不是 IssueStatus：#258 之前的历史里有已去掉的 todo、waiting，时间线只增不改
+    change: Change[str]
+
+
+class DependencyActivityOut(_ActivityBase):
+    # 一个上游完成：它的状态变化，状态的取值同 StatusActivityOut
+    kind: Literal[ActivityKind.DEPENDENCY]
+    change: DependencyChange
+
+
+class PriorityActivityOut(_ActivityBase):
+    kind: Literal[ActivityKind.PRIORITY]
+    change: Change[IssuePriority]
+
+
+class PersonActivityOut(_ActivityBase):
+    # 取值同 IssueOut.assignee / owner；null 是未指派、没有负责项目
+    kind: Literal[ActivityKind.ASSIGNEE, ActivityKind.OWNER]
+    change: Change[str | None]
+
+
+class TitleActivityOut(_ActivityBase):
+    kind: Literal[ActivityKind.TITLE]
+    change: Change[str]
+
+
+class DependsOnActivityOut(_ActivityBase):
+    kind: Literal[ActivityKind.DEPENDS_ON]
+    change: Change[list[int]]
+
+
+ActivityOut = Annotated[
+    PlainActivityOut
+    | TextActivityOut
+    | EventActivityOut
+    | StoppedActivityOut
+    | StatusActivityOut
+    | DependencyActivityOut
+    | PriorityActivityOut
+    | PersonActivityOut
+    | TitleActivityOut
+    | DependsOnActivityOut,
+    Field(discriminator="kind"),
+]
+_ACTIVITY_OUT: TypeAdapter[ActivityOut] = TypeAdapter(ActivityOut)
+
+
+def _activity_out(a: IssueActivity) -> ActivityOut:
+    """存下的一条按种类解析；存的形状不符（种类缺了内容或变化）当场报错，不交给界面去猜。"""
+    return _ACTIVITY_OUT.validate_python(
+        dict(
             id=a.id,
             created_at=a.created_at,
             actor=a.actor,
+            session_id=a.session_id,
             kind=a.kind,
             body=a.body,
             change=a.change,
-            session_id=a.session_id,
         )
+    )
 
 
 class IssueDetailOut(BaseModel):
@@ -173,7 +264,7 @@ async def create_issue(c: C, body: IssueCreate) -> IssueOut:
 async def get_issue(c: C, issue_id: int) -> IssueDetailOut:
     detail = await c.issues.get(issue_id)
     return IssueDetailOut(
-        issue=await _out(c, detail.issue), activities=[ActivityOut.of(a) for a in detail.activities]
+        issue=await _out(c, detail.issue), activities=[_activity_out(a) for a in detail.activities]
     )
 
 
@@ -196,7 +287,7 @@ async def update_issue(c: C, issue_id: int, body: IssuePatch) -> IssueOut:
 
 @router.post("/issues/{issue_id}/comments", status_code=201)
 async def comment_issue(c: C, issue_id: int, body: CommentIn) -> ActivityOut:
-    return ActivityOut.of(await c.issues.comment(USER, issue_id, body.body))
+    return _activity_out(await c.issues.comment(USER, issue_id, body.body))
 
 
 @router.post("/issues/{issue_id}/approve")

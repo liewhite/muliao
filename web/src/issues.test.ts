@@ -66,30 +66,26 @@ describe('issues', () => {
   })
 
   it('describes changes in the timeline', () => {
-    const change = (kind: IssueActivity['kind'], from: unknown, to: unknown): IssueActivity => ({
-      id: 1,
-      created_at: '',
-      actor: 'user',
-      kind,
-      body: null,
-      session_id: null,
-      change: { from, to },
-    })
-    expect(activityText(agents, change('status', 'in_review', 'done'))).toBe('把状态从「待审核」改为「完成」')
+    const base = { id: 1, created_at: '', actor: 'user', session_id: null }
+    // 每种只写 kind 与它自己的内容、变化，公共字段用 base
+    type Own<A> = A extends unknown ? Omit<A, keyof typeof base> : never
+    const at = (a: Own<IssueActivity>): IssueActivity => ({ ...base, ...a })
+    expect(activityText(agents, at({ kind: 'status', change: { from: 'in_review', to: 'done' } }))).toBe('把状态从「待审核」改为「完成」')
     // 已去掉的状态（时间线里的旧记录）原样显示
-    expect(activityText(agents, change('status', 'todo', 'in_progress'))).toBe('把状态从「todo」改为「进行中」')
-    expect(activityText(agents, change('status', 'waiting', 'in_progress'))).toBe('把状态从「waiting」改为「进行中」')
-    expect(activityText(agents, change('assignee', null, 'a1'))).toBe('把指派从「未指派」改为「alpha」')
-    expect(activityText(agents, change('depends_on', [1, 2], []))).toBe('把依赖从「#1, #2」改为「无」')
-    expect(activityText(agents, { ...change('dependency', 'in_progress', 'done'), change: { issue: 3, from: 'in_progress', to: 'done' } })).toBe(
+    expect(activityText(agents, at({ kind: 'status', change: { from: 'todo', to: 'in_progress' } }))).toBe('把状态从「todo」改为「进行中」')
+    expect(activityText(agents, at({ kind: 'status', change: { from: 'waiting', to: 'in_progress' } }))).toBe('把状态从「waiting」改为「进行中」')
+    expect(activityText(agents, at({ kind: 'assignee', change: { from: null, to: 'a1' } }))).toBe('把指派从「未指派」改为「alpha」')
+    expect(activityText(agents, at({ kind: 'priority', change: { from: 'none', to: 'high' } }))).toContain('改为')
+    expect(activityText(agents, at({ kind: 'depends_on', change: { from: [1, 2], to: [] } }))).toBe('把依赖从「#1, #2」改为「无」')
+    expect(activityText(agents, at({ kind: 'dependency', change: { issue: 3, from: 'in_progress', to: 'done' } }))).toBe(
       '把依赖 #3 的状态从「进行中」改为「完成」',
     )
-    expect(activityText(agents, { ...change('run_failed', null, null), change: null, body: 'Boom: bad' })).toBe(
-      '在 issue 会话里的运行失败了：Boom: bad',
+    expect(activityText(agents, at({ kind: 'run_failed', body: 'Boom: bad' }))).toBe('在 issue 会话里的运行失败了：Boom: bad')
+    expect(activityText(agents, at({ kind: 'unsettled' }))).toContain('已请它表态')
+    expect(activityText(agents, at({ kind: 'event', body: 'x', change: { from: null, to: 'trigger feed' } }))).toBe(
+      '投递了事件（来自 trigger feed）',
     )
-    expect(activityText(agents, { ...change('unsettled', null, null), change: null })).toContain('已请它表态')
-    expect(activityText(agents, change('event', null, 'trigger feed'))).toBe('投递了事件（来自 trigger feed）')
-    expect(activityText(agents, change('stopped', null, 'a1'))).toBe('停止了 alpha 在这个 issue 上的会话')
+    expect(activityText(agents, at({ kind: 'stopped', change: { from: null, to: 'a1' } }))).toBe('停止了 alpha 在这个 issue 上的会话')
   })
 })
 

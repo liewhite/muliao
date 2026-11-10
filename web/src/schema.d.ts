@@ -882,6 +882,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/trigger-routes/help": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Route Help */
+        get: operations["route_help_api_trigger_routes_help_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/triggers": {
         parameters: {
             query?: never;
@@ -1324,32 +1341,6 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
-         * ActivityKind
-         * @enum {string}
-         */
-        ActivityKind: "created" | "comment" | "status" | "assignee" | "priority" | "owner" | "title" | "description" | "depends_on" | "dependency" | "run_failed" | "unsettled" | "stopped" | "event";
-        /** ActivityOut */
-        ActivityOut: {
-            /** Id */
-            id: number;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Actor */
-            actor: string;
-            kind: components["schemas"]["ActivityKind"];
-            /** Body */
-            body: string | null;
-            /** Change */
-            change: {
-                [key: string]: unknown;
-            } | null;
-            /** Session Id */
-            session_id: string | null;
-        };
-        /**
          * AgentAnswer
          * @description 被问的 agent 交回的结局（sessions.delegation）：给发问方模型的文字，它挂给用户的文件。做它的 thread 不在这里：
          *     调用开出了哪个 thread 记在 sessions.thread_calls。更早投出的回答信件里的 thread 键忽略。
@@ -1396,27 +1387,17 @@ export interface components {
             description: string;
             /** Model */
             model?: string | null;
-            /**
-             * Roles
-             * @default []
-             */
-            roles: string[];
-            /**
-             * Allow
-             * @default []
-             */
-            allow: string[];
-            /**
-             * Deny
-             * @default []
-             */
-            deny: string[];
+            /** Roles */
+            roles?: string[];
+            /** Allow */
+            allow?: string[];
+            /** Deny */
+            deny?: string[];
             /**
              * Thinking
-             * @default default
              * @enum {string}
              */
-            thinking: "default" | "off" | "low" | "medium" | "high" | "xhigh";
+            thinking?: "default" | "off" | "low" | "medium" | "high" | "xhigh";
             /** Group */
             group?: string | null;
         };
@@ -1525,6 +1506,16 @@ export interface components {
             call_id: string;
             /** Tool Name */
             tool_name: string;
+        };
+        /**
+         * Arrival
+         * @description 不是属性变化、只有一个值的记法（存为 {"from": null, "to": 值}）。
+         */
+        Arrival: {
+            /** From */
+            from: null;
+            /** To */
+            to: string;
         };
         /**
          * AskResult
@@ -1762,6 +1753,32 @@ export interface components {
             /** Admin */
             admin: boolean;
         };
+        /** Change[IssuePriority] */
+        Change_IssuePriority_: {
+            from: components["schemas"]["IssuePriority"];
+            to: components["schemas"]["IssuePriority"];
+        };
+        /** Change[Union[str, NoneType]] */
+        Change_Union_str__NoneType__: {
+            /** From */
+            from: string | null;
+            /** To */
+            to: string | null;
+        };
+        /** Change[list[int]] */
+        Change_list_int__: {
+            /** From */
+            from: number[];
+            /** To */
+            to: number[];
+        };
+        /** Change[str] */
+        Change_str_: {
+            /** From */
+            from: string;
+            /** To */
+            to: string;
+        };
         /**
          * CodeBlock
          * @description 一段代码或文件内容（等宽），title 多为文件路径。
@@ -1832,6 +1849,55 @@ export interface components {
              */
             since: string;
         };
+        /** DependencyActivityOut */
+        DependencyActivityOut: {
+            /** Id */
+            id: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Actor */
+            actor: string;
+            /** Session Id */
+            session_id: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "dependency";
+            change: components["schemas"]["DependencyChange"];
+        };
+        /** DependencyChange */
+        DependencyChange: {
+            /** From */
+            from: string;
+            /** To */
+            to: string;
+            /** Issue */
+            issue: number;
+        };
+        /** DependsOnActivityOut */
+        DependsOnActivityOut: {
+            /** Id */
+            id: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Actor */
+            actor: string;
+            /** Session Id */
+            session_id: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "depends_on";
+            change: components["schemas"]["Change_list_int__"];
+        };
         /**
          * DiffBlock
          * @description 一处修改：统一 diff 格式的文本（以 `+`/`-`/空格开头的行），title 多为文件路径。
@@ -1867,6 +1933,28 @@ export interface components {
             modified: string;
             /** Inline */
             inline: boolean;
+        };
+        /** EventActivityOut */
+        EventActivityOut: {
+            /** Id */
+            id: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Actor */
+            actor: string;
+            /** Session Id */
+            session_id: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "event";
+            /** Body */
+            body: string;
+            change: components["schemas"]["Arrival"];
         };
         /** FeaturesOut */
         FeaturesOut: {
@@ -1976,28 +2064,20 @@ export interface components {
             title: string;
             /** Owner */
             owner: string;
-            /**
-             * Description
-             * @default
-             */
-            description: string;
-            /** @default backlog */
-            status: components["schemas"]["IssueStatus"];
-            /** @default none */
-            priority: components["schemas"]["IssuePriority"];
+            /** Description */
+            description?: string;
+            status?: components["schemas"]["IssueStatus"];
+            priority?: components["schemas"]["IssuePriority"];
             /** Assignee */
             assignee?: string | null;
-            /**
-             * Depends On
-             * @default []
-             */
-            depends_on: number[];
+            /** Depends On */
+            depends_on?: number[];
         };
         /** IssueDetailOut */
         IssueDetailOut: {
             issue: components["schemas"]["IssueOut"];
             /** Activities */
-            activities: components["schemas"]["ActivityOut"][];
+            activities: (components["schemas"]["PlainActivityOut"] | components["schemas"]["TextActivityOut"] | components["schemas"]["EventActivityOut"] | components["schemas"]["StoppedActivityOut"] | components["schemas"]["StatusActivityOut"] | components["schemas"]["DependencyActivityOut"] | components["schemas"]["PriorityActivityOut"] | components["schemas"]["PersonActivityOut"] | components["schemas"]["TitleActivityOut"] | components["schemas"]["DependsOnActivityOut"])[];
         };
         /** IssueOut */
         IssueOut: {
@@ -2257,32 +2337,20 @@ export interface components {
             transport: components["schemas"]["McpTransport"];
             /** Command */
             command?: string | null;
-            /**
-             * Args
-             * @default []
-             */
-            args: string[];
+            /** Args */
+            args?: string[];
             /** Url */
             url?: string | null;
-            /**
-             * Env
-             * @default {}
-             */
-            env: {
+            /** Env */
+            env?: {
                 [key: string]: string;
             };
-            /**
-             * Headers
-             * @default {}
-             */
-            headers: {
+            /** Headers */
+            headers?: {
                 [key: string]: string;
             };
-            /**
-             * Probe
-             * @default true
-             */
-            probe: boolean;
+            /** Probe */
+            probe?: boolean;
         };
         /** McpOut */
         McpOut: {
@@ -2397,6 +2465,24 @@ export interface components {
              */
             run_at: string;
         };
+        /** OnceTriggerCreate */
+        OnceTriggerCreate: {
+            /** Name */
+            name: string;
+            /** Agent Id */
+            agent_id: string;
+            /** Prompt */
+            prompt: string;
+            precheck?: components["schemas"]["Precheck"] | null;
+            /** Route */
+            route?: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "once";
+            config: components["schemas"]["OnceConfig"];
+        };
         /** OnceTriggerOut */
         OnceTriggerOut: {
             /** Id */
@@ -2467,6 +2553,45 @@ export interface components {
             /** Owner */
             owner: string | null;
         };
+        /** PersonActivityOut */
+        PersonActivityOut: {
+            /** Id */
+            id: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Actor */
+            actor: string;
+            /** Session Id */
+            session_id: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "assignee" | "owner";
+            change: components["schemas"]["Change_Union_str__NoneType__"];
+        };
+        /** PlainActivityOut */
+        PlainActivityOut: {
+            /** Id */
+            id: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Actor */
+            actor: string;
+            /** Session Id */
+            session_id: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "created" | "description" | "unsettled";
+        };
         /** Precheck */
         Precheck: {
             /**
@@ -2487,6 +2612,26 @@ export interface components {
              * @enum {string}
              */
             fire_when: "output" | "changed";
+        };
+        /** PriorityActivityOut */
+        PriorityActivityOut: {
+            /** Id */
+            id: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Actor */
+            actor: string;
+            /** Session Id */
+            session_id: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "priority";
+            change: components["schemas"]["Change_IssuePriority_"];
         };
         /** PushKeys */
         PushKeys: {
@@ -2527,11 +2672,8 @@ export interface components {
          * @description 用户对一个问题的回答：选中的选项，和/或「其他」里填的文字。
          */
         QuestionAnswer: {
-            /**
-             * Selected
-             * @default []
-             */
-            selected: string[];
+            /** Selected */
+            selected?: string[];
             /** Other */
             other?: string | null;
         };
@@ -2554,23 +2696,14 @@ export interface components {
         ReplyIn: {
             /** Prompt */
             prompt: string;
-            /**
-             * Attachments
-             * @default []
-             */
-            attachments: string[];
-            /**
-             * Answers
-             * @default {}
-             */
-            answers: {
+            /** Attachments */
+            attachments?: string[];
+            /** Answers */
+            answers?: {
                 [key: string]: components["schemas"]["QuestionAnswer"][];
             };
-            /**
-             * Approvals
-             * @default {}
-             */
-            approvals: {
+            /** Approvals */
+            approvals?: {
                 [key: string]: "approve" | "deny" | "always";
             };
         };
@@ -2611,6 +2744,11 @@ export interface components {
             allow: string[];
             /** Deny */
             deny: string[];
+        };
+        /** RouteHelpOut */
+        RouteHelpOut: {
+            /** Address Help */
+            address_help: string;
         };
         /**
          * RunDeltaEvent
@@ -2698,6 +2836,24 @@ export interface components {
             next_run_at: string;
             skipped: components["schemas"]["SkippedFires"] | null;
         };
+        /** ScheduleTriggerCreate */
+        ScheduleTriggerCreate: {
+            /** Name */
+            name: string;
+            /** Agent Id */
+            agent_id: string;
+            /** Prompt */
+            prompt: string;
+            precheck?: components["schemas"]["Precheck"] | null;
+            /** Route */
+            route?: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "schedule";
+            config: components["schemas"]["ScheduleConfig"];
+        };
         /** ScheduleTriggerOut */
         ScheduleTriggerOut: {
             /** Id */
@@ -2765,11 +2921,8 @@ export interface components {
             owner?: string | null;
             /** Value */
             value: string;
-            /**
-             * Description
-             * @default
-             */
-            description: string;
+            /** Description */
+            description?: string;
             /** Allow Shell */
             allow_shell?: boolean | null;
         };
@@ -2959,13 +3112,50 @@ export interface components {
             agent_id: string;
             /** Prompt */
             prompt: string;
-            /**
-             * Attachments
-             * @default []
-             */
-            attachments: string[];
+            /** Attachments */
+            attachments?: string[];
             /** Compaction Threshold Tokens */
             compaction_threshold_tokens?: number | null;
+        };
+        /** StatusActivityOut */
+        StatusActivityOut: {
+            /** Id */
+            id: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Actor */
+            actor: string;
+            /** Session Id */
+            session_id: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "status";
+            change: components["schemas"]["Change_str_"];
+        };
+        /** StoppedActivityOut */
+        StoppedActivityOut: {
+            /** Id */
+            id: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Actor */
+            actor: string;
+            /** Session Id */
+            session_id: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "stopped";
+            change: components["schemas"]["Arrival"];
         };
         /**
          * StoredKind
@@ -2973,7 +3163,16 @@ export interface components {
          */
         StoredKind: "skill" | "mcp" | "secret" | "memory";
         /** StreamConfig */
-        StreamConfig: {
+        "StreamConfig-Input": {
+            /** Command */
+            command: string;
+            /** Secrets */
+            secrets?: string[];
+            /** Debounce Seconds */
+            debounce_seconds?: number;
+        };
+        /** StreamConfig */
+        "StreamConfig-Output": {
             /** Command */
             command: string;
             /**
@@ -2997,6 +3196,24 @@ export interface components {
             failures: number;
             /** Stderr Log */
             stderr_log: string;
+        };
+        /** StreamTriggerCreate */
+        StreamTriggerCreate: {
+            /** Name */
+            name: string;
+            /** Agent Id */
+            agent_id: string;
+            /** Prompt */
+            prompt: string;
+            precheck?: components["schemas"]["Precheck"] | null;
+            /** Route */
+            route?: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "stream";
+            config: components["schemas"]["StreamConfig-Input"];
         };
         /** StreamTriggerOut */
         StreamTriggerOut: {
@@ -3030,7 +3247,7 @@ export interface components {
              * @enum {string}
              */
             kind: "stream";
-            config: components["schemas"]["StreamConfig"];
+            config: components["schemas"]["StreamConfig-Output"];
             status: components["schemas"]["StreamStatus"];
         };
         /** TableBlock */
@@ -3124,6 +3341,27 @@ export interface components {
             /** Failed */
             failed: boolean;
         };
+        /** TextActivityOut */
+        TextActivityOut: {
+            /** Id */
+            id: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Actor */
+            actor: string;
+            /** Session Id */
+            session_id: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "comment" | "run_failed";
+            /** Body */
+            body: string;
+        };
         /** ThreadSource */
         ThreadSource: {
             /**
@@ -3135,6 +3373,26 @@ export interface components {
             raw: string;
             /** Session Id */
             session_id: string;
+        };
+        /** TitleActivityOut */
+        TitleActivityOut: {
+            /** Id */
+            id: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Actor */
+            actor: string;
+            /** Session Id */
+            session_id: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "title";
+            change: components["schemas"]["Change_str_"];
         };
         /** TokenOut */
         TokenOut: {
@@ -3160,27 +3418,6 @@ export interface components {
         TranscriptOut: {
             /** Text */
             text: string;
-        };
-        /** TriggerCreate */
-        TriggerCreate: {
-            /** Name */
-            name: string;
-            /** Agent Id */
-            agent_id: string;
-            /**
-             * Kind
-             * @enum {string}
-             */
-            kind: "schedule" | "once" | "webhook" | "stream";
-            /** Prompt */
-            prompt: string;
-            /** Config */
-            config: {
-                [key: string]: unknown;
-            };
-            precheck?: components["schemas"]["Precheck"] | null;
-            /** Route */
-            route?: string | null;
         };
         /** TriggerKindOut */
         TriggerKindOut: {
@@ -3309,6 +3546,24 @@ export interface components {
             url: string;
             /** Has Token */
             has_token: boolean;
+        };
+        /** WebhookTriggerCreate */
+        WebhookTriggerCreate: {
+            /** Name */
+            name: string;
+            /** Agent Id */
+            agent_id: string;
+            /** Prompt */
+            prompt: string;
+            precheck?: components["schemas"]["Precheck"] | null;
+            /** Route */
+            route?: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "webhook";
+            config: components["schemas"]["WebhookConfig"];
         };
         /** WebhookTriggerOut */
         WebhookTriggerOut: {
@@ -5183,6 +5438,26 @@ export interface operations {
             };
         };
     };
+    route_help_api_trigger_routes_help_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RouteHelpOut"];
+                };
+            };
+        };
+    };
     list_triggers_api_triggers_get: {
         parameters: {
             query?: {
@@ -5224,7 +5499,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["TriggerCreate"];
+                "application/json": components["schemas"]["ScheduleTriggerCreate"] | components["schemas"]["OnceTriggerCreate"] | components["schemas"]["WebhookTriggerCreate"] | components["schemas"]["StreamTriggerCreate"];
             };
         };
         responses: {
@@ -5763,7 +6038,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ActivityOut"];
+                    "application/json": components["schemas"]["PlainActivityOut"] | components["schemas"]["TextActivityOut"] | components["schemas"]["EventActivityOut"] | components["schemas"]["StoppedActivityOut"] | components["schemas"]["StatusActivityOut"] | components["schemas"]["DependencyActivityOut"] | components["schemas"]["PriorityActivityOut"] | components["schemas"]["PersonActivityOut"] | components["schemas"]["TitleActivityOut"] | components["schemas"]["DependsOnActivityOut"];
                 };
             };
             /** @description Validation Error */

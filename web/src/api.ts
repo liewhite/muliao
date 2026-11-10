@@ -23,7 +23,7 @@ export type Agent = WithAgentId<Schemas['AgentOut'], 'id'>
 export type AgentInput = Schemas['AgentUpdate']
 export type Session = WithAgentId<Schemas['SessionOut'], 'agent_id'>
 /** 对等批准的调用的决定：批准、拒绝、始终允许 */
-export type ApprovalChoice = Schemas['ReplyIn']['approvals'][string]
+export type ApprovalChoice = NonNullable<Schemas['ReplyIn']['approvals']>[string]
 export type ScriptGrant = Schemas['ScriptGrantOut']
 // 会话列表里的一行：多一个工作状态 state（在运行 / 在等 / 空闲），不空闲的（在运行、在等）排在最前（接口排序）
 export type SessionListItem = WithAgentId<Schemas['SessionListItem'], 'agent_id'>
@@ -83,6 +83,12 @@ export type Trigger = WithAgentId<
   'agent_id'
 >
 export type TriggerKindName = Trigger['kind']
+/** 新建触发器的请求，同样按 kind 区分：有服务端默认值的配置项可省 */
+export type TriggerCreate =
+  | Schemas['ScheduleTriggerCreate']
+  | Schemas['OnceTriggerCreate']
+  | Schemas['WebhookTriggerCreate']
+  | Schemas['StreamTriggerCreate']
 export type McpServer = WithAgentId<Schemas['McpOut'], 'owner'>
 export type McpInput = WithAgentId<Schemas['McpIn'], 'owner'>
 /** AI 资产池里的一项（内置工具、skill、MCP server、secret、记忆），带收录它的角色与这一种自己的详情（按 kind 收窄）；
@@ -111,7 +117,8 @@ export type IssueStatus = Schemas['IssueStatus']
 export type IssuePriority = Schemas['IssuePriority']
 /** assignee：agent id、'user'（用户），或 null（未指派） */
 export type Issue = Schemas['IssueOut']
-export type IssueActivity = Schemas['ActivityOut']
+/** 时间线上的一条，按 kind 区分：收窄后就是这种的内容（body）与变化（change）；后端 api/issues.py */
+export type IssueActivity = IssueDetail['activities'][number]
 export type IssueDetail = Schemas['IssueDetailOut']
 // 新建表单预填的值，形状同整体替换的 AgentInput
 export type AgentDefaults = Schemas['AgentUpdate']
@@ -411,7 +418,9 @@ export const api = {
   triggerKinds: () => call('get', '/api/trigger-kinds'),
   /** finished 为 true 时列已结束的（跑完的一次性触发器），它们只能查看与删除 */
   triggers: (finished = false) => branded<Trigger[]>(call('get', '/api/triggers', { query: { finished } })),
-  createTrigger: (body: Schemas['TriggerCreate'] & { agent_id: AgentId }) => branded<Trigger>(call('post', '/api/triggers', { body })),
+  /** 投递目标文字地址的格式说明（与给 agent 的工具说明同一份） */
+  routeHelp: () => call('get', '/api/trigger-routes/help'),
+  createTrigger: (body: TriggerCreate & { agent_id: AgentId }) => branded<Trigger>(call('post', '/api/triggers', { body })),
   /** 只修改给出的字段；precheck 不给表示不变，给 null 表示去掉 */
   updateTrigger: (trigger_id: number, body: Schemas['TriggerPatch']) =>
     branded<Trigger>(call('patch', '/api/triggers/{trigger_id}', { path: { trigger_id }, body })),

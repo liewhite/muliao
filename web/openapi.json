@@ -2422,6 +2422,24 @@
         }
       }
     },
+    "/api/trigger-routes/help": {
+      "get": {
+        "summary": "Route Help",
+        "operationId": "route_help_api_trigger_routes_help_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RouteHelpOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/triggers": {
       "get": {
         "summary": "List Triggers",
@@ -2497,7 +2515,30 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/TriggerCreate"
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/ScheduleTriggerCreate"
+                  },
+                  {
+                    "$ref": "#/components/schemas/OnceTriggerCreate"
+                  },
+                  {
+                    "$ref": "#/components/schemas/WebhookTriggerCreate"
+                  },
+                  {
+                    "$ref": "#/components/schemas/StreamTriggerCreate"
+                  }
+                ],
+                "discriminator": {
+                  "propertyName": "kind",
+                  "mapping": {
+                    "schedule": "#/components/schemas/ScheduleTriggerCreate",
+                    "once": "#/components/schemas/OnceTriggerCreate",
+                    "webhook": "#/components/schemas/WebhookTriggerCreate",
+                    "stream": "#/components/schemas/StreamTriggerCreate"
+                  }
+                },
+                "title": "Body"
               }
             }
           }
@@ -3288,7 +3329,58 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ActivityOut"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/PlainActivityOut"
+                    },
+                    {
+                      "$ref": "#/components/schemas/TextActivityOut"
+                    },
+                    {
+                      "$ref": "#/components/schemas/EventActivityOut"
+                    },
+                    {
+                      "$ref": "#/components/schemas/StoppedActivityOut"
+                    },
+                    {
+                      "$ref": "#/components/schemas/StatusActivityOut"
+                    },
+                    {
+                      "$ref": "#/components/schemas/DependencyActivityOut"
+                    },
+                    {
+                      "$ref": "#/components/schemas/PriorityActivityOut"
+                    },
+                    {
+                      "$ref": "#/components/schemas/PersonActivityOut"
+                    },
+                    {
+                      "$ref": "#/components/schemas/TitleActivityOut"
+                    },
+                    {
+                      "$ref": "#/components/schemas/DependsOnActivityOut"
+                    }
+                  ],
+                  "discriminator": {
+                    "propertyName": "kind",
+                    "mapping": {
+                      "created": "#/components/schemas/PlainActivityOut",
+                      "description": "#/components/schemas/PlainActivityOut",
+                      "unsettled": "#/components/schemas/PlainActivityOut",
+                      "comment": "#/components/schemas/TextActivityOut",
+                      "run_failed": "#/components/schemas/TextActivityOut",
+                      "event": "#/components/schemas/EventActivityOut",
+                      "stopped": "#/components/schemas/StoppedActivityOut",
+                      "status": "#/components/schemas/StatusActivityOut",
+                      "dependency": "#/components/schemas/DependencyActivityOut",
+                      "priority": "#/components/schemas/PriorityActivityOut",
+                      "assignee": "#/components/schemas/PersonActivityOut",
+                      "owner": "#/components/schemas/PersonActivityOut",
+                      "title": "#/components/schemas/TitleActivityOut",
+                      "depends_on": "#/components/schemas/DependsOnActivityOut"
+                    }
+                  },
+                  "title": "Response Comment Issue Api Issues  Issue Id  Comments Post"
                 }
               }
             }
@@ -3665,91 +3757,6 @@
   },
   "components": {
     "schemas": {
-      "ActivityKind": {
-        "type": "string",
-        "enum": [
-          "created",
-          "comment",
-          "status",
-          "assignee",
-          "priority",
-          "owner",
-          "title",
-          "description",
-          "depends_on",
-          "dependency",
-          "run_failed",
-          "unsettled",
-          "stopped",
-          "event"
-        ],
-        "title": "ActivityKind"
-      },
-      "ActivityOut": {
-        "properties": {
-          "id": {
-            "type": "integer",
-            "title": "Id"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Created At"
-          },
-          "actor": {
-            "type": "string",
-            "title": "Actor"
-          },
-          "kind": {
-            "$ref": "#/components/schemas/ActivityKind"
-          },
-          "body": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Body"
-          },
-          "change": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Change"
-          },
-          "session_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Session Id"
-          }
-        },
-        "type": "object",
-        "required": [
-          "id",
-          "created_at",
-          "actor",
-          "kind",
-          "body",
-          "change",
-          "session_id"
-        ],
-        "title": "ActivityOut"
-      },
       "AgentAnswer": {
         "properties": {
           "text": {
@@ -4208,6 +4215,25 @@
         ],
         "title": "ApprovalWait",
         "description": "在等用户批准一次工具调用（如 skill_run 执行 SKILL.md 里标了 approval 的脚本）。"
+      },
+      "Arrival": {
+        "properties": {
+          "from": {
+            "type": "null",
+            "title": "From"
+          },
+          "to": {
+            "type": "string",
+            "title": "To"
+          }
+        },
+        "type": "object",
+        "required": [
+          "from",
+          "to"
+        ],
+        "title": "Arrival",
+        "description": "不是属性变化、只有一个值的记法（存为 {\"from\": null, \"to\": 值}）。"
       },
       "AskResult": {
         "properties": {
@@ -4787,6 +4813,96 @@
         "title": "CatalogToolOut",
         "description": "内置工具：归平台、代码里定义，不能改。"
       },
+      "Change_IssuePriority_": {
+        "properties": {
+          "from": {
+            "$ref": "#/components/schemas/IssuePriority"
+          },
+          "to": {
+            "$ref": "#/components/schemas/IssuePriority"
+          }
+        },
+        "type": "object",
+        "required": [
+          "from",
+          "to"
+        ],
+        "title": "Change[IssuePriority]"
+      },
+      "Change_Union_str__NoneType__": {
+        "properties": {
+          "from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From"
+          },
+          "to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To"
+          }
+        },
+        "type": "object",
+        "required": [
+          "from",
+          "to"
+        ],
+        "title": "Change[Union[str, NoneType]]"
+      },
+      "Change_list_int__": {
+        "properties": {
+          "from": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "From"
+          },
+          "to": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "To"
+          }
+        },
+        "type": "object",
+        "required": [
+          "from",
+          "to"
+        ],
+        "title": "Change[list[int]]"
+      },
+      "Change_str_": {
+        "properties": {
+          "from": {
+            "type": "string",
+            "title": "From"
+          },
+          "to": {
+            "type": "string",
+            "title": "To"
+          }
+        },
+        "type": "object",
+        "required": [
+          "from",
+          "to"
+        ],
+        "title": "Change[str]"
+      },
       "CodeBlock": {
         "properties": {
           "kind": {
@@ -4926,6 +5042,121 @@
         "title": "DelegationWait",
         "description": "在等委派出去的工作交回结局（ask_agent，或 delegate_task 带 report_back）。"
       },
+      "DependencyActivityOut": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "actor": {
+            "type": "string",
+            "title": "Actor"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "kind": {
+            "type": "string",
+            "const": "dependency",
+            "title": "Kind"
+          },
+          "change": {
+            "$ref": "#/components/schemas/DependencyChange"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "created_at",
+          "actor",
+          "session_id",
+          "kind",
+          "change"
+        ],
+        "title": "DependencyActivityOut"
+      },
+      "DependencyChange": {
+        "properties": {
+          "from": {
+            "type": "string",
+            "title": "From"
+          },
+          "to": {
+            "type": "string",
+            "title": "To"
+          },
+          "issue": {
+            "type": "integer",
+            "title": "Issue"
+          }
+        },
+        "type": "object",
+        "required": [
+          "from",
+          "to",
+          "issue"
+        ],
+        "title": "DependencyChange"
+      },
+      "DependsOnActivityOut": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "actor": {
+            "type": "string",
+            "title": "Actor"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "kind": {
+            "type": "string",
+            "const": "depends_on",
+            "title": "Kind"
+          },
+          "change": {
+            "$ref": "#/components/schemas/Change_list_int__"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "created_at",
+          "actor",
+          "session_id",
+          "kind",
+          "change"
+        ],
+        "title": "DependsOnActivityOut"
+      },
       "DiffBlock": {
         "properties": {
           "kind": {
@@ -5011,6 +5242,57 @@
           "inline"
         ],
         "title": "EntryOut"
+      },
+      "EventActivityOut": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "actor": {
+            "type": "string",
+            "title": "Actor"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "kind": {
+            "type": "string",
+            "const": "event",
+            "title": "Kind"
+          },
+          "body": {
+            "type": "string",
+            "title": "Body"
+          },
+          "change": {
+            "$ref": "#/components/schemas/Arrival"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "created_at",
+          "actor",
+          "session_id",
+          "kind",
+          "body",
+          "change"
+        ],
+        "title": "EventActivityOut"
       },
       "FeaturesOut": {
         "properties": {
@@ -5300,7 +5582,57 @@
           },
           "activities": {
             "items": {
-              "$ref": "#/components/schemas/ActivityOut"
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/PlainActivityOut"
+                },
+                {
+                  "$ref": "#/components/schemas/TextActivityOut"
+                },
+                {
+                  "$ref": "#/components/schemas/EventActivityOut"
+                },
+                {
+                  "$ref": "#/components/schemas/StoppedActivityOut"
+                },
+                {
+                  "$ref": "#/components/schemas/StatusActivityOut"
+                },
+                {
+                  "$ref": "#/components/schemas/DependencyActivityOut"
+                },
+                {
+                  "$ref": "#/components/schemas/PriorityActivityOut"
+                },
+                {
+                  "$ref": "#/components/schemas/PersonActivityOut"
+                },
+                {
+                  "$ref": "#/components/schemas/TitleActivityOut"
+                },
+                {
+                  "$ref": "#/components/schemas/DependsOnActivityOut"
+                }
+              ],
+              "discriminator": {
+                "propertyName": "kind",
+                "mapping": {
+                  "assignee": "#/components/schemas/PersonActivityOut",
+                  "comment": "#/components/schemas/TextActivityOut",
+                  "created": "#/components/schemas/PlainActivityOut",
+                  "dependency": "#/components/schemas/DependencyActivityOut",
+                  "depends_on": "#/components/schemas/DependsOnActivityOut",
+                  "description": "#/components/schemas/PlainActivityOut",
+                  "event": "#/components/schemas/EventActivityOut",
+                  "owner": "#/components/schemas/PersonActivityOut",
+                  "priority": "#/components/schemas/PriorityActivityOut",
+                  "run_failed": "#/components/schemas/TextActivityOut",
+                  "status": "#/components/schemas/StatusActivityOut",
+                  "stopped": "#/components/schemas/StoppedActivityOut",
+                  "title": "#/components/schemas/TitleActivityOut",
+                  "unsettled": "#/components/schemas/PlainActivityOut"
+                }
+              }
             },
             "type": "array",
             "title": "Activities"
@@ -6535,6 +6867,60 @@
         ],
         "title": "OnceStatus"
       },
+      "OnceTriggerCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "prompt": {
+            "type": "string",
+            "title": "Prompt"
+          },
+          "precheck": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Precheck"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "route": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Route"
+          },
+          "kind": {
+            "type": "string",
+            "const": "once",
+            "title": "Kind"
+          },
+          "config": {
+            "$ref": "#/components/schemas/OnceConfig"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "agent_id",
+          "prompt",
+          "kind",
+          "config"
+        ],
+        "title": "OnceTriggerCreate"
+      },
       "OnceTriggerOut": {
         "properties": {
           "id": {
@@ -6747,6 +7133,101 @@
         ],
         "title": "OwnerIn"
       },
+      "PersonActivityOut": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "actor": {
+            "type": "string",
+            "title": "Actor"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "assignee",
+              "owner"
+            ],
+            "title": "Kind"
+          },
+          "change": {
+            "$ref": "#/components/schemas/Change_Union_str__NoneType__"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "created_at",
+          "actor",
+          "session_id",
+          "kind",
+          "change"
+        ],
+        "title": "PersonActivityOut"
+      },
+      "PlainActivityOut": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "actor": {
+            "type": "string",
+            "title": "Actor"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "created",
+              "description",
+              "unsettled"
+            ],
+            "title": "Kind"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "created_at",
+          "actor",
+          "session_id",
+          "kind"
+        ],
+        "title": "PlainActivityOut"
+      },
       "Precheck": {
         "properties": {
           "command": {
@@ -6782,6 +7263,52 @@
           "command"
         ],
         "title": "Precheck"
+      },
+      "PriorityActivityOut": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "actor": {
+            "type": "string",
+            "title": "Actor"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "kind": {
+            "type": "string",
+            "const": "priority",
+            "title": "Kind"
+          },
+          "change": {
+            "$ref": "#/components/schemas/Change_IssuePriority_"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "created_at",
+          "actor",
+          "session_id",
+          "kind",
+          "change"
+        ],
+        "title": "PriorityActivityOut"
       },
       "PushKeys": {
         "properties": {
@@ -7098,6 +7625,19 @@
         ],
         "title": "RolePreviewIn"
       },
+      "RouteHelpOut": {
+        "properties": {
+          "address_help": {
+            "type": "string",
+            "title": "Address Help"
+          }
+        },
+        "type": "object",
+        "required": [
+          "address_help"
+        ],
+        "title": "RouteHelpOut"
+      },
       "RunDeltaEvent": {
         "properties": {
           "type": {
@@ -7256,6 +7796,60 @@
           "skipped"
         ],
         "title": "ScheduleStatus"
+      },
+      "ScheduleTriggerCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "prompt": {
+            "type": "string",
+            "title": "Prompt"
+          },
+          "precheck": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Precheck"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "route": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Route"
+          },
+          "kind": {
+            "type": "string",
+            "const": "schedule",
+            "title": "Kind"
+          },
+          "config": {
+            "$ref": "#/components/schemas/ScheduleConfig"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "agent_id",
+          "prompt",
+          "kind",
+          "config"
+        ],
+        "title": "ScheduleTriggerCreate"
       },
       "ScheduleTriggerOut": {
         "properties": {
@@ -8109,6 +8703,98 @@
         ],
         "title": "StartIn"
       },
+      "StatusActivityOut": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "actor": {
+            "type": "string",
+            "title": "Actor"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "kind": {
+            "type": "string",
+            "const": "status",
+            "title": "Kind"
+          },
+          "change": {
+            "$ref": "#/components/schemas/Change_str_"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "created_at",
+          "actor",
+          "session_id",
+          "kind",
+          "change"
+        ],
+        "title": "StatusActivityOut"
+      },
+      "StoppedActivityOut": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "actor": {
+            "type": "string",
+            "title": "Actor"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "kind": {
+            "type": "string",
+            "const": "stopped",
+            "title": "Kind"
+          },
+          "change": {
+            "$ref": "#/components/schemas/Arrival"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "created_at",
+          "actor",
+          "session_id",
+          "kind",
+          "change"
+        ],
+        "title": "StoppedActivityOut"
+      },
       "StoredKind": {
         "type": "string",
         "enum": [
@@ -8119,7 +8805,7 @@
         ],
         "title": "StoredKind"
       },
-      "StreamConfig": {
+      "StreamConfig-Input": {
         "properties": {
           "command": {
             "type": "string",
@@ -8147,6 +8833,39 @@
         "type": "object",
         "required": [
           "command"
+        ],
+        "title": "StreamConfig"
+      },
+      "StreamConfig-Output": {
+        "properties": {
+          "command": {
+            "type": "string",
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Command"
+          },
+          "secrets": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Secrets",
+            "default": []
+          },
+          "debounce_seconds": {
+            "type": "number",
+            "maximum": 3600.0,
+            "minimum": 0.0,
+            "title": "Debounce Seconds",
+            "default": 5.0
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "command",
+          "secrets",
+          "debounce_seconds"
         ],
         "title": "StreamConfig"
       },
@@ -8192,6 +8911,60 @@
           "stderr_log"
         ],
         "title": "StreamStatus"
+      },
+      "StreamTriggerCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "prompt": {
+            "type": "string",
+            "title": "Prompt"
+          },
+          "precheck": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Precheck"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "route": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Route"
+          },
+          "kind": {
+            "type": "string",
+            "const": "stream",
+            "title": "Kind"
+          },
+          "config": {
+            "$ref": "#/components/schemas/StreamConfig-Input"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "agent_id",
+          "prompt",
+          "kind",
+          "config"
+        ],
+        "title": "StreamTriggerCreate"
       },
       "StreamTriggerOut": {
         "properties": {
@@ -8304,7 +9077,7 @@
             "title": "Kind"
           },
           "config": {
-            "$ref": "#/components/schemas/StreamConfig"
+            "$ref": "#/components/schemas/StreamConfig-Output"
           },
           "status": {
             "$ref": "#/components/schemas/StreamStatus"
@@ -8589,6 +9362,56 @@
         "title": "TerminalBlock",
         "description": "终端：`$ command` 提示行、输出、状态行（如退出码、超时、后台任务）。界面把相邻的终端块（调用的命令与结果的\n输出）画在同一个终端框里。"
       },
+      "TextActivityOut": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "actor": {
+            "type": "string",
+            "title": "Actor"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "comment",
+              "run_failed"
+            ],
+            "title": "Kind"
+          },
+          "body": {
+            "type": "string",
+            "title": "Body"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "created_at",
+          "actor",
+          "session_id",
+          "kind",
+          "body"
+        ],
+        "title": "TextActivityOut"
+      },
       "ThreadSource": {
         "properties": {
           "kind": {
@@ -8612,6 +9435,52 @@
           "session_id"
         ],
         "title": "ThreadSource"
+      },
+      "TitleActivityOut": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "actor": {
+            "type": "string",
+            "title": "Actor"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "kind": {
+            "type": "string",
+            "const": "title",
+            "title": "Kind"
+          },
+          "change": {
+            "$ref": "#/components/schemas/Change_str_"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "created_at",
+          "actor",
+          "session_id",
+          "kind",
+          "change"
+        ],
+        "title": "TitleActivityOut"
       },
       "TokenOut": {
         "properties": {
@@ -8666,67 +9535,6 @@
           "text"
         ],
         "title": "TranscriptOut"
-      },
-      "TriggerCreate": {
-        "properties": {
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
-          "agent_id": {
-            "type": "string",
-            "title": "Agent Id"
-          },
-          "kind": {
-            "type": "string",
-            "enum": [
-              "schedule",
-              "once",
-              "webhook",
-              "stream"
-            ],
-            "title": "Kind"
-          },
-          "prompt": {
-            "type": "string",
-            "title": "Prompt"
-          },
-          "config": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Config"
-          },
-          "precheck": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Precheck"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "route": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Route"
-          }
-        },
-        "type": "object",
-        "required": [
-          "name",
-          "agent_id",
-          "kind",
-          "prompt",
-          "config"
-        ],
-        "title": "TriggerCreate"
       },
       "TriggerKindOut": {
         "properties": {
@@ -9036,6 +9844,60 @@
           "has_token"
         ],
         "title": "WebhookStatus"
+      },
+      "WebhookTriggerCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "prompt": {
+            "type": "string",
+            "title": "Prompt"
+          },
+          "precheck": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Precheck"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "route": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Route"
+          },
+          "kind": {
+            "type": "string",
+            "const": "webhook",
+            "title": "Kind"
+          },
+          "config": {
+            "$ref": "#/components/schemas/WebhookConfig"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "agent_id",
+          "prompt",
+          "kind",
+          "config"
+        ],
+        "title": "WebhookTriggerCreate"
       },
       "WebhookTriggerOut": {
         "properties": {

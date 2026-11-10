@@ -126,15 +126,8 @@ export function moveIssues(issues: Issue[], moves: ReadonlyMap<number, PendingMo
   })
 }
 
-const statusLabel = (v: unknown) => STATUS_LABEL[v as IssueStatus] ?? String(v)
-
-function valueLabel(agents: Agent[] | undefined, a: IssueActivity, v: unknown): string {
-  if (a.kind === 'assignee') return assigneeLabel(agents, (v as string | null) ?? null)
-  if (a.kind === 'owner') return ownerLabel(agents, (v as string | null) ?? null)
-  if (a.kind === 'status') return statusLabel(v)
-  if (a.kind === 'priority') return PRIORITY_LABEL[v as IssuePriority] ?? String(v)
-  return String(v)
-}
+/** 时间线里的状态可能是已去掉的旧状态（todo、waiting，历史不改），没有中文名时原样显示 */
+const statusLabel = (v: string) => (Object.hasOwn(STATUS_LABEL, v) ? STATUS_LABEL[v as IssueStatus] : v)
 
 /** issue 编号列表的文字：「#1, #2」，空为「无」 */
 export function issueRefs(ids: readonly number[]): string {
@@ -158,21 +151,27 @@ export function activityText(agents: Agent[] | undefined, a: IssueActivity): str
     case 'comment':
       return '评论了'
     case 'depends_on':
-      return `把依赖从「${issueRefs(a.change?.from as number[])}」改为「${issueRefs(a.change?.to as number[])}」`
+      return `把依赖从「${issueRefs(a.change.from)}」改为「${issueRefs(a.change.to)}」`
     case 'dependency':
-      return `把依赖 #${a.change?.issue} 的状态从「${statusLabel(a.change?.from)}」改为「${statusLabel(a.change?.to)}」`
+      return `把依赖 #${a.change.issue} 的状态从「${statusLabel(a.change.from)}」改为「${statusLabel(a.change.to)}」`
     case 'run_failed':
       return `在 issue 会话里的运行失败了：${a.body}`
     case 'stopped':
-      return `停止了 ${assigneeLabel(agents, (a.change?.to as string | null) ?? null)} 在这个 issue 上的会话`
+      return `停止了 ${assigneeLabel(agents, a.change.to)} 在这个 issue 上的会话`
     case 'event':
-      return `投递了事件（来自 ${a.change?.to}）`
+      return `投递了事件（来自 ${a.change.to}）`
     case 'unsettled':
       return '在 issue 会话里的运行结束时 issue 仍是进行中、会话也没在等什么：已请它表态'
-    default: {
-      const what = { status: '状态', assignee: '指派', owner: '负责项目', priority: '优先级', title: '标题' }[a.kind]
-      return `把${what}从「${valueLabel(agents, a, a.change?.from)}」改为「${valueLabel(agents, a, a.change?.to)}」`
-    }
+    case 'status':
+      return `把状态从「${statusLabel(a.change.from)}」改为「${statusLabel(a.change.to)}」`
+    case 'assignee':
+      return `把指派从「${assigneeLabel(agents, a.change.from)}」改为「${assigneeLabel(agents, a.change.to)}」`
+    case 'owner':
+      return `把负责项目从「${ownerLabel(agents, a.change.from)}」改为「${ownerLabel(agents, a.change.to)}」`
+    case 'priority':
+      return `把优先级从「${PRIORITY_LABEL[a.change.from]}」改为「${PRIORITY_LABEL[a.change.to]}」`
+    case 'title':
+      return `把标题从「${a.change.from}」改为「${a.change.to}」`
   }
 }
 
