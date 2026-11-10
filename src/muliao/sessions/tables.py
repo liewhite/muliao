@@ -215,7 +215,7 @@ class ApprovalRequest(Base):
     session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"))
     call_id: Mapped[str] = mapped_column(String(100))
     # 工具请求批准时定下的被批准对象的指纹（agent_runtime.require_approval 的 pin，如 skill 脚本内容），批准时交回给工具比对；
-    # 只从历史推出的请求、#570 之前的行为空（工具当作对不上）
+    # #570 之前的行为空（工具当作对不上）
     pin: Mapped[str | None] = mapped_column(String(100))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     # 批准第一次交给运行去执行的时间（sessions.approvals.take_in）：之后再交就是重复执行，改给「被中断」的结果

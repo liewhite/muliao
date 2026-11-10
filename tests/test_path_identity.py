@@ -124,3 +124,14 @@ async def test_asset_files_written_under_another_spelling_are_still_vetted(conta
     )
     assert "frontmatter must contain a string 'description'" in outputs[0]
     assert not (tree / "root" / "skills" / "new-one").exists()
+
+
+def test_a_file_in_a_directory_that_cannot_be_listed_is_still_named_as_on_disk(folded):
+    d = folded / "NoRead"
+    d.mkdir()
+    (d / "Inner.txt").write_text("x")
+    d.chmod(0o311)
+    try:
+        assert real(folded / "noread" / "INNER.TXT") == real(folded) / "NoRead" / "Inner.txt"
+    finally:
+        d.chmod(0o755)

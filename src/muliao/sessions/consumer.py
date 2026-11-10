@@ -97,9 +97,9 @@ def interrupted_calls(history: list[ModelMessage], handed: HandedOut) -> list[To
 
 
 def paused_end(
-    calls: Sequence[ToolCallPart], gated: Sequence[ToolCallPart], pins: Mapping[str, str]
+    calls: Sequence[ToolCallPart], gated: Sequence[ToolCallPart], requested: Mapping[str, str]
 ) -> RunEnd:
-    """停在这些挂起的调用上（calls 等回信，gated 等批准，pins 是它们请求批准时定下的、知道的）：ask_user 的问题、等批准的
+    """停在这些挂起的调用上（calls 等回信，gated 等批准，requested 是其中这次新请求的及其 pin）：ask_user 的问题、等批准的
     调用要告诉用户。"""
     questions = [q for c in calls for q in questions_in(c)]
     texts = [waiting_text(questions)] if questions else []
@@ -110,7 +110,8 @@ def paused_end(
         paused=True,
         asked_user=bool(questions),
         stopped=False,
-        approvals={c.tool_call_id: pins.get(c.tool_call_id) for c in gated},
+        approvals=tuple(c.tool_call_id for c in gated),
+        requested=requested,
     )
 
 
@@ -140,7 +141,7 @@ def settled_end(history: list[ModelMessage], handed: HandedOut) -> RunEnd:
         return paused_end(
             [c for c in calls if c.tool_call_id not in handed.approvals],
             [c for c in calls if c.tool_call_id in handed.approvals],
-            # 工具定下的 pin 只在那次运行的结局里，历史里没有：记为未知，批准后工具拒绝执行、让模型重新请求
+            # 等批准的正是按 approval_requests 的记录认出来的：之前的尝试收尾时已记下（连同 pin），没有新请求
             {},
         )
     last = history[-1]

@@ -33,9 +33,11 @@ class RunEnd:
     # 停下来等用户回答提问：要告诉用户
     asked_user: bool
     stopped: bool
-    # 停下来等用户批准的调用 id -> 工具请求批准时定下的 pin（不知道为 None）：收尾时记下（sessions.approvals），
-    # 不论有没有人在等都要告诉用户
-    approvals: Mapping[str, str | None] = field(default_factory=dict)
+    # 停下来等用户批准的调用 id：不论有没有人在等都要告诉用户
+    approvals: tuple[str, ...] = ()
+    # 这次运行新请求批准的调用 id -> 工具定下的 pin：收尾时记下（sessions.approvals）。从历史收尾时为空：那些调用
+    # 正是按已记下的记录认出来的，pin 已在库里
+    requested: Mapping[str, str] = field(default_factory=dict)
 
 
 class RunFinisher:
@@ -68,8 +70,8 @@ class RunFinisher:
     def commit(self, state: RunState, end: RunEnd) -> Commit:
         async def finish(s: AsyncSession) -> None:
             session, agent = await load_session(s, state.session.id)
-            if end.approvals:
-                await record_approvals_in(s, session.id, end.approvals)
+            if end.requested:
+                await record_approvals_in(s, session.id, end.requested)
             if state.messages:
                 session.updated_at = utcnow()
                 # 推送由通知领域订阅（运行结束后随即投递）

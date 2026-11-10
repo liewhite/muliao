@@ -323,9 +323,11 @@ def file_toolset(
                     crlf.add(target)
             located.append(_Located(target, e))
         after, counts = file_edit.apply_each(before, [(c.target, c) for c in located])
+        # 盘上要写的文本（按 CRLF 编辑的换回 CRLF）：校验与写盘是同一份
+        stored = {t: c.replace("\n", "\r\n") if t in crlf else c for t, c in after.items()}
         in_tree = {t for t in after if assets.contains(t)}
         for target in in_tree:
-            await assets.vet(target, after[target])
+            await assets.vet(target, stored[target])
         changed = [str(t) for t in in_tree if t.stat().st_mtime_ns != stamps[t]]
         if changed:
             raise InvalidInput(
@@ -334,13 +336,12 @@ def file_toolset(
             )
         # 全部校验通过才写盘；资源目录里的原子写入（读树的不会读到写了一半的文件）
         written: list[Path] = []
-        for target, content in after.items():
-            stored = content.replace("\n", "\r\n") if target in crlf else content
+        for target, content in stored.items():
             try:
                 if target in in_tree:
-                    write_atomic(target, stored)
+                    write_atomic(target, content)
                 else:
-                    write_text(target, stored)
+                    write_text(target, content)
             except OSError as e:
                 done = (
                     f" Already written: {', '.join(map(str, written))}."

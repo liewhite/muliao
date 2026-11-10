@@ -87,7 +87,7 @@ def waiting_text(tools: Sequence[str]) -> str:
     return "等你批准：" + "、".join(tools)
 
 
-async def record_in(s: AsyncSession, session_id: str, calls: Mapping[str, str | None]) -> None:
+async def record_in(s: AsyncSession, session_id: str, calls: Mapping[str, str]) -> None:
     """这些调用停下来等批准了（运行收尾的事务里），连同工具请求批准时定下的 pin。已记过的不再记（之前的尝试已收尾过）。"""
     known = await requested_in(s, session_id)
     for call_id, pin in calls.items():

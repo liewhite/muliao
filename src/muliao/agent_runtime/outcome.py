@@ -42,8 +42,8 @@ class Approval:
     approved: bool
     note: str = ""
     always: bool = False
-    # 请求批准时工具定下的 pin（Paused.pins）；批准时交回，工具再执行时由 approved_pin 取出比对。没记下（收尾时只从
-    # 历史推出了等批准的调用）为 None，工具当作对不上
+    # 请求批准时工具定下的 pin（Paused.pins）；批准时交回，工具再执行时由 approved_pin 取出比对。#570 之前的
+    # 请求没有，为 None，工具当作对不上
     pin: str | None = None
 
 

@@ -68,13 +68,22 @@ def _fold(name: str) -> str:
 
 
 def _entry(directory: str, name: str) -> str | None:
-    """directory 里叫 name 的那一项在盘上的写法；不存在为 None。目录列不出（没有读权限）时用 name 本身。"""
-    if not os.path.lexists(os.path.join(directory, name)):
+    """directory 里叫 name 的那一项在盘上的写法；不存在为 None。目录列不出（只有 x 没有 r 权限）时打开这一项本身取内核
+    记的路径（不要读权限；不当常规路径：硬链接的文件 F_GETPATH 可能给出别的名字）。都不行时报 OSError，不退回给的写法。"""
+    path = os.path.join(directory, name)
+    if not os.path.lexists(path):
         return None
     try:
         names = os.listdir(directory)
     except OSError:
-        return name
+        flags = os.O_EVTONLY | os.O_NONBLOCK | os.O_CLOEXEC
+        flags |= os.O_SYMLINK if os.path.islink(path) else os.O_NOFOLLOW
+        fd = os.open(path, flags)
+        try:
+            got = fcntl.fcntl(fd, fcntl.F_GETPATH, bytes(_MAXPATHLEN))
+        finally:
+            os.close(fd)
+        return os.path.basename(os.fsdecode(got.split(b"\0", 1)[0]))
     if name in names:
         return name
     key = _fold(name)
