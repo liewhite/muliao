@@ -97,7 +97,7 @@ async def routed_in(s: AsyncSession, sender: Sender, target: Destination, conten
     try:
         routed = await _routed_in(s, sender, target, content)
     except NotFound as e:
-        raise InvalidInput(f"route target is gone: {e}") from e
+        raise InvalidInput(f"route target not found or gone: {e}") from e
     log.info(
         "event routed",
         extra={"source": sender.source, "target": target.model_dump(), "session_id": routed.session_id},

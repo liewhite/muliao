@@ -265,7 +265,7 @@ function RouteInput({ value, onChange }: { value: string; onChange: (v: string) 
   return (
     <TextInput
       label="投递目标"
-      hint={`可选地址：${help.data?.address_help ?? '…'}。事件里单独一行 @route <目标> 可以把之后的内容投到别处`}
+      hint={`可选地址：${help.data?.address_help ?? help.error ?? '…'}。事件里单独一行 @route <目标> 可以把之后的内容投到别处`}
       value={value}
       onChange={onChange}
       placeholder="new"

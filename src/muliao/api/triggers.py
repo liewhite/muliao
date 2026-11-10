@@ -87,6 +87,7 @@ class TriggerPatch(BaseModel):
     """只修改给出的字段。precheck 给出 null 表示去掉前置检查，不出现表示不变；route 给 `new` 回到默认。"""
 
     prompt: str | None = None
+    # 修改请求不带 kind：按已存的 kind 校验，格式同新建时这种方式的 config
     config: dict[str, Any] | None = None
     enabled: bool | None = None
     precheck: Precheck | None = None

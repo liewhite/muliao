@@ -34,6 +34,8 @@ class ActivityKind(StrEnum):
     # 各种类带的内容（body）与变化（change）的形状；HTTP 接口按种类给出的类型（api/issues.py 的 ActivityOut）照它写，改形状两边一起改
     CREATED = "created"
     COMMENT = "comment"
+    # 属性变化：change 为 {"from": 原值, "to": 新值}；指派人、负责项目可为 null（未指派、负责的 agent 已删除）。状态的历史
+    # 里有 #258 之前的 todo、waiting（时间线只增不改）
     STATUS = "status"
     ASSIGNEE = "assignee"
     PRIORITY = "priority"

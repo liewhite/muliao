@@ -204,5 +204,5 @@ async def test_the_default_route_is_checked_when_set_and_again_when_its_target_i
 
     trigger = await container.triggers.update(trigger.id, route=f"issue:{issue.id}")
     await container.issues.delete(issue.id)
-    with pytest.raises(InvalidInput, match="route target is gone"):
+    with pytest.raises(InvalidInput, match="route target not found or gone"):
         await container.triggers.fire(trigger.id, "x")

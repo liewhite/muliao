@@ -43,7 +43,7 @@ function closure(schemas, roots) {
  * openapi-typescript 把有 default 的字段当作必有（defaultNonNullable），对响应是对的（服务端总会给出），对请求却错。
  * 请求与响应共用、而两边形状不同的类型，后端会分成 -Input / -Output 两个（如 StreamConfig），-Input 也只在请求里。
  */
-function relaxRequestDefaults(spec) {
+export function relaxRequestDefaults(spec) {
   const schemas = spec.components.schemas
   const requests = new Set()
   for (const op of Object.values(spec.paths).flatMap((p) => Object.values(p))) refsIn(op.requestBody, () => false, requests)

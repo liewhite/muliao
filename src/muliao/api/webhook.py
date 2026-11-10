@@ -22,7 +22,7 @@ class TokenOut(BaseModel):
 @public_router.post("/api/hooks/{name}", status_code=202)
 async def hook(c: C, name: str, request: Request, session_id: str | None = None) -> FiredOut:
     """外部事件入口：Authorization: Bearer <token>。不带 session_id 时按触发器的投递目标投递（默认新建会话）；带上之前
-    返回的则在该会话里继续。"""
+    返回的则以该会话为默认目标继续；返回的 session_id 是这次投到的第一个会话（内容以 `@route` 行开头时不是续写的那个）。"""
     scheme, _, token = request.headers.get("authorization", "").partition(" ")
     if scheme.lower() != "bearer" or not token:
         raise Unauthorized("missing bearer token")
