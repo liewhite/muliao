@@ -91,7 +91,7 @@ def agents_toolset(
         """List all agents and what each one is for. Returns a JSON array of groups, each with `group` (null = not
         in any group) and `agents` (each with `name` and `description`). Use before delegating. Archived agents
         are not listed: they cannot be used until the user unarchives them. Nor are agents whose agent.toml
-        cannot be loaded until it is fixed."""
+        cannot be loaded until it is fixed (one whose model cannot run is listed, but its runs fail)."""
         return agent_directory(await agents.list_views())
 
     @ts.tool_plain

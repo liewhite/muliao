@@ -41,7 +41,7 @@ class ModelUsage(Base):
     # 不属于任何会话的运行（历史上的强制反思）为空；历史上的临时 agent 记发起它的那个会话
     session_id: Mapped[str | None] = mapped_column(session_ref())
     kind: Mapped[RunKind] = mapped_column(StrEnumType(RunKind))
-    # "<provider 名>:<模型名>"，与 agents.model 同一格式
+    # "<provider 名>:<模型名>"，与 agent.toml 的 model 同一格式
     model: Mapped[str] = mapped_column(String(200))
     requests: Mapped[int]
     input_tokens: Mapped[int]

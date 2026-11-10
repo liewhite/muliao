@@ -39,6 +39,9 @@ import { refreshUnreadLogged } from '../unread'
 import { announceChange } from '../events'
 import { groupAgents } from '../agentGroups'
 
+/** 目录没加载（agent.toml 坏了、目录名对不上等）：不能运行 */
+const CONFIG_NOT_LOADED = '配置未加载，不能运行（原因见资源问题）'
+
 function AgentCard({ a }: { a: Agent }) {
   const { config } = a
   return (
@@ -48,7 +51,7 @@ function AgentCard({ a }: { a: Agent }) {
           <Card.Header>
             <Card.Title>{a.name}</Card.Title>
             <Card.Description className="truncate" title={config?.description}>
-              {config?.description ?? 'agent.toml 读不出，不能运行（原因见服务日志或它的资源问题）'}
+              {config?.description ?? CONFIG_NOT_LOADED}
             </Card.Description>
           </Card.Header>
           <Card.Footer className="flex flex-wrap gap-2">
@@ -134,10 +137,10 @@ export function AgentList() {
 }
 
 function initialInput(agent: Agent | undefined, defaults: AgentDefaults): AgentInput {
-  // 配置没加载的 agent 保存会被拒（先修好它的 agent.toml），表单先按缺省值填
-  if (agent) {
+  // 配置没加载的 agent 不显示表单（见调用处），这里 config 一定有
+  if (agent?.config) {
     const { name, roles, allow, deny, config } = agent
-    return { ...defaults, ...config, name, roles, allow, deny }
+    return { ...config, name, roles, allow, deny }
   }
   return defaults
 }
@@ -415,16 +418,20 @@ export function AgentDetail() {
               </Card>
               <Card>
                 <Card.Content className="flex flex-col gap-3">
-                  <Loading state={defaults}>
-                    {(d) => (
-                      <AgentForm
-                        key={`${a.id}-${a.name}-${a.config?.description}`}
-                        agent={a}
-                        defaults={d}
-                        onSaved={() => void agent.reload()}
-                      />
-                    )}
-                  </Loading>
+                  {a.config === null ? (
+                    <p className="text-sm text-danger">{CONFIG_NOT_LOADED}；修好 {a.name}/agent.toml 后才能在这里改</p>
+                  ) : (
+                    <Loading state={defaults}>
+                      {(d) => (
+                        <AgentForm
+                          key={`${a.id}-${a.name}-${a.config?.description}`}
+                          agent={a}
+                          defaults={d}
+                          onSaved={() => void agent.reload()}
+                        />
+                      )}
+                    </Loading>
+                  )}
                 </Card.Content>
               </Card>
               <ErrorAlert error={action.error} />

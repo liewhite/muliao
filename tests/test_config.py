@@ -209,3 +209,9 @@ async def test_an_unrunnable_model_in_agent_toml_is_reported_and_fails_its_runs_
         await idle(c)  # 服务里的 worker 已在跑
         [turn] = [t for t in await tasks_of(c, RUN_TASK) if t.session_id == session.id]
         assert turn.status == TaskStatus.FAILED and "gone" in (turn.error or "")
+    await c.db.engine.dispose()
+    # 重启也照常（以前启动检查会因它拒绝启动）
+    c2 = assemble(settings)
+    async with c2.running():
+        pass
+    await c2.db.engine.dispose()
