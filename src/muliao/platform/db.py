@@ -149,7 +149,7 @@ _WHEN_COMMITTED = "muliao.when_committed"
 
 def when_committed_in(s: AsyncSession, action: Callable[[], Awaitable[None]]) -> None:
     """登记这个事务提交之后要做的事：释放事务锁之后，在开事务的任务里按登记顺序 await（可以开新的事务）；事务回滚时
-    丢弃。它抛出的异常照常交给开事务的一方，那时数据已经提交。"""
+    丢弃。它抛出的异常照常交给开事务的一方（那时数据已经提交），之后登记的不再执行。"""
     s.info.setdefault(_WHEN_COMMITTED, []).append(action)
 
 

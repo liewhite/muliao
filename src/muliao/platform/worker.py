@@ -127,7 +127,15 @@ class Worker:
         取消——投递的写入与「完成」同一事务，重做是安全的。"""
         if EVENT_TASK not in self._handlers:
             raise RuntimeError("run_now executes deliveries, but this worker has no EVENT handler")
-        task = await self._queue.claim_task(task_id, [EVENT_TASK])
+        try:
+            task = await self._queue.claim_task(task_id, [EVENT_TASK])
+        except Exception:
+            # 投递已经提交、worker 已被唤醒：领取出错（如数据库暂时不可用）只是没能马上执行，不当成发送方的失败（它的
+            # 写入已经提交）
+            log.exception(
+                "could not claim a task to run on the spot; left to the worker", extra={"task_id": task_id}
+            )
+            return
         if task is None:
             log.info("task not claimable now, left to the worker", extra={"task_id": task_id})
             return

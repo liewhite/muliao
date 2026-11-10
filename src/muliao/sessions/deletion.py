@@ -76,6 +76,8 @@ class AgentSessionsCleanup:
             "sessions.agent_deleting",
             self.on_agent_deleting,
             lane=lambda e: agent_deleting_lane(e.agent_id),
+            # 要停下忙的会话、等它们空闲（最多 _IDLE_WAIT_SECONDS）：删除 agent 的请求不等它
+            slow=True,
         )
 
     async def on_agent_deleting(self, event: AgentDeleting, _delivery: Delivery) -> Commit:

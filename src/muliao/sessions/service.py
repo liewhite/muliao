@@ -223,13 +223,14 @@ class SessionService:
     async def mark_read(self, session_id: str) -> None:
         """用户看过了会话：发布 SessionRead（会话的未读就是指向它的未读通知，通知领域据此把它们标为已读；会话不存在时
         NotFound）。提交后马上投递（Messaging），通常返回时界面重新取的未读数已经反映；同一 lane 上还有更早的投递时留给 worker
-        稍后处理（界面在事件投递完成时再取未读数）。订阅者的处理必须短小（在请求里执行）。"""
+        稍后处理（界面在事件投递完成时再取未读数）。"""
         async with self._db.transaction() as s:
             await self._get(s, session_id)
             self._messaging.publish_in(s, SessionRead(session_id=session_id))
 
     def subscribe(self, messaging: Messaging) -> None:
-        messaging.handle(StopThread, "sessions.stop_thread", self.on_stop_thread)
+        # 停止 thread 要等它的运行连同收尾结束（不设时限）：停止发起方的一方不等它，一个停不下来的 thread 不拖住发起方
+        messaging.handle(StopThread, "sessions.stop_thread", self.on_stop_thread, slow=True)
         messaging.handle(Receive, "sessions.receive", self.on_receive, lane=receive_lane_of)
 
     async def on_stop_thread(self, command: StopThread, _delivery: Delivery) -> Commit:

@@ -348,19 +348,41 @@ async def test_deliveries_sent_from_a_handlers_commit_also_run_at_once(container
     assert [t.status for t in await deliveries(container)] == [TaskStatus.DONE] * 2
 
 
-async def test_a_delivery_that_cannot_run_at_once_does_not_fail_the_sender_and_the_worker_runs_it(container):
+async def test_a_delivery_that_cannot_be_claimed_at_once_does_not_fail_the_sender_and_the_worker_runs_it(
+    container, monkeypatch
+):
+    """领取出错（数据库暂时不可用）只是没能马上执行：发送方的写入已经提交，不报错，由 worker 执行。"""
+    messaging = _assembled(container)
     done: list[str] = []
 
-    async def broken(_task_id: int) -> None:
-        raise RuntimeError("database briefly unavailable")
-
-    messaging = Messaging(container.queue, broken)
+    async def unavailable(*_args):  # noqa: ANN202
+        raise TransientError("database briefly unavailable")
 
     async def handle(command: DoIt, _d: Delivery):
         done.append(command.what)
         return no_commit
 
     messaging.handle(DoIt, "do", handle)
+    with monkeypatch.context() as m:
+        m.setattr(container.queue, "claim_task", unavailable)
+        async with container.db.transaction() as s:
+            messaging.send_in(s, DoIt(what="x"))
+    assert done == []
+
+    await run_worker(container, messaging)
+    assert done == ["x"]
+
+
+async def test_a_slow_receiver_is_left_to_the_worker(container):
+    """处理要等别的工作结束的接收方（slow）不在发送方的任务里执行：发送方不等它。"""
+    messaging = _assembled(container)
+    done: list[str] = []
+
+    async def handle(command: DoIt, _d: Delivery):
+        done.append(command.what)
+        return no_commit
+
+    messaging.handle(DoIt, "do", handle, slow=True)
     async with container.db.transaction() as s:
         messaging.send_in(s, DoIt(what="x"))
     assert done == []

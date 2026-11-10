@@ -6,7 +6,8 @@
 - 定向命令（send_in）：接收方由发送方指定，只有一个处理者。用于「先在自己的事务里提交了状态，又必须保证一条指定的
   命令执行」；其余命令直接同步调用对方接口。
 - 发送方的事务提交之后，在它的任务里马上执行这些投递（Worker.run_now，经 db.when_committed_in）：发送方返回时效果通常已经生效（如新建
-  的会话已经存在），不靠各发送方自己收集。此刻不可领取（lane 被挡住、已被领取）、或马上执行本身出错时由 worker 照常执行。
+  的会话已经存在），不靠各发送方自己收集；发送方因此要等整条投递链做完。此刻不可领取（lane 被挡住、已被领取）、领取时出错
+  的由 worker 照常执行。处理要等别的工作结束的接收方登记为 slow（停下 thread、删除 agent 的会话与目录），只交给 worker。
 - 处理者返回 Commit：它对自己领域的写入与「这条投递完成」在同一个事务里提交（TaskQueue.complete），所以对自己领域
   是恰好一次；对别的领域只能调用命令（在 execute 里、带幂等键），不能在 Commit 里调用。
 - 消息的数据不合法、接收方没有登记，都是存下的数据与代码不一致（errors.CorruptState，例如跨版本部署），投递直接
@@ -63,6 +64,7 @@ class _Receiver:
     message_type: type[Message]
     handler: Handler[Any]
     lane: Callable[[Message], str]
+    slow: bool
 
 
 class Messaging:
@@ -88,9 +90,11 @@ class Messaging:
         handler: Handler[E],
         *,
         lane: Callable[[E], str] | None = None,
+        slow: bool = False,
     ) -> None:
-        """name 在全部接收方里唯一（它写在投递任务里）。lane 不给时这个订阅者的投递都在一条 lane 上。"""
-        receiver = self._register(name, event_type, handler, lane)
+        """name 在全部接收方里唯一（它写在投递任务里）。lane 不给时这个订阅者的投递都在一条 lane 上。slow：处理要等
+        别的工作结束（停下会话、删目录），不在发送方的任务里马上执行，只交给 worker，发送方不等它。"""
+        receiver = self._register(name, event_type, handler, lane, slow)
         self._subscribers.setdefault(event_type.TYPE, []).append(receiver)
 
     def handle[C: Command](
@@ -100,13 +104,20 @@ class Messaging:
         handler: Handler[C],
         *,
         lane: Callable[[C], str] | None = None,
+        slow: bool = False,
     ) -> None:
+        """name、lane、slow 同 subscribe。"""
         if command_type.TYPE in self._commands:
             raise RuntimeError(f"command {command_type.TYPE} already has a handler")
-        self._commands[command_type.TYPE] = self._register(name, command_type, handler, lane)
+        self._commands[command_type.TYPE] = self._register(name, command_type, handler, lane, slow)
 
     def _register(
-        self, name: str, message_type: type[Message], handler: Handler[Any], lane: Callable[[Any], str] | None
+        self,
+        name: str,
+        message_type: type[Message],
+        handler: Handler[Any],
+        lane: Callable[[Any], str] | None,
+        slow: bool,
     ) -> _Receiver:
         if name in self._receivers:
             raise RuntimeError(f"receiver name {name!r} is registered twice")
@@ -120,6 +131,7 @@ class Messaging:
             message_type=message_type,
             handler=handler,
             lane=lane if lane is not None else (lambda _m, n=name: f"sub:{n}"),
+            slow=slow,
         )
         self._receivers[name] = receiver
         return receiver
@@ -127,13 +139,13 @@ class Messaging:
     # ---- 发送（在发送方的事务里） ----
 
     def publish_in(self, s: AsyncSession, event: DomainEvent) -> None:
-        """为每个订阅者插入一条投递任务，提交后马上执行。没有订阅者时什么都不插。"""
+        """为每个订阅者插入一条投递任务，提交后马上执行（slow 的只交给 worker）。没有订阅者时什么都不插。"""
         message_id = new_id()
         for receiver in self._subscribers.get(event.TYPE, []):
             self._enqueue(s, receiver, event, message_id)
 
     def send_in(self, s: AsyncSession, command: Command) -> None:
-        """插入一条投递任务，提交后马上执行。"""
+        """插入一条投递任务，提交后马上执行（slow 的只交给 worker）。"""
         receiver = self._commands.get(command.TYPE)
         if receiver is None:
             raise RuntimeError(f"command {command.TYPE} has no handler")
@@ -153,17 +165,8 @@ class Messaging:
                 "data": message.model_dump(mode="json"),
             },
         )
-        when_committed_in(s, lambda: self._run_committed(task))
-
-    async def _run_committed(self, task: Task) -> None:
-        """发送方提交之后马上执行。投递已经提交、worker 已被唤醒：马上执行本身出错（如领取时数据库暂时不可用）只是没能
-        马上执行，记下它、交给 worker，不当成发送方的失败上抛（发送方的写入已经提交）。取消照常抛出（run_now 已把任务放回）。"""
-        try:
-            await self._run_now(task.id)
-        except Exception:
-            log.exception(
-                "could not run a committed delivery at once; left to the worker", extra={"task_id": task.id}
-            )
+        if not receiver.slow:
+            when_committed_in(s, lambda: self._run_now(task.id))
 
     # ---- 投递（TaskHandler） ----
 
