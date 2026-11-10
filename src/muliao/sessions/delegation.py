@@ -156,10 +156,7 @@ class ThreadChecks:
             # (发起会话, thread) -> 到期的委派与它的间隔
             due: dict[tuple[str, str], tuple[DelegationRecord, float]] = {}
             for a in active:
-                record, child_id = a.record, a.record.thread_id
-                interval = record.check_seconds
-                if interval is None:
-                    raise RuntimeError(f"reporting delegation {record.holder} has no check interval")
+                record, child_id, interval = a.record, a.record.thread_id, a.interval
                 if not self._beats.due(record.holder, a.since, interval, now):
                     continue
                 self._beats.checked(record.holder, now)

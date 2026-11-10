@@ -34,6 +34,8 @@ class ActiveDelegation:
     record: DelegationRecord
     # 发起方登记占用的时刻（运行中检查从它起算）
     since: datetime
+    # 运行中检查的间隔（秒）
+    interval: float
 
 
 def _record(row: ThreadCall) -> DelegationRecord:
@@ -95,20 +97,20 @@ async def call_threads_in(s: AsyncSession, parent_id: str) -> dict[str, str]:
 
 
 async def delegations_among(s: AsyncSession, holders: Collection[str]) -> dict[str, DelegationRecord]:
-    """这些占用者里是委派、且 thread 还在的那些的记录（后台任务等别的占用不在结果里），一次查询。"""
+    """这些占用者里是委派的那些的记录（后台任务等别的占用、thread 已删除的委派不在结果里），一次查询。"""
     if not holders:
         return {}
     rows = await s.scalars(select(ThreadCall).where(ThreadCall.holder.in_(list(holders))))
-    return {row.holder: _record(row) for row in rows.all() if row.holder is not None}
+    return {(r := _record(row)).holder: r for row in rows.all()}
 
 
 async def active_reporting_in(s: AsyncSession) -> list[ActiveDelegation]:
     """发起方占用还 active 的并发等待委派（带心跳间隔的），按登记先后（委派的运行中检查用），一次查询。"""
     active = active_holds()
     rows = await s.execute(
-        select(ThreadCall, active.c.created_at)
+        select(ThreadCall, active.c.created_at, ThreadCall.check_seconds)
         .join(active, active.c.holder == ThreadCall.holder)
         .where(ThreadCall.check_seconds.is_not(None))
         .order_by(active.c.id)
     )
-    return [ActiveDelegation(_record(row), since) for row, since in rows.all()]
+    return [ActiveDelegation(_record(row), since, interval) for row, since, interval in rows.all()]

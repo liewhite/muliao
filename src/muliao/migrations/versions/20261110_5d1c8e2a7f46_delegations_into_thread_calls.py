@@ -28,8 +28,6 @@ _MATCH = "d.holder = 'delegation:' || thread_calls.parent_session_id || ':' || t
 
 def upgrade() -> None:
     conn = op.get_bind()
-    op.add_column("thread_calls", sa.Column("holder", sa.String(length=200), nullable=True))
-    op.add_column("thread_calls", sa.Column("check_seconds", sa.Double(), nullable=True))
     unmatched = conn.execute(
         sa.text(
             "SELECT d.holder FROM delegations d WHERE d.thread_session_id IS NOT NULL AND NOT EXISTS ("
@@ -39,6 +37,8 @@ def upgrade() -> None:
     ).all()
     if unmatched:
         raise RuntimeError(f"delegations without their thread call: {[h for (h,) in unmatched][:5]}")
+    op.add_column("thread_calls", sa.Column("holder", sa.String(length=200), nullable=True))
+    op.add_column("thread_calls", sa.Column("check_seconds", sa.Double(), nullable=True))
     conn.execute(
         sa.text(
             "UPDATE thread_calls SET "

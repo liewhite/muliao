@@ -1286,6 +1286,8 @@ def test_delegations_move_onto_their_thread_calls_and_downgrade(tmp_path):
     with pytest.raises(RuntimeError, match="delegations without their thread call"):
         migrate(path)
     assert "delegations" in _tables(path)
+    with sqlite3.connect(path) as conn:
+        assert "holder" not in {r[1] for r in conn.execute("pragma table_info(thread_calls)")}
 
 
 def test_todo_issues_become_in_progress_or_waiting_run_ended_gets_origin_and_downgrade(tmp_path):

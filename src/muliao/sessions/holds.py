@@ -96,7 +96,7 @@ async def active_holders_of_in(s: AsyncSession, session_id: str) -> list[str]:
 
 
 def active_holds() -> Subquery:
-    """全部 active 占用（列 holder、created_at、id），给别的子域在一条查询里连表（到点唤醒、委派的运行中检查按它找
+    """全部 active 占用（列 holder、created_at、id；id 即登记先后），给别的子域在一条查询里连表（到点唤醒、委派的运行中检查按它找
     还在进行的工作），不先把全部占用者取出来。"""
     return (
         select(SessionHold.holder, SessionHold.created_at, SessionHold.id)
