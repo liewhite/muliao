@@ -1,6 +1,8 @@
 import hashlib
 import json
 import logging
+import math
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -33,7 +35,7 @@ from muliao.api import (
     webhook,
     workspace,
 )
-from muliao.api.auth import COOKIE_NAME, MAX_AGE_SECONDS, Auth, require_auth
+from muliao.api.auth import COOKIE_NAME, MAX_AGE_SECONDS, Auth, LoginThrottle, require_auth
 from muliao.api.deps import C
 from muliao.api.events import HeartbeatEvent, ServerEvent
 from muliao.config import AuthConfig
@@ -100,9 +102,25 @@ def _public_routes() -> APIRouter:
     @router.post("/api/auth/login", status_code=204)
     async def login(request: Request, body: LoginIn, response: Response) -> None:
         auth: Auth = request.app.state.auth
+        throttle: LoginThrottle = request.app.state.login_throttle
+        # uvicorn 总会给出对端地址（经受信代理时已换成 X-Forwarded-For 里的真实 IP，见 LoginThrottle）
+        assert request.client is not None
+        ip = request.client.host
+        now = time.monotonic()
+        wait = throttle.retry_after(ip, now)
+        if wait > 0:
+            log.warning("login throttled", extra={"client": ip, "retry_after": round(wait)})
+            seconds = math.ceil(wait)
+            raise HTTPException(
+                status_code=429,
+                detail=f"too many failed logins, retry in {seconds}s",
+                headers={"Retry-After": str(seconds)},
+            )
         if not auth.check_password(body.password):
-            log.warning("login failed", extra={"client": request.client.host if request.client else None})
+            throttle.failed(ip, now)
+            log.warning("login failed", extra={"client": ip})
             raise HTTPException(status_code=401, detail="wrong password")
+        throttle.succeeded(ip)
         response.set_cookie(
             COOKIE_NAME,
             auth.issue(),
@@ -193,6 +211,7 @@ def create_app(container: Container, web_dir: Path, *, auth: AuthConfig, public_
     app = FastAPI(title=TITLE, lifespan=lifespan)
     app.state.container = container
     app.state.auth = Auth(auth.secret_key.get_secret_value(), auth.password.get_secret_value())
+    app.state.login_throttle = LoginThrottle()
 
     @app.exception_handler(DomainError)
     async def domain_error(_request: Request, exc: DomainError) -> JSONResponse:
@@ -211,7 +230,7 @@ def create_app(container: Container, web_dir: Path, *, auth: AuthConfig, public_
 
 def _install_api(app: FastAPI) -> None:
     """全部接口；不依赖运行时的 container，生成接口描述时也用它（api_schema）。处理请求时路由读取 app.state 上的
-    container、auth、secure_cookie、ui_version，只有 create_app 设置它们：只装了路由的应用只能用来生成描述。"""
+    container、auth、login_throttle、secure_cookie、ui_version，只有 create_app 设置它们：只装了路由的应用只能用来生成描述。"""
     app.include_router(_public_routes())
     # webhook 的事件入口凭触发器 token 鉴权，不走登录
     app.include_router(webhook.public_router)
