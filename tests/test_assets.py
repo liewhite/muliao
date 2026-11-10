@@ -1,4 +1,4 @@
-"""AI 资源存成文件（#498）：资源目录树的读法（归属看目录、坏文件跳过并报出、同名冲突：与平台同名只跳过副本、agent 之间同名全部跳过）、agent 配置同步进镜像列、
+"""AI 资源存成文件（#498）：资源目录树的读法（归属看目录、坏文件跳过并报出、同名冲突：与平台同名只跳过副本、agent 之间同名全部跳过）、agent 配置只认 agent.toml、
 平台自己的读写（界面、vault_set、建 / 改名 / 删 agent）。"""
 
 import json
@@ -13,9 +13,11 @@ from muliao.agents.api import McpTransport, RoleSpec, StoredKind, mcp_config
 from muliao.agents.assets import load_tree
 from muliao.agents.service import AgentPatch, AgentSpec
 from muliao.errors import Conflict, Forbidden, InvalidInput, NotFound
+from muliao.platform.tables import TaskStatus
+from muliao.sessions.lanes import RUN_TASK
 from tests.conftest import login, owned
 from tests.scripted import scripted
-from tests.test_flow import drain, start
+from tests.test_flow import drain, start, tasks_of
 
 
 def root(container) -> Path:
@@ -221,23 +223,23 @@ async def test_a_name_on_disk_but_not_loaded_cannot_be_created_again(container, 
         await container.skills.write("digest", "When digesting", "x", actor="user", owner=None)
 
 
-async def test_editing_agent_toml_takes_effect_and_an_unrunnable_model_is_reported(
-    container, make_agent, models
-):
+async def test_editing_agent_toml_takes_effect_and_a_broken_one_fails_the_run(container, make_agent, models):
+    """agent 的配置只认 agent.toml（#549）：改了下次读到就生效；读坏了整个目录不加载，它的运行当场失败，不沿用旧值。"""
     alpha = await make_agent("alpha")
     path = root(container) / "alpha" / "agent.toml"
-    text = path.read_text()
-    write(path, text.replace('description = "test agent"', 'description = "new role"'))
-    await container.assets.snapshot()
-    assert (await container.agents.get(alpha.id)).description == "new role"
+    write(path, path.read_text().replace('description = "test agent"', 'description = "new role"'))
+    view = await container.agents.view(alpha.id)
+    assert view.config is not None and view.config.description == "new role"
 
-    models.models["test"] = scripted(lambda m, i: ModelResponse(parts=[TextPart("ok")]))
     write(path, path.read_text().replace('thinking = "default"', 'thinking = "extreme"'))
     snapshot = await container.assets.snapshot()
     assert snapshot.get(StoredKind.MEMORY, "alpha") is None  # 整个目录没加载
     assert any("agent.toml" in str(p.path) for p in snapshot.problems)
-    # 镜像列保留上次的值，照样能运行
-    assert (await container.agents.get(alpha.id)).thinking == "default"
+    assert (await container.agents.view(alpha.id)).config is None
+    session = await start(container, alpha.id, "hi")
+    await drain(container)
+    [turn] = [t for t in await tasks_of(container, RUN_TASK) if t.session_id == session.id]
+    assert turn.status == TaskStatus.FAILED and "no loadable directory" in (turn.error or "")
 
 
 async def test_access_toml_skips_only_the_broken_rules(container, make_agent):
@@ -471,7 +473,8 @@ async def test_creating_and_renaming_an_agent_writes_its_directory_and_rules(con
     updated = await container.agents.update(
         agent.id, AgentPatch(name="beta", description="new"), actor="user"
     )
-    assert (updated.name, updated.description) == ("beta", "new")
+    view = await container.agents.view(agent.id)
+    assert view.config is not None and (updated.name, view.config.description) == ("beta", "new")
     assert not (r / "alpha").exists()
     assert (r / "beta" / "agent.toml").read_text().startswith("# keep me\n")
     access = (r / "platform" / "access.toml").read_text()

@@ -91,7 +91,7 @@ def test_base_has_every_tool_but_admin_ones_and_admin_has_all():
 
 async def test_new_agents_have_base_implicitly(container):
     agent = await container.agents.create(AgentSpec(name="a", description="d"), actor="user")
-    assert (await container.agents.get_with_rules(agent.id))[1].roles == ()
+    assert (await container.agents.view(agent.id)).rules.roles == ()
     tools = (await container.distribution.reach(agent.id)).tool_names
     assert not set(tools) & _ADMIN_TOOLS and {"run_shell", "edit_file", "vault_set"} <= set(tools)
     with pytest.raises(InvalidInput, match="implicit"):

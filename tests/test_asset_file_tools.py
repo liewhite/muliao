@@ -117,7 +117,7 @@ async def test_agent_toml_keeps_its_id(container, make_agent, models):
     assert outputs[2].startswith("edited ")
     assert toml.read_text() == before.replace("test agent", "new job")
     await container.assets.snapshot()  # 运行开始时读树，同步进 agent 的配置
-    assert (await container.agents.get(me.id)).description == "new job"
+    assert (await container.agents.view(me.id)).config.description == "new job"
 
 
 async def test_access_toml_is_checked_like_the_tree_reads_it(container, make_agent, models):

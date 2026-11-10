@@ -4,7 +4,6 @@ import logging
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, replace
-from pathlib import Path
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
@@ -49,6 +48,7 @@ from muliao.agent_runtime.toolbox import RunProfile
 from muliao.agent_runtime.transient import transient_as_retryable
 from muliao.agents.api import (
     ASSETS_SKILL,
+    AgentDir,
     AgentInfo,
     AgentService,
     AssetSource,
@@ -139,7 +139,7 @@ class AgentRuntime:
         )
 
     async def instructions(
-        self, agent: AgentInfo, scope: RunScope, summary: str | None, origin_note: str
+        self, agent: AgentDir, scope: RunScope, summary: str | None, origin_note: str
     ) -> str:
         """这次运行的指令。只由会话级、agent 级的稳定内容组成，同一个会话的两次运行得到同一段文字：它是缓存前缀
         （agent_runtime.instructions 的模块说明）。随运行变化的那几行走 run_context。origin_note 是会话来源的说明
@@ -149,7 +149,7 @@ class AgentRuntime:
             agent_name=agent.name,
             agent_description=agent.description,
             workspace=scope.workspace,
-            asset_dir=await self._asset_dir(agent),
+            asset_dir=agent.path,
             origin_note=origin_note,
             memories=await self._memory.for_run(agent.id),
             skills=await self._skills.index(agent.id),
@@ -157,10 +157,10 @@ class AgentRuntime:
             summary=summary,
         )
 
-    async def _asset_dir(self, agent: AgentInfo) -> Path:
-        """它的资源目录：加载成功时就是快照里那个；目录坏了（问题已报给它）时是它该在的位置。"""
-        loaded = (await self._assets.snapshot()).agents.get(agent.id)
-        return loaded.path if loaded is not None else self._assets.root / agent.name
+    async def _config(self, agent_id: str) -> AgentDir:
+        """它的配置（描述、模型、思考档位）与资源目录，只认 agent.toml：没加载时 NotFound（带上原因），这次运行当场失败，
+        不沿用旧值（模型不能运行的在 _model 失败）。"""
+        return (await self._assets.snapshot()).loaded_agent(agent_id)
 
     async def _asset_problems(self, agent_id: str) -> list[str]:
         snapshot = await self._assets.snapshot()
@@ -199,20 +199,21 @@ class AgentRuntime:
         节点开始，再由 _step_through 逐步驱动到结束。"""
         # 这次交回结果的挂起调用：调用已在历史里，结果随第一步保存
         resumed = frozenset(deferred or ())
-        instructions = await self.instructions(agent, scope, summary, origin_note)
+        config = await self._config(agent.id)
+        instructions = await self.instructions(config, scope, summary, origin_note)
         # 这次驱动自己的一份 scope：notices 先放资源目录里与它相关的问题（读坏、名字冲突而没加载的文件），工具组连接时
         # 再往里加；压缩后续跑会重新连接工具组。读过的文件从空开始（压缩后模型看不到之前读到的内容了）
         scope = replace(scope, notices=await self._asset_problems(agent.id), reads={})
         ctx = {
             "agent": scope.agent_id,
             "session_id": scope.session_id,
-            "model": agent.model,
-            "thinking": agent.thinking,
+            "model": config.model,
+            "thinking": config.thinking,
             "workspace": str(scope.workspace),
         }
-        resolved, settings = self._model(agent.model, agent.thinking)
+        resolved, settings = self._model(config.model, config.thinking)
         async with self._billed(
-            RunKind.RUN, scope.agent_id, agent.model, scope.session_id, ctx, len(history)
+            RunKind.RUN, scope.agent_id, config.model, scope.session_id, ctx, len(history)
         ) as usage:
             with tool_input_kept_out_of_failures():
                 async with self._pai.iter(
@@ -239,17 +240,23 @@ class AgentRuntime:
 
     def _model(self, model: str, thinking: Thinking) -> tuple[Model, ModelSettings | None]:
         """模型与这次运行的 model settings（思考档位）。档位会被模型悄悄忽略时报 InvalidInput（llm.check_thinking）：
-        agent 存下的档位在写入与启动时已查过，这里拦住的是依赖升级后模型 profile 变了的情况；每次都查而不分入口，
-        成本只是读 profile。"""
+        agent.toml 里写了不能运行的模型或档位、配置删了 provider、依赖升级后模型 profile 变了，都在这里让运行当场失败
+        （读资源树时已记成问题报给它）；每次都查而不分入口，成本只是读 profile。"""
         resolved = self._resolve_model(model)
         check_thinking(model, resolved, thinking)
         return resolved, model_settings(thinking)
 
     async def summarize(self, agent: AgentInfo, session_id: str, instructions: str, prompt: str) -> str:
         """用该 agent 的模型做一次无工具的文本生成（压缩 session_id 这个会话的上下文）。不转发事件到前端。"""
-        ctx = {"agent": agent.id, "session_id": session_id, "model": agent.model, "thinking": agent.thinking}
-        resolved, settings = self._model(agent.model, agent.thinking)
-        async with self._billed(RunKind.COMPACTION, agent.id, agent.model, session_id, ctx) as usage:
+        config = await self._config(agent.id)
+        ctx = {
+            "agent": agent.id,
+            "session_id": session_id,
+            "model": config.model,
+            "thinking": config.thinking,
+        }
+        resolved, settings = self._model(config.model, config.thinking)
+        async with self._billed(RunKind.COMPACTION, agent.id, config.model, session_id, ctx) as usage:
             result = await self._pai.run(
                 prompt,
                 model=resolved,

@@ -116,7 +116,7 @@ RUN_TYPES = {
 # agents 的子域各自独占的表（docs/architecture.md 2.1）：表类只在它的子域的模块里出现在查询与构造中（`select(X)`、`X.列`、
 # `X(...)`，规则同下面的 sessions），别的子域经 `*_in` 接口；拿交给它的行做类型标注不算
 AGENTS_TABLES: dict[str, set[str]] = {
-    # 目录（名称等镜像列由 agents.source 经 active 的 sync_mirror_in 同步）
+    # 目录（身份；配置只在资源目录的 agent.toml）
     "Agent": {"service", "active"},
     # #498 之前存在库里的 AI 资源：没有代码再读，表留到 #503 删
     "RoleRow": set(),

@@ -27,19 +27,19 @@ class Agent(Base):
 
     # 系统生成、不可变：主键、外键、目录名、URL 与工具调用都用它
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
-    # name / description / model / thinking / group 是资源目录（`<名>/agent.toml` 与目录名）的镜像，由 agents.source 同步：
-    # 别的领域在自己的事务里按名字解析、展示；事实来源是文件。名字仅供展示，可改名；唯一以免委派时混淆
+    # 名字只认这里（也是资源目录里它的目录名），别的领域在自己的事务里按名字解析、展示。仅供展示，可改名；唯一以免委派时混淆
     name: Mapped[str] = mapped_column(String(64), unique=True)
+    # description / model / thinking / group：#549 之前从 `<名>/agent.toml` 同步来的旧镜像列，代码不再读写（新建时填空值），
+    # 配置只在 agent.toml；#503 加迁移删除
     description: Mapped[str] = mapped_column(Text)
     model: Mapped[str] = mapped_column(String(200))
-    # 思考档位（agents.service.Thinking）；"default" 表示不传、按模型与服务端默认
     thinking: Mapped[str] = mapped_column(String(16), default="default", server_default="default")
     # 正在删除时是发起删除的人（actor）（docs/architecture.md 第 10 节）：不出现在列表与名称解析里，各领域清理完它的数据后删除
     # 这一行（它的资源目录同时删掉）
     deleting_by: Mapped[str | None] = mapped_column(String(64))
     # 系统默认 agent（AgentService.set_default）；行删除时设置随之消失，正在删除的不出现在列表里
     is_default: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
-    # 分组（只用于展示与列表的组织，如一批同类的接单 agent）；None 为不分组
+    # 旧镜像列，见上
     group: Mapped[str | None] = mapped_column(String(64))
     # 归档时间（AgentLifecycle.set_archived）：非空时不能运行（agents.active.runnable_row_in），取消归档后恢复
     archived_at: Mapped[datetime | None] = mapped_column(UTCDateTime)

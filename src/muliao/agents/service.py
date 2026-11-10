@@ -1,7 +1,7 @@
-"""agent 目录（子域）：agent 的身份与配置及其工作目录。身份（id）、归档、默认 agent、删除标记在 agents 表；名字、描述、模型、
-思考档位、分组的事实来源是资源目录（`<名>/agent.toml` 与目录名，agents.assets），表里那几列是同步来的镜像
-（agents.source）。新建与修改都写文件（agent.toml、access.toml 里它的规则、空的私有记忆）再写表；改名就是挪目录。删除与
-归档的流程在 agents.lifecycle，它对 agents 表的写入用这里的 `*_in`。"""
+"""agent 目录（子域）：agent 的身份与配置及其工作目录。身份（id、名字）、归档、默认 agent、删除标记在 agents 表（AgentInfo），
+名字也是它资源目录的目录名；描述、模型、思考档位、分组只在 `<名>/agent.toml`（读快照的 Snapshot.loaded_agent）。
+新建与修改都写文件（agent.toml、access.toml 里它的规则、空的私有记忆）再写表；改名就是挪目录。删除与归档的流程在
+agents.lifecycle，它对 agents 表的写入用这里的 `*_in`。"""
 
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import cast
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,7 +21,7 @@ from tomlkit.toml_document import TOMLDocument
 from muliao.agents import access_file, agent_file, assets
 from muliao.agents.active import AgentNames, active_row_in, agent_names_in, runnable_row_in
 from muliao.agents.agent_file import AGENT_FILE, AgentFile
-from muliao.agents.assets import PLATFORM, PRIVATE_MEMORY_FILE, Snapshot
+from muliao.agents.assets import PLATFORM, PRIVATE_MEMORY_FILE, AgentDir, Snapshot
 from muliao.agents.distribution import check_agent_rules
 from muliao.agents.ids import new_agent_id
 from muliao.agents.kinds import StoredKind
@@ -114,18 +113,14 @@ class _AgentFields:
 
 @dataclass(frozen=True)
 class AgentInfo:
-    """别的领域看到的 agent（读模型）：ORM 行不出 agent 领域。"""
+    """别的领域看到的 agent 身份（读模型）：ORM 行不出 agent 领域。配置（描述、模型、思考档位、分组）不在这里，在快照
+    （Snapshot.loaded_agent）。"""
 
     id: str
     name: str
-    description: str
-    model: str
-    thinking: Thinking
     created_at: datetime
     # 系统默认 agent（Web 新对话默认选中它），最多一个
     is_default: bool
-    # 分组名，None 为不分组
-    group: str | None
     # 归档时间；非空时不能运行（agents.active.runnable_row_in）
     archived_at: datetime | None
 
@@ -134,17 +129,26 @@ class AgentInfo:
         return self.archived_at is not None
 
 
+@dataclass(frozen=True)
+class AgentView:
+    """界面与 get_agent / list_agents 看到的 agent：身份、配置、分发规则。config 为 None：它的目录没加载（问题已报出），
+    不能运行，但照样列出，以便修或删。"""
+
+    info: AgentInfo
+    config: AgentDir | None
+    rules: AgentRules
+
+
+def _view_of(snapshot: Snapshot, info: AgentInfo) -> AgentView:
+    return AgentView(info, snapshot.agents.get(info.id), snapshot.rules_of(info.id))
+
+
 def info_of(agent: Agent) -> AgentInfo:
     return AgentInfo(
         id=agent.id,
         name=agent.name,
-        description=agent.description,
-        model=agent.model,
-        # 同步镜像前已校验（agents.source）
-        thinking=cast(Thinking, agent.thinking),
         created_at=agent.created_at,
         is_default=agent.is_default,
-        group=agent.group,
         archived_at=agent.archived_at,
     )
 
@@ -271,27 +275,10 @@ class AgentService:
         root = self._workspaces_dir
         return sorted(p.name for p in root.iterdir() if p.is_dir()) if root.exists() else []
 
-    async def verify_stored(self) -> None:
-        """启动检查：已存 agent 的模型与思考档位必须能按当前配置运行，与新建、修改时同一套规则。配置改动（删 provider）
-        在启动时暴露，而不是散落到每个任务里失败。正在删除的不查。先报出已删除 agent 的残留工作目录（只记录，不阻止启动）。
-        分发规则不在这里查：读资源树时坏规则跳过并报出（agents.assets）。"""
-        await self._report_leftovers()
-        broken = []
-        for agent in await self.list():
-            try:
-                check_thinking_level(agent.thinking)
-                self._check_model(agent.model, agent.thinking)
-            except InvalidInput as e:
-                broken.append(f"{agent.name} ({agent.id}): {e}")
-        if broken:
-            raise RuntimeError(
-                "agents reference models or thinking levels not runnable with current config:\n"
-                + "\n".join(broken)
-            )
-
-    async def _report_leftovers(self) -> None:
-        """数据库里已删除、还留着工作目录（删除时没删干净）的 agent：记录出来，由人决定是否清理。正在删除的不算：
-        它的目录由删除流程删。"""
+    async def report_leftovers(self) -> None:
+        """启动时：数据库里已删除、还留着工作目录（删除时没删干净）的 agent 记录出来，由人决定是否清理（不阻止启动）。
+        正在删除的不算：它的目录由删除流程删。agent 配置不在这里查：读资源树时不能运行的模型记成问题（agents.source），
+        它的运行当场失败。"""
         known = await self._ids()
         leftovers = [o for o in self._workspace_owners() if o not in known]
         if leftovers:
@@ -306,7 +293,7 @@ class AgentService:
 
     @staticmethod
     async def _check_name_free(s: AsyncSession, snapshot: Snapshot, name: str, agent_id: str | None) -> None:
-        """名字要没人用：数据库里别的 agent（含目录坏掉、只剩镜像的）、资源目录里已有的目录、同名的共享记忆（私有记忆名就是
+        """名字要没人用：数据库里别的 agent（含目录坏掉、没加载的）、资源目录里已有的目录、同名的共享记忆（私有记忆名就是
         agent 名）。只给名称：这条错误也会交还给模型，模型不接触 id。"""
         holder = await s.scalar(select(Agent.id).where(Agent.name == name))
         if holder is not None and holder != agent_id:
@@ -347,14 +334,8 @@ class AgentService:
                     _write_new_agent, directory, snapshot.access_path, agent_id, fields, rules
                 )
                 async with self._db.transaction() as s:
-                    agent = Agent(
-                        id=agent_id,
-                        name=name,
-                        description=fields.description,
-                        model=fields.model,
-                        thinking=fields.thinking,
-                        group=fields.group,
-                    )
+                    # description / model 是待 #503 删的旧镜像列（NOT NULL），只填空串：配置只在 agent.toml
+                    agent = Agent(id=agent_id, name=name, description="", model="")
                     s.add(agent)
                     await s.flush()
                     self.workspace(agent_id).mkdir(parents=True, exist_ok=True)
@@ -372,14 +353,9 @@ class AgentService:
         async with self._source.writing() as snapshot:
             async with self._db.transaction() as s:
                 agent = await active_row_in(s, agent_id)
-                fields = self._validated(agent, patch)
+                directory = snapshot.loaded_agent(agent_id)
+                fields = self._validated(agent.name, directory, patch)
                 await self._check_name_free(s, snapshot, fields.name, agent_id)
-            directory = snapshot.agents.get(agent_id)
-            if directory is None:
-                raise NotFound(
-                    f"agent {agent.name!r} has no loadable directory in {snapshot.root} (see the reported asset "
-                    "problems); fix that first"
-                )
             before = snapshot.rules_of(agent_id)
             rules = AgentRules.of(
                 before.roles if patch.roles is None else patch.roles,
@@ -399,8 +375,7 @@ class AgentService:
             try:
                 async with self._db.transaction() as s:
                     row = await active_row_in(s, agent_id)
-                    row.name, row.description, row.model = fields.name, fields.description, fields.model
-                    row.thinking, row.group = fields.thinking, fields.group
+                    row.name = fields.name
                     await s.flush()
                     return info_of(row)
             except BaseException:
@@ -420,14 +395,15 @@ class AgentService:
             await s.flush()
             return info_of(agent)
 
-    def _validated(self, agent: Agent, patch: AgentPatch) -> _AgentFields:
-        """patch 合并到 agent 当前值之后的字段（分发规则之外），校验过（不合法时报 InvalidInput）。"""
+    def _validated(self, name: str, config: AgentDir, patch: AgentPatch) -> _AgentFields:
+        """patch 合并到 agent 当前值（名字认数据库，配置认 agent.toml）之后的字段（分发规则之外），校验过（不合法时报
+        InvalidInput）。"""
         fields = _AgentFields(
-            name=agent.name if patch.name is None else new_agent_name(patch.name),
-            description=agent.description if patch.description is None else patch.description,
-            model=agent.model if patch.model is None else patch.model,
-            thinking=cast(Thinking, agent.thinking) if patch.thinking is None else patch.thinking,
-            group=agent.group if patch.group is None else normalize_group(patch.group),
+            name=name if patch.name is None else new_agent_name(patch.name),
+            description=config.description if patch.description is None else patch.description,
+            model=config.model if patch.model is None else patch.model,
+            thinking=config.thinking if patch.thinking is None else patch.thinking,
+            group=config.group if patch.group is None else normalize_group(patch.group),
         )
         self._check(fields)
         return fields
@@ -438,10 +414,10 @@ class AgentService:
         async with self._db.transaction() as s:
             return await active_agent_in(s, agent_id)
 
-    async def get_with_rules(self, agent_id: str) -> tuple[AgentInfo, AgentRules]:
-        """还可用的 agent 加上它的分发规则。"""
+    async def view(self, agent_id: str) -> AgentView:
+        """还可用的 agent 加上它的配置与分发规则。"""
         snapshot = await self._source.snapshot()
-        return await self.get_active(agent_id), snapshot.rules_of(agent_id)
+        return _view_of(snapshot, await self.get_active(agent_id))
 
     async def get(self, agent_id: str) -> AgentInfo:
         """agent（包括正在删除的）。"""
@@ -453,12 +429,10 @@ class AgentService:
         async with self._db.transaction() as s:
             return await named_agent_in(s, name)
 
-    async def find_with_rules(self, name: str) -> tuple[AgentInfo, AgentRules]:
-        """按名称找到的 agent 加上它的分发规则，同一个事务里读（get_agent 工具）。"""
+    async def find_view(self, name: str) -> AgentView:
+        """按名称找到的 agent 加上它的配置与分发规则（get_agent 工具）。"""
         snapshot = await self._source.snapshot()
-        async with self._db.transaction() as s:
-            agent = await named_agent_in(s, name)
-        return agent, snapshot.rules_of(agent.id)
+        return _view_of(snapshot, await self.find_by_name(name))
 
     async def names(self) -> AgentNames:
         async with self._db.transaction() as s:
@@ -468,10 +442,10 @@ class AgentService:
         async with self._db.transaction() as s:
             return [info_of(a) for a in await _listed_in(s)]
 
-    async def list_with_rules(self) -> list[tuple[AgentInfo, AgentRules]]:
-        """list 加上各自的分发规则。"""
+    async def list_views(self) -> list[AgentView]:
+        """list 加上各自的配置与分发规则。"""
         snapshot = await self._source.snapshot()
-        return [(a, snapshot.rules_of(a.id)) for a in await self.list()]
+        return [_view_of(snapshot, a) for a in await self.list()]
 
     async def _ids(self) -> set[str]:
         """数据库里所有 agent 的 id，正在删除的也算（它的目录还在是正常的，删除流程会删）。"""
@@ -487,7 +461,7 @@ class AgentService:
                 await asyncio.to_thread(shutil.rmtree, workspace)
             except OSError as e:
                 # 例如它留在后台的进程还在往里写（目录删空后又出现新文件）。工作目录只是文件：删不干净不能让删除卡在
-                # deleting 一直重试；残留留给启动检查列出（verify_stored），由人清理
+                # deleting 一直重试；残留留给启动检查列出（report_leftovers），由人清理
                 log.warning(
                     "workspace of a deleted agent could not be fully removed",
                     extra={"agent": agent_id, "path": str(workspace), "error": repr(e)},

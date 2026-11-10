@@ -7,10 +7,12 @@ from pydantic import BaseModel
 from muliao.agent_runtime.api import memory_section
 from muliao.agents.api import (
     USER,
+    AgentDir,
     AgentInfo,
     AgentPatch,
     AgentRules,
     AgentSpec,
+    AgentView,
     McpTransport,
     Reach,
     RoleSpec,
@@ -55,44 +57,53 @@ class AgentUpdate(BaseModel):
     group: str | None
 
 
+class AgentConfigOut(BaseModel):
+    """agent.toml 里的配置。"""
+
+    description: str
+    model: str
+    thinking: Thinking
+    # 分组名，null 为不分组
+    group: str | None
+
+    @classmethod
+    def of(cls, d: AgentDir) -> "AgentConfigOut":
+        return cls(description=d.description, model=d.model, thinking=d.thinking, group=d.group)
+
+
 class AgentOut(BaseModel):
     id: str
     name: str
-    description: str
-    model: str
+    # null：它的目录没加载（agent.toml 坏了等，见资源问题），不能运行，修好文件或删掉它
+    config: AgentConfigOut | None
     roles: list[str]
     allow: list[str]
     deny: list[str]
-    thinking: Thinking
     created_at: datetime
     # 系统默认 agent：Web 新对话默认选中它，最多一个
     is_default: bool
-    # 分组名，null 为不分组
-    group: str | None
     # 归档时间；非空时不能对话、委派、指派，它的触发器不触发
     archived_at: datetime | None
 
     @classmethod
-    def of(cls, a: AgentInfo, rules: AgentRules) -> "AgentOut":
+    def of(cls, v: AgentView) -> "AgentOut":
+        a, rules = v.info, v.rules
         return cls(
             id=a.id,
             name=a.name,
-            description=a.description,
-            model=a.model,
+            config=None if v.config is None else AgentConfigOut.of(v.config),
             roles=list(rules.roles),
             allow=list(rules.allow),
             deny=list(rules.deny),
-            thinking=a.thinking,
             created_at=a.created_at,
             is_default=a.is_default,
-            group=a.group,
             archived_at=a.archived_at,
         )
 
 
 async def _out(c: C, a: AgentInfo) -> AgentOut:
-    """操作之后的 agent：只取它的 id，目录字段与分发规则在同一个事务里重新读（两个子域各自的读模型）。"""
-    return AgentOut.of(*await c.agents.get_with_rules(a.id))
+    """操作之后的 agent：只取它的 id，配置与分发规则重新从快照读。"""
+    return AgentOut.of(await c.agents.view(a.id))
 
 
 @router.get("/agent-defaults")
@@ -231,7 +242,7 @@ async def delete_role(c: C, name: str) -> None:
 
 @router.get("/agents")
 async def list_agents(c: C) -> list[AgentOut]:
-    return [AgentOut.of(a, rules) for a, rules in await c.agents.list_with_rules()]
+    return [AgentOut.of(v) for v in await c.agents.list_views()]
 
 
 @router.post("/agents", status_code=201)
@@ -252,7 +263,7 @@ async def create_agent(c: C, body: AgentCreate) -> AgentOut:
 @router.get("/agents/{agent_id}")
 async def get_agent(c: C, agent_id: str) -> AgentOut:
     # 正在删除的按不存在处理
-    return AgentOut.of(*await c.agents.get_with_rules(agent_id))
+    return AgentOut.of(await c.agents.view(agent_id))
 
 
 class AssetSourceOut(BaseModel):

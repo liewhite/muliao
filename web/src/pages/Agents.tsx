@@ -40,14 +40,15 @@ import { announceChange } from '../events'
 import { groupAgents } from '../agentGroups'
 
 function AgentCard({ a }: { a: Agent }) {
+  const { config } = a
   return (
     <NavLink to={agentRoute(a.id)}>
       {({ isActive }) => (
         <Card className={`transition-colors hover:bg-surface-hover ${isActive ? 'ring-2 ring-accent' : ''}`}>
           <Card.Header>
             <Card.Title>{a.name}</Card.Title>
-            <Card.Description className="truncate" title={a.description}>
-              {a.description}
+            <Card.Description className="truncate" title={config?.description}>
+              {config?.description ?? 'agent.toml 读不出，不能运行（原因见服务日志或它的资源问题）'}
             </Card.Description>
           </Card.Header>
           <Card.Footer className="flex flex-wrap gap-2">
@@ -61,13 +62,21 @@ function AgentCard({ a }: { a: Agent }) {
                 已归档
               </Chip>
             )}
-            <Chip size="sm" variant="secondary">
-              {a.model}
-            </Chip>
-            {a.thinking !== 'default' && (
-              <Chip size="sm" variant="secondary">
-                思考 {THINKING_LABEL[a.thinking]}
+            {config === null ? (
+              <Chip size="sm" color="danger" variant="soft">
+                配置未加载
               </Chip>
+            ) : (
+              <>
+                <Chip size="sm" variant="secondary">
+                  {config.model}
+                </Chip>
+                {config.thinking !== 'default' && (
+                  <Chip size="sm" variant="secondary">
+                    思考 {THINKING_LABEL[config.thinking]}
+                  </Chip>
+                )}
+              </>
             )}
           </Card.Footer>
         </Card>
@@ -125,9 +134,10 @@ export function AgentList() {
 }
 
 function initialInput(agent: Agent | undefined, defaults: AgentDefaults): AgentInput {
+  // 配置没加载的 agent 保存会被拒（先修好它的 agent.toml），表单先按缺省值填
   if (agent) {
-    const { name, description, model, roles, allow, deny, thinking, group } = agent
-    return { name, description, model, roles, allow, deny, thinking, group }
+    const { name, roles, allow, deny, config } = agent
+    return { ...defaults, ...config, name, roles, allow, deny }
   }
   return defaults
 }
@@ -408,7 +418,7 @@ export function AgentDetail() {
                   <Loading state={defaults}>
                     {(d) => (
                       <AgentForm
-                        key={`${a.id}-${a.name}-${a.description}`}
+                        key={`${a.id}-${a.name}-${a.config?.description}`}
                         agent={a}
                         defaults={d}
                         onSaved={() => void agent.reload()}

@@ -249,9 +249,7 @@ class Assembly:
     async def _prepare(self) -> None:
         await asyncio.to_thread(migrate, self.settings.db_path)
         await self.assets.ensure_global_memory()
-        # 第一次读资源目录，同步 agent 配置的镜像列
-        await self.assets.snapshot()
-        await self.agents.verify_stored()
+        await self.agents.report_leftovers()
         await self.queue.check_kinds()
         await asyncio.to_thread(self.files.recover)
         # 上次运行留下的「运行中」后台任务：进程已随服务结束，记为被中断并通知 agent（worker 处理这些事件之前）

@@ -74,7 +74,7 @@ async def test_agent_api_rejects_partial_update(container, tmp_path):
         assert (
             await client.put(f"/api/agents/{agent['id']}", json={"description": "new"})
         ).status_code == 422
-        assert (await client.get(f"/api/agents/{agent['id']}")).json()["model"] == "custom"
+        assert (await client.get(f"/api/agents/{agent['id']}")).json()["config"]["model"] == "custom"
 
 
 async def test_vault_set_value_is_redacted_from_saved_history(container, make_agent, models):

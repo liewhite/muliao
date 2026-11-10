@@ -10,7 +10,7 @@ from muliao.issues.api import IssueStatus
 from muliao.sessions.api import NewChat, Origin, UserMessage
 from muliao.sessions.tables import Session
 from muliao.triggers.api import Precheck
-from tests.conftest import login
+from tests.conftest import agent_update, login
 from tests.test_flow import deliver, drain
 
 PROGRESS = IssueStatus.IN_PROGRESS
@@ -20,21 +20,27 @@ def _new_session(agent_id: str) -> UserMessage:
     return UserMessage(content="hi", session=NewChat(agent_id))
 
 
+async def _group(container, agent_id: str) -> str | None:
+    config = (await container.agents.view(agent_id)).config
+    assert config is not None
+    return config.group
+
+
 async def test_group_is_trimmed_kept_on_other_changes_and_cleared_by_an_empty_string(container):
     agent = await container.agents.create(
         AgentSpec(name="a", description="d", model="test", group="  jobs  "), actor="user"
     )
-    assert agent.group == "jobs"
-    assert (
-        await container.agents.update(agent.id, AgentPatch(description="x"), actor="user")
-    ).group == "jobs"
-    assert (await container.agents.update(agent.id, AgentPatch(group="   "), actor="user")).group is None
+    assert await _group(container, agent.id) == "jobs"
+    await container.agents.update(agent.id, AgentPatch(description="x"), actor="user")
+    assert await _group(container, agent.id) == "jobs"
+    await container.agents.update(agent.id, AgentPatch(group="   "), actor="user")
+    assert await _group(container, agent.id) is None
     with pytest.raises(InvalidInput, match="at most 64"):
         await container.agents.update(agent.id, AgentPatch(group="g" * 65), actor="user")
 
 
 async def test_list_agents_groups_ungrouped_first_and_leaves_out_archived(container, make_agent):
-    plain = await make_agent("plain")
+    await make_agent("plain")
     for name, group in (("z1", "zhu"), ("b1", "biz"), ("z2", "zhu")):
         await container.agents.create(
             AgentSpec(name=name, description=name, model="test", group=group), actor="user"
@@ -42,9 +48,9 @@ async def test_list_agents_groups_ungrouped_first_and_leaves_out_archived(contai
     gone = await make_agent("gone")
     await container.agent_lifecycle.set_archived(gone.id, True)
 
-    directory = agent_directory(await container.agents.list())
+    directory = agent_directory(await container.agents.list_views())
     assert directory == [
-        AgentGroup(group=None, agents=[AgentEntry(name="plain", description=plain.description)]),
+        AgentGroup(group=None, agents=[AgentEntry(name="plain", description="test agent")]),
         AgentGroup(group="biz", agents=[AgentEntry(name="b1", description="b1")]),
         AgentGroup(
             group="zhu",
@@ -63,7 +69,8 @@ async def test_an_archived_agent_takes_no_mail_until_unarchived(container, make_
     with pytest.raises(AgentArchived, match="archived; unarchive it first"):
         await container.sessions.receive(_new_session(alpha.id))
     # 配置照常可改（取消归档、改名都要能找到它）
-    assert (await container.agents.update(alpha.id, AgentPatch(group="old"), actor="user")).group == "old"
+    await container.agents.update(alpha.id, AgentPatch(group="old"), actor="user")
+    assert await _group(container, alpha.id) == "old"
     assert (await container.agents.find_by_name("alpha")).archived
 
     assert not (await container.agent_lifecycle.set_archived(alpha.id, False)).archived
@@ -170,7 +177,7 @@ async def test_issues_cannot_go_to_an_archived_agent_and_its_old_ones_stay_quiet
 async def test_archive_over_http_marks_the_agent_and_conversations_get_409(client):
     await login(client)
     agent = (await client.post("/api/agents", json={"name": "a", "description": "x", "group": "jobs"})).json()
-    assert agent["group"] == "jobs" and agent["archived_at"] is None
+    assert agent["config"]["group"] == "jobs" and agent["archived_at"] is None
     path = f"/api/agents/{agent['id']}/archive"
     archived = (await client.put(path)).json()
     assert archived["archived_at"] is not None
@@ -180,10 +187,8 @@ async def test_archive_over_http_marks_the_agent_and_conversations_get_409(clien
     assert resp.status_code == 409 and "archived" in resp.text
     assert (await client.delete(path)).json()["archived_at"] is None
     # 整体替换时 null 即不分组
-    body = {k: agent[k] for k in ("name", "description", "model", "roles", "allow", "deny", "thinking")}
-    assert (await client.put(f"/api/agents/{agent['id']}", json={**body, "group": None})).json()[
-        "group"
-    ] is None
+    resp = await client.put(f"/api/agents/{agent['id']}", json={**agent_update(agent), "group": None})
+    assert resp.json()["config"]["group"] is None
 
 
 async def test_delegating_to_an_archived_agent_new_or_continued_thread_is_refused(container, make_agent):

@@ -2,8 +2,8 @@
 
 - 快照按树的指纹（每个文件的路径、修改时间、大小）与数据库里的 agent id 缓存：文件没变就不重读，直接改文件下次读到就
   生效（运行开始时组装指令、算工具与分发、解析 secret，都读它）。
-- 读到的 agent 配置（描述、模型、思考档位、分组；名字只认数据库）同步到 agents 表的镜像列（agents.active.sync_mirror_in）；模型或
-  思考档位在当前配置下不能运行的不同步、记成 Problem，agent 照旧用上次同步的值运行。
+- agent 的配置（描述、模型、思考档位、分组）只在快照里（Snapshot.loaded_agent），数据库只有身份（id、名字、归档、默认）。
+  模型或思考档位在当前配置下不能运行的记成 Problem 报给它；它的运行在取模型时当场失败，不沿用旧值。
 - 平台自己写资源（界面、vault_set、建 / 改名 / 删 agent）时在 writing() 里做：与读共用一把锁，读-改-写串行。
 - 文件工具写资源目录里的文件之前问 contains / vet（agents.asset_files）：按读树的规则校验格式（#500）。
 """
@@ -18,7 +18,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from muliao.agents import asset_files
-from muliao.agents.active import Mirrored, agent_names_in, sync_mirror_in
+from muliao.agents.active import agent_names_in
 from muliao.agents.agent_file import AGENT_FILE
 from muliao.agents.assets import Problem, Snapshot, fingerprint, load_tree
 from muliao.agents.kinds import StoredKind
@@ -46,7 +46,7 @@ class AssetSource:
         self._check_model = model_checker
         self._key: object = None
         self._snapshot: Snapshot | None = None
-        # 读（重新加载、同步镜像）与平台自己的读-改-写共用一把锁：写入期间不会读到写了一半的树
+        # 读（重新加载）与平台自己的读-改-写共用一把锁：写入期间不会读到写了一半的树
         self._lock = asyncio.Lock()
 
     async def snapshot(self) -> Snapshot:
@@ -60,7 +60,7 @@ class AssetSource:
         if key == self._key and self._snapshot is not None:
             return self._snapshot
         snapshot = await asyncio.to_thread(load_tree, self.root, known, self.memory_max_chars)
-        snapshot = await self._synced(snapshot)
+        snapshot = self._checked(snapshot)
         self._key, self._snapshot = key, snapshot
         if snapshot.problems:
             log.warning(
@@ -69,27 +69,17 @@ class AssetSource:
             )
         return snapshot
 
-    async def _synced(self, snapshot: Snapshot) -> Snapshot:
-        """把 agent 配置同步进镜像列；不能运行的模型与思考档位不同步（保留上次的），记成问题。"""
-        mirrored, problems = [], []
+    def _checked(self, snapshot: Snapshot) -> Snapshot:
+        """在当前配置下不能运行的模型与思考档位记成问题（agent 照样加载：界面能看能改，运行时报错）。"""
+        problems = []
         for a in snapshot.agents.values():
-            model: str | None = a.model
-            thinking: str | None = a.thinking
             try:
                 check_thinking_level(a.thinking)
                 self._check_model(a.model, a.thinking)
             except InvalidInput as e:
                 problems.append(
-                    Problem(
-                        a.path / AGENT_FILE, f"{e}; the agent keeps running with its previous model", a.id
-                    )
+                    Problem(a.path / AGENT_FILE, f"{e}; the agent cannot run until this is fixed", a.id)
                 )
-                model = thinking = None
-            mirrored.append(Mirrored(a.id, a.description, model, thinking, a.group))
-        async with self._db.transaction() as s:
-            changed = await sync_mirror_in(s, mirrored)
-        if changed:
-            log.info("agent config synced from asset files", extra={"agent_ids": changed})
         if not problems:
             return snapshot
         return dataclasses.replace(snapshot, problems=(*snapshot.problems, *problems))

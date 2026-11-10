@@ -381,7 +381,7 @@ async def test_without_web_config_web_permissions_grant_no_tools_and_does_not_bl
         AgentSpec(name="reader", description="d", allow=["use:tool:web_*"], roles=[]), actor="user"
     )
     without_web = assemble(with_web.settings, model_checker=lambda _m, _t: None)
-    await without_web.agents.verify_stored()
+    await without_web.agents.report_leftovers()
     toolbox = without_web.consumer._toolbox  # noqa: SLF001
     assert "web_search" not in toolbox.tool_names()
     # 界面与 get_agent 也不列出这次配置没有的工具（与运行时取同一份注册的工具）

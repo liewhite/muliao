@@ -270,10 +270,9 @@ async def _again(container, models, agent_id: str, args=GATED, model: str = "gat
     """同一个 agent 在新会话里再发起一次调用（模型换一个名字，各自记结果）。"""
     gate = Gate(args)
     models.models[model] = scripted(gate)
-    async with container.db.transaction() as s:
-        from muliao.agents.tables import Agent
+    from muliao.agents.service import AgentPatch
 
-        (await s.get(Agent, agent_id)).model = model
+    await container.agents.update(agent_id, AgentPatch(model=model), actor="user")
     session = await start(container, agent_id, "again")
     await drain(container)
     return session.id, gate

@@ -6,15 +6,12 @@ function agent(name: string, group: string | null = null, archived = false, desc
   return {
     id: asAgentId(name),
     name,
-    description,
-    model: 'p:m',
+    config: { description, model: 'p:m', thinking: 'default', group },
     roles: [],
     allow: [],
     deny: [],
-    thinking: 'default',
     created_at: '2026-10-26T00:00:00Z',
     is_default: false,
-    group,
     archived_at: archived ? '2026-10-26T01:00:00Z' : null,
   }
 }

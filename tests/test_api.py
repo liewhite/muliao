@@ -6,7 +6,7 @@ from pydantic_ai.profiles import ModelProfile
 
 from muliao.agents.api import BASE
 from muliao.api.auth import Auth
-from tests.conftest import login, share
+from tests.conftest import agent_update, login, share
 from tests.scripted import scripted
 
 
@@ -22,10 +22,10 @@ async def test_agent_session_lifecycle_over_http(client):
     resp = await client.post("/api/agents", json={"name": "alpha", "description": "general helper"})
     assert resp.status_code == 201, resp.text
     agent = resp.json()
-    assert agent["model"] == "fake:default" and len(agent["id"]) == 12
+    assert agent["config"]["model"] == "fake:default" and len(agent["id"]) == 12
     assert (await client.post("/api/agents", json={"name": "alpha", "description": "dup"})).status_code == 409
     assert (await client.post("/api/agents", json={"name": "  ", "description": "x"})).status_code == 422
-    assert agent["thinking"] == "default"  # 未指定时不传 thinking，与之前一致
+    assert agent["config"]["thinking"] == "default"  # 未指定时不传 thinking，与之前一致
 
     resp = await client.post("/api/sessions", json={"agent_id": agent["id"], "prompt": "hello there"})
     assert resp.status_code == 201
@@ -210,7 +210,7 @@ async def test_agent_cannot_be_named_user(client):
     await login(client)
     assert (await client.post("/api/agents", json={"name": "user", "description": "x"})).status_code == 422
     agent = (await client.post("/api/agents", json={"name": "a1", "description": "x"})).json()
-    resp = await client.put(f"/api/agents/{agent['id']}", json={**agent, "name": " user "})
+    resp = await client.put(f"/api/agents/{agent['id']}", json={**agent_update(agent), "name": " user "})
     assert resp.status_code == 422
     assert "reserved" in resp.json()["detail"]
 
@@ -222,23 +222,7 @@ async def test_agent_identified_by_id_and_renamable(client, container):
     # 目录用 id，不受名称影响
     assert container.agents.workspace(agent["id"]).is_dir()
 
-    renamed = {**agent, "name": "Research Assistant 📚"}
-    resp = await client.put(
-        path,
-        json={
-            k: renamed[k]
-            for k in (
-                "name",
-                "description",
-                "model",
-                "roles",
-                "allow",
-                "deny",
-                "thinking",
-                "group",
-            )
-        },
-    )
+    resp = await client.put(path, json={**agent_update(agent), "name": "Research Assistant 📚"})
     assert resp.status_code == 200 and resp.json()["name"] == "Research Assistant 📚"
     assert (await client.get(path)).json()["id"] == agent["id"]
 
@@ -249,7 +233,7 @@ async def test_agent_identified_by_id_and_renamable(client, container):
     clash = {
         "name": "other",
         "description": "d",
-        "model": agent["model"],
+        "model": agent["config"]["model"],
         "roles": agent["roles"],
         "allow": [],
         "deny": [],
@@ -469,12 +453,12 @@ async def test_agent_thinking_is_set_and_validated_over_http(client, models):
     resp = await client.post("/api/agents", json={"name": "alpha", "description": "d", "thinking": "high"})
     assert resp.status_code == 201, resp.text
     agent = resp.json()
-    assert agent["thinking"] == "high"
-    body = {k: agent[k] for k in ("name", "description", "model", "roles", "allow", "deny", "group")}
+    assert agent["config"]["thinking"] == "high"
+    body = {k: v for k, v in agent_update(agent).items() if k != "thinking"}
     resp = await client.put(f"/api/agents/{agent['id']}", json={**body, "thinking": "off"})
-    assert resp.json()["thinking"] == "off"
+    assert resp.json()["config"]["thinking"] == "off"
     # 整体替换：thinking 必填；不在档位里的值拒绝
     assert (await client.put(f"/api/agents/{agent['id']}", json=body)).status_code == 422
     resp = await client.put(f"/api/agents/{agent['id']}", json={**body, "thinking": "max"})
     assert resp.status_code == 422
-    assert (await client.get(f"/api/agents/{agent['id']}")).json()["thinking"] == "off"
+    assert (await client.get(f"/api/agents/{agent['id']}")).json()["config"]["thinking"] == "off"

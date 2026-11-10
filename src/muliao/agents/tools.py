@@ -9,8 +9,8 @@ from pydantic_ai import FunctionToolset, RunContext
 from muliao.agents.distribution import Distribution
 from muliao.agents.lifecycle import AgentLifecycle
 from muliao.agents.permissions import Role
-from muliao.agents.service import AgentInfo, AgentService, AgentSpec, Thinking
-from muliao.errors import InvalidInput
+from muliao.agents.service import AgentService, AgentSpec, AgentView, Thinking
+from muliao.errors import InvalidInput, NotFound
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 
 
@@ -66,12 +66,15 @@ class AgentGroup(BaseModel):
     agents: list[AgentEntry]
 
 
-def agent_directory(agents: Iterable[AgentInfo]) -> list[AgentGroup]:
-    """list_agents 的结果：能委派的 agent（不含归档的）按分组列出，不分组的在前，其余按组名；组内保持传入的顺序。"""
+def agent_directory(agents: Iterable[AgentView]) -> list[AgentGroup]:
+    """list_agents 的结果：能委派的 agent（不含归档的、目录没加载的：都不能运行）按分组列出，不分组的在前，其余按组名；
+    组内保持传入的顺序。"""
     groups: dict[str | None, list[AgentEntry]] = {}
     for a in agents:
-        if not a.archived:
-            groups.setdefault(a.group, []).append(AgentEntry(name=a.name, description=a.description))
+        if not a.info.archived and a.config is not None:
+            groups.setdefault(a.config.group, []).append(
+                AgentEntry(name=a.info.name, description=a.config.description)
+            )
     order = sorted(groups, key=lambda g: (g is not None, g or ""))
     return [AgentGroup(group=g, agents=groups[g]) for g in order]
 
@@ -87,8 +90,9 @@ def agents_toolset(
     async def list_agents() -> list[AgentGroup]:
         """List all agents and what each one is for. Returns a JSON array of groups, each with `group` (null = not
         in any group) and `agents` (each with `name` and `description`). Use before delegating. Archived agents
-        are not listed: they cannot be used until the user unarchives them."""
-        return agent_directory(await agents.list())
+        are not listed: they cannot be used until the user unarchives them. Nor are agents whose agent.toml
+        cannot be loaded until it is fixed."""
+        return agent_directory(await agents.list_views())
 
     @ts.tool_plain
     async def get_agent(agent: str) -> AgentDetail:
@@ -102,15 +106,21 @@ def agents_toolset(
         Args:
             agent: Agent name.
         """
-        target, rules = await agents.find_with_rules(agent)
+        view = await agents.find_view(agent)
+        target, config, rules = view.info, view.config, view.rules
+        if config is None:
+            raise NotFound(
+                f"agent {target.name!r} has no loadable agent.toml (see the asset problems reported to it); "
+                "it cannot run until that is fixed"
+            )
         reach = await distribution.reach(target.id)
         return AgentDetail(
             name=target.name,
-            description=target.description,
-            group=target.group,
+            description=config.description,
+            group=config.group,
             archived=target.archived,
-            model=target.model,
-            thinking=target.thinking,
+            model=config.model,
+            thinking=config.thinking,
             roles=list(rules.roles),
             allow=list(rules.allow),
             deny=list(rules.deny),

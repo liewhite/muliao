@@ -2,7 +2,9 @@
 资源三个子域（docs/architecture.md 2.1）；AI 资源都是资源目录里的文件（agents.assets），AssetSource 给出当前快照。
 
 - 查询：AgentService 的 get / get_active / find_by_name / list，事务内的 agent_in / active_agent_in / runnable_agent_in（归档的报
-  AgentArchived），返回 AgentInfo；
+  AgentArchived），返回 AgentInfo（身份）；
+  配置（描述、模型、思考档位、分组）只在快照：AssetSource.snapshot().loaded_agent 给出 AgentDir，界面与 get_agent 用
+  AgentService.view / find_view / list_views（AgentView：身份 + 配置 + 分发规则）；
   名称映射 AgentService.names / 事务内的 agent_names_in（AgentNames，已删除的 agent 也有展示名）；
 - 删除与归档 agent（AgentLifecycle）；
 - AI 资源：种类（kinds：Kind / StoredKind），资源目录（AssetSource：当前快照与读树时发现的问题 Problem；讲怎么改资源文件的公共 skill 名 ASSETS_SKILL），记忆（MemoryStore、一次运行放进指令的 MemoryBlock、MemoryInfo）、skill 的索引、界面编辑与标准 .skill 文件的导入导出，MCP server 的配置（McpServer 等；把配置连接成工具在 agent_runtime）、secret（Vault：存取、加解密与 ${vault:KEY} 引用的解析 VAULT_REF / fill，对外不出密文；SECRET_TOOL_ARGS：要脱敏的工具参数）、资源池（AssetCatalog：全部资源、转移 owner）；
@@ -13,7 +15,7 @@
 from muliao.agents.access import Reach, Source, WriteScope
 from muliao.agents.active import AgentArchived, AgentNames, agent_names_in
 from muliao.agents.asset_files import SKILL as ASSETS_SKILL
-from muliao.agents.assets import Problem
+from muliao.agents.assets import AgentDir, Problem
 from muliao.agents.catalog import AssetCatalog, CatalogAsset
 from muliao.agents.distribution import Distribution, RoleSpec, RoleView, UsedAsset
 from muliao.agents.ids import USER
@@ -30,6 +32,7 @@ from muliao.agents.service import (
     AgentPatch,
     AgentService,
     AgentSpec,
+    AgentView,
     Thinking,
     active_agent_in,
     agent_in,
@@ -56,6 +59,8 @@ __all__ = [
     "AgentSpec",
     "Thinking",
     "AgentInfo",
+    "AgentDir",
+    "AgentView",
     "AgentNames",
     "AgentRules",
     "AgentService",

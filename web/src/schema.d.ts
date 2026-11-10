@@ -1379,6 +1379,23 @@ export interface components {
             /** Mcp */
             mcp: components["schemas"]["McpAssetOut"][];
         };
+        /**
+         * AgentConfigOut
+         * @description agent.toml 里的配置。
+         */
+        AgentConfigOut: {
+            /** Description */
+            description: string;
+            /** Model */
+            model: string;
+            /**
+             * Thinking
+             * @enum {string}
+             */
+            thinking: "default" | "off" | "low" | "medium" | "high" | "xhigh";
+            /** Group */
+            group: string | null;
+        };
         /** AgentCreate */
         AgentCreate: {
             /** Name */
@@ -1407,10 +1424,7 @@ export interface components {
             id: string;
             /** Name */
             name: string;
-            /** Description */
-            description: string;
-            /** Model */
-            model: string;
+            config: components["schemas"]["AgentConfigOut"] | null;
             /** Roles */
             roles: string[];
             /** Allow */
@@ -1418,19 +1432,12 @@ export interface components {
             /** Deny */
             deny: string[];
             /**
-             * Thinking
-             * @enum {string}
-             */
-            thinking: "default" | "off" | "low" | "medium" | "high" | "xhigh";
-            /**
              * Created At
              * Format: date-time
              */
             created_at: string;
             /** Is Default */
             is_default: boolean;
-            /** Group */
-            group: string | null;
             /** Archived At */
             archived_at: string | null;
         };

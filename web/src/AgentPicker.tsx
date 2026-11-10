@@ -48,7 +48,9 @@ export function AgentPicker({
             {current ? (
               <>
                 <span className="truncate">{current.name}</span>
-                {current.group !== null && <span className="shrink-0 text-xs text-muted">{current.group}</span>}
+                {current.config?.group != null && (
+                  <span className="shrink-0 text-xs text-muted">{current.config.group}</span>
+                )}
               </>
             ) : (
               <span className="text-muted">{placeholder}</span>
@@ -138,12 +140,14 @@ function AgentItem({
 }) {
   return (
     <Dropdown.Item id={agent.id} textValue={agent.name} onAction={() => onChoose(agent.id)}>
-      <div className="flex min-w-0 flex-1 flex-col" title={agent.description || undefined}>
+      <div className="flex min-w-0 flex-1 flex-col" title={agent.config?.description || undefined}>
         <span className="flex items-center gap-2">
           <span className="truncate">{agent.name}</span>
-          {showGroup && agent.group !== null && <span className="shrink-0 text-xs text-muted">{agent.group}</span>}
+          {showGroup && agent.config?.group != null && (
+            <span className="shrink-0 text-xs text-muted">{agent.config.group}</span>
+          )}
         </span>
-        {agent.description && <span className="truncate text-xs text-muted">{agent.description}</span>}
+        {agent.config?.description && <span className="truncate text-xs text-muted">{agent.config.description}</span>}
       </div>
       <Dropdown.ItemIndicator />
     </Dropdown.Item>

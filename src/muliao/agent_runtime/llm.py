@@ -208,7 +208,7 @@ class ModelRegistry:
         return provider
 
     def check(self, model: str, thinking: Thinking) -> None:
-        """agent 的模型与思考档位在当前配置下能否运行（新建、修改与启动检查时）。不访问网络。"""
+        """agent 的模型与思考档位在当前配置下能否运行（新建、修改与读资源树时）。不访问网络。"""
         check_thinking(model, self.resolve(model), thinking)
 
     def provider_names(self) -> list[str]:

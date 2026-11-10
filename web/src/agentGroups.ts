@@ -16,11 +16,15 @@ export function groupAgents(agents: Agent[]): AgentGroups {
   const groups = new Map<string, Agent[]>()
   for (const a of agents) {
     if (a.archived_at !== null) archived.push(a)
-    else if (a.group === null) ungrouped.push(a)
     else {
-      const list = groups.get(a.group)
-      if (list) list.push(a)
-      else groups.set(a.group, [a])
+      // 目录没加载（config 为 null）的也算不分组
+      const group = a.config?.group ?? null
+      if (group === null) ungrouped.push(a)
+      else {
+        const list = groups.get(group)
+        if (list) list.push(a)
+        else groups.set(group, [a])
+      }
     }
   }
   return {
@@ -34,7 +38,7 @@ export function groupAgents(agents: Agent[]): AgentGroups {
 export function searchAgents(agents: Agent[], query: string): Agent[] {
   const q = query.trim().toLowerCase()
   if (q === '') return []
-  return agents.filter((a) => a.name.toLowerCase().includes(q) || a.description.toLowerCase().includes(q))
+  return agents.filter((a) => a.name.toLowerCase().includes(q) || (a.config?.description ?? '').toLowerCase().includes(q))
 }
 
 /** 可以选来派活（新会话、指派、负责、触发器）的 agent：不含归档的；keep 是当前已选的值，归档了也留着以便显示 */

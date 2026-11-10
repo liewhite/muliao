@@ -53,34 +53,3 @@ class AgentNames:
 async def agent_names_in(s: AsyncSession) -> AgentNames:
     """在调用方的事务里取全部 agent（含正在删除的）的名称：展示用，也是读资源树时按 id 对上 agent 目录的依据（agents.source）。"""
     return AgentNames({agent_id: name for agent_id, name in await s.execute(select(Agent.id, Agent.name))})
-
-
-@dataclass(frozen=True)
-class Mirrored:
-    """agents 表里从 `<名>/agent.toml` 同步来的镜像列（agents.source.AssetSource）：别的领域在自己的事务里读（展示、运行用
-    的模型），旧版本回滚后也读得到最新的值。名字不在这里：名字只认数据库，目录名对不上的目录不加载（agents.assets），改名
-    只走平台（AgentService.update）。model / thinking 为 None 时不同步（文件里的在当前配置下不能运行，保留上次的）。"""
-
-    id: str
-    description: str
-    model: str | None
-    thinking: str | None
-    group: str | None
-
-
-async def sync_mirror_in(s: AsyncSession, agents: list[Mirrored]) -> list[str]:
-    """把镜像列改成文件里的值，返回改了的 agent 的 id。"""
-    rows = {a.id: a for a in await s.scalars(select(Agent).where(Agent.id.in_([m.id for m in agents])))}
-    changed = []
-    for m in agents:
-        row = rows.get(m.id)
-        if row is None:
-            continue
-        before = (row.description, row.model, row.thinking, row.group)
-        row.description, row.group = m.description, m.group
-        if m.model is not None and m.thinking is not None:
-            row.model, row.thinking = m.model, m.thinking
-        if (row.description, row.model, row.thinking, row.group) != before:
-            changed.append(m.id)
-    await s.flush()
-    return changed

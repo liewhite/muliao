@@ -142,14 +142,25 @@ class Snapshot:
     def of_kind(self, kind: StoredKind) -> list[Asset]:
         return sorted(self.assets[kind].values(), key=lambda a: a.name)
 
+    def loaded_agent(self, agent_id: str) -> AgentDir:
+        """agent 加载成功的目录（它的配置：描述、模型、思考档位、分组的唯一来源）。没加载（agent.toml 坏了、目录名对不上
+        等）时 NotFound，带上报给它的问题：这时它不能运行，要先修好文件。"""
+        agent = self.agents.get(agent_id)
+        if agent is None:
+            reasons = [f"{p.path}: {p.reason}" for p in self.problems if p.owner == agent_id]
+            name = self.names.get(agent_id, agent_id)
+            raise NotFound(
+                f"agent {name!r} has no loadable directory in {self.root}"
+                + (f" ({'; '.join(reasons)})" if reasons else "")
+                + "; fix its agent.toml first"
+            )
+        return agent
+
     def owner_dir(self, owner: str | None) -> Path:
         """owner（agent 的 id，None 为平台）的目录。agent 没有加载成功的目录时 NotFound。"""
         if owner is None:
             return self.root / PLATFORM
-        agent = self.agents.get(owner)
-        if agent is None:
-            raise NotFound(f"agent {owner!r} has no directory in {self.root}")
-        return agent.path
+        return self.loaded_agent(owner).path
 
     def owner_label(self, owner: str | None) -> str:
         if owner is None:
@@ -254,8 +265,8 @@ class _Reader:
             if agent_id not in agents and agent_id not in reported:
                 self.problem(
                     self.root / name,
-                    f"agent {name!r} ({agent_id}) has no directory with an {AGENT_FILE} carrying its id; it keeps "
-                    "its last known name, description and model, without private memory and own assets",
+                    f"agent {name!r} ({agent_id}) has no directory with an {AGENT_FILE} carrying its id; it cannot "
+                    "run until its directory is fixed",
                     agent_id,
                 )
         path = self.root / PLATFORM / ACCESS_FILE

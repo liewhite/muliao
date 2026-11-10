@@ -186,26 +186,26 @@ def test_vapid_subject_scheme_is_checked(tmp_path):
         load_settings(path)
 
 
-async def test_startup_rejects_agents_with_unresolvable_models(settings, models):
+async def test_an_unrunnable_model_in_agent_toml_is_reported_and_fails_its_runs_without_blocking_startup(
+    settings,
+):
+    """agent.toml 的模型在当前配置下不能运行（如配置里删掉了 provider）：启动照常，问题报给它，它的运行当场失败，
+    不沿用旧模型（#549）。"""
     from muliao.agents.service import AgentSpec
     from muliao.container import assemble
+    from muliao.platform.tasks import TaskStatus
+    from muliao.sessions.lanes import RUN_TASK
+    from tests.test_flow import idle, start, tasks_of
 
-    c = assemble(settings, resolve_model=models)  # 使用真实的配置校验
+    c = assemble(settings)  # 真实的模型解析与配置校验（解析不访问网络）
     async with c.running():
-        agent = await c.agents.create(
-            AgentSpec(name="ok", description="d", model="fake:m"),
-            actor="user",
-        )
-    try:
-        async with c.db.transaction() as s:
-            from muliao.agents.tables import Agent
-
-            (await s.get(Agent, agent.id)).model = "gone:m"  # 模拟配置里删掉了 provider
+        agent = await c.agents.create(AgentSpec(name="ok", description="d", model="fake:m"), actor="user")
         toml = settings.assets_dir / "ok" / "agent.toml"
         toml.write_text(toml.read_text().replace('"fake:m"', '"gone:m"'))
-    finally:
-        await c.db.engine.dispose()
-    c2 = assemble(settings, resolve_model=models)
-    with pytest.raises(RuntimeError, match=f"ok \\({agent.id}\\): model 'gone:m'"):
-        async with c2.running():
-            pass
+        snapshot = await c.assets.snapshot()
+        [problem] = snapshot.problems_for(agent.id)
+        assert "'gone:m'" in problem.reason and "cannot run until this is fixed" in problem.reason
+        session = await start(c, agent.id, "hi")
+        await idle(c)  # 服务里的 worker 已在跑
+        [turn] = [t for t in await tasks_of(c, RUN_TASK) if t.session_id == session.id]
+        assert turn.status == TaskStatus.FAILED and "gone" in (turn.error or "")

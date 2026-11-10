@@ -3844,6 +3844,50 @@
         "title": "AgentAssetsOut",
         "description": "agent 能用的资产，按种类分组，各组按名称。"
       },
+      "AgentConfigOut": {
+        "properties": {
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "thinking": {
+            "type": "string",
+            "enum": [
+              "default",
+              "off",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "title": "Thinking"
+          },
+          "group": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group"
+          }
+        },
+        "type": "object",
+        "required": [
+          "description",
+          "model",
+          "thinking",
+          "group"
+        ],
+        "title": "AgentConfigOut",
+        "description": "agent.toml 里的配置。"
+      },
       "AgentCreate": {
         "properties": {
           "name": {
@@ -3931,13 +3975,15 @@
             "type": "string",
             "title": "Name"
           },
-          "description": {
-            "type": "string",
-            "title": "Description"
-          },
-          "model": {
-            "type": "string",
-            "title": "Model"
+          "config": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentConfigOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "roles": {
             "items": {
@@ -3960,18 +4006,6 @@
             "type": "array",
             "title": "Deny"
           },
-          "thinking": {
-            "type": "string",
-            "enum": [
-              "default",
-              "off",
-              "low",
-              "medium",
-              "high",
-              "xhigh"
-            ],
-            "title": "Thinking"
-          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -3980,17 +4014,6 @@
           "is_default": {
             "type": "boolean",
             "title": "Is Default"
-          },
-          "group": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Group"
           },
           "archived_at": {
             "anyOf": [
@@ -4009,15 +4032,12 @@
         "required": [
           "id",
           "name",
-          "description",
-          "model",
+          "config",
           "roles",
           "allow",
           "deny",
-          "thinking",
           "created_at",
           "is_default",
-          "group",
           "archived_at"
         ],
         "title": "AgentOut"
