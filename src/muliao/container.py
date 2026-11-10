@@ -28,7 +28,6 @@ from muliao.agents.api import (
     Thinking,
     Vault,
 )
-from muliao.agents.export import export_if_missing
 from muliao.agents.permissions import available_tools
 from muliao.agents.secret_tools import vault_toolset
 from muliao.agents.service import AgentDefaults
@@ -249,8 +248,7 @@ class Assembly:
 
     async def _prepare(self) -> None:
         await asyncio.to_thread(migrate, self.settings.db_path)
-        # #498：AI 资源第一次启动时从数据库导出成文件；之后每次读资源目录（第一次读同步 agent 配置的镜像列）
-        await export_if_missing(self.db, self.settings.assets_dir, self.settings.legacy_skills_dir)
+        # 第一次读资源目录，同步 agent 配置的镜像列
         await self.assets.snapshot()
         await self.agents.verify_stored()
         await self.queue.check_kinds()

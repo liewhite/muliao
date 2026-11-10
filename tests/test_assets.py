@@ -1,5 +1,5 @@
 """AI 资源存成文件（#498）：资源目录树的读法（归属看目录、坏文件跳过并报出、同名冲突：与平台同名只跳过副本、agent 之间同名全部跳过）、agent 配置同步进镜像列、
-平台自己的读写（界面、vault_set、建 / 改名 / 删 agent），以及从数据库一次性导出。"""
+平台自己的读写（界面、vault_set、建 / 改名 / 删 agent）。"""
 
 import json
 import os
@@ -8,14 +8,10 @@ from pathlib import Path
 import pytest
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo
-from sqlalchemy import select
 
 from muliao.agents.api import McpTransport, RoleSpec, StoredKind, mcp_config
 from muliao.agents.assets import load_tree
-from muliao.agents.export import export_if_missing
-from muliao.agents.secrets_format import SecretFile
 from muliao.agents.service import AgentPatch, AgentSpec
-from muliao.agents.tables import Agent, AgentRulesRow, Item, ItemFile, RoleRow
 from muliao.errors import Conflict, Forbidden, InvalidInput, NotFound
 from tests.conftest import login, owned
 from tests.scripted import scripted
@@ -496,82 +492,3 @@ async def test_deleting_an_agent_removes_its_directory_but_keeps_what_others_use
     assert (r / "platform" / "skills" / "kept" / "SKILL.md").exists()
     assert not (r / "platform" / "skills" / "gone").exists()
     assert "[agents.alpha]" not in (r / "platform" / "access.toml").read_text()
-
-
-# ---- 一次性导出 ----
-
-
-async def test_the_database_is_exported_once_into_files(container, tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    db = container.db
-    async with db.transaction() as s:
-        s.add(
-            Agent(id="a1b2c3d4e5f6", name="alpha", description="d", model="test", thinking="low", group="g")
-        )
-        await s.flush()
-        s.add(AgentRulesRow(agent_id="a1b2c3d4e5f6", roles=["reader"], allow=["write:path:~/x"], deny=[]))
-        s.add(RoleRow(name="reader", description="r", allow=["use:skill:digest"], deny=[]))
-        await s.merge(RoleRow(name="base", description="b", allow=["use:skill:digest"], deny=[]))
-        s.add(
-            Item(
-                kind="memory",
-                name="alpha",
-                owner="a1b2c3d4e5f6",
-                content="see ~/.muliao/data/skills/digest/x.py",
-            )
-        )
-        s.add(Item(kind="memory", name="trading", owner=None, content="t"))
-        md = (
-            "---\nname: digest\ndescription: When digesting\n---\nRun $HOME/.muliao/data/skills/digest/x.py\n"
-        )
-        s.add(
-            Item(kind="skill", name="digest", owner="a1b2c3d4e5f6", description="When digesting", content=md)
-        )
-        s.add(Item(kind="secret", name="TOKEN", owner=None, description="t", secret=b"gAAAAtoken"))
-        s.add(
-            Item(
-                kind="mcp",
-                name="docs",
-                owner=None,
-                enabled=False,
-                content=json.dumps(
-                    {
-                        "transport": "http",
-                        "command": None,
-                        "args": [],
-                        "url": "https://x",
-                        "env": {},
-                        "headers": {},
-                    }
-                ),
-            )
-        )
-        await s.flush()
-        digest = await s.scalar(select(Item.id).where(Item.name == "digest"))
-        s.add(ItemFile(item_id=digest, path="x.py", content="print(1)\n", executable=True))
-    target = tmp_path / ".muliao" / "assets"
-    legacy = tmp_path / ".muliao" / "data" / "skills"
-    (legacy / "digest").mkdir(parents=True)
-    os.chmod(legacy / "digest", 0o555)
-    assert await export_if_missing(db, target, legacy)
-    assert not legacy.exists()
-    assert not await export_if_missing(db, target, legacy)
-
-    snapshot = load_tree(target, {"a1b2c3d4e5f6": "alpha"}, 4000)
-    assert snapshot.problems == ()
-    agent = snapshot.agents["a1b2c3d4e5f6"]
-    assert (agent.name, agent.thinking, agent.group) == ("alpha", "low", "g")
-    assert snapshot.rules_of(agent.id).roles == ("reader",)
-    assert snapshot.rules_of(agent.id).allow == ("write:path:~/x",)
-    assert snapshot.roles["base"].rules.allow == ("use:skill:digest",)
-    digest_dir = target / "alpha" / "skills" / "digest"
-    assert snapshot.asset(StoredKind.SKILL, "digest").path == digest_dir
-    assert os.access(digest_dir / "x.py", os.X_OK)
-    # 正文里写死的旧 skill 目录换成新位置，写法不变
-    assert "Run $HOME/.muliao/assets/alpha/skills/digest/x.py" in (digest_dir / "SKILL.md").read_text()
-    assert snapshot.asset(StoredKind.MEMORY, "alpha").text == "see ~/.muliao/assets/alpha/skills/digest/x.py"
-    assert snapshot.asset(StoredKind.SECRET, "TOKEN").secret == SecretFile(
-        "t", b"gAAAAtoken", allow_shell=True
-    )
-    assert snapshot.asset(StoredKind.MCP, "docs").mcp[1] is False
-    assert snapshot.asset(StoredKind.MEMORY, "trading").owner is None

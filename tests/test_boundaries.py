@@ -117,12 +117,12 @@ RUN_TYPES = {
 # `X(...)`，规则同下面的 sessions），别的子域经 `*_in` 接口；拿交给它的行做类型标注不算
 AGENTS_TABLES: dict[str, set[str]] = {
     # 目录（名称等镜像列由 agents.source 经 active 的 sync_mirror_in 同步）
-    "Agent": {"service", "active", "export"},
-    # #498 之前存在库里的 AI 资源：只有一次性导出读它们（agents.export）
-    "RoleRow": {"export"},
-    "AgentRulesRow": {"export"},
-    "Item": {"export"},
-    "ItemFile": {"export"},
+    "Agent": {"service", "active"},
+    # #498 之前存在库里的 AI 资源：没有代码再读，表留到 #503 删
+    "RoleRow": set(),
+    "AgentRulesRow": set(),
+    "Item": set(),
+    "ItemFile": set(),
     "Revision": set(),
 }
 

@@ -196,11 +196,6 @@ class Settings(_Section):
         return self.data_dir / "muliao.db"
 
     @property
-    def legacy_skills_dir(self) -> Path:
-        """#498 之前由数据库生成的 skill 只读副本目录：资源导出成文件后删掉（muliao.agents.export）。"""
-        return self.data_dir / "skills"
-
-    @property
     def workspaces_dir(self) -> Path:
         """每个 agent 的工作目录（文件工具与 shell 的 cwd），不做版本管理。"""
         return self.data_dir / "workspaces"

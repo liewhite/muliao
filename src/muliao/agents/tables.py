@@ -47,8 +47,8 @@ class Agent(Base):
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
 
 
-# ---- 以下是 #498 之前存在数据库里的 AI 资源（现在是资源目录里的文件，agents.assets）：只在启动时一次性导出
-# （agents.export）时读，不再写。表先保留，回滚到旧版本时还能用；确认新版运行正常后另加迁移删除 ----
+# ---- 以下是 #498 之前存在数据库里的 AI 资源（现在是资源目录里的文件，agents.assets）：没有代码再读写，
+# 表先保留，回滚到旧版本时还能用；#503 另加迁移删除 ----
 
 
 def _owner_ref() -> ForeignKey:

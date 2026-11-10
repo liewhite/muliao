@@ -11,7 +11,6 @@ from pydantic_ai.models import Model
 from pydantic_ai.tools import Tool
 
 from muliao.agent_runtime.llm import check_thinking
-from muliao.agents.export import export_if_missing
 from muliao.api.app import create_app
 from muliao.config import Settings
 from muliao.container import Assembly, assemble
@@ -75,8 +74,10 @@ async def container(settings: Settings, models: ModelSlot) -> AsyncIterator[Asse
         check_writes=single_domain_writes,
     )
     migrate(settings.db_path)
-    # 同服务启动（Assembly._prepare）：资源目录第一次从数据库导出（迁移建好的全局记忆）
-    await export_if_missing(c.db, settings.assets_dir, settings.legacy_skills_dir)
+    # 已安装的平台都有全局记忆文件（base 固定收录）
+    global_memory = settings.assets_dir / "platform" / "memory" / "global.md"
+    global_memory.parent.mkdir(parents=True)
+    global_memory.write_text("")
     # 后台任务的监督者需要它的任务组（服务里由 Assembly.running 打开）；worker 等循环由测试自己驱动
     async with c.jobs.running():
         yield c
