@@ -42,13 +42,12 @@ class SkillMeta:
 class SkillScripts:
     # skill 的目录（脚本在里面）
     directory: Path
-    # 执行前要用户批准的脚本，相对目录的路径（SKILL.md frontmatter 的 approval）
-    approval: tuple[str, ...]
+    # 执行前要用户批准的脚本（SKILL.md frontmatter 的 approval，读树时已换成文件的身份，platform.fs.real）
+    approval: tuple[Path, ...]
 
     def needs_approval(self, script: Path) -> bool:
-        """这个脚本（已解析成真实路径）在要批准的列表里；列表里的路径同样解析后比较（`./x.sh` 与 `x.sh` 是同一个）。"""
-        root = self.directory.resolve()
-        return any((root / p).resolve() == script for p in self.approval)
+        """这个脚本（身份，platform.fs.real）在要批准的列表里。"""
+        return script in self.approval
 
     def fingerprint(self) -> str:
         """skill 目录里除 SKILL.md 以外全部文件的内容指纹（sha256，十六进制）：「始终允许」按它认同一份脚本（#531），

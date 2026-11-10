@@ -1825,7 +1825,9 @@ export interface components {
         };
         /**
          * Decision
-         * @description 用户对一次等批准的调用的决定。always：批准时还要求以后同样的调用不再问（#531 之前的信件没有这一项）。
+         * @description 用户对一次等批准的调用的决定。always：批准时还要求以后同样的调用不再问（#531 之前的信件没有这一项）。pin：用户批准的
+         *     是哪一份——请求批准时工具定下、记在 approval_requests 的 pin，提交决定时记进来，批准时交回给工具比对（没记下、#570
+         *     之前的信件为 None，工具当作对不上）。
          */
         Decision: {
             /** Approved */
@@ -1835,6 +1837,8 @@ export interface components {
              * @default false
              */
             always: boolean;
+            /** Pin */
+            pin?: string | null;
         };
         /**
          * DelegationWait

@@ -27,7 +27,7 @@ from muliao.agents.kinds import StoredKind, label
 from muliao.agents.mcp_config import parse_mcp_file
 from muliao.agents.naming import file_name, validate_slug
 from muliao.agents.secrets_format import parse_secret_file, validate_key
-from muliao.agents.skill_package import SKILL_FILE, parse_frontmatter
+from muliao.agents.skill_package import SKILL_FILE, approval_scripts, parse_frontmatter
 from muliao.agents.thinking import Thinking
 from muliao.errors import Conflict, InvalidInput
 from muliao.platform.fs import real
@@ -115,7 +115,7 @@ def _check(
         _new(snapshot, StoredKind.SKILL, name, base / SKILLS_DIR / name, "Skills")
         if rest[2:] == (SKILL_FILE,):
             try:
-                parse_frontmatter(text, name)
+                approval_scripts(base / SKILLS_DIR / name, parse_frontmatter(text, name).approval)
             except InvalidInput as e:
                 raise _Rejected(str(e), "Skills") from e
     elif len(rest) == 2 and rest[0] == MCP_DIR and rest[1].endswith(".json"):

@@ -40,7 +40,7 @@ from muliao.agents.mcp_config import McpConfig, parse_mcp_file
 from muliao.agents.naming import file_name, nfc, validate_slug
 from muliao.agents.permissions import ADMIN, AgentRules, Role
 from muliao.agents.secrets_format import SecretFile, parse_secret_file
-from muliao.agents.skill_package import SKILL_FILE, parse_frontmatter
+from muliao.agents.skill_package import SKILL_FILE, approval_scripts, parse_frontmatter
 from muliao.agents.thinking import Thinking
 from muliao.errors import Conflict, InvalidInput, NotFound
 
@@ -72,7 +72,7 @@ class AgentDir:
 class Asset:
     """一项资源。path：记忆、MCP、secret 是那个文件，skill 是它的目录。description：skill 与 secret 的描述（记忆、MCP
     为空）。种类专有的内容：记忆的正文 text，MCP 的 mcp（配置与是否启用），secret 的文件内容 secret（密文与 allow_shell），
-    skill 执行前要批准的脚本 approval（frontmatter，相对目录的路径）。"""
+    skill 执行前要批准的脚本 approval（frontmatter 里列的，读树时已换成目录里存在的文件的身份，skill_package.approval_scripts）。"""
 
     kind: StoredKind
     name: str
@@ -83,7 +83,7 @@ class Asset:
     text: str = ""
     mcp: tuple[McpConfig, bool] | None = None
     secret: SecretFile | None = None
-    approval: tuple[str, ...] = ()
+    approval: tuple[Path, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -462,9 +462,8 @@ class _Reader:
             if not md.is_file():
                 raise InvalidInput(f"skill directory has no {SKILL_FILE}")
             fm = parse_frontmatter(md.read_text(encoding="utf-8"), name)
-            return Asset(
-                StoredKind.SKILL, name, owner, path, fm.description, updated(md), approval=fm.approval
-            )
+            approval = approval_scripts(path, fm.approval)
+            return Asset(StoredKind.SKILL, name, owner, path, fm.description, updated(md), approval=approval)
 
         self.guarded(StoredKind.SKILL, path.name, path, owner, load)
 

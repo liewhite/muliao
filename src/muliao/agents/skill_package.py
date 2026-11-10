@@ -18,6 +18,7 @@ import zipfile
 import zlib
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 
 import frontmatter
 import yaml
@@ -25,6 +26,7 @@ import yaml
 from muliao.agents.kinds import StoredKind, label
 from muliao.agents.naming import validate_slug
 from muliao.errors import InvalidInput, TooLarge
+from muliao.platform.fs import resolve_within
 
 SKILL_FILE = "SKILL.md"
 # skill 的附件（脚本、配置、参考文档，可在子目录里）：按后缀白名单，UTF-8 文本，单个不超过 MAX_FILE_BYTES。二进制文件
@@ -248,6 +250,25 @@ def _approval(value: object, where: str) -> tuple[str, ...]:
         if p.startswith("/"):
             raise InvalidInput(f"{where}: approval path {p!r} must be relative to the skill directory")
     return tuple(p.strip() for p in value)
+
+
+def approval_scripts(directory: Path, approval: tuple[str, ...]) -> tuple[Path, ...]:
+    """frontmatter 的 approval 换成目录里的脚本文件（身份，platform.fs.real，skill_run 按它认要批准的脚本）。哪一项
+    不是目录里存在的文件就 InvalidInput：写错的一项若照样加载，那个脚本就静默地不用批准。"""
+    where = f"{directory.name}/{SKILL_FILE}"
+    found = []
+    for p in approval:
+        try:
+            script = resolve_within(directory, p)
+        except InvalidInput as e:
+            raise InvalidInput(f"{where}: approval: {e}") from e
+        if not script.is_file():
+            raise InvalidInput(
+                f"{where}: approval path {p!r} is not a file in the skill directory (looked for {script}); "
+                "create the script first, or fix the path"
+            )
+        found.append(script)
+    return tuple(found)
 
 
 def loads_skill_md(text: str, name: str, where: str) -> frontmatter.Post:

@@ -25,8 +25,9 @@ def test_deferred_calls_are_a_paused_run():
 
 def test_calls_asking_for_approval_are_a_paused_run():
     call = ToolCallPart(tool_name="skill_run", args={}, tool_call_id="c1")
-    outcome = outcome_of(_result(DeferredToolRequests(approvals=[call])))  # type: ignore[arg-type]
-    assert outcome == Paused(calls=(), approvals=(call,))
+    requests = DeferredToolRequests(approvals=[call], metadata={"c1": {"pin": "abc"}})
+    outcome = outcome_of(_result(requests))  # type: ignore[arg-type]
+    assert outcome == Paused(calls=(), approvals=(call,), pins={"c1": "abc"})
 
 
 def test_decisions_on_approvals_go_to_approvals_and_other_results_to_calls():
@@ -35,3 +36,8 @@ def test_decisions_on_approvals_go_to_approvals_and_other_results_to_calls():
     )
     assert results.approvals == {"a": True, "d": ToolDenied("no")}
     assert results.calls == {"c": "answer"}
+
+
+def test_an_approval_hands_back_the_pin_recorded_with_the_request():
+    results = deferred_tool_results({"a": Approval(approved=True, always=True, pin="abc")})
+    assert results.metadata == {"a": {"always": True, "pin": "abc"}}

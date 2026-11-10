@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from functools import partial
 
 from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, ToolCallPart, UserContent
@@ -96,8 +96,11 @@ def interrupted_calls(history: list[ModelMessage], handed: HandedOut) -> list[To
     return [] if all(replayable(c.tool_name) for c in calls) else calls
 
 
-def paused_end(calls: Sequence[ToolCallPart], gated: Sequence[ToolCallPart]) -> RunEnd:
-    """停在这些挂起的调用上（calls 等回信，gated 等批准）：ask_user 的问题、等批准的调用要告诉用户。"""
+def paused_end(
+    calls: Sequence[ToolCallPart], gated: Sequence[ToolCallPart], pins: Mapping[str, str]
+) -> RunEnd:
+    """停在这些挂起的调用上（calls 等回信，gated 等批准，pins 是它们请求批准时定下的、知道的）：ask_user 的问题、等批准的
+    调用要告诉用户。"""
     questions = [q for c in calls for q in questions_in(c)]
     texts = [waiting_text(questions)] if questions else []
     if gated:
@@ -107,7 +110,7 @@ def paused_end(calls: Sequence[ToolCallPart], gated: Sequence[ToolCallPart]) -> 
         paused=True,
         asked_user=bool(questions),
         stopped=False,
-        approvals=tuple(c.tool_call_id for c in gated),
+        approvals={c.tool_call_id: pins.get(c.tool_call_id) for c in gated},
     )
 
 
@@ -127,7 +130,7 @@ def end_of(outcome: Finished | Paused) -> RunEnd:
     if any(c.tool_name in DEFERRED_TOOLS for c in outcome.approvals):
         # 挂起的工具按工具名认，等批准的按记录认（sessions.approvals）：同一个工具两样都做会认不清
         raise RuntimeError(f"a deferred tool asked for approval: {[c.tool_name for c in outcome.approvals]}")
-    return paused_end(outcome.calls, outcome.approvals)
+    return paused_end(outcome.calls, outcome.approvals, outcome.pins)
 
 
 def settled_end(history: list[ModelMessage], handed: HandedOut) -> RunEnd:
@@ -137,6 +140,8 @@ def settled_end(history: list[ModelMessage], handed: HandedOut) -> RunEnd:
         return paused_end(
             [c for c in calls if c.tool_call_id not in handed.approvals],
             [c for c in calls if c.tool_call_id in handed.approvals],
+            # 工具定下的 pin 只在那次运行的结局里，历史里没有：记为未知，批准后工具拒绝执行、让模型重新请求
+            {},
         )
     last = history[-1]
     if not isinstance(last, ModelResponse):

@@ -24,7 +24,7 @@ from muliao.files.api import FileMeta, load_metas
 from muliao.platform.db import utcnow
 from muliao.platform.ids import new_id
 from muliao.platform.tasks import TaskQueue
-from muliao.sessions.approvals import ApprovalAnswered, Choice
+from muliao.sessions.approvals import ApprovalAnswered, Choice, pins_in
 from muliao.sessions.deferred import CallResult
 from muliao.sessions.directory import add_in, keyed_rows_among
 from muliao.sessions.events import Receive, ReceiveKey, ReceiveNewSession
@@ -286,10 +286,11 @@ async def _resolve_answers(
         if call_id not in asks.answerable:
             raise Conflict(f"question {call_id!r} is not waiting for an answer in session {session_id}")
         resolved[call_id] = UserAnswered.of(answer_result(asks.answerable[call_id], given))
+    pins = await pins_in(s, session_id, list(approvals)) if approvals else {}
     for call_id, choice in approvals.items():
         if call_id not in asks.approvable:
             raise Conflict(f"call {call_id!r} is not waiting for approval in session {session_id}")
-        resolved[call_id] = ApprovalAnswered.of(choice)
+        resolved[call_id] = ApprovalAnswered.of(choice, pins[call_id])
     return resolved
 
 

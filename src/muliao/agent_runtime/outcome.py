@@ -6,7 +6,7 @@ require_approval / is_approved / always_allow_requested。换掉模型库时改�
 """
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, NoReturn
 
 from pydantic_ai import AgentRunResult, DeferredToolRequests, DeferredToolResults, RunContext, ToolDenied
@@ -29,6 +29,8 @@ class Paused:
 
     calls: tuple[ToolCallPart, ...]
     approvals: tuple[ToolCallPart, ...] = ()
+    # 等批准的调用 id -> 工具请求批准时定下的被批准对象的指纹（require_approval 的 pin），调用方记下、批准时随 Approval 交回
+    pins: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -40,9 +42,13 @@ class Approval:
     approved: bool
     note: str = ""
     always: bool = False
+    # 请求批准时工具定下的 pin（Paused.pins）；批准时交回，工具再执行时由 approved_pin 取出比对。没记下（收尾时只从
+    # 历史推出了等批准的调用）为 None，工具当作对不上
+    pin: str | None = None
 
 
 _ALWAYS = "always"
+_PIN = "pin"
 
 
 def defer_call() -> NoReturn:
@@ -50,10 +56,11 @@ def defer_call() -> NoReturn:
     raise CallDeferred()
 
 
-def require_approval() -> NoReturn:
+def require_approval(pin: str) -> NoReturn:
     """在工具里调用（参数都校验过之后）：这次调用要先得到批准，运行停在这里正常结束（Paused.approvals）；批准后
-    工具以同样的参数再被调用一次，那时 is_approved 为真。"""
-    raise ApprovalRequired()
+    工具以同样的参数再被调用一次，那时 is_approved 为真。pin：用户看到的以外、这次执行还取决于的东西的指纹
+    （如脚本内容）：批准后再执行时用 approved_pin 取回，和那时的比，不同就不执行（批准的不是这一份）。"""
+    raise ApprovalRequired(metadata={_PIN: pin})
 
 
 def is_approved(ctx: RunContext[Any]) -> bool:
@@ -66,11 +73,17 @@ def always_allow_requested(ctx: RunContext[Any]) -> bool:
     return ctx.tool_call_approved and bool((ctx.tool_call_metadata or {}).get(_ALWAYS))
 
 
+def approved_pin(ctx: RunContext[Any]) -> str | None:
+    """这次批准之后的再执行里，请求批准时定下的 pin（require_approval）；没记下时为 None。"""
+    return (ctx.tool_call_metadata or {}).get(_PIN) if ctx.tool_call_approved else None
+
+
 def outcome_of(result: AgentRunResult[str | DeferredToolRequests]) -> Finished | Paused:
     output = result.output
     if isinstance(output, str):
         return Finished(answer=output, messages=result.new_messages())
-    return Paused(calls=tuple(output.calls), approvals=tuple(output.approvals))
+    pins = {c.tool_call_id: output.metadata[c.tool_call_id][_PIN] for c in output.approvals}
+    return Paused(calls=tuple(output.calls), approvals=tuple(output.approvals), pins=pins)
 
 
 def deferred_tool_results(deferred: Mapping[str, object]) -> DeferredToolResults:
@@ -82,8 +95,8 @@ def deferred_tool_results(deferred: Mapping[str, object]) -> DeferredToolResults
     for call_id, result in deferred.items():
         if isinstance(result, Approval):
             approvals[call_id] = True if result.approved else ToolDenied(result.note)
-            if result.approved and result.always:
-                metadata[call_id] = {_ALWAYS: True}
+            if result.approved:
+                metadata[call_id] = {_ALWAYS: result.always, _PIN: result.pin}
         else:
             calls[call_id] = result
     return DeferredToolResults(calls=calls, approvals=approvals, metadata=metadata)

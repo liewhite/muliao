@@ -11,7 +11,7 @@ from muliao.agents.assets import load_tree
 from muliao.errors import Forbidden, InvalidInput
 from muliao.platform.sandbox import Category, Confinement, Sandbox, WritablePaths, real_forms, sandbox_for
 from muliao.platform.shell import run_bash
-from muliao.workspace.writable import DEFAULT_WRITABLE, Confiner, check_read, check_write, denial_note
+from muliao.workspace.writable import DEFAULT_WRITABLE, Confiner, denial_note, reach
 from tests.test_tools import run_tools
 
 ADAPTERS = [pytest.param("darwin", marks=pytest.mark.skipif(sys.platform != "darwin", reason="macOS only"))]
@@ -390,10 +390,12 @@ async def test_a_stdio_mcp_server_runs_inside_its_users_write_sandbox(container,
 
 def test_file_tools_are_refused_with_the_system_error_and_the_note(tmp_path):
     c = _confinement("darwin", [(True, tmp_path / "ok")])
-    check_write(c, tmp_path / "ok/f")
+    assert reach(c, tmp_path, "ok/f", "write") == tmp_path / "ok/f"
     with pytest.raises(Forbidden, match=r"Operation not permitted: '.*/no/f'\n\[.*write:path"):
-        check_write(c, tmp_path / "no/f")
-    check_write(_confinement("darwin", [(True, tmp_path / "ok")], mode="report"), tmp_path / "no/f")
+        reach(c, tmp_path, "no/f", "write")
+    assert reach(c, tmp_path, "no/f", "read") == tmp_path / "no/f"
+    report = _confinement("darwin", [(True, tmp_path / "ok")], mode="report")
+    assert reach(report, tmp_path, str(tmp_path / "no/f"), "write") == tmp_path / "no/f"
 
 
 def test_the_note_is_added_only_when_the_refused_path_is_outside(tmp_path):
@@ -520,7 +522,7 @@ async def test_report_mode_lets_reads_of_private_files_through(platform, tmp_pat
     )
     result = await _sh(c, tmp_path, f"cat {secret}")
     assert (result.exit_code, result.stdout) == (0, "key\n")
-    check_read(c, secret)
+    assert reach(c, tmp_path, str(secret), "read") == secret
 
 
 async def test_a_precheck_cannot_read_a_private_file(container, make_agent):
@@ -532,3 +534,39 @@ async def test_a_precheck_cannot_read_a_private_file(container, make_agent):
     runner = PrecheckRunner(container.vault, container.agents.workspace, container.confiner.of, 30, 1000)
     with pytest.raises(PrecheckFailed, match=r"Operation not permitted\n\[.*private files"):
         await runner.run(me.id, Precheck(command=f"cat {config}"), None)
+
+
+async def test_private_files_stay_private_under_another_spelling_and_through_share_file(
+    container, make_agent, models
+):
+    """#570：大小写不同的写法、share_file 都按同一个入口（writable.reach）判断，读不到私有文件。"""
+    config = container.settings.data_dir.parent / "config.toml"
+    config.write_text("password = 'hunter22'\n")
+    if not (config.parent / "CONFIG.TOML").exists():
+        pytest.skip("the file system here is case-sensitive")
+    carol = await make_agent("carol", model="tools")
+    shouted = str(config.parent / "CONFIG.TOML")
+    outputs = await run_tools(
+        container,
+        models,
+        carol.id,
+        [
+            ("read_file", {"path": shouted}),
+            ("share_file", {"path": shouted}),
+            ("share_file", {"path": str(config)}),
+            ("write_file", {"path": shouted, "content": "x"}),
+        ],
+    )
+    for o in outputs:
+        assert "Operation not permitted" in o and "only an agent with the admin role" in o
+    assert config.read_text() == "password = 'hunter22'\n"
+
+
+def test_writes_are_judged_by_the_files_identity_whatever_the_spelling(tmp_path):
+    (tmp_path / "Install").mkdir()
+    c = _confinement("darwin", [(True, tmp_path), (False, tmp_path / "Install")])
+    if not (tmp_path / "INSTALL").exists():
+        pytest.skip("the file system here is case-sensitive")
+    for spelling in ("Install/x", "INSTALL/x", "install/new/y"):
+        assert not c.writable.permits(tmp_path / spelling)
+    assert c.writable.permits(tmp_path / "other")

@@ -8,13 +8,14 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Literal, Protocol
+
+from muliao.platform.fs import real
 
 # 越界的写：enforce 拒绝；report 放行但由适配器记进系统日志（上线前试跑，统计漏掉的路径）
 Mode = Literal["enforce", "report"]
@@ -45,16 +46,14 @@ def expand(path: str, home: Path) -> Path:
 
 
 def real_forms(path: Path) -> tuple[Path, ...]:
-    """路径在文件系统里的写法：上级目录解析符号链接后的它（链接本身），以及连它一起解析后的（链接指向的）。系统按真实路径
-    判断，而 /tmp 这类上级是链接的路径、本身是链接的路径两种都会被写到。"""
-    path = Path(os.path.abspath(path))
-    forms = [Path(os.path.realpath(path.parent)) / path.name, Path(os.path.realpath(path))]
-    return tuple(dict.fromkeys(forms))
+    """路径在文件系统里的身份（platform.fs.real）：链接本身的，以及它指向的。系统按真实路径判断，而 /tmp 这类
+    上级是链接的路径、本身是链接的路径两种都会被写到。"""
+    return tuple(dict.fromkeys([real(path, follow=False), real(path)]))
 
 
 def covers(paths: Iterable[Path], path: Path) -> bool:
     """path（绝对路径）按它的真实路径落在 paths（真实路径）的某一个里：就是它，或在它下面。"""
-    target = Path(os.path.realpath(path))
+    target = real(path)
     return any(target == p or p in target.parents for p in paths)
 
 
@@ -74,7 +73,7 @@ class WritablePaths:
 
     def permits(self, path: Path) -> bool:
         """path（绝对路径）能不能写：按它最终写到的真实路径判断。"""
-        target = Path(os.path.realpath(path))
+        target = real(path)
         verdict = False
         for writable, rule in self.rules:
             if target == rule or rule in target.parents:

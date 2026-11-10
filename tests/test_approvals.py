@@ -15,6 +15,7 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.function import AgentInfo
 
+from muliao.agents.kinds import StoredKind
 from muliao.agents.skill_package import parse_frontmatter
 from muliao.errors import InvalidInput
 from muliao.platform.tables import Task, TaskStatus
@@ -410,3 +411,59 @@ def test_the_fingerprint_follows_a_symlinked_directory_and_survives_a_loop(tmp_p
     first = scripts.fingerprint()
     (outside / "x.sh").write_text("v2")
     assert scripts.fingerprint() != first
+
+
+# ---- #570：要批准的脚本按文件的身份认；批准的是请求时那一份 ----
+
+
+async def test_a_gated_script_called_by_another_spelling_still_waits_for_approval(
+    client, container, make_agent, models
+):
+    await login(client)
+    args = {**GATED, "script": "./SCRIPTS/Deploy.sh"}
+    session_id, gate, ran = await _gated(container, make_agent, models, args=args)
+    if gate.results and "has no script" in gate.results[0]:
+        pytest.skip("the file system here is case-sensitive")
+    assert gate.requests == 1 and not ran.exists()
+    assert _approval_states((await client.get(f"/api/sessions/{session_id}")).json()) == {"c1": "pending"}
+
+
+async def test_a_script_changed_after_approval_was_requested_does_not_run(
+    client, container, make_agent, models
+):
+    await login(client)
+    session_id, gate, ran = await _gated(container, make_agent, models)
+    script = container.settings.assets_dir / "alpha" / "skills" / "ops" / "scripts" / "deploy.sh"
+    script.write_text(SCRIPT + "echo extra\n")
+    assert await _decide(client, session_id, True) == 202
+    await drain(container)
+    assert not ran.exists()
+    [result] = gate.results
+    assert "not the version the user approved" in result and "nothing was run" in result
+
+
+async def test_an_approval_path_that_is_not_a_file_in_the_skill_keeps_the_skill_from_loading(
+    container, make_agent
+):
+    await make_agent("alpha")
+    base = container.settings.assets_dir / "alpha" / "skills" / "ops"
+    (base / "scripts").mkdir(parents=True)
+    for approval in ("[scripts/missing.sh]", "[scripts]", "[../../x.sh]"):
+        (base / "SKILL.md").write_text(f"---\ndescription: d\napproval: {approval}\n---\n")
+        snapshot = await container.assets.snapshot()
+        assert snapshot.get(StoredKind.SKILL, "ops") is None
+        [problem] = [p for p in snapshot.problems if p.path == base]
+        assert "approval" in problem.reason
+
+
+async def test_writing_a_skill_md_whose_approval_names_no_script_is_refused(container, make_agent, models):
+    from tests.test_tools import run_tools
+
+    me = await make_agent("alpha", model="tools")
+    md = container.settings.assets_dir / "alpha" / "skills" / "ops" / "SKILL.md"
+    content = "---\ndescription: d\napproval: [scripts/deploy.sh]\n---\n"
+    outputs = await run_tools(
+        container, models, me.id, [("write_file", {"path": str(md), "content": content})]
+    )
+    assert "create the script first" in outputs[0]
+    assert not md.exists()

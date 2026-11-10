@@ -8,7 +8,7 @@
 类别换成具体路径、命令怎么关进沙箱由执行层按当前系统做（platform.sandbox）。
 
 读只拦一处（#539）：平台的私有文件（config.Settings.private_files：配置、备份、推送私钥）只有 admin 能读，命令由沙箱拒绝、
-read_file 由 check_read 拒绝，补的说明同样走 Confinement.explain。防误操作（把密钥打进会话记录），不防故意。
+文件工具由 reach 拒绝，补的说明同样走 Confinement.explain。防误操作（把密钥打进会话记录），不防故意。
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ import logging
 import re
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import Literal
 
 import anyio
 
@@ -106,30 +107,26 @@ class Confiner:
         return Confinement(self._sandbox, writable, self._home, explain, unreadable)
 
 
-def check_write(confinement: Confinement, path: Path) -> None:
-    """文件工具写 path 之前：不在可写范围内时 Forbidden，说法与命令里 Python 被系统拒绝时一样，后面补同一句说明。只记录
-    不拦的模式下记一条日志放行。"""
-    if confinement.writable.permits(path):
-        return
-    if confinement.enforcing:
-        raise Forbidden(f"[Errno 1] Operation not permitted: '{path}'\n{confinement.explain(path)}")
-    log.warning(
-        "write outside writable paths (report mode)",
-        extra={"agent": confinement.writable.owner, "path": str(path)},
-    )
+# 文件工具对一个路径要做的：只读（read_file、share_file），或写（write_file、edit_file；写的也要读得了）
+Access = Literal["read", "write"]
 
 
-def check_read(confinement: Confinement, path: Path) -> None:
-    """read_file 读 path 之前：是它读不了的（平台的私有文件）时 Forbidden，说法与命令里被沙箱拒绝时一样。只记录不拦的
-    模式下记一条日志放行。"""
-    if confinement.readable(path):
-        return
+def reach(confinement: Confinement, workspace: Path, path: str, access: Access) -> Path:
+    """文件工具拿路径的唯一入口：模型给的 path（`~` 展开，相对路径以 workspace 为基准）换成绝对路径，并检查这个 agent
+    能不能这样访问它（按路径的身份，platform.fs.real：大小写不同、经符号链接的写法都按它指向的文件判断）。不能时
+    Forbidden，说法与命令里被沙箱拒绝时一样，后面补同一句说明；只记录不拦的模式下记一条日志放行。返回的是模型的写法
+    （展示、报错里用），身份另按 real 取。"""
+    p = Path(path).expanduser()
+    target = p if p.is_absolute() else workspace / p
+    if confinement.readable(target) and (access == "read" or confinement.writable.permits(target)):
+        return target
     if confinement.enforcing:
-        raise Forbidden(f"[Errno 1] Operation not permitted: '{path}'\n{confinement.explain(path)}")
+        raise Forbidden(f"[Errno 1] Operation not permitted: '{target}'\n{confinement.explain(target)}")
     log.warning(
-        "read of a private file (report mode)",
-        extra={"agent": confinement.writable.owner, "path": str(path)},
+        "file tool access outside the agent's paths (report mode)",
+        extra={"agent": confinement.writable.owner, "path": str(target), "access": access},
     )
+    return target
 
 
 # 写沙箱拒绝时系统报的错一律是 EPERM：各语言的说法大小写不一（Node `EPERM: operation not permitted`、Go

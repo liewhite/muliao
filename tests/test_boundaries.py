@@ -486,3 +486,36 @@ def test_tools_refuse_with_domain_errors_not_model_retry():
             ):
                 offenders.append(f"{path.relative_to(SRC)}:{getattr(node, 'lineno', '?')}")
     assert offenders == []
+
+
+def test_path_identity_is_computed_only_in_platform_fs():
+    """「两个路径是不是同一个、在不在某目录下」只经 platform.fs.real（#570）：APFS 不分大小写与正规化形式，realpath /
+    Path.resolve() 不纠正大小写，各处自己解析再按字符串比，`~/.MULIAO/CONFIG.toml` 就绕过了读写边界与审批。所以
+    fs.py 以外不得调用 os.path.realpath、无参的 .resolve()。"""
+    allowed = {SRC / "platform" / "fs.py"}
+    offenders = []
+    for path in SRC.rglob("*.py"):
+        if path in allowed or "webui" in path.parts:
+            continue
+        for node in ast.walk(ast.parse(path.read_text())):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            name = node.func.attr
+            if name == "realpath" or (name == "resolve" and not node.args and not node.keywords):
+                offenders.append(f"{path.relative_to(SRC)}:{node.lineno} {name}")
+    assert offenders == []
+
+
+def test_file_tools_read_and_write_text_only_through_platform_fs():
+    """文件工具的文本读写只经 platform.fs（read_text / write_text / write_atomic）：Python 默认的文本读会把 CRLF 换成 LF、
+    解码失败抛 UnicodeDecodeError 打崩整次运行（#570）。"""
+    offenders = []
+    for path in (SRC / "workspace").rglob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text())):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in ("read_text", "write_text")
+            ):
+                offenders.append(f"{path.relative_to(SRC)}:{node.lineno} {node.func.attr}")
+    assert offenders == []

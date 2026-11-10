@@ -7,14 +7,14 @@
 import asyncio
 import os
 import shlex
-from pathlib import PurePosixPath
 
 from pydantic_ai import FunctionToolset, RunContext
 
-from muliao.agent_runtime.api import always_allow_requested, is_approved, require_approval
+from muliao.agent_runtime.api import always_allow_requested, approved_pin, is_approved, require_approval
 from muliao.agents.api import AssetSource, SkillScripts, SkillStore, Vault
 from muliao.errors import InvalidInput, NotFound
 from muliao.files.api import FileStore
+from muliao.platform.fs import real, resolve_within
 from muliao.platform.shell import LEFT_RUNNING_NOTE, run_bash
 from muliao.platform.text_edit import truncate
 from muliao.platform.tool_views import TerminalBlock, ToolRender, ViewBlock, rendered_by
@@ -74,19 +74,19 @@ def _script_command(
     """skill 目录里的脚本加参数，拼成一条不经 shell 解析的命令；脚本执行前要用户批准时还给出它相对目录的路径
     （解析后的，始终允许按它认脚本），不用批准为 None。脚本必须落在目录里（经符号链接也不行）。"""
     directory = scripts.directory
-    root = directory.resolve()
-    path = (root / script).resolve()
-    if PurePosixPath(script).is_absolute() or not path.is_relative_to(root) or path == root:
+    try:
+        path = resolve_within(directory, script)
+    except InvalidInput as e:
         raise InvalidInput(
             f"script must be a path inside the skill's directory ({directory}), got {script!r}"
-        )
+        ) from e
     if not path.is_file():
         raise NotFound(f"skill {skill!r} has no script {script!r} (looked for {path})")
     if not os.access(path, os.X_OK):
         raise InvalidInput(
             f"{path} is not executable: a skill script needs a shebang line and the executable bit (chmod +x)"
         )
-    gated = path.relative_to(root).as_posix() if scripts.needs_approval(path) else None
+    gated = path.relative_to(real(directory)).as_posix() if scripts.needs_approval(path) else None
     return shlex.join([str(path), *args]), gated
 
 
@@ -154,24 +154,28 @@ def workspace_toolset(
         """
         found = await skills.scripts(skill, ctx.deps.agent_id)
         command, gated = await asyncio.to_thread(_script_command, found, skill, script, args)
-        # 要批准的脚本：用户这次点了始终允许就记下；还没批准的看有没有始终允许（workspace.grants）
+        # 要批准的脚本：按 skill 目录的指纹认是哪一份。批准后再执行时须与请求批准时的一样（批准的是那一份）；用户这次
+        # 点了始终允许就记下；还没批准的看有没有始终允许（workspace.grants）
         granted: int | None = None
-        if gated is not None and (always_allow_requested(ctx) or not is_approved(ctx)):
+        pin: str | None = None
+        if gated is not None:
             fingerprint = await asyncio.to_thread(found.fingerprint)
             call = ScriptCall.of(ctx.deps.agent_id, skill, gated, args, secrets, fingerprint)
-            if always_allow_requested(ctx):
-                await grants.grant(call, ctx.deps.session_id, ctx.tool_call_id)
+            if is_approved(ctx):
+                if approved_pin(ctx) != fingerprint:
+                    raise InvalidInput(
+                        f"the files of skill {skill!r} are not the version the user approved (they changed after "
+                        "approval was requested, or the request did not record the version); nothing was run. "
+                        "Call it again to ask the user to approve the current version."
+                    )
+                if always_allow_requested(ctx):
+                    await grants.grant(call, ctx.deps.session_id, ctx.tool_call_id)
             else:
                 granted = await grants.find(call)
+                if granted is None:
+                    pin = fingerprint
         result = await execute(
-            ctx.deps,
-            command,
-            timeout,
-            secrets,
-            background,
-            heartbeat_seconds,
-            shell=False,
-            ask_approval=gated is not None and not is_approved(ctx) and granted is None,
+            ctx.deps, command, timeout, secrets, background, heartbeat_seconds, shell=False, approval_pin=pin
         )
         if granted is None:
             return result
@@ -187,11 +191,11 @@ def workspace_toolset(
         heartbeat_seconds: float | None,
         *,
         shell: bool,
-        ask_approval: bool = False,
+        approval_pin: str | None = None,
     ) -> str:
         """run_shell 与 skill_run 共用的执行：前台或后台、参数用错场合的报错都一样。shell：command 是 agent 自己写的
-        （决定能不能注入 allow_shell = false 的 secret，Vault.resolve_many）。ask_approval：参数校验通过后先停下等用户批准
-        （require_approval），不去问一个参数就不对的调用。"""
+        （决定能不能注入 allow_shell = false 的 secret，Vault.resolve_many）。approval_pin：给了就在参数校验通过后先停下
+        等用户批准（require_approval，批准的是 pin 这一份），不去问一个参数就不对的调用。"""
         if not background:
             if heartbeat_seconds is not None:
                 raise InvalidInput(
@@ -202,8 +206,8 @@ def workspace_toolset(
                     "timeout is required for a foreground command: estimate how many seconds it needs "
                     "(no upper limit), or run it with `background: true`"
                 )
-            if ask_approval:
-                require_approval()
+            if approval_pin is not None:
+                require_approval(approval_pin)
             return await _run_foreground(vault, limits, confiner, scope, command, timeout, secrets, shell)
         if timeout is not None:
             raise InvalidInput(
@@ -211,8 +215,8 @@ def workspace_toolset(
                 "you want to hear about it, kill it with job_kill)"
             )
         check = check_interval(heartbeat_seconds)
-        if ask_approval:
-            require_approval()
+        if approval_pin is not None:
+            require_approval(approval_pin)
         job = await jobs.start(
             session_id=scope.session_id,
             agent_id=scope.agent_id,

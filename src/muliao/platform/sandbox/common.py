@@ -6,6 +6,8 @@ import shutil
 import sys
 from pathlib import Path
 
+from muliao.platform.fs import real
+
 # 家目录下的相对路径
 HOME_PACKAGES = (
     ".local",
@@ -53,5 +55,5 @@ def platform_install() -> tuple[Path, ...]:
     """运行中的服务的 Python 环境，以及 PATH 上指向它的 muliao 启动命令（uv tool 装在 ~/.local/bin 的链接）。"""
     env = Path(sys.prefix)
     found = shutil.which("muliao")
-    launcher = Path(found) if found is not None and env in Path(found).resolve().parents else None
+    launcher = Path(found) if found is not None and env in real(found).parents else None
     return (env, *((launcher,) if launcher is not None else ()))

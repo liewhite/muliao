@@ -9,6 +9,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, SecretStr, model_validator
 
+from muliao.platform.fs import real
 from muliao.platform.sandbox import Mode
 
 DEFAULT_CONFIG_PATH = Path("~/.muliao/config.toml")
@@ -211,7 +212,7 @@ class Settings(_Section):
 
 
 def load_settings(path: Path) -> Settings:
-    path = path.expanduser().resolve()
+    path = real(path.expanduser())
     with path.open("rb") as f:
         raw = tomllib.load(f)
     settings = Settings.model_validate(raw)

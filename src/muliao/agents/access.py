@@ -16,7 +16,6 @@ changeable / writable / usable。全部按一份资源快照（agents.assets.Sna
 
 from __future__ import annotations
 
-import os
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -36,6 +35,7 @@ from muliao.agents.permissions import (
     spec_of,
 )
 from muliao.errors import Forbidden
+from muliao.platform.fs import real
 
 
 @dataclass(frozen=True)
@@ -191,8 +191,8 @@ class WriteScope:
 
     def refusal(self, path: Path) -> str | None:
         """资源树里的 path 被拒时补的说明：是谁的、找谁授权；不在树里为 None（用通用的说明）。"""
-        tree = Path(os.path.realpath(self.tree))
-        target = Path(os.path.realpath(path))
+        tree = real(self.tree)
+        target = real(path)
         if target != tree and tree not in target.parents:
             return None
         snapshot = self.snapshot
@@ -225,8 +225,8 @@ def _containing(snapshot: Snapshot, target: Path) -> Asset | None:
     """target（真实路径）所在的那一项资源：就是它的文件，或在 skill 目录里。"""
     for kind in StoredKind:
         for a in snapshot.of_kind(kind):
-            real = Path(os.path.realpath(a.path))
-            if target == real or real in target.parents:
+            own = real(a.path)
+            if target == own or own in target.parents:
                 return a
     return None
 

@@ -19,7 +19,7 @@ from muliao.agents.api import AssetSource
 from muliao.errors import Forbidden, InvalidInput, NotFound
 from muliao.files.api import INLINE_IMAGE_TYPES, FileStore
 from muliao.platform import text_edit
-from muliao.platform.fs import write_atomic
+from muliao.platform.fs import read_text, real, write_atomic, write_text
 from muliao.platform.sandbox import Confinement
 from muliao.platform.text_edit import truncate
 from muliao.platform.tool_views import Args, CodeBlock, ToolRender, ViewBlock, diff, rendered_by
@@ -27,7 +27,7 @@ from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 from muliao.workspace import file_edit
 from muliao.workspace.file_edit import numbered
 from muliao.workspace.syntax_edit import PatternEdit, language_of
-from muliao.workspace.writable import Confiner, check_read, check_write
+from muliao.workspace.writable import Confiner, reach
 
 log = logging.getLogger(__name__)
 
@@ -144,11 +144,6 @@ def _io_errors_returned[**P, R](tool: Callable[P, Awaitable[R]]) -> Callable[P, 
     return wrapped
 
 
-def resolve(scope: RunScope, path: str) -> Path:
-    p = Path(path).expanduser()
-    return p if p.is_absolute() else scope.workspace / p
-
-
 def file_toolset(
     limits: ShellLimits, files: FileStore, confiner: Confiner, assets: AssetSource
 ) -> FunctionToolset[RunScope]:
@@ -192,8 +187,7 @@ def file_toolset(
         if not reads:
             if path is None:
                 raise InvalidInput("path is required (or pass reads)")
-            target = resolve(ctx.deps, path)
-            check_read(confinement, target)
+            target = reach(confinement, ctx.deps.workspace, path, "read")
             if media_type := _image_type(target):
                 if offset != 1 or limit != _DEFAULT_READ_LIMIT:
                     raise InvalidInput(f"offset/limit do not apply to an image file: {target}")
@@ -217,8 +211,7 @@ def file_toolset(
             path: File path.
             content: Full file content.
         """
-        target = resolve(ctx.deps, path)
-        check_write(await confiner.of(ctx.deps.agent_id), target)
+        target = reach(await confiner.of(ctx.deps.agent_id), ctx.deps.workspace, path, "write")
         existed = target.is_file()
         if assets.contains(target):
             await assets.vet(target, content)
@@ -227,8 +220,7 @@ def file_toolset(
                 _check_fresh(ctx.deps, target)
             write_atomic(target, content)
         else:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(content, encoding="utf-8")
+            write_text(target, content)
         _remember(ctx.deps, target)
         verb = "overwrote" if existed else "created"
         return f"{verb} {target} ({len(content.splitlines())} lines, {len(content)} chars)"
@@ -305,27 +297,30 @@ def file_toolset(
                     replace_all=replace_all,
                 ),
             )
-        # 同一个文件可能写成不同路径（相对/绝对、带 ..）：按真实路径认成一份，用第一次出现时的写法展示，
-        # 否则后写的一份会覆盖先写的
+        # 同一个文件可能写成不同路径（相对/绝对、带 ..、大小写不同）：按身份（real）认成一份，用第一次出现时的
+        # 写法展示，否则后写的一份会覆盖先写的
         same: dict[Path, Path] = {}
         before: dict[Path, str] = {}
+        # 按 CRLF 编辑的文件（_as_lf）：写回时换回 CRLF
+        crlf: set[Path] = set()
         # 读 before 时各文件的修改时间：校验（会 await）之后、写盘之前再核对，等待期间被别处改了就整次不写
         stamps: dict[Path, int] = {}
         located: list[_Located] = []
         confinement = await confiner.of(ctx.deps.agent_id)
         for i, e in enumerate(edits, 1):
-            given = _edit_target(ctx.deps, path, e, i)
+            given = _edit_target(ctx.deps.workspace, confinement, path, e, i)
             where = f"edit {i}: " if len(edits) > 1 else ""
             if not given.is_file():
                 raise NotFound(f"{where}file not found: {given}")
-            check_write(confinement, given)
             # 只读文件在任何写盘之前挡住，不留下改了一半的几个文件（写盘时的其他 IO 失败不在此保证内）
             if not os.access(given, os.W_OK):
                 raise InvalidInput(f"{where}file is not writable: {given}; nothing was written.")
-            target = same.setdefault(given.resolve(), given)
+            target = same.setdefault(real(given), given)
             if target not in before:
                 stamps[target] = target.stat().st_mtime_ns
-                before[target] = target.read_text(encoding="utf-8")
+                before[target], was_crlf = _as_lf(read_text(target))
+                if was_crlf:
+                    crlf.add(target)
             located.append(_Located(target, e))
         after, counts = file_edit.apply_each(before, [(c.target, c) for c in located])
         in_tree = {t for t in after if assets.contains(t)}
@@ -340,11 +335,12 @@ def file_toolset(
         # 全部校验通过才写盘；资源目录里的原子写入（读树的不会读到写了一半的文件）
         written: list[Path] = []
         for target, content in after.items():
+            stored = content.replace("\n", "\r\n") if target in crlf else content
             try:
                 if target in in_tree:
-                    write_atomic(target, content)
+                    write_atomic(target, stored)
                 else:
-                    target.write_text(content, encoding="utf-8")
+                    write_text(target, stored)
             except OSError as e:
                 done = (
                     f" Already written: {', '.join(map(str, written))}."
@@ -374,7 +370,7 @@ def file_toolset(
         Args:
             path: File path.
         """
-        target = resolve(ctx.deps, path)
+        target = reach(await confiner.of(ctx.deps.agent_id), ctx.deps.workspace, path, "read")
         if not target.is_file():
             raise NotFound(f"file not found: {target}")
         meta = await files.put_path(target.name, _media_type(target), target)
@@ -433,13 +429,13 @@ def _remember(scope: RunScope, target: Path) -> None:
     """记下这次驱动读到（或刚写成）的文件当时的修改时间（RunScope.reads）。读之前记：读的过程中被改了，记下的是旧的，
     之后覆盖时按「改过了」拒绝，不会放过。"""
     if target.is_file():
-        scope.reads[Path(os.path.realpath(target))] = target.stat().st_mtime_ns
+        scope.reads[real(target)] = target.stat().st_mtime_ns
 
 
 def _check_fresh(scope: RunScope, target: Path) -> None:
     """write_file 整体覆盖资源目录里已有的文件之前：这次驱动读过它、之后没被改过；否则拒绝，免得盖掉别处刚做的修改
     （共享记忆、access.toml 可能有几处同时在改）。"""
-    seen = scope.reads.get(Path(os.path.realpath(target)))
+    seen = scope.reads.get(real(target))
     if seen is None:
         raise InvalidInput(
             f"{target} is an existing AI asset file and write_file replaces it whole: read it with read_file "
@@ -461,13 +457,13 @@ def _read_parts(
     skipped: list[FileRange] = []
     budget = max_chars
     for part in reads:
-        target = resolve(scope, part.path)
-        body_budget = budget - len(str(target)) - _PART_OVERHEAD
+        # 标题里的路径是绝对路径（reach 的结果）；还没解析时按工作目录加上给的写法估（只会多估）
+        body_budget = budget - len(str(scope.workspace)) - len(part.path) - 1 - _PART_OVERHEAD
         if skipped or body_budget <= 0:
             skipped.append(part)
             continue
         try:
-            check_read(confinement, target)
+            target = reach(confinement, scope.workspace, part.path, "read")
             if _image_type(target):
                 raise InvalidInput("an image file cannot be read in reads; read it alone with path")
             _remember(scope, target)
@@ -515,7 +511,8 @@ def _read_range(target: Path, offset: int, limit: int, budget: int) -> _Excerpt:
         )
     if not target.is_file():
         raise NotFound(f"file not found: {target}")
-    lines = target.read_text(encoding="utf-8", errors="replace").splitlines()
+    # 只是看：不是 UTF-8 的字节显示成 �，不拒绝（日志里偶有坏字节）；改它时 edit_file 按 read_text 拒绝
+    lines = target.read_bytes().decode("utf-8", errors="replace").splitlines()
     first = offset - 1
     if offset > 1 and first >= len(lines):
         raise InvalidInput(f"offset {offset} is past the end: {target} has {len(lines)} lines")
@@ -548,12 +545,20 @@ def _read_range(target: Path, offset: int, limit: int, budget: int) -> _Excerpt:
     )
 
 
-def _edit_target(scope: RunScope, path: str | None, e: TextEdit, i: int) -> Path:
+def _edit_target(workspace: Path, confinement: Confinement, path: str | None, e: TextEdit, i: int) -> Path:
     """一处修改要改的文件：它自己的 path，没有就用顶层的。"""
     chosen = e.path if e.path is not None else path
     if chosen is None:
         raise InvalidInput(f"edit {i} has no path: give it its own path or pass the top-level path")
-    return resolve(scope, chosen)
+    return reach(confinement, workspace, chosen, "write")
+
+
+def _as_lf(text: str) -> tuple[str, bool]:
+    """编辑用的文本，以及它是不是通篇 CRLF：模型给的 old_text / new_text 只用 \\n，所以通篇 CRLF 的文件按 LF 编辑、
+    写回时换回 CRLF（不悄悄改掉文件的换行符）。两种混用的原样编辑。"""
+    if "\r\n" in text and "\n" not in text.replace("\r\n", ""):
+        return text.replace("\r\n", "\n"), True
+    return text, False
 
 
 def _edit_report(target: Path, before: str, content: str, count: int) -> str:

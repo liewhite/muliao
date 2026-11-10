@@ -9,7 +9,7 @@ docs/architecture.md「挂起的调用」。
 
 from __future__ import annotations
 
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from typing import Literal
 
 from pydantic import BaseModel
@@ -39,10 +39,13 @@ Choice = Literal["approve", "deny", "always"]
 
 
 class Decision(BaseModel):
-    """用户对一次等批准的调用的决定。always：批准时还要求以后同样的调用不再问（#531 之前的信件没有这一项）。"""
+    """用户对一次等批准的调用的决定。always：批准时还要求以后同样的调用不再问（#531 之前的信件没有这一项）。pin：用户批准的
+    是哪一份——请求批准时工具定下、记在 approval_requests 的 pin，提交决定时记进来，批准时交回给工具比对（没记下、#570
+    之前的信件为 None，工具当作对不上）。"""
 
     approved: bool
     always: bool = False
+    pin: str | None = None
 
 
 class ApprovalAnswered(BaseModel):
@@ -53,12 +56,15 @@ class ApprovalAnswered(BaseModel):
     result: Decision
 
     @classmethod
-    def of(cls, choice: Choice) -> ApprovalAnswered:
-        return cls(tool="approval", result=Decision(approved=choice != "deny", always=choice == "always"))
+    def of(cls, choice: Choice, pin: str | None) -> ApprovalAnswered:
+        return cls(
+            tool="approval",
+            result=Decision(approved=choice != "deny", always=choice == "always", pin=pin),
+        )
 
     def tool_return(self) -> object:
         if self.result.approved:
-            return Approval(approved=True, always=self.result.always)
+            return Approval(approved=True, always=self.result.always, pin=self.result.pin)
         return Approval(approved=False, note=DENIED)
 
     @staticmethod
@@ -81,12 +87,12 @@ def waiting_text(tools: Sequence[str]) -> str:
     return "等你批准：" + "、".join(tools)
 
 
-async def record_in(s: AsyncSession, session_id: str, call_ids: Collection[str]) -> None:
-    """这些调用停下来等批准了（运行收尾的事务里）。已记过的不再记（之前的尝试已收尾过）。"""
+async def record_in(s: AsyncSession, session_id: str, calls: Mapping[str, str | None]) -> None:
+    """这些调用停下来等批准了（运行收尾的事务里），连同工具请求批准时定下的 pin。已记过的不再记（之前的尝试已收尾过）。"""
     known = await requested_in(s, session_id)
-    for call_id in call_ids:
+    for call_id, pin in calls.items():
         if call_id not in known:
-            s.add(ApprovalRequest(session_id=session_id, call_id=call_id, created_at=utcnow()))
+            s.add(ApprovalRequest(session_id=session_id, call_id=call_id, pin=pin, created_at=utcnow()))
     await s.flush()
 
 
@@ -115,6 +121,16 @@ async def requested_in(s: AsyncSession, session_id: str) -> set[str]:
     """这个会话里停下来等过批准的调用 id（不论现在有没有结果）。"""
     rows = await s.scalars(select(ApprovalRequest.call_id).where(ApprovalRequest.session_id == session_id))
     return set(rows.all())
+
+
+async def pins_in(s: AsyncSession, session_id: str, call_ids: Collection[str]) -> dict[str, str | None]:
+    """这些等批准的调用请求批准时记下的 pin（用户提交决定时记进 Decision）。"""
+    rows = await s.execute(
+        select(ApprovalRequest.call_id, ApprovalRequest.pin).where(
+            ApprovalRequest.session_id == session_id, ApprovalRequest.call_id.in_(list(call_ids))
+        )
+    )
+    return {call_id: pin for call_id, pin in rows.all()}
 
 
 async def requested_among(s: AsyncSession, session_ids: Collection[str]) -> dict[str, set[str]]:

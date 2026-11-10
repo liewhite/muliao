@@ -4,7 +4,8 @@ RunEnded（通知领域订阅它做推送，issue 看板订阅它请 agent 表�
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,8 +33,9 @@ class RunEnd:
     # 停下来等用户回答提问：要告诉用户
     asked_user: bool
     stopped: bool
-    # 停下来等用户批准的调用 id：收尾时记下（sessions.approvals），不论有没有人在等都要告诉用户
-    approvals: tuple[str, ...] = ()
+    # 停下来等用户批准的调用 id -> 工具请求批准时定下的 pin（不知道为 None）：收尾时记下（sessions.approvals），
+    # 不论有没有人在等都要告诉用户
+    approvals: Mapping[str, str | None] = field(default_factory=dict)
 
 
 class RunFinisher:

@@ -52,6 +52,7 @@ from muliao.errors import (
     UpstreamFailed,
 )
 from muliao.platform.bus import SubscriptionEnded
+from muliao.platform.fs import resolve_within
 
 log = logging.getLogger(__name__)
 
@@ -189,14 +190,16 @@ def _mount_web(app: FastAPI, web_dir: Path) -> None:
         log.warning("web UI not built, serving API only", extra={"web_dir": str(web_dir)})
         return
     app.mount("/assets", StaticFiles(directory=web_dir / "assets"), name="assets")
-    root = web_dir.resolve()
 
     @app.get("/{path:path}", include_in_schema=False)
     async def spa(path: str) -> FileResponse:
         if path.startswith("api/"):
             raise HTTPException(status_code=404)
-        candidate = (web_dir / path).resolve()
-        if path and candidate.is_file() and candidate.is_relative_to(root):
+        try:
+            candidate = resolve_within(web_dir, path) if path else None
+        except InvalidInput:
+            candidate = None
+        if candidate is not None and candidate.is_file():
             return FileResponse(candidate)
         return FileResponse(index, headers={"Cache-Control": "no-cache"})
 
