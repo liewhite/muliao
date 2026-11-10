@@ -610,8 +610,8 @@ async def test_route_lines_hold_across_batches_and_a_batch_merges_lines_by_targe
 
     for line in ["still 5", "@route agent:beta", "@route new", "n1", "@route issue:5", "5 again"]:
         await pending.put(line)
-    # 同一目标的行合并；只有 `@route` 没有内容的地址也带上，投递时照样校验
-    assert pending.take() == ("@route issue:5\nstill 5\n5 again\n@route agent:beta\n@route new\nn1", 3)
+    # 同一目标的行合并；后面没有内容的地址不进事件
+    assert pending.take() == ("@route issue:5\nstill 5\n5 again\n@route new\nn1", 3)
 
 
 async def test_route_lines_alone_do_not_make_a_batch_ready():

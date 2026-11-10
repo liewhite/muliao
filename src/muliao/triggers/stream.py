@@ -173,34 +173,32 @@ class _Pending:
     max_bytes: int
     # 最近一个 `@route` 行的地址（None 为默认目标）
     address: str | None = None
-    # 这一批按目标攒的行；只有 `@route` 行、还没有内容的目标也在（地址照样要校验）
+    # 这一批按目标攒的行（只有内容到了的目标才在：`@route` 行只改 address，后面没内容的地址不进事件，也不校验）
     sections: dict[str | None, list[str]] = field(default_factory=dict)
-    # 这一批有内容的行数与合成后事件文本的字节数
+    # 这一批的行数与合成后事件文本的字节数
     lines: int = 0
     size: int = 0
-    # 这一批第一行内容到达的时间（anyio 时钟），debounce 从它算起
+    # 这一批第一行到达的时间（anyio 时钟），debounce 从它算起
     first_at: float = 0.0
     changed: asyncio.Event = field(default_factory=asyncio.Event)
 
     async def put(self, line: str) -> None:
-        address = route_line(line)
-        if address is not None:
+        if (address := route_line(line)) is not None:
             self.address = address
+            return
         while True:
-            # 合成文本里这一行占的字节：新出现的目标多一行 `@route`，`@route` 行本身不进文本
-            n = 0 if address is not None else len(line.encode()) + 1
+            # 合成文本里这一行占的字节：这一批新出现的目标多一行 `@route`
+            n = len(line.encode()) + 1
             if self.address is not None and self.address not in self.sections:
                 n += len(route_header(self.address).encode()) + 1
             if not self.lines or self.size + n <= self.max_bytes:
                 break
             self.changed.clear()
             await self.changed.wait()
-        body = self.sections.setdefault(self.address, [])
-        if address is None:
-            if not self.lines:
-                self.first_at = anyio.current_time()
-            body.append(line)
-            self.lines += 1
+        if not self.lines:
+            self.first_at = anyio.current_time()
+        self.sections.setdefault(self.address, []).append(line)
+        self.lines += 1
         self.size += n
         self.changed.set()
 
