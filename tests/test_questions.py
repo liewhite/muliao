@@ -557,7 +557,7 @@ def test_an_answer_for_another_tool_than_the_pending_call_is_an_error():
     from muliao.sessions.deferred import AgentAnswer, AgentAnswered
     from muliao.sessions.pending import HandedOut, deferred_results
 
-    call = ToolCallPart("ask_user", {"questions": []}, tool_call_id="c")
+    call = ToolCallPart("ask_user", {"questions": QUESTIONS}, tool_call_id="c")
     wrong = AgentAnswered.of(AgentAnswer(text="hi", attachments=[]))
     with pytest.raises(RuntimeError, match="got an answer for ask_agent"):
         deferred_results({"c": call}, {"c": wrong}, HandedOut(frozenset(), frozenset()))
@@ -586,16 +586,35 @@ def test_every_deferred_kind_has_its_envelope_in_call_result():
 
 def test_an_ask_whose_arguments_were_rejected_has_no_questions():
     # 参数被工具 schema 退回的提问不是提问（transcript 按普通工具调用展示），解析不抛异常
-    import pytest
-    from pydantic import ValidationError
     from pydantic_ai.messages import ToolCallPart
 
     from muliao.sessions.deferred import questions_in
-    from muliao.sessions.questions import shown_questions
 
     for args in ({"questions": []}, "{not json", {}):
-        call = ToolCallPart("ask_user", args, tool_call_id="a")
-        assert shown_questions(call) == []
-        # 挂起的调用参数不合法是数据与代码不一致：报错，不当成「没有问题」
-        with pytest.raises(ValidationError):
-            questions_in(call)
+        assert questions_in(ToolCallPart("ask_user", args, tool_call_id="a")) == []
+
+
+def test_an_ask_with_unchecked_arguments_left_by_an_interruption_is_an_ordinary_call():
+    # #563：回复在工具执行前保存，参数校验（与退回重试的结果）在这一步结束才保存。这一步中途被打断，历史里留下
+    # 一个没结果、参数从没校验过的 ask_user：参数不合法就不是挂起的提问，停止与续跑都按普通调用补结果
+    from pydantic_ai.messages import ModelResponse, ToolCallPart
+
+    from muliao.sessions.consumer import interrupted_calls, resumable
+    from muliao.sessions.history import stopped_results
+    from muliao.sessions.pending import HandedOut, open_asks_of, pending_calls
+
+    handed = HandedOut(frozenset(), frozenset())
+    bad = ToolCallPart("ask_user", {"questions": []}, tool_call_id="bad")
+    history = [ModelResponse(parts=[bad])]
+
+    assert pending_calls(history, handed) == {}
+    assert open_asks_of(history, [], frozenset()).answerable == {}
+    assert [c.tool_call_id for c in interrupted_calls(history, handed)] == ["bad"]
+    assert resumable(history, handed)
+    (stopped,) = stopped_results(history)
+    assert [p.tool_call_id for p in stopped.parts] == ["bad"]
+
+    # 参数合法的提问照旧挂着：停止时不补结果
+    good = ToolCallPart("ask_user", {"questions": QUESTIONS}, tool_call_id="good")
+    assert stopped_results([ModelResponse(parts=[good])]) == []
+    assert list(pending_calls([ModelResponse(parts=[good])], handed)) == ["good"]

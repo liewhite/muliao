@@ -34,8 +34,8 @@ from muliao.sessions.conventions import (
     parse_event,
     run_context_index,
 )
-from muliao.sessions.deferred import asks_user
-from muliao.sessions.questions import AnsweredQuestion, AskResult, Question, shown_questions
+from muliao.sessions.deferred import asks_user, questions_in
+from muliao.sessions.questions import AnsweredQuestion, AskResult, Question
 from muliao.sessions.sources import EventSource, parse_source
 
 ItemType = Literal[
@@ -129,7 +129,7 @@ def call_item(part: ToolCallPart, started_at: datetime | None, renders: ToolRend
         at=started_at,
         view=_call_view(part, renders),
     )
-    if asks_user(part.tool_name) and (questions := shown_questions(part)):
+    if questions := questions_in(part):
         item.ask = AskView(status="asking", questions=questions, answers=[], note=None)
     return item
 

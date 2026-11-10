@@ -309,7 +309,7 @@ def stopped_results(history: Sequence[ModelMessage]) -> list[ModelMessage]:
     """没出结果的工具调用补上「被用户停止、可能已部分执行」的结果；等用户回答的提问除外（它在等人回答，不是没做完
     的调用，用户仍可回答）。"""
     return _results_for(
-        [c for c in unanswered_calls(history) if not kept_open_on_stop(c.tool_name)],
+        [c for c in unanswered_calls(history) if not kept_open_on_stop(c)],
         STOPPED_TOOL_RESULT,
         "success",
     )

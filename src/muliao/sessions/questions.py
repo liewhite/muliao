@@ -82,17 +82,11 @@ _ASK_ARGS: TypeAdapter[_AskArgs] = TypeAdapter(_AskArgs)
 
 
 def questions_of(call: ToolCallPart) -> list[Question]:
-    """挂起的 ask_user 调用里的问题：一般已通过同一个 Questions 类型的校验（中途打断留下的没校验过的调用见 #563），不合法（ValidationError）是
-    数据与代码不一致。"""
-    return _ASK_ARGS.validate_json(call.args_as_json_str()).questions
-
-
-def shown_questions(call: ToolCallPart) -> list[Question]:
-    """展示一次 ask_user 调用时的问题（sessions.transcript）。展示的调用参数可以不合法：被工具 schema 退回、交还模型
-    重试的（结果是 tool_error，界面按普通调用展示，见 transcript.annotate_asks），或运行中刚生成、还没校验的。这时
-    没有问题。"""
+    """一次 ask_user 调用里的问题，按工具参数的同一个 Questions 类型解析。参数可以不合法：被工具 schema 退回、交还
+    模型重试的，运行中刚生成、还没校验的，或这一步中途被打断、从没校验过的（回复在工具执行前保存，#563）。这时
+    没有问题，这次调用不是提问（deferred.deferred_call）。"""
     try:
-        return questions_of(call)
+        return _ASK_ARGS.validate_json(call.args_as_json_str()).questions
     except ValidationError:
         return []
 

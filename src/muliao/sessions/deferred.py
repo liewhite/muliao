@@ -83,7 +83,7 @@ class DeferredKind:
     replayable: bool
     # 用户停止运行时不补「已停止」的结果，仍挂着等回答
     kept_open_on_stop: bool
-    # 调用里是给用户的提问时，从调用参数取出问题（停下时告诉用户，界面按提问展示）；不是提问为 None
+    # 调用里是给用户的提问时，从调用参数取出问题（停下时告诉用户，界面按提问展示），参数不合法时为空；不是提问为 None
     questions: Callable[[ToolCallPart], list[Question]] | None
 
     def __post_init__(self) -> None:
@@ -128,10 +128,18 @@ def asks_user(name: str) -> bool:
     return _flag(name, lambda t: t.questions is not None)
 
 
+def deferred_call(call: ToolCallPart) -> DeferredKind | None:
+    """这次调用按工具名认的挂起规则；不是挂起的工具为 None。提问的参数不合法（没有问题）时也为 None：这样的调用
+    没执行过（中途打断留下的，或被退回重试的），不是在等用户回答，停止与续跑都按普通调用补结果（#563）。"""
+    tool = deferred_tool(call.tool_name)
+    if tool is not None and tool.questions is not None and not tool.questions(call):
+        return None
+    return tool
+
+
 def questions_in(call: ToolCallPart) -> list[Question]:
-    """挂起的调用里给用户的问题；不是提问的调用没有。提问至少有一个问题（questions.Questions），所以非空就是提问：
-    要的是问题时只用它判断，不再先问 asks_user。只用于挂起的调用（参数一般已校验过，例外见 #563）；展示任意调用用
-    questions.shown_questions。"""
+    """调用里给用户的问题；不是提问、或参数不合法的调用没有。提问至少有一个问题（questions.Questions），所以非空
+    就是提问：要的是问题时只用它判断，不再先问 asks_user。"""
     tool = deferred_tool(call.tool_name)
     return [] if tool is None or tool.questions is None else tool.questions(call)
 
@@ -141,6 +149,7 @@ def replayable(name: str) -> bool:
     return _flag(name, lambda t: t.replayable)
 
 
-def kept_open_on_stop(name: str) -> bool:
-    """用户停止运行时这个工具的调用仍挂着（DeferredKind.kept_open_on_stop）。"""
-    return _flag(name, lambda t: t.kept_open_on_stop)
+def kept_open_on_stop(call: ToolCallPart) -> bool:
+    """用户停止运行时这次调用仍挂着（DeferredKind.kept_open_on_stop，按 deferred_call 认）。"""
+    tool = deferred_call(call)
+    return tool is not None and tool.kept_open_on_stop

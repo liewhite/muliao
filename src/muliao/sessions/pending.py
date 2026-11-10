@@ -27,7 +27,7 @@ from muliao.sessions.deferred import (
     CallResult,
     DeferredKind,
     call_result,
-    deferred_tool,
+    deferred_call,
     questions_in,
 )
 from muliao.sessions.history import since_last_response
@@ -60,10 +60,11 @@ def pending_calls(history: Sequence[ModelMessage], handed: HandedOut) -> dict[st
 
 def kind_of(call: ToolCallPart, handed: HandedOut) -> DeferredKind | None:
     """这次调用若挂起，是哪一种（deferred.KINDS）：记过等批准的是等批准，否则按工具名认；都不是为 None。两者互斥：
-    挂起的工具请求批准时 consumer.end_of 当场报错，等批准的记录里不会有它们的调用。"""
+    挂起的工具请求批准时 consumer.end_of 当场报错，等批准的记录里不会有它们的调用。参数不合法的提问不算（
+    deferred.deferred_call）。"""
     if call.tool_call_id in handed.approvals:
         return AWAITING_APPROVAL
-    return deferred_tool(call.tool_name)
+    return deferred_call(call)
 
 
 def _is_pending(call: ToolCallPart, handed: HandedOut) -> bool:
