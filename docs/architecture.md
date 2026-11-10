@@ -372,7 +372,7 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
 
 | 种类（信封 `tool`） | 要占用才算挂起（`needs_hold`） | 没交出去时可原样重放（`replayable`） | 停止时仍挂着（`kept_open_on_stop`） | 调用里给用户的问题（`questions`） | 没等到回答就继续时的结果（`skipped`） |
 |---|---|---|---|---|---|
-| `ask_user` | 否 | 否（没结果的总是挂着） | 是 | `questions_of`（参数没通过校验的不是提问，没有问题） | 没回答 / 跳过 |
+| `ask_user` | 否 | 否（没结果的总是挂着） | 是 | `questions_of`（挂起的调用参数已校验，不合法即报错；界面展示任意调用用宽容的 `shown_questions`） | 没回答 / 跳过 |
 | `ask_agent` | 是 | 是 | 否 | 无 | `STILL_WORKING` |
 | `approval`（等批准） | 否 | 否 | 否 | 无 | `NOT_DECIDED` |
 

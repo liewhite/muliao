@@ -9,7 +9,8 @@ from pydantic_ai import FunctionToolset, RunContext
 from muliao.agent_runtime.api import defer_call
 from muliao.errors import Conflict
 from muliao.platform.tooling import TOOL_MAX_RETRIES, Audience, RunScope
-from muliao.sessions.questions import ASK_USER, Questions
+from muliao.sessions.deferred import ASK_USER_KIND
+from muliao.sessions.questions import Questions
 
 NO_USER_WAITING = (
     "No user is waiting for this run's answer, so nobody can answer questions here. Decide yourself, "
@@ -27,7 +28,7 @@ REJECTED: dict[Audience, str] = {Audience.AGENT: ASKED_BY_AGENT, Audience.NONE: 
 def ask_user_toolset() -> FunctionToolset[RunScope]:
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
-    @ts.tool(name=ASK_USER)
+    @ts.tool(name=ASK_USER_KIND.name)
     async def ask_user(
         ctx: RunContext[RunScope],
         questions: Questions,

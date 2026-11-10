@@ -586,10 +586,16 @@ def test_every_deferred_kind_has_its_envelope_in_call_result():
 
 def test_an_ask_whose_arguments_were_rejected_has_no_questions():
     # 参数被工具 schema 退回的提问不是提问（transcript 按普通工具调用展示），解析不抛异常
+    import pytest
+    from pydantic import ValidationError
     from pydantic_ai.messages import ToolCallPart
 
     from muliao.sessions.deferred import questions_in
+    from muliao.sessions.questions import shown_questions
 
-    assert questions_in(ToolCallPart("ask_user", {"questions": []}, tool_call_id="a")) == []
-    assert questions_in(ToolCallPart("ask_user", "{not json", tool_call_id="b")) == []
-    assert questions_in(ToolCallPart("ask_user", {}, tool_call_id="c")) == []
+    for args in ({"questions": []}, "{not json", {}):
+        call = ToolCallPart("ask_user", args, tool_call_id="a")
+        assert shown_questions(call) == []
+        # 挂起的调用参数不合法是数据与代码不一致：报错，不当成「没有问题」
+        with pytest.raises(ValidationError):
+            questions_in(call)

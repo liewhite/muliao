@@ -5,14 +5,12 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Annotated, Final, Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from pydantic_ai.messages import ToolCallPart
 
 from muliao.errors import InvalidInput
-
-ASK_USER: Final = "ask_user"
 
 
 class Option(BaseModel):
@@ -84,10 +82,17 @@ _ASK_ARGS: TypeAdapter[_AskArgs] = TypeAdapter(_AskArgs)
 
 
 def questions_of(call: ToolCallPart) -> list[Question]:
-    """ask_user 调用里的问题，参数一次解析：参数没通过 Questions 校验的调用被工具 schema 退回给模型重试（结果是
-    tool_error），它不是提问，没有问题。挂起的调用参数都已通过同一个类型的校验。"""
+    """挂起的 ask_user 调用里的问题：能挂起就说明参数已通过同一个 Questions 类型的校验，不合法（ValidationError）是
+    数据与代码不一致。"""
+    return _ASK_ARGS.validate_json(call.args_as_json_str()).questions
+
+
+def shown_questions(call: ToolCallPart) -> list[Question]:
+    """展示一次 ask_user 调用时的问题（sessions.transcript）。展示的调用参数可以不合法：被工具 schema 退回、交还模型
+    重试的（结果是 tool_error，界面按普通调用展示，见 transcript.annotate_asks），或运行中刚生成、还没校验的。这时
+    没有问题。"""
     try:
-        return _ASK_ARGS.validate_json(call.args_as_json_str()).questions
+        return questions_of(call)
     except ValidationError:
         return []
 

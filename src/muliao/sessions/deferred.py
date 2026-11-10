@@ -22,8 +22,6 @@ from muliao.sessions.answers import Answer
 from muliao.sessions.approvals import ApprovalAnswered
 from muliao.sessions.questions import Question, UserAnswered, questions_of
 
-ASK_AGENT: Final = "ask_agent"
-
 # ask_agent 答复之前来了新消息：这次调用不再等，模型知道回答之后会作为事件送达
 STILL_WORKING = (
     "A new message arrived before the agent you asked answered. Its answer will reach you as an event "
@@ -104,7 +102,8 @@ ASK_USER_KIND: Final = DeferredKind(
 ASK_AGENT_KIND: Final = DeferredKind(
     answer=AgentAnswered, needs_hold=True, replayable=True, kept_open_on_stop=False, questions=None
 )
-# 等批准的调用：可能要批准的工具是普通工具，其余规则同普通工具：被打断不重放，用户停止时补「已停止」
+# 等批准的调用。replayable、kept_open_on_stop 两项不被读取：等批准的调用按工具名走普通工具的规则（被打断不重放，
+# 用户停止时补「已停止」），这里填的是与之一致的值
 AWAITING_APPROVAL: Final = DeferredKind(
     answer=ApprovalAnswered, needs_hold=False, replayable=False, kept_open_on_stop=False, questions=None
 )
@@ -130,8 +129,9 @@ def asks_user(name: str) -> bool:
 
 
 def questions_in(call: ToolCallPart) -> list[Question]:
-    """调用里给用户的问题；不是提问的调用（包括参数被退回的提问）没有。提问至少有一个问题（questions.Questions），
-    所以非空就是提问：要的是问题时只用它判断，不再先问 asks_user。"""
+    """挂起的调用里给用户的问题；不是提问的调用没有。提问至少有一个问题（questions.Questions），所以非空就是提问：
+    要的是问题时只用它判断，不再先问 asks_user。只用于挂起的调用（参数已校验过）；展示任意调用用
+    questions.shown_questions。"""
     tool = deferred_tool(call.tool_name)
     return [] if tool is None or tool.questions is None else tool.questions(call)
 

@@ -11,7 +11,7 @@ from muliao.platform.db import Database
 from muliao.platform.text_edit import truncate
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 from muliao.sessions.activity import WorkState
-from muliao.sessions.deferred import ASK_AGENT
+from muliao.sessions.deferred import ASK_AGENT_KIND
 from muliao.sessions.halt import Halted, StopSession
 from muliao.sessions.threads import Threads, validate_thread
 from muliao.sessions.work import check_interval
@@ -103,7 +103,7 @@ def delegation_toolset(
                 )
         return f"delegated to {target.name} in thread {validate_thread(thread)!r}"
 
-    @ts.tool(name=ASK_AGENT)
+    @ts.tool(name=ASK_AGENT_KIND.name)
     async def ask_agent(
         ctx: RunContext[RunScope],
         agent: str,

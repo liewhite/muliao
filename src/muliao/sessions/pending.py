@@ -59,7 +59,8 @@ def pending_calls(history: Sequence[ModelMessage], handed: HandedOut) -> dict[st
 
 
 def kind_of(call: ToolCallPart, handed: HandedOut) -> DeferredKind | None:
-    """这次调用若挂起，是哪一种（deferred.KINDS）：记过等批准的是等批准，否则按工具名认；都不是为 None。"""
+    """这次调用若挂起，是哪一种（deferred.KINDS）：记过等批准的是等批准，否则按工具名认；都不是为 None。两者互斥：
+    挂起的工具请求批准时 consumer.end_of 当场报错，等批准的记录里不会有它们的调用。"""
     if call.tool_call_id in handed.approvals:
         return AWAITING_APPROVAL
     return deferred_tool(call.tool_name)
@@ -115,7 +116,7 @@ def deferred_results(
     回答信封的 skipped：ask_user 记为没回答（这次回答了别的提问时是跳过了它们），ask_agent 记为回答之后
     作为事件送达；等批准的记为没批准。
 
-    spent：批准之前已经交给过运行去执行的调用（sessions.approvals.take_in）。批准后工具在运行开头就执行，执行完
+    spent：批准之前已经交给过运行去执行的调用（approved_calls(answers) 的子集）（sessions.approvals.take_in）。批准后工具在运行开头就执行，执行完
     的结果随下一步保存；批准再次被取走、调用还没有结果，说明上一次可能在执行中被打断（进程退出，或运行最终失败后
     被新消息、手动重试接手）：不再执行，给「被中断」的结果，由模型查过再决定（同 docs/architecture.md「从哪里
     开始」不重新执行被打断的调用）。"""
