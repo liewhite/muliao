@@ -282,7 +282,7 @@ def _check_assignable(roles: Mapping[str, Role], names: Sequence[str]) -> None:
 
 def check_rules(snapshot: Snapshot, rules: Rules, before: Rules = Rules()) -> None:
     """写入一组规则（agent 自己的 allow / deny 或角色的）之前的全部校验：形式合法，新加的匹配快照里的资源。读树时对已有
-    内容用同样的形式规则（agents.access_file，坏的跳过并报出）。"""
+    内容用同样的形式规则（agents.access_file，任何一处不合法整份作废）。"""
     check_patterns(rules.allow)
     check_patterns(rules.deny)
     assets = [pattern_of(Kind(k.value), n) for k, by_name in snapshot.assets.items() for n in by_name]

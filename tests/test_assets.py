@@ -3,9 +3,11 @@
 
 import json
 import os
+import tomllib
 from pathlib import Path
 
 import pytest
+import tomlkit
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo
 
@@ -242,7 +244,8 @@ async def test_editing_agent_toml_takes_effect_and_a_broken_one_fails_the_run(co
     assert turn.status == TaskStatus.FAILED and "no loadable directory" in (turn.error or "")
 
 
-async def test_access_toml_skips_only_the_broken_rules(container, make_agent):
+async def test_access_toml_references_to_missing_things_only_narrow(container, make_agent):
+    """只引用了不存在的东西（没加载的 agent、匹配不上任何工具的规则）与写了隐含的 base，记问题、其余照常（#573）。"""
     alpha = await make_agent("alpha")
     skill(root(container) / "platform" / "skills" / "digest")
     write(
@@ -253,19 +256,94 @@ description = "reads"
 allow = ["use:skill:digest", "use:tool:no_such_tool"]
 
 [agents.alpha]
-roles = ["reader", "missing"]
-allow = ["bogus"]
+roles = ["reader", "base"]
 
 [agents.nobody]
 roles = []
 """,
     )
     snapshot = await container.assets.snapshot()
-    assert snapshot.roles["reader"].rules.allow == ("use:skill:digest",)
     assert snapshot.rules_of(alpha.id).roles == ("reader",)
-    assert snapshot.rules_of(alpha.id).allow == ()
-    assert len(snapshot.problems) == 4
+    assert len(snapshot.problems) == 3
     assert [s.name for s in await container.skills.index(alpha.id)] == ["digest"]
+
+
+def _drop_watcher(doc: dict) -> None:
+    del doc["roles"]["watcher"]
+
+
+def _drop_alpha(doc: dict) -> None:
+    del doc["agents"]["alpha"]
+
+
+def _alpha_typo(doc: dict) -> None:
+    doc["agents"]["alpha"]["roles"] = ["watchr"]
+
+
+def _roles_not_a_table(doc: dict) -> None:
+    doc["roles"] = []
+    doc["agents"]["alpha"]["roles"] = []
+
+
+@pytest.mark.parametrize(
+    ("mutate", "extra"),
+    [
+        (
+            _drop_watcher,
+            '[roles.watcher]\ndescription = "w"\ndeny = ["use:tool:run_shell"]\nallw = []\n',
+        ),  # 键拼错
+        (
+            _drop_watcher,
+            '[roles.watcher]\ndescription = "w"\ndeny = ["use:tool:run_shell", "bogus"]\n',
+        ),  # deny 写错一条
+        (_drop_alpha, '[agents.alpha]\nroles = ["watcher"]\nrole = []\n'),  # agent 一节键拼错
+        (_alpha_typo, ""),  # 引用的角色名拼错：跳过会丢掉它的 deny
+        (_roles_not_a_table, ""),  # roles 不是表
+        (lambda doc: None, "[other]\n"),  # 不认识的顶层表
+        (lambda doc: None, '[roles."Bad Name"]\ndescription = "x"\n'),  # 角色名不合法
+        (lambda doc: None, '[roles.empty]\ndescription = " "\n'),  # 角色描述为空
+        (lambda doc: None, '[agents.ghost]\ndeny = ["bogus"]\n'),  # 没加载的 agent 那一节里的规则写坏
+    ],
+)
+async def test_any_malformed_part_invalidates_the_whole_access_toml(container, make_agent, mutate, extra):
+    """形式上任何一处不合法整份作废、沿用上份规则（#573 延伸 #550）：跳过写坏的那一条（尤其 deny）等于放宽权限。"""
+    boss = await make_agent("boss", roles=("admin",))
+    await container.distribution.create(RoleSpec("watcher", "w", [], ["use:tool:run_shell"]), actor="user")
+    alpha = await make_agent("alpha", roles=("watcher",))
+    path = root(container) / "platform" / "access.toml"
+    before = await container.assets.snapshot()
+    doc = tomllib.loads(path.read_text())
+    mutate(doc)
+    write(path, tomlkit.dumps(doc) + "\n" + extra)
+    snapshot = await container.assets.snapshot()
+    assert snapshot.administers(boss.id)
+    assert snapshot.rules_of(alpha.id) == before.rules_of(alpha.id)
+    assert snapshot.roles["watcher"] == before.roles["watcher"]
+    reported = [p.reason for p in snapshot.problems_for(boss.id) if p.path == path]
+    assert reported and all("last read successfully stay in effect" in r for r in reported)
+    # 平台自己的写入（界面改角色、建 / 改 / 删 agent）在不合法的文件上一律拒绝，不写一半
+    with pytest.raises(Conflict, match="fix it first"):
+        await container.distribution.create(RoleSpec("other", "o", [], []), actor="user")
+    with pytest.raises(Conflict, match="fix it first"):
+        await make_agent("beta")
+    assert not (root(container) / "beta").exists()
+    with pytest.raises(Conflict, match="fix it first"):
+        await container.agents.update(alpha.id, AgentPatch(name="gamma"), actor="user")
+    assert (root(container) / "alpha").is_dir() and not (root(container) / "gamma").exists()
+    with pytest.raises(Conflict, match="fix it first"):
+        await container.agent_lifecycle.delete(alpha.id, actor="user")
+    assert (await container.agents.get(alpha.id)).name == "alpha"
+
+
+async def test_deleting_a_role_still_referenced_by_an_unloaded_agent_is_refused(container, make_agent):
+    """平台自己改完的 access.toml 也要合法：没加载的 agent 那一节还引用着的角色删不掉，文件不变。"""
+    await container.distribution.create(RoleSpec("watcher", "w", [], ["use:tool:run_shell"]), actor="user")
+    path = root(container) / "platform" / "access.toml"
+    write(path, path.read_text() + '\n[agents.ghost]\nroles = ["watcher"]\n')
+    before = path.read_text()
+    with pytest.raises(Conflict, match="not defined"):
+        await container.distribution.delete("watcher", actor="user")
+    assert path.read_text() == before
 
 
 async def test_an_unparsable_access_toml_keeps_the_last_rules_and_reports_to_their_admin(

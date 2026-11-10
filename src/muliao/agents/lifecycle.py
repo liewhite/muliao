@@ -76,6 +76,9 @@ class AgentLifecycle:
         if blocking:
             log.info("agent deletion refused: busy", extra={"agent": agent_id, "blocked_by": blocking})
             raise Conflict(f"agent {agent.name!r} is working right now; stop its sessions first, then delete")
+        # 删除最后要改 access.toml（_retire_assets）：它不合法时先拒绝，不让 agent 停在正在删除、一直重放
+        snapshot = await self._source.snapshot()
+        await asyncio.to_thread(access_file.check_valid, snapshot.access_path)
         async with self._db.transaction() as s:
             await mark_deleting_in(s, agent_id, actor)
             self._messaging.publish_in(s, AgentDeleting(agent_id=agent_id))

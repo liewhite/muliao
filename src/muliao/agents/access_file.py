@@ -1,11 +1,12 @@
 """`platform/access.toml`（角色定义、各 agent 的角色与 allow / deny）的格式：读（read / parse）与平台自己写（edit 加各项
 改动）都在这一处。
 
-读：坏掉的单条规则、不认识的角色各自跳过并记一条问题，其余照常（不让一个笔误拿掉一个 agent 的全部角色）；整个文件读不
-出来时 readable 为 False（只剩内置角色的固定部分，没有任何 agent 的规则），由读树的一方决定沿用什么（agents.assets）。
+读：语法、字段、规则格式任何一处不合法，整份都不合法（readable 为 False，只剩内置角色的固定部分，没有任何 agent 的
+规则），由读树的一方决定沿用什么（agents.assets，#550）——跳过写坏的一条（尤其 deny 或带 deny 的角色）等于放宽权限
+（#573）。只引用了不存在的东西（没加载的 agent 目录、未知角色）只收窄：跳过那个引用、记一条问题，其余照常。
 纯函数，问题交给调用方（读树的 agents.assets、写前校验的 agents.asset_files）。
-写：界面上的角色与 agent 规则、建 / 改名 / 删 agent，用 tomlkit 读改写，人手写的注释与排版保留；调用方在
-AssetSource.writing() 里串行调用。"""
+写：界面上的角色与 agent 规则、建 / 改名 / 删 agent，用 tomlkit 读改写，人手写的注释与排版保留；现在的文件不合法时
+拒绝（Conflict，先修好它）；调用方在 AssetSource.writing() 里串行调用。"""
 
 from __future__ import annotations
 
@@ -20,8 +21,8 @@ from tomlkit.items import Table
 from tomlkit.toml_document import TOMLDocument
 
 from muliao.agents.naming import nfc, validate_slug
-from muliao.agents.permissions import BASE, FIXED_RULES, AgentRules, Role, Rules, check_patterns
-from muliao.errors import InvalidInput
+from muliao.agents.permissions import BASE, FIXED_RULES, AgentRules, Role, Rules, check_patterns, kind_of
+from muliao.errors import Conflict, InvalidInput
 from muliao.platform.fs import write_atomic
 from muliao.platform.values import validation_reason
 
@@ -53,16 +54,17 @@ class _AgentEntry(BaseModel):
 
 @dataclass(frozen=True)
 class AccessProblem:
-    """读出的一处问题。agent_id：与它相关的 agent（报给它），平台的为 None。"""
+    """读出的一处问题。agent_id：与它相关的 agent（报给它），平台的为 None。invalid：形式不合法，整份因它作废。"""
 
     reason: str
     agent_id: str | None
+    invalid: bool = False
 
 
 @dataclass(frozen=True)
 class Access:
     """读出的内容：全部角色（内置在前，按定义顺序；自建的按名称）、各 agent 的规则（按 id，没写的 agent 只有 base）。
-    readable：整个文件读出来了；False 时 roles 只有内置角色的固定部分、rules 为空，problems 里是读不出的原因。"""
+    readable：整份合法；False 时 roles 只有内置角色的固定部分、rules 为空，problems 只有不合法的那几处。"""
 
     roles: dict[str, Role]
     rules: dict[str, AgentRules]
@@ -86,24 +88,33 @@ def parse(text: str | None, agents: Mapping[str, str]) -> Access:
     return _Parser(agents).parse(text)
 
 
+def _builtin_roles() -> dict[str, Role]:
+    return {n: Role(n, BUILTIN_DESCRIPTIONS[n], Rules(), fixed) for n, fixed in FIXED_RULES.items()}
+
+
 class _Parser:
     def __init__(self, agents: Mapping[str, str]):
         self.agents = agents
         self.problems: list[AccessProblem] = []
-        self.roles: dict[str, Role] = {
-            n: Role(n, BUILTIN_DESCRIPTIONS[n], Rules(), fixed) for n, fixed in FIXED_RULES.items()
-        }
+        self.roles = _builtin_roles()
         self.rules: dict[str, AgentRules] = {}
 
     def problem(self, reason: str, agent_id: str | None = None) -> None:
         self.problems.append(AccessProblem(reason, agent_id))
 
-    def done(self) -> Access:
-        return Access(self.roles, self.rules, tuple(self.problems), readable=True)
+    def invalid(self, reason: str) -> None:
+        """形式不合法的一处：整份作废（报给平台，即 admin）。"""
+        self.problems.append(AccessProblem(reason, None, invalid=True))
 
     def unreadable(self, error: str) -> Access:
-        self.problem(f"cannot parse: {error}")
-        return Access(self.roles, self.rules, tuple(self.problems), readable=False)
+        self.invalid(f"cannot parse: {error}")
+        return self.done()
+
+    def done(self) -> Access:
+        invalid = [p for p in self.problems if p.invalid]
+        if invalid:
+            return Access(_builtin_roles(), {}, tuple(invalid), readable=False)
+        return Access(self.roles, self.rules, tuple(self.problems), readable=True)
 
     def parse(self, text: str | None) -> Access:
         if text is None:
@@ -114,27 +125,32 @@ class _Parser:
             return self.unreadable(str(e))
         extra = sorted(set(data) - {"roles", "agents"})
         if extra:
-            self.problem(f"unknown top-level tables {extra} (expected roles, agents)")
-        for name, raw in sorted(_table(data.get("roles"))):
+            self.invalid(f"unknown top-level tables {extra} (expected roles, agents)")
+        for name, raw in sorted(self.table(data, "roles")):
             self.role(name, raw)
-        for name, raw in sorted(_table(data.get("agents"))):
+        for name, raw in sorted(self.table(data, "agents")):
             self.agent(name, raw)
         return self.done()
 
+    def table(self, data: dict[str, object], key: str) -> list[tuple[str, object]]:
+        value = data.get(key, {})
+        if not isinstance(value, dict):
+            self.invalid(f"{key} must be a table ([{key}.<name>] sections)")
+            return []
+        return list(value.items())
+
     def role(self, name: str, raw: object) -> None:
-        entry = self.entry(_RoleEntry, raw, f"role {name!r}")
-        if entry is None:
-            return
+        what = f"role {name!r}"
+        entry = self.entry(_RoleEntry, raw, what)
         try:
             validate_slug("role", name)
         except InvalidInput as e:
-            self.problem(str(e))
+            self.invalid(str(e))
+        if entry is None:
             return
         description = entry.description.strip() or BUILTIN_DESCRIPTIONS.get(name, "")
         if not description:
-            self.problem(f"role {name!r}: description must not be empty")
-            return
-        what = f"role {name!r}"
+            self.invalid(f"{what}: description must not be empty")
         rules = Rules(self.patterns(entry.allow, what), self.patterns(entry.deny, what))
         self.roles[name] = Role(name, description, rules, FIXED_RULES.get(name, Rules()))
 
@@ -144,50 +160,79 @@ class _Parser:
         if entry is None:
             return
         agent_id = self.agents.get(nfc(name))
+        allow, deny = self.patterns(entry.allow, what, agent_id), self.patterns(entry.deny, what, agent_id)
+        # 角色定义与对它的引用在同一个文件里：引用了没定义的角色是文件自相矛盾（拼错、手删了定义），跳过它会丢掉
+        # 那个角色的 deny，所以整份作废；写了隐含的 base 只是多余
+        unknown = [r for r in entry.roles if r not in self.roles]
+        if unknown:
+            self.invalid(f"{what}: roles {unknown} are not defined in [roles]")
         if agent_id is None:
+            # 那个 agent 本来就跑不了（目录没加载），这一节暂时不起作用
             self.problem(f"[agents.{name}]: no loaded agent directory has this name")
             return
-        kept = []
-        for r in dict.fromkeys(entry.roles):
-            if r not in self.roles or not self.roles[r].assignable:
-                self.problem(f"{what}: role {r!r} is unknown or implicit; skipped", agent_id)
-            else:
-                kept.append(r)
-        self.rules[agent_id] = AgentRules.of(
-            kept, self.patterns(entry.allow, what, agent_id), self.patterns(entry.deny, what, agent_id)
-        )
+        implicit = [r for r in entry.roles if r in self.roles and not self.roles[r].assignable]
+        if implicit:
+            self.problem(f"{what}: roles {implicit} are implicit for every agent; skipped", agent_id)
+        kept = [r for r in dict.fromkeys(entry.roles) if r in self.roles and self.roles[r].assignable]
+        self.rules[agent_id] = AgentRules.of(kept, allow, deny)
 
     def entry[T: BaseModel](self, model: type[T], raw: object, what: str) -> T | None:
         try:
             return model.model_validate(raw)
         except ValidationError as e:
-            self.problem(f"{what}: {validation_reason(e)}")
+            self.invalid(f"{what}: {validation_reason(e)}")
             return None
 
     def patterns(self, patterns: list[str], what: str, agent_id: str | None = None) -> tuple[str, ...]:
-        kept = []
-        for p in dict.fromkeys(patterns):
+        """形式不对的整份作废；一个工具都匹配不上的只是引用了不存在的工具（留着也什么都不匹配），记一条问题；重复的
+        去重。"""
+        unique = tuple(dict.fromkeys(patterns))
+        for p in unique:
             try:
-                check_patterns([p])
+                kind_of(p)
             except InvalidInput as e:
-                self.problem(f"{what}: {e}; skipped", agent_id)
-                continue
-            kept.append(p)
-        return tuple(kept)
-
-
-def _table(value: object) -> list[tuple[str, object]]:
-    return list(value.items()) if isinstance(value, dict) else []
+                self.invalid(f"{what}: {e}")
+            else:
+                try:
+                    check_patterns([p])
+                except InvalidInput as e:
+                    self.problem(f"{what}: {e}", agent_id)
+        return unique
 
 
 # ---- 写 ----
 
 
 def edit(path: Path, change: Callable[[TOMLDocument], None]) -> None:
-    """读出 path（不存在就是空文档）、交给 change 改、原子写回。同步 IO。"""
-    doc = tomlkit.parse(path.read_text(encoding="utf-8")) if path.is_file() else tomlkit.document()
+    """读出 path（不存在就是空文档）、交给 change 改、原子写回；现在的文件不合法（与读树同一套规则）时 Conflict，不写。
+    同步 IO。"""
+    text = _valid_text(path)
+    doc = tomlkit.parse(text) if text is not None else tomlkit.document()
     change(doc)
-    write_atomic(path, tomlkit.dumps(doc))
+    out = tomlkit.dumps(doc)
+    # 改完也要合法：比如删掉的角色还被一节对不上已加载目录的 [agents.X] 引用着（调用方只看得到已加载的 agent）
+    after = parse(out, {})
+    if not after.readable:
+        raise Conflict("; ".join(p.reason for p in after.problems))
+    write_atomic(path, out)
+
+
+def check_valid(path: Path) -> None:
+    """path 现在的内容整份合法，否则 Conflict：平台不在不合法的文件上改（与读树同一套规则），由 admin 先修好它。同步 IO。"""
+    _valid_text(path)
+
+
+def _valid_text(path: Path) -> str | None:
+    """合法的现有内容（没有文件为 None），否则 Conflict 列出不合法的每一处。"""
+    try:
+        text = path.read_text(encoding="utf-8") if path.is_file() else None
+    except UnicodeDecodeError as e:
+        raise Conflict(f"{path} is not UTF-8 text ({e}); fix it first") from e
+    access = parse(text, {})
+    if not access.readable:
+        reasons = "; ".join(p.reason for p in access.problems)
+        raise Conflict(f"{path} is invalid ({reasons}); fix it first")
+    return text
 
 
 def _section(doc: TOMLDocument, name: str) -> Table:

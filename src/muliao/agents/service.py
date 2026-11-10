@@ -329,6 +329,8 @@ class AgentService:
             async with self._db.transaction() as s:
                 await self._check_name_free(s, snapshot, name, None)
             directory = snapshot.root / name
+            # 先查 access.toml：不合法时什么都不写（否则写到一半，撤回时改它又失败）
+            await asyncio.to_thread(access_file.check_valid, snapshot.access_path)
             try:
                 await asyncio.to_thread(
                     _write_new_agent, directory, snapshot.access_path, agent_id, fields, rules
@@ -363,6 +365,8 @@ class AgentService:
                 before.deny if patch.deny is None else patch.deny,
             )
             check_agent_rules(snapshot, rules, before)
+            # 与建 agent 同：access.toml 不合法时先拒绝，不动目录
+            await asyncio.to_thread(access_file.check_valid, snapshot.access_path)
             undo = await asyncio.to_thread(
                 _write_agent_update,
                 directory.path,
