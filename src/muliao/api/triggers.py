@@ -109,7 +109,7 @@ class _TriggerOutBase(BaseModel):
     last_checked_at: datetime | None
     last_fired_at: datetime | None
     last_session_id: str | None
-    # 被自动停用的原因；最近一次前置检查失败的原因；最近一次触发里事件内容中写错而被丢掉的 `@route` 地址与原因
+    # 被自动停用的原因；最近一次前置检查失败的原因；事件内容里写错而被丢掉的各种 `@route` 地址与原因（换前置检查、改配置或重新启用时清除）
     disabled_reason: str | None
     precheck_error: str | None
     route_error: str | None

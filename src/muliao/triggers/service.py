@@ -508,7 +508,7 @@ class TriggerService:
                 "trigger event has no content to deliver after routing, not firing",
                 extra={"trigger": trigger.name, "dropped": len(rejected)},
             )
-            return _Fired(fired=None, deliveries=alerts)
+            return _Fired(fired=None, deliveries=tuple(alerts))
         sessions = [r.session_id for r in routed]
         tasks = [self._messaging.send_in(s, r.command) for r in routed]
         trigger.last_fired_at = now
@@ -518,7 +518,7 @@ class TriggerService:
         if known:
             trigger.last_session_id = known[0]
         log.info("trigger fired", extra={"trigger": trigger.name, "kind": trigger.kind, "sessions": sessions})
-        return _Fired(fired=Fired(sessions=tuple(sessions)), deliveries=tasks + alerts)
+        return _Fired(fired=Fired(sessions=tuple(sessions)), deliveries=(*tasks, *alerts))
 
     async def _route_errors_in(
         self, s: AsyncSession, trigger: Trigger, rejected: list[Rejected]
@@ -737,14 +737,14 @@ class _Fired:
     # 投出去的信；没有触发（前置检查判定没事、各段都空、内容里的地址全写错而一段也没投）时为 None
     fired: Fired | None
     # 提交后要马上执行的投递任务（投信的定向命令 Receive、issue 动态的投递、告警）
-    deliveries: list[Task]
+    deliveries: tuple[Task, ...]
 
 
-_NOT_FIRED = _Fired(fired=None, deliveries=[])
+_NOT_FIRED = _Fired(fired=None, deliveries=())
 
 
 def route_alert(trigger: Trigger, rejected: list[Rejected]) -> str:
-    """事件内容里的投递地址从没出错变为出错时交给触发器所属 agent 的信件：哪些地址、为什么不行、丢掉的内容，以及怎么处理。"""
+    """事件内容里出现新的一种写错的投递地址时交给触发器所属 agent 的信件：哪些地址、为什么不行、丢掉的内容，以及怎么处理。"""
     lines = [
         f"An event of your trigger `{trigger.name}` (kind {trigger.kind}) had `@route` lines whose address was "
         "rejected, so those parts were dropped (not delivered anywhere); the rest of the event was delivered as "
@@ -761,6 +761,7 @@ def route_alert(trigger: Trigger, rejected: list[Rejected]) -> str:
         "- The line was outside text your script passes on (a message, a web page) that happens to start with "
         "`@route`: make the script indent such lines, so outside content cannot pick where events go.",
         "- If the dropped part matters, handle it yourself now.",
+        "Different bad addresses showing up again and again usually mean the script forwards outside text unindented.",
         "You are told once per distinct bad address; `trigger_list` shows them all as `route_error`, cleared when "
         "you change the trigger's precheck or config (or re-enable it).",
     ]

@@ -36,7 +36,7 @@ class TriggerInfo(BaseModel):
     status: dict[str, Any]
     enabled: bool
     precheck: Precheck | None
-    # 被自动停用的原因；最近一次前置检查失败的原因；最近一次触发里事件内容中写错而被丢掉的 `@route` 地址与原因
+    # 被自动停用的原因；最近一次前置检查失败的原因；事件内容里写错而被丢掉的各种 `@route` 地址与原因（换前置检查、改配置或重新启用时清除）
     disabled_reason: str | None
     precheck_error: str | None
     route_error: str | None
@@ -70,7 +70,8 @@ goes to `route`. Each part gets `prompt` in front. So channel logic (which proje
 to, which issue a monitor writes to) lives in the script. Only a line starting exactly with `@route` counts, \
 so a script passing on outside text (messages, web pages) must indent any such line in it. An `@route` address \
 that is wrong or whose target no longer exists drops just that part: the rest is delivered, the trigger stays \
-enabled, the error is recorded as `route_error` and its agent gets one new conversation about it (`trigger_run` \
+enabled, the error is added to `route_error` and its agent gets a new conversation once per distinct bad \
+address; `route_error` is cleared when the precheck or config changes or the trigger is re-enabled (`trigger_run` \
 and webhooks reject the whole firing instead, with the error). A default `route` whose target is gone disables \
 the trigger with the reason."""
 

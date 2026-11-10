@@ -44,7 +44,8 @@ class Trigger(Base):
     disabled_reason: Mapped[str | None] = mapped_column(Text)
     # 最近一次前置检查失败的原因；检查成功、或换了前置检查时清除
     precheck_error: Mapped[str | None] = mapped_column(Text)
-    # 最近一次触发里，事件内容中写错（解析不了或目标不接受）而被丢掉的 `@route` 地址与原因；一次没丢段的触发清除
+    # 事件内容里写错（解析不了或目标不接受）而被丢掉的 `@route`：一行一种「地址: 原因」，自上次换前置检查、改配置或
+    # 重新启用以来累计（那时清除），新的一种出现时告警
     route_error: Mapped[str | None] = mapped_column(Text)
     # 结束的时间：这个触发器不会再触发了（一次性触发器用掉了它那一次）。已结束的不出现在默认列表，不能再修改、
     # 启用或立即运行；行保留着，它发起过的会话（origin_ref 是它的 id）因此仍查得到是谁发的
