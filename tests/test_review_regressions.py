@@ -461,4 +461,4 @@ async def test_every_model_run_entry_hands_transient_failures_to_the_queue_as_mo
     models.models["m"] = scripted(overloaded)
     runtime = container.consumer._runtime  # noqa: SLF001
     with pytest.raises(ModelUnavailable, match="503"):
-        await runtime.summarize(agent, "s1", "summarize", "text")
+        await runtime.summarize(await runtime.config(agent.id), "s1", "summarize", "text")

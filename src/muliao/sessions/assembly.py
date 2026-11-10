@@ -102,6 +102,7 @@ class SessionDomain:
     _ports: SessionPorts
     _db: Database
     _queue: TaskQueue
+    _runtime: AgentRuntime
 
     @classmethod
     def build(
@@ -149,6 +150,7 @@ class SessionDomain:
             _ports=ports,
             _db=db,
             _queue=queue,
+            _runtime=runtime,
         )
 
     def subscribe(self, messaging: Messaging) -> None:
@@ -162,5 +164,5 @@ class SessionDomain:
         """会话 lane 上的任务种类与处理器（组合根交给 worker 登记）。"""
         return (
             (RUN_TASK, RunHandler(self.consumer, self._queue, messaging)),
-            (COMPACTION_TASK, CompactionHandler(self._db, self.compactor)),
+            (COMPACTION_TASK, CompactionHandler(self._db, self.compactor, self._runtime)),
         )

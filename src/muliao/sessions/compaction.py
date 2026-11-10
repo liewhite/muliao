@@ -20,7 +20,7 @@ from pydantic_ai.messages import ModelMessage
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agent_runtime.api import AgentRuntime
-from muliao.agents.api import AgentInfo, active_agent_in
+from muliao.agents.api import AgentDir, active_agent_in
 from muliao.errors import NotFound
 from muliao.platform.db import Database
 from muliao.platform.tables import Task
@@ -160,8 +160,9 @@ class Compactor:
             return Verdict.HOPELESS
         return Verdict.DUE
 
-    async def compact(self, session: Session, agent: AgentInfo) -> int:
-        """压缩到保留窗口之外没有可压缩的为止（每一批一次模型调用）。返回压缩的步数；为 0 表示没有可压缩的。"""
+    async def compact(self, session: Session, config: AgentDir) -> int:
+        """用这份 agent 配置（运行中压缩时是运行的快照）的模型压缩到保留窗口之外没有可压缩的为止（每一批一次模型调用）。
+        返回压缩的步数；为 0 表示没有可压缩的。"""
         compacted = 0
         while True:
             async with self._db.transaction() as s:
@@ -172,7 +173,7 @@ class Compactor:
                 break
             chosen, more = select_steps(steps, self._keep_steps, _TRANSCRIPT_CHARS)
             summary = await self._runtime.summarize(
-                agent,
+                config,
                 session.id,
                 COMPACTION_INSTRUCTIONS,
                 compaction_prompt(previous.summary if previous else None, chosen),
@@ -226,9 +227,10 @@ class CompactionHandler:
     # 量小，留着
     prunable = False
 
-    def __init__(self, db: Database, compactor: Compactor):
+    def __init__(self, db: Database, compactor: Compactor, runtime: AgentRuntime):
         self._db = db
         self._compactor = compactor
+        self._runtime = runtime
 
     async def failed_in(self, s: AsyncSession, task: Task) -> None:
         """失败只需可见（任务记录、日志），没有等着结果的一方。"""
@@ -238,6 +240,6 @@ class CompactionHandler:
             raise RuntimeError(f"compaction task {task.id} must reference a session")
         async with self._db.transaction() as s:
             session, agent = await load_session(s, task.session_id)
-        if not await self._compactor.compact(session, agent):
+        if not await self._compactor.compact(session, await self._runtime.config(agent.id)):
             log.info("nothing to compact beyond the kept steps", extra={"session_id": session.id})
         return no_commit

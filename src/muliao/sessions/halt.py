@@ -45,7 +45,7 @@ log = logging.getLogger(__name__)
 
 async def close_history_in(s: AsyncSession, queue: TaskQueue, session_id: str) -> None:
     """停止时让会话历史停在不会被续跑的地方（唯一事实源是库里的历史）。运行中被停止时同一事务里先把当前这一步已产生的部分存库
-    （Steps.save_tail_in），补结果与停止标记都在这里一处做。
+    （steps.save_tail_in），补结果与停止标记都在这里一处做。
     只看最后一条模型回复起的那一段（history.since_last_response）：没出结果的调用只可能在那里。"""
     history = await since_last_response(s, session_id)
     if closing := stopped_results(history):
@@ -83,7 +83,7 @@ class SessionHalt:
     async def __call__(
         self, session_id: str, *, first: Callable[[AsyncSession], Awaitable[None]] | None = None
     ) -> Halted:
-        """first：运行中被停止时，消费者保存这一步还没保存的部分（Steps.save_tail_in），和停止放在同一个事务里：两者
+        """first：运行中被停止时，消费者保存这一步还没保存的部分（steps.save_tail_in），和停止放在同一个事务里：两者
         之间不会因关停留下没结果、没标停止、会被续跑的历史。"""
         async with self._db.transaction() as s:
             session = await s.get(Session, session_id)

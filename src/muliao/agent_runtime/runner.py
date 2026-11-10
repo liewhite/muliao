@@ -16,6 +16,7 @@ from pydantic_ai import (
     UserPromptNode,
 )
 from pydantic_ai.messages import (
+    SYNTHESIZED_TOOL_RETURN_METADATA_KEY,
     AgentStreamEvent,
     FunctionToolCallEvent,
     FunctionToolResultEvent,
@@ -157,9 +158,10 @@ class AgentRuntime:
             summary=summary,
         )
 
-    async def _config(self, agent_id: str) -> AgentDir:
-        """它的配置（描述、模型、思考档位）与资源目录，只认 agent.toml：没加载时 NotFound（带上原因），这次运行当场失败，
-        不沿用旧值（模型不能运行的在 _model 失败）。"""
+    async def config(self, agent_id: str) -> AgentDir:
+        """它现在的配置（描述、模型、思考档位）与资源目录，只认 agent.toml：没加载时 NotFound（带上原因），要它的运行当场
+        失败，不沿用旧值（模型不能运行的在 _model 失败）。一次会话运行在开头取一份（sessions.consumer），整次运行的各次驱动
+        （run_steps）与压缩（summarize）都用它。"""
         return (await self._assets.snapshot()).loaded_agent(agent_id)
 
     async def _asset_problems(self, agent_id: str) -> list[str]:
@@ -177,7 +179,7 @@ class AgentRuntime:
 
     async def run_steps(
         self,
-        agent: AgentInfo,
+        config: AgentDir,
         scope: RunScope,
         prompt: Sequence[UserContent] | None,
         history: Sequence[ModelMessage],
@@ -193,17 +195,17 @@ class AgentRuntime:
         sessions.questions）：结局为 Paused；之后带着 deferred（`{调用 id: 结果}`，如用户的回答）再运行就从那里继续。
 
         prompt 为 None 时从历史续跑：历史停在一条请求上就重发它，停在带工具调用的回复上就执行这些调用（pydantic-ai
-        的续跑语义）。
+        的续跑语义）。交进来的历史要完整：除了挂起、待重放的，每个调用都已有结果（调用方补齐并存库）。pydantic-ai
+        还是动手修补了时当场报错（_unrepaired）：只在内存里修补的历史和库里的对不上，之后的运行会在错位置上再补一次。
 
         外壳：记账与日志（_billed）、工具失败信息里不带参数（tool_input_kept_out_of_failures）、确认运行从用户 prompt
         节点开始，再由 _step_through 逐步驱动到结束。"""
         # 这次交回结果的挂起调用：调用已在历史里，结果随第一步保存
         resumed = frozenset(deferred or ())
-        config = await self._config(agent.id)
         instructions = await self.instructions(config, scope, summary, origin_note)
         # 这次驱动自己的一份 scope：notices 先放资源目录里与它相关的问题（读坏、名字冲突而没加载的文件），工具组连接时
         # 再往里加；压缩后续跑会重新连接工具组。读过的文件从空开始（压缩后模型看不到之前读到的内容了）
-        scope = replace(scope, notices=await self._asset_problems(agent.id), reads={})
+        scope = replace(scope, notices=await self._asset_problems(config.id), reads={})
         ctx = {
             "agent": scope.agent_id,
             "session_id": scope.session_id,
@@ -246,17 +248,16 @@ class AgentRuntime:
         check_thinking(model, resolved, thinking)
         return resolved, model_settings(thinking)
 
-    async def summarize(self, agent: AgentInfo, session_id: str, instructions: str, prompt: str) -> str:
-        """用该 agent 的模型做一次无工具的文本生成（压缩 session_id 这个会话的上下文）。不转发事件到前端。"""
-        config = await self._config(agent.id)
+    async def summarize(self, config: AgentDir, session_id: str, instructions: str, prompt: str) -> str:
+        """用这份配置的模型做一次无工具的文本生成（压缩 session_id 这个会话的上下文）。不转发事件到前端。"""
         ctx = {
-            "agent": agent.id,
+            "agent": config.id,
             "session_id": session_id,
             "model": config.model,
             "thinking": config.thinking,
         }
         resolved, settings = self._model(config.model, config.thinking)
-        async with self._billed(RunKind.COMPACTION, agent.id, config.model, session_id, ctx) as usage:
+        async with self._billed(RunKind.COMPACTION, config.id, config.model, session_id, ctx) as usage:
             result = await self._pai.run(
                 prompt,
                 model=resolved,
@@ -340,6 +341,10 @@ async def _step_through(
     """从用户 prompt 节点把运行逐步驱动到结束，在每次请求模型之前、模型回复之后回调 hooks。notices 是这次驱动的
     scope 里的那份列表：工具组在进入 iter 时已经构建、连接，到这里已经齐了。"""
     node = await run.next(first)
+    # 从末尾的请求续跑时 pydantic-ai 把它从历史里取出、放进第一次请求的节点，一起查
+    _unrepaired(
+        [*run.ctx.state.message_history, *([node.request] if PaiAgent.is_model_request_node(node) else [])]
+    )
     await hooks.started(run.ctx.state.message_history, notices)
     while not isinstance(node, End):
         if PaiAgent.is_model_request_node(node):
@@ -358,6 +363,21 @@ async def _step_through(
             node = await run.next(node)
         else:
             node = await run.next(node)
+
+
+def _unrepaired(messages: Sequence[ModelMessage]) -> None:
+    """pydantic-ai 开始运行时没有给悬空的调用合成结果（它静默地补，只在内存里，例如重发的请求里）：有就是交进来的
+    历史不完整，当场失败。"""
+    if made_up := [
+        p.tool_call_id
+        for m in messages
+        if isinstance(m, ModelRequest)
+        for p in m.parts
+        if isinstance(p, ToolReturnPart) and (p.metadata or {}).get(SYNTHESIZED_TOOL_RETURN_METADATA_KEY)
+    ]:
+        raise RuntimeError(
+            f"pydantic-ai synthesized results for dangling tool calls in the history: {made_up}"
+        )
 
 
 async def _forward_events(

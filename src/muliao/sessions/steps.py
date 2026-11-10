@@ -1,6 +1,7 @@
 """逐步保存：一次运行的每一步（一次模型请求及其返回的工具调用）各自提交。请求模型之前把新到的信件并进这条请求，请求与
 它带上的信件（记为已处理）同一个事务提交；模型回复之后提交这条回复。失败或重启后从上一步续跑，已经保存的步骤不会
-重放；中断那一步里正在执行的工具也不重新执行，而是补上「被中断」的结果（save_interrupted）。实时展示按步换段
+重放；中断那一步里正在执行的工具也不重新执行，而是补上「被中断」的结果（sessions.consumer，经 save_in）。停在挂起的调用上时最后
+一步的工具结果由收尾保存（save_tail_in）。实时展示按步换段
 （sessions.live.LiveSegments.step）。"""
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agent_runtime.api import StepHooks, redact_messages, with_notices
-from muliao.agents.api import AgentInfo
+from muliao.agents.api import AgentDir, AgentInfo
 from muliao.platform.db import Database, utcnow
 from muliao.platform.text_edit import truncate
 from muliao.platform.tool_views import ToolRenders, truncated
@@ -149,11 +150,11 @@ class Steps:
             state.live = None
             raise CompactionDue()
 
-    async def compact(self, state: RunState, fresh_run_context: str) -> SessionContext:
-        """运行中途该压缩了（CompactionDue，触发它的请求已经保存）：压缩，从库里重新加载上下文（摘要 + 切点之后），并把这次
+    async def compact(self, state: RunState, config: AgentDir, fresh_run_context: str) -> SessionContext:
+        """运行中途该压缩了（CompactionDue，触发它的请求已经保存）：用这次运行的配置快照（config）压缩，从库里重新加载上下文（摘要 + 切点之后），并把这次
         运行的状态对上它，返回续跑用的上下文。挂着运行上下文的那条请求被压进了摘要时，模型不再看得到它：下一条新请求
         重新挂一段（fresh_run_context，时间取现在）。"""
-        compacted = await self._compactor.compact(state.session, state.agent)
+        compacted = await self._compactor.compact(state.session, config)
         async with self._db.transaction() as s:
             context = await load_context(s, state.session.id)
             compaction = await latest_compaction(s, state.session.id)
@@ -185,54 +186,47 @@ class Steps:
         await self._save(state, messages[state.saved :], consumed=[])
         state.saved = len(messages)
 
-    async def save_tail(self, state: RunState) -> None:
-        """运行停在挂起的调用上时，挂起之外已经执行完的工具结果在最后一条请求里，一起保存。"""
-        async with self._db.transaction() as s:
-            await self.save_tail_in(s, state)
-
-    async def save_tail_in(self, s: AsyncSession, state: RunState) -> None:
-        """在调用方事务里保存运行中的历史里还没保存的部分。被停止时由停止事务调用（sessions.halt 的 first）：当前这一步
-        已产生的部分（包括生成到一半的回答）原样存库，没出结果的调用与停止标记由同一事务里的停止从库里补齐。开头取走、
-        还没随请求交给模型的信件（state.taken）不算处理过。"""
-        if state.live is not None and len(state.live) > state.saved:
-            await self._save_in(s, state, state.live[state.saved :], consumed=[])
-            state.saved = len(state.live)
-
-    async def save_interrupted(self, state: RunState, messages: Sequence[ModelMessage]) -> int:
-        """从被中断的一步续跑：给没出结果的调用补上的结果（sessions.history.interrupted_results）作为这次运行的
-        第一步存下来，走的是和别的步骤同一条保存路径，历史里不留悬空的调用。返回保存的最后一行的 id。"""
-        await self._save(state, messages, consumed=[])
-        if state.last_row is None:
-            raise RuntimeError(f"run {state.run_id} saved interrupted tool results without a row")
-        return state.last_row.id
-
     async def _save(
         self, state: RunState, messages: Sequence[ModelMessage], *, consumed: Sequence[Mail]
     ) -> None:
         """一步：这些消息与它们带上的信件（记为已处理）在同一个事务里提交。"""
         async with self._db.transaction() as s:
-            await self._save_in(s, state, messages, consumed=consumed)
+            await save_in(s, state, messages, consumed=consumed)
 
-    async def _save_in(
-        self, s: AsyncSession, state: RunState, messages: Sequence[ModelMessage], *, consumed: Sequence[Mail]
-    ) -> None:
-        stored = redact_messages(list(messages))
-        if await s.get(Session, state.session.id) is None:
-            raise RuntimeError(f"session {state.session.id} vanished during its run")
-        rows = await append_in(s, state.session.id, state.run_id, stored)
-        await consume_in(s, [m.id for m in consumed], state.run_id)
-        log.info(
-            "step saved",
-            extra={
-                "session_id": state.session.id,
-                "run_id": state.run_id,
-                "messages": len(rows),
-                "consumed_mail": [m.id for m in consumed],
-            },
-        )
-        state.messages += stored
-        if rows:
-            state.last_row = rows[-1]
+
+async def save_tail_in(s: AsyncSession, state: RunState) -> None:
+    """在调用方事务里保存运行中的历史里还没保存的部分，只在运行结束的那个事务里调用：
+    - 收尾（sessions.finish.RunFinisher.commit）：停在挂起的调用上时，挂起之外已经执行完的工具结果在最后一条请求里，和等批准
+      的记录、运行记为完成一起提交：分开提交时，进程在两者之间退出会留下一个没有结果、又不算在等批准的调用。
+    - 被停止时（sessions.halt 的 first）：当前这一步已产生的部分（包括生成到一半的回答）原样存库，没出结果的调用与停止标记
+      由同一事务里的停止从库里补齐。
+    开头取走、还没随请求交给模型的信件（state.taken）不算处理过。"""
+    if state.live is not None and len(state.live) > state.saved:
+        await save_in(s, state, state.live[state.saved :], consumed=[])
+        state.saved = len(state.live)
+
+
+async def save_in(
+    s: AsyncSession, state: RunState, messages: Sequence[ModelMessage], *, consumed: Sequence[Mail]
+) -> None:
+    """在调用方事务里把这次运行的这些消息接在历史末尾，并把它们带上的信件记为已处理。运行保存消息只经这里。"""
+    stored = redact_messages(list(messages))
+    if await s.get(Session, state.session.id) is None:
+        raise RuntimeError(f"session {state.session.id} vanished during its run")
+    rows = await append_in(s, state.session.id, state.run_id, stored)
+    await consume_in(s, [m.id for m in consumed], state.run_id)
+    log.info(
+        "step saved",
+        extra={
+            "session_id": state.session.id,
+            "run_id": state.run_id,
+            "messages": len(rows),
+            "consumed_mail": [m.id for m in consumed],
+        },
+    )
+    state.messages += stored
+    if rows:
+        state.last_row = rows[-1]
 
 
 def _preview(item: Item) -> Item:

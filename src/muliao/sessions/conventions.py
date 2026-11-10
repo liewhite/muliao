@@ -11,7 +11,7 @@ pydantic-ai 的消息是存储与回放的唯一形式（数据库里一行一�
 | `INTERRUPTED_TOOL_RESULT`：进程退出时没出结果的调用 | 合成的 ToolReturnPart 内容（`outcome='interrupted'`） | sessions.history | 模型（续跑的那次请求）；会话条目（同上） |
 | `questions.NOT_ANSWERED`：挂起提问没被回答 | 合成的 ask_user 结果（AskResult，属于提问领域） | sessions.questions 定义、sessions.deferred 填入 | 模型、会话条目 |
 | 「回复是否报告了上下文大小」 | 完整的 ModelResponse，或被截断（pydantic-ai state='interrupted'）但已收到输入用量 | — | measured_responses：压缩判断 |
-| 「调用是否已有结果」 | ToolReturnPart 或 RetryPromptPart | — | unanswered_calls：挂起的提问、压缩切点、停止时补结果 |
+| 「调用是否已有结果」 | ToolReturnPart 或 RetryPromptPart；没结果的只可能在最后一条回复里 | — | unanswered_calls：挂起的调用、被中断的调用、压缩切点、停止时补结果 |
 | `RUN_EVENTS`：这一步交给模型的事件信件 | 事件各占用户消息内容的一段（format_event，来源见 sessions.sources），metadata 记下是第几段 | sessions.content | 模型、会话条目 |
 | `RUN_CHECK_INS`：其中哪些是运行中检查（信件的 check_in） | 同上，metadata 记下是第几段（RUN_EVENTS 的子集） | sessions.content | 会话条目（界面合并连续的检查） |
 | `RUN_CONTEXT`：这次运行的运行上下文（当前时间等） | 单独一段用户消息，metadata 记下它是第几个 part | sessions.steps | 模型；会话条目不展示它 |
@@ -147,6 +147,14 @@ def results_in(message: ModelMessage) -> set[str]:
 
 def unanswered_calls(messages: Sequence[ModelMessage]) -> list[ToolCallPart]:
     """还没有结果的工具调用，按出现顺序。「调用是否已有结果」只在这里定义（calls_in / results_in；挂起的调用、
-    压缩切点、停止时补结果都用它）。"""
+    被中断的调用、压缩切点、停止时补结果都用它）。
+
+    库里的历史守着一条不变式（提供方的要求）：每条回复的调用在下一条回复之前都有结果，所以没结果的调用只可能在最后
+    一条回复里。写历史的各处（一步的保存、收尾、停止、续跑前补「被中断」的结果）都守着它；破了说明有一处写错了，
+    在这里当场报错，不往末尾补结果——补在末尾的结果离开了它的调用，提供方会拒绝之后的每一次请求。"""
     done = set().union(*(results_in(m) for m in messages))
-    return [c for m in messages for c in calls_in(m) if c.tool_call_id not in done]
+    last = max((i for i, m in enumerate(messages) if isinstance(m, ModelResponse)), default=-1)
+    unanswered = [(i, c) for i, m in enumerate(messages) for c in calls_in(m) if c.tool_call_id not in done]
+    if stale := [c.tool_call_id for i, c in unanswered if i != last]:
+        raise RuntimeError(f"history has tool calls without results before its last response: {stale}")
+    return [c for _i, c in unanswered]
