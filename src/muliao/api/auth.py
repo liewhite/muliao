@@ -14,6 +14,11 @@ MAX_AGE_SECONDS = 90 * 24 * 3600
 _VERSION = "v1"
 
 
+def _same(given: str, expected: str) -> bool:
+    """恒定时间比较外部给的签名：按字节比，compare_digest 比含非 ASCII 字符的 str 会抛 TypeError（变成 500）。"""
+    return hmac.compare_digest(given.encode(), expected.encode())
+
+
 class Auth:
     def __init__(self, secret_key: str, password: str):
         self._password = password.encode()
@@ -37,15 +42,14 @@ class Auth:
         return self._sign(f"site.{agent_id}/{page}")
 
     def verify_site(self, agent_id: str, page: str, sig: str) -> bool:
-        # 按字节比：URL 里的签名可能含非 ASCII 字符，compare_digest 比 str 时会抛 TypeError
-        return hmac.compare_digest(sig.encode(), self.sign_site(agent_id, page).encode())
+        return _same(sig, self.sign_site(agent_id, page))
 
     def verify(self, token: str, now: float | None = None) -> bool:
         parts = token.split(".")
         if len(parts) != 3 or parts[0] != _VERSION or not parts[1].isdigit():
             return False
         payload = f"{parts[0]}.{parts[1]}"
-        if not hmac.compare_digest(parts[2], self._sign(payload)):
+        if not _same(parts[2], self._sign(payload)):
             return False
         issued = int(parts[1])
         return (now if now is not None else time.time()) - issued < MAX_AGE_SECONDS

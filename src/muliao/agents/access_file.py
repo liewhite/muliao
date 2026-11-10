@@ -20,8 +20,18 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from tomlkit.items import Table
 from tomlkit.toml_document import TOMLDocument
 
+from muliao.agents.kinds import Kind
 from muliao.agents.naming import nfc, validate_slug
-from muliao.agents.permissions import BASE, FIXED_RULES, AgentRules, Role, Rules, check_patterns, kind_of
+from muliao.agents.permissions import (
+    BASE,
+    FIXED_RULES,
+    AgentRules,
+    Role,
+    Rules,
+    check_patterns,
+    kind_of,
+    pattern_of,
+)
 from muliao.errors import Conflict, InvalidInput
 from muliao.platform.fs import write_atomic
 from muliao.platform.values import validation_reason
@@ -284,10 +294,20 @@ def set_agent_rules(doc: TOMLDocument, agent: str, rules: AgentRules) -> None:
 
 
 def rename_agent(doc: TOMLDocument, old: str, new: str) -> None:
+    """agent 改名：它的那一节跟着改名；别处指名它私有记忆的规则（私有记忆以 agent 名为名，`<action>:memory:<旧名>`）
+    跟着改成新名，否则改名后静默失效。带通配的规则不动（匹配到什么由写的人定）。"""
     agents = _section(doc, "agents")
     if old in agents:
         agents[new] = agents[old]
         del agents[old]
+    for section in ("roles", "agents"):
+        for entry in doc.get(section, {}).values():
+            for key in ("allow", "deny"):
+                rules = entry.get(key, [])
+                for i, rule in enumerate(rules):
+                    action, _, rest = rule.partition(":")
+                    if rest == pattern_of(Kind.MEMORY, old):
+                        rules[i] = f"{action}:{pattern_of(Kind.MEMORY, new)}"
 
 
 def remove_agent(doc: TOMLDocument, agent: str) -> None:

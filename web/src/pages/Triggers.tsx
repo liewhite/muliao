@@ -728,6 +728,24 @@ function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: 
 }
 
 function TriggerForm({ kinds, agents, onCreated }: { kinds: TriggerKind[]; agents: Agent[] | undefined; onCreated: () => void }) {
+  // 建好一条就换一份新的表单：各输入（含配置、前置检查自己的状态）都回到初始值，不带到下一条
+  const [created, setCreated] = useState(0)
+  return (
+    <CollapsibleForm title="新建触发器">
+      <TriggerFields
+        key={created}
+        kinds={kinds}
+        agents={agents}
+        onCreated={() => {
+          setCreated((n) => n + 1)
+          onCreated()
+        }}
+      />
+    </CollapsibleForm>
+  )
+}
+
+function TriggerFields({ kinds, agents, onCreated }: { kinds: TriggerKind[]; agents: Agent[] | undefined; onCreated: () => void }) {
   // 选中方式时的初始配置，也就决定了当前的方式；编辑中的配置在 config 里
   const [initial, setInitial] = useState<KindConfig | null>(kinds[0] ? emptyConfig(kinds[0].name) : null)
   const kind = initial?.kind ?? null
@@ -753,15 +771,11 @@ function TriggerForm({ kinds, agents, onCreated }: { kinds: TriggerKind[]; agent
       })
       toast.success('触发器已创建')
     })
-    if (ok) {
-      setName('')
-      setPrompt('')
-      onCreated()
-    }
+    if (ok) onCreated()
   }
 
   return (
-    <CollapsibleForm title="新建触发器">
+    <>
       <SelectInput
         label="触发方式"
         value={kind}
@@ -806,7 +820,7 @@ function TriggerForm({ kinds, agents, onCreated }: { kinds: TriggerKind[]; agent
       >
         创建
       </ActionButton>
-    </CollapsibleForm>
+    </>
   )
 }
 

@@ -1,6 +1,6 @@
 """把 MCP 配置变成一次运行的工具（「使用 MCP」组）与连接验证。配置本身是 agent 领域的资源（agents.mcp.McpRegistry）。
 
-一个 server 出问题只影响它自己：引用的 secret 不在了、连不上，这次运行就没有它的
+一个 server 出问题只影响它自己：引用的 secret 不在了或解不开、连不上，这次运行就没有它的
 工具，其余 server 照常可用（列工具失败同样只跳过它）；原因记日志，并作为 RunScope.notices 放进这次运行开头的运行上下文告诉模型。
 运行中调用工具失败只是这次调用失败（ToolFailed 交还模型），断开失败只记 warning。
 """
@@ -215,8 +215,8 @@ class McpConnector:
             for server in servers:
                 try:
                     toolsets.append(await self.build_toolset(server, agent, ctx.deps.workspace))
-                except NotFound as e:
-                    # 配置引用的 secret 不在了（vault.resolve_many）
+                except (NotFound, InvalidInput) as e:
+                    # 配置引用的 secret 不在了或解不开（vault.resolve_many）
                     _skip(notices, agent=agent, server=server.name, reason=f"MCP server {server.name!r}: {e}")
                     continue
                 names.append(server.name)

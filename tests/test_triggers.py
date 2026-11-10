@@ -363,7 +363,7 @@ async def test_a_trigger_corrupted_after_being_listed_is_disabled_when_it_fires(
     async with container.db.transaction() as s:
         (await trigger_in(s, trigger.id)).state = {}
 
-    await schedules._fire_one(trigger.id, datetime.now().astimezone())
+    assert not await schedules._consume_one(trigger.id, datetime.now().astimezone())
 
     trigger = await triggers.get_by_name("bad")
     assert not trigger.enabled and trigger.disabled_reason.startswith(
@@ -401,6 +401,41 @@ async def test_an_unexpected_failure_of_one_due_trigger_is_logged_without_disabl
     assert fired == [ids[1]]
     assert "agent resources missing" in caplog.text
     assert (await triggers.get_by_name("broken")).enabled
+
+
+async def test_a_slow_due_fire_does_not_hold_up_the_next_scan(container, make_agent, monkeypatch):
+    """扫描循环不等触发做完：一个慢的前置检查还在跑时，下一轮照常触发别的到期触发器，慢的那个已消耗、不会再触发。"""
+    import anyio
+
+    alpha = (await make_agent()).id
+    triggers, schedules = _schedule(container)
+    slow = await triggers.create(
+        name="slow", agent_id=alpha, kind="schedule", prompt="x", config={"cron": "* * * * *"}
+    )
+    await _make_due(container, slow.id)
+    release, other_fired, fired = anyio.Event(), anyio.Event(), []
+    real = triggers.fire_activated
+
+    async def fire_activated(trigger_id):  # noqa: ANN001, ANN202
+        fired.append(trigger_id)
+        if trigger_id == slow.id:
+            await release.wait()
+        else:
+            other_fired.set()
+        return await real(trigger_id)
+
+    monkeypatch.setattr(triggers, "fire_activated", fire_activated)
+    async with anyio.create_task_group() as group:
+        assert await schedules._fire_due_in(group) == 1
+        quick = await triggers.create(
+            name="quick", agent_id=alpha, kind="schedule", prompt="y", config={"cron": "* * * * *"}
+        )
+        await _make_due(container, quick.id)
+        with anyio.fail_after(5):
+            assert await schedules._fire_due_in(group) == 1
+            await other_fired.wait()
+        release.set()
+    assert fired == [slow.id, quick.id]
 
 
 async def test_an_activated_fire_rejected_with_a_conflict_disables_the_trigger(
@@ -515,6 +550,40 @@ async def test_agent_can_call_mcp_tools_with_secret_env(container, make_agent, m
     items = to_items(await history_of(container, session.id), NO_RENDERS)
     results = [i.text for i in items if i.type == "tool_result"]
     assert results == ["tok-123"]
+
+
+async def test_an_mcp_server_whose_secret_cannot_be_decrypted_is_skipped_and_the_run_goes_on(
+    container, make_agent, models
+):
+    from pydantic_ai.messages import ModelResponse, TextPart
+
+    from tests.scripted import scripted
+
+    alpha = (await make_agent("alpha", model="m")).id
+    await container.vault.set("ECHO_TOKEN", "tok-123", "", actor="user", owner=alpha)
+    spec = mcp_config(
+        transport=McpTransport.STDIO,
+        command=sys.executable,
+        args=[ECHO_SERVER],
+        env={"TOKEN": "${vault:ECHO_TOKEN}"},
+    )
+    await container.mcp.add("echo", spec, actor="user", owner=alpha, probe=False)
+    (container.settings.assets_dir / "alpha" / "secrets" / "ECHO_TOKEN.toml").write_text(
+        'ciphertext = "gAAAAbroken"\n'
+    )
+    contexts: list[str] = []
+
+    def fn(messages, info):  # noqa: ANN001, ANN202
+        contexts.append(str(getattr(messages[0].parts[0], "content", "")))
+        return ModelResponse(parts=[TextPart("ok")])
+
+    models.models["m"] = scripted(fn)
+    session = await start(container, alpha, "hi")
+    await drain(container)
+
+    assert "MCP server 'echo'" in contexts[0] and "cannot be decrypted" in contexts[0]
+    history = await history_of(container, session.id)
+    assert history[-1].parts[0].content == "ok"
 
 
 def _same_dir(a: Path, b: Path) -> bool:

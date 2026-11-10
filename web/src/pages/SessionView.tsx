@@ -380,9 +380,10 @@ function Blocks({ items, ctx }: { items: Item[]; ctx: SessionContext }) {
       {foldCheckIns(groupSteps(toBlocks(items))).map((v, i) => {
         switch (v.kind) {
           case 'ask':
-            return <AskBlock key={i} block={v.ask} ctx={ctx} />
+            // 表单、提交状态跟着这次调用走：前面多出或少了块时，不串到别的提问、审批上
+            return <AskBlock key={`ask:${v.ask.callId}`} block={v.ask} ctx={ctx} />
           case 'approval':
-            return <ApprovalBlock key={i} block={v.approval} ctx={ctx} />
+            return <ApprovalBlock key={`approval:${v.approval.callId}`} block={v.approval} ctx={ctx} />
           case 'stopped':
             return (
               <div key={i} className="flex items-center gap-1.5 self-start text-xs text-muted">

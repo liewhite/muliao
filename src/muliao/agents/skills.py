@@ -51,8 +51,8 @@ class SkillScripts:
 
     def fingerprint(self) -> str:
         """skill 目录里除 SKILL.md 以外全部文件的内容指纹（sha256，十六进制）：「始终允许」按它认同一份脚本（#531），
-        改了脚本或它用的辅助文件就不再算同一份，改说明不算。按相对路径排序，路径与内容一起算；跳过 `__pycache__`
-        （运行 Python 脚本时自动生成，Python 只在源文件对得上时用它）；符号链接跟进去算目标的内容（链到目录的也是：
+        改了脚本或它用的辅助文件就不再算同一份，改说明不算。按相对路径排序，路径与内容一起算；跳过隐藏文件
+        与脚本运行时自己生成的目录（`.venv`、`__pycache__` 等，skill_package.is_generated_dir），否则跑一次就对不上；符号链接跟进去算目标的内容（链到目录的也是：
         脚本可能 source 里面的文件），同一个目录只算一次（链接成环也不会走不完）。阻塞 IO，在线程里调。"""
         root = self.directory
         digest = hashlib.sha256()
@@ -64,12 +64,12 @@ class SkillScripts:
                 dirnames[:] = []
                 continue
             seen.add((st.st_dev, st.st_ino))
-            dirnames[:] = sorted(d for d in dirnames if d != "__pycache__")
+            dirnames[:] = sorted(d for d in dirnames if not skill_package.is_generated_dir(d))
             digest.update(f"{here.relative_to(root).as_posix()}/\0".encode())
             for name in sorted(filenames):
                 path = here / name
                 rel = path.relative_to(root).as_posix()
-                if rel == SKILL_FILE or not path.is_file():
+                if rel == SKILL_FILE or name.startswith(".") or not path.is_file():
                     continue
                 digest.update(f"{rel}\0".encode())
                 digest.update(hashlib.sha256(path.read_bytes()).digest())

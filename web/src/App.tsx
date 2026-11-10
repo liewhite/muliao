@@ -111,6 +111,12 @@ function IssueRoute() {
   return <IssueView key={id} />
 }
 
+/** 改了名的页面：旧地址整段换前缀，子路径、查询参数、锚点照带（旧链接里的 /items/skill?… 仍打开同一个 skill） */
+function Moved({ from, to }: { from: string; to: string }) {
+  const { pathname, search, hash } = useLocation()
+  return <Navigate to={to + pathname.slice(from.length) + search + hash} replace />
+}
+
 /** 动态导航的一项，通知带未读角标；底栏与桌面左侧栏共用 */
 function TabLink({
   to,
@@ -214,7 +220,7 @@ function Shell() {
                 <Route path="/ai-assets" element={<Assets />} />
                 <Route path="/ai-assets/skill" element={<SkillEditor />} />
                 {/* 合并进 AI 资产页之前的地址 */}
-                <Route path="/items" element={<Navigate to="/ai-assets" replace />} />
+                <Route path="/items/*" element={<Moved from="/items" to="/ai-assets" />} />
                 <Route path="/skills" element={<Navigate to="/ai-assets?kind=skill" replace />} />
                 <Route path="/mcp" element={<Navigate to="/ai-assets?kind=mcp" replace />} />
                 <Route path="/vault" element={<Navigate to="/ai-assets?kind=secret" replace />} />

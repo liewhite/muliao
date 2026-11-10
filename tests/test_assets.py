@@ -183,7 +183,12 @@ async def test_renaming_in_the_app_moves_the_directory_and_rules_together(contai
     agent = await container.agents.create(
         AgentSpec(name="alpha", description="d", model="test", roles=["reader"]), actor="user"
     )
-    await make_agent("beta")
+    beta = await make_agent("beta")
+    # 别人指名 alpha 私有记忆的规则跟着改名；带通配的不动
+    await container.distribution.create(
+        RoleSpec("peek", "p", ["use:memory:alpha", "use:memory:alpha*"], ["write:memory:alpha"]), actor="user"
+    )
+    await container.agents.update(beta.id, AgentPatch(allow=["*:memory:alpha"]), actor="user")
     r = root(container)
     with pytest.raises(Conflict, match="already taken"):
         await container.agents.update(agent.id, AgentPatch(name="beta"), actor="user")
@@ -192,6 +197,9 @@ async def test_renaming_in_the_app_moves_the_directory_and_rules_together(contai
     assert renamed.name == "gamma" and (r / "gamma" / "agent.toml").exists()
     assert (await container.distribution.agent_rules(agent.id)).roles == ("reader",)
     assert (await container.memory.read("gamma")).owner == agent.id
+    assert (await container.distribution.agent_rules(beta.id)).allow == ("*:memory:gamma",)
+    access = (r / "platform" / "access.toml").read_text()
+    assert '"use:memory:gamma", "use:memory:alpha*"' in access and '"write:memory:gamma"' in access
     assert await problems(container) == []
 
 

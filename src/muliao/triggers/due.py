@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Protocol
 
 import anyio
+from anyio.abc import TaskGroup
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.errors import CorruptState
@@ -86,26 +87,38 @@ class DueRunner:
         return pending
 
     async def fire_due(self) -> int:
+        """扫描一轮并等这轮的触发都做完；返回到期的个数。"""
+        async with anyio.create_task_group() as group:
+            return await self._fire_due_in(group)
+
+    async def _fire_due_in(self, group: TaskGroup) -> int:
+        """扫描一轮：到期的在这里逐个消耗（短事务，下一轮不会再看到它到期），触发放进 group 并发跑、不等它做完：
+        一个慢的前置检查既不拖住同一轮的其他触发器，也不推迟下一轮扫描。"""
         now = self._clock()
         due = [t.id for t, at in await self._pending() if at <= now]
-        # 到期的触发器并发执行：一个慢的前置检查不拖住同一轮里的其他触发器；一个触发器的意外异常只记在它自己身上（_fire_one）
-        async with anyio.create_task_group() as group:
-            for trigger_id in due:
-                group.start_soon(self._fire_one, trigger_id, now)
+        for trigger_id in due:
+            if await self._consume_one(trigger_id, now):
+                group.start_soon(self._fire, trigger_id)
         return len(due)
 
-    async def _fire_one(self, trigger_id: int, now: datetime) -> None:
-        """一个到期的触发器。契约之外的异常（如数据库暂时不可用、bug）只记日志：不取消同一轮里的其他触发器，也不拖崩扫描
-        循环（与流式触发的投递循环同一做法，triggers.stream）。消耗没提交的下一轮重来；已消耗、触发时失败的不再重试（至多一次）。"""
+    async def _consume_one(self, trigger_id: int, now: datetime) -> bool:
+        """消耗一个到期的触发器，返回是否应当触发。契约之外的异常（如数据库暂时不可用、bug）只记日志、不拖崩扫描循环
+        （与流式触发的投递循环同一做法，triggers.stream）：消耗没提交的下一轮重来。"""
         try:
             try:
-                if not await self._consume(trigger_id, now):
-                    return
+                return await self._consume(trigger_id, now)
             except CorruptState as e:
                 # 只有这个触发器自己存下的数据（到期规则读的配置与状态）坏了才停用它
                 await self._disable(trigger_id, f"{type(e).__name__}: {e}")
-                return
-            # 触发本身的失败按激活机制共用的规则处理（见 TriggerService.fire_activated）
+                return False
+        except Exception:
+            log.exception("due consume failed", extra={"trigger_id": trigger_id})
+            return False
+
+    async def _fire(self, trigger_id: int) -> None:
+        """触发一个已消耗的触发器。失败按激活机制共用的规则处理（TriggerService.fire_activated）；契约之外的异常只记在
+        它自己身上，不取消同一组里的其他触发，也不再重试（至多一次）。"""
+        try:
             await self._triggers.fire_activated(trigger_id)
         except Exception:
             log.exception("due fire failed", extra={"trigger_id": trigger_id})
@@ -152,8 +165,9 @@ class DueRunner:
         return min(_MAX_SLEEP_SECONDS, max(0.0, (min(times) - self._clock()).total_seconds()))
 
     async def run_forever(self) -> None:
-        while True:
-            await self.fire_due()
-            self._changed.clear()
-            with anyio.move_on_after(await self._next_wake()):
-                await self._changed.wait()
+        async with anyio.create_task_group() as group:
+            while True:
+                await self._fire_due_in(group)
+                self._changed.clear()
+                with anyio.move_on_after(await self._next_wake()):
+                    await self._changed.wait()

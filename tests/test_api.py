@@ -200,6 +200,8 @@ def test_auth_token_expires_and_rejects_tampering():
     assert auth.verify(token, now=1001)
     assert not auth.verify(token, now=1000 + 91 * 24 * 3600)
     assert not auth.verify(token.replace("v1.1000", "v1.2000"), now=1001)
+    # 签名段带非 ASCII 字符只是对不上，不抛异常（否则请求变成 500）
+    assert not auth.verify("v1.1000.签名", now=1001)
 
 
 def test_changing_the_password_revokes_issued_cookies():
