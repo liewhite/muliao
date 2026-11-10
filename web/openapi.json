@@ -5468,6 +5468,16 @@
         ],
         "title": "EventActivityOut"
       },
+      "FaultSource": {
+        "type": "string",
+        "enum": [
+          "precheck",
+          "route",
+          "stream"
+        ],
+        "title": "FaultSource",
+        "description": "哪个脚本出的错。"
+      },
       "FeaturesOut": {
         "properties": {
           "transcription": {
@@ -7194,27 +7204,12 @@
             ],
             "title": "Disabled Reason"
           },
-          "precheck_error": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Precheck Error"
-          },
-          "route_error": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Route Error"
+          "faults": {
+            "items": {
+              "$ref": "#/components/schemas/TriggerFault"
+            },
+            "type": "array",
+            "title": "Faults"
           },
           "finished_at": {
             "anyOf": [
@@ -7253,8 +7248,7 @@
           "last_fired_at",
           "last_session_id",
           "disabled_reason",
-          "precheck_error",
-          "route_error",
+          "faults",
           "finished_at",
           "kind",
           "config",
@@ -8182,27 +8176,12 @@
             ],
             "title": "Disabled Reason"
           },
-          "precheck_error": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Precheck Error"
-          },
-          "route_error": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Route Error"
+          "faults": {
+            "items": {
+              "$ref": "#/components/schemas/TriggerFault"
+            },
+            "type": "array",
+            "title": "Faults"
           },
           "finished_at": {
             "anyOf": [
@@ -8241,8 +8220,7 @@
           "last_fired_at",
           "last_session_id",
           "disabled_reason",
-          "precheck_error",
-          "route_error",
+          "faults",
           "finished_at",
           "kind",
           "config",
@@ -9148,17 +9126,6 @@
             ],
             "title": "Running Since"
           },
-          "error": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Error"
-          },
           "failures": {
             "type": "integer",
             "title": "Failures"
@@ -9171,7 +9138,6 @@
         "type": "object",
         "required": [
           "running_since",
-          "error",
           "failures",
           "stderr_log"
         ],
@@ -9313,27 +9279,12 @@
             ],
             "title": "Disabled Reason"
           },
-          "precheck_error": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Precheck Error"
-          },
-          "route_error": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Route Error"
+          "faults": {
+            "items": {
+              "$ref": "#/components/schemas/TriggerFault"
+            },
+            "type": "array",
+            "title": "Faults"
           },
           "finished_at": {
             "anyOf": [
@@ -9372,8 +9323,7 @@
           "last_fired_at",
           "last_session_id",
           "disabled_reason",
-          "precheck_error",
-          "route_error",
+          "faults",
           "finished_at",
           "kind",
           "config",
@@ -9812,6 +9762,36 @@
           "text"
         ],
         "title": "TranscriptOut"
+      },
+      "TriggerFault": {
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/FaultSource"
+          },
+          "error": {
+            "type": "string",
+            "title": "Error"
+          },
+          "address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Address"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "source",
+          "error"
+        ],
+        "title": "TriggerFault",
+        "description": "一条出错：来源、原因；写错的投递地址还带着那个地址（每个地址各一条）。"
       },
       "TriggerKindOut": {
         "properties": {
@@ -10258,27 +10238,12 @@
             ],
             "title": "Disabled Reason"
           },
-          "precheck_error": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Precheck Error"
-          },
-          "route_error": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Route Error"
+          "faults": {
+            "items": {
+              "$ref": "#/components/schemas/TriggerFault"
+            },
+            "type": "array",
+            "title": "Faults"
           },
           "finished_at": {
             "anyOf": [
@@ -10317,8 +10282,7 @@
           "last_fired_at",
           "last_session_id",
           "disabled_reason",
-          "precheck_error",
-          "route_error",
+          "faults",
           "finished_at",
           "kind",
           "config",

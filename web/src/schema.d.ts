@@ -2008,6 +2008,12 @@ export interface components {
             body: string;
             change: components["schemas"]["Arrival"];
         };
+        /**
+         * FaultSource
+         * @description 哪个脚本出的错。
+         * @enum {string}
+         */
+        FaultSource: "precheck" | "route" | "stream";
         /** FeaturesOut */
         FeaturesOut: {
             /** Transcription */
@@ -2562,10 +2568,8 @@ export interface components {
             last_session_id: string | null;
             /** Disabled Reason */
             disabled_reason: string | null;
-            /** Precheck Error */
-            precheck_error: string | null;
-            /** Route Error */
-            route_error: string | null;
+            /** Faults */
+            faults: components["schemas"]["TriggerFault"][];
             /** Finished At */
             finished_at: string | null;
             /**
@@ -2947,10 +2951,8 @@ export interface components {
             last_session_id: string | null;
             /** Disabled Reason */
             disabled_reason: string | null;
-            /** Precheck Error */
-            precheck_error: string | null;
-            /** Route Error */
-            route_error: string | null;
+            /** Faults */
+            faults: components["schemas"]["TriggerFault"][];
             /** Finished At */
             finished_at: string | null;
             /**
@@ -3259,8 +3261,6 @@ export interface components {
         StreamStatus: {
             /** Running Since */
             running_since: string | null;
-            /** Error */
-            error: string | null;
             /** Failures */
             failures: number;
             /** Stderr Log */
@@ -3307,10 +3307,8 @@ export interface components {
             last_session_id: string | null;
             /** Disabled Reason */
             disabled_reason: string | null;
-            /** Precheck Error */
-            precheck_error: string | null;
-            /** Route Error */
-            route_error: string | null;
+            /** Faults */
+            faults: components["schemas"]["TriggerFault"][];
             /** Finished At */
             finished_at: string | null;
             /**
@@ -3490,6 +3488,17 @@ export interface components {
             /** Text */
             text: string;
         };
+        /**
+         * TriggerFault
+         * @description 一条出错：来源、原因；写错的投递地址还带着那个地址（每个地址各一条）。
+         */
+        TriggerFault: {
+            source: components["schemas"]["FaultSource"];
+            /** Error */
+            error: string;
+            /** Address */
+            address?: string | null;
+        };
         /** TriggerKindOut */
         TriggerKindOut: {
             /**
@@ -3659,10 +3668,8 @@ export interface components {
             last_session_id: string | null;
             /** Disabled Reason */
             disabled_reason: string | null;
-            /** Precheck Error */
-            precheck_error: string | null;
-            /** Route Error */
-            route_error: string | null;
+            /** Faults */
+            faults: components["schemas"]["TriggerFault"][];
             /** Finished At */
             finished_at: string | null;
             /**

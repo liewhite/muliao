@@ -1834,7 +1834,7 @@ def test_triggers_get_a_null_route_error_and_downgrade_drops_it(tmp_path):
             "insert into triggers (name, agent_id, prompt, kind, config, state, enabled, created_at) "
             "values ('w', 'a1', 'p', 'webhook', '{}', '{}', 1, '2026-01-01 00:00:00')"
         )
-    migrate(path)
+    migrate(path, "ff49bc305899")
     with sqlite3.connect(path) as conn:
         assert conn.execute("select route_error from triggers").fetchall() == [(None,)]
     with _migration_engine(path).begin() as connection:
@@ -1875,3 +1875,51 @@ def test_sessions_lose_kind_and_downgrade_derives_it_from_origin(tmp_path):
             ("c", "thread"),
             ("p", "conversation"),
         ]
+
+
+def test_trigger_errors_become_one_faults_list_and_downgrade_restores_them(tmp_path):
+    """#580：precheck_error、route_error 与流式 state.error 换算成 faults 列表（坏地址每行一条），两列删掉；降级反算回去。"""
+    import json
+
+    from alembic import command
+
+    from muliao.platform.db import _migration_engine
+
+    path = tmp_path / "m.db"
+    migrate(path, "a7d3e5c91b04")
+    cols = "name, agent_id, prompt, kind, config, state, enabled, created_at, precheck_error, route_error"
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            f"insert into triggers ({cols}) values ('w', 'a1', 'p', 'webhook', '{{}}', '{{}}', 1, "
+            "'2026-01-01 00:00:00', 'precheck exited with 1: x', "
+            "'@route agent:nobody: invalid route ''agent:nobody'': no agent\n@route issue:9: gone')"
+        )
+        conn.execute(
+            f"insert into triggers ({cols}) values ('s', 'a1', 'p', 'stream', '{{}}', "
+            """'{"generation": "g", "error": "exited with 3", "failures": 4}', 1, '2026-01-01 00:00:00', NULL, NULL)"""
+        )
+    migrate(path)
+    with sqlite3.connect(path) as conn:
+        columns = {r[1] for r in conn.execute("pragma table_info(triggers)")}
+        assert "precheck_error" not in columns and "route_error" not in columns
+        rows = {
+            n: (json.loads(f), json.loads(s))
+            for n, f, s in conn.execute("select name, faults, state from triggers")
+        }
+    assert rows["w"][0] == [
+        {"source": "precheck", "error": "precheck exited with 1: x"},
+        {"source": "route", "error": "invalid route 'agent:nobody': no agent", "address": "agent:nobody"},
+        {"source": "route", "error": "gone", "address": "issue:9"},
+    ]
+    assert rows["s"] == ([{"source": "stream", "error": "exited with 3"}], {"generation": "g", "failures": 4})
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "a7d3e5c91b04")
+    with sqlite3.connect(path) as conn:
+        back = {
+            r[0]: r[1:] for r in conn.execute("select name, precheck_error, route_error, state from triggers")
+        }
+    assert back["w"][:2] == (
+        "precheck exited with 1: x",
+        "@route agent:nobody: invalid route 'agent:nobody': no agent\n@route issue:9: gone",
+    )
+    assert back["s"][:2] == (None, None) and json.loads(back["s"][2])["error"] == "exited with 3"

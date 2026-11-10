@@ -13,6 +13,7 @@ from muliao.triggers.api import Precheck
 from muliao.triggers.service import TriggerAgentArchived
 from tests.conftest import login
 from tests.test_flow import deliver, drain
+from tests.test_precheck import precheck_error
 
 PROGRESS = IssueStatus.IN_PROGRESS
 
@@ -145,7 +146,7 @@ async def test_triggers_of_an_archived_agent_neither_run_their_precheck_nor_fire
     # 激活机制：只跳过，不停用、不记失败
     await container.triggers.fire_activated(trigger.id)
     after = await container.triggers.get_by_name("w")
-    assert after.enabled and after.precheck_error is None and after.disabled_reason is None
+    assert after.enabled and precheck_error(after) is None and after.disabled_reason is None
     assert not marker.exists()
     with pytest.raises(AgentArchived):
         await container.triggers.create(name="x", agent_id=alpha.id, kind="webhook", prompt="p", config={})

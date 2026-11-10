@@ -10,6 +10,8 @@
 import ast
 from pathlib import Path
 
+import pytest
+
 SRC = Path(__file__).parent.parent / "src" / "muliao"
 # 经 api 的依赖方向（docs/architecture.md 2.3）：领域只能 import 更早一层的领域的 api，同层与反向都不行，所以依赖无环。
 # 事件与定向命令不受方向限制（events 模块只放消息的数据形状）。新增领域要在这里定它在哪一层
@@ -229,13 +231,19 @@ def test_other_agents_subdomains_check_an_agent_without_taking_its_row():
     assert not problems, "\n".join(problems)
 
 
-def test_only_precheck_changes_the_precheck_state_of_a_trigger():
-    """前置检查在触发器上的状态只在 triggers/precheck.py 迁移（docs/architecture.md 第 14 节）：别的模块不给这几列赋值，
-    构造触发器时也不带它们（由 precheck.set_precheck 设）。"""
-    state = {"precheck", "precheck_output", "precheck_error", "last_checked_at"}
+@pytest.mark.parametrize(
+    ("owner", "state"),
+    [
+        ("precheck", {"precheck", "precheck_output", "last_checked_at"}),
+        ("faults", {"faults"}),
+    ],
+)
+def test_only_its_module_changes_a_state_of_a_trigger(owner, state):
+    """前置检查在触发器上的状态只在 triggers/precheck.py 迁移（docs/architecture.md 第 14 节），脚本出错只在
+    triggers/faults.py 记录与清除：别的模块不给这几列赋值，构造触发器时也不带它们。"""
     problems = []
     for path in sorted((SRC / "triggers").glob("*.py")):
-        if path.stem in ("precheck", "tables"):
+        if path.stem in (owner, "tables"):
             continue
         for node in ast.walk(ast.parse(path.read_text())):
             targets = []
@@ -337,7 +345,7 @@ READ_ONLY_IN_CALLER_TRANSACTION = {
     "agents": {"active_agent_in", "agent_in", "agent_names_in", "named_agent_in", "runnable_agent_in"},
     "files": {"load_metas"},
     "issues": {"check_issue_in"},
-    "routing": {"plan_in", "resolve_in", "routed_in"},
+    "routing": {"plan_in", "resolve_in"},
     "sessions": {
         "session_in",
         "receive_command_in",

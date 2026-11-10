@@ -12,7 +12,6 @@
 """
 
 import re
-from collections.abc import Mapping
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
@@ -128,16 +127,6 @@ def split_routed(text: str) -> list[tuple[str | None, str]]:
         else:
             sections[-1][1].append(line)
     return [(address, "\n".join(body).strip("\n")) for address, body in sections]
-
-
-def routed_text(sections: Mapping[str | None, list[str]]) -> str:
-    """按目标分好的行合成一段事件文本（split_routed 的逆，同一目标的行已合并）：默认目标（None）的行在最前，其后每个地址
-    一行 route_header 接它的行。流式触发按行到达顺序分好目标、攒批后用它合成一次触发的事件（没有行的地址只写一行 route_header）。"""
-    parts = list(sections.get(None, []))
-    for address, lines in sections.items():
-        if address is not None:
-            parts += [route_header(address), *lines]
-    return "\n".join(parts)
 
 
 def describe(target: NewTo | LatestOf | IssueTo, names: AgentNames) -> str:

@@ -16,6 +16,7 @@ from muliao.triggers.precheck import Precheck
 from muliao.triggers.service import trigger_in
 from tests.conftest import login
 from tests.test_flow import deliver
+from tests.test_precheck import precheck_error
 
 
 def _later(hours: int = 1) -> str:
@@ -142,7 +143,7 @@ async def test_a_once_trigger_whose_precheck_fails_is_finished_with_the_error(co
     await deliver(container)
 
     finished = (await container.triggers.list(finished=True))[0]
-    assert finished.finished_at is not None and "exited with 3" in finished.precheck_error
+    assert finished.finished_at is not None and "exited with 3" in precheck_error(finished)
 
 
 async def test_a_once_trigger_that_cannot_fire_is_finished_with_the_reason(container, make_agent):

@@ -3,6 +3,7 @@
 各触发方式的配置与状态类型也在这里导出：HTTP 接口按 kind 把它们组成有区分字段的联合类型。
 """
 
+from muliao.triggers.faults import FaultSource, TriggerFault
 from muliao.triggers.once import OnceConfig, OnceStatus
 from muliao.triggers.precheck import Precheck, PrecheckFailed
 from muliao.triggers.schedule import ScheduleConfig, ScheduleStatus
@@ -21,6 +22,7 @@ from muliao.triggers.webhook import WebhookConfig, Webhooks, WebhookStatus
 
 __all__ = [
     "EVENT_MAX_BYTES",
+    "FaultSource",
     "Fired",
     "OnceConfig",
     "OnceStatus",
@@ -31,6 +33,7 @@ __all__ = [
     "ScheduleStatus",
     "StreamConfig",
     "StreamStatus",
+    "TriggerFault",
     "TriggerKind",
     "TriggerKindName",
     "TriggerService",

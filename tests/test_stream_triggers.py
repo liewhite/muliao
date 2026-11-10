@@ -11,6 +11,7 @@ from pydantic_ai.messages import UserPromptPart
 from muliao.errors import InvalidInput, NotFound
 from muliao.sessions.api import Origin, SessionActivity
 from muliao.sessions.mailbox import queued_in
+from muliao.triggers.faults import FaultSource
 from muliao.triggers.service import EVENT_MAX_BYTES
 from muliao.triggers.stream import StreamRunner, _Pending, _Spec
 from tests.test_flow import drain, history_of
@@ -25,6 +26,7 @@ def _runner(container, **kw) -> StreamRunner:
         container.agents.workspace,
         container.confiner.of,
         container.messaging,
+        container.trigger_faults,
         kw.pop("max_bytes", EVENT_MAX_BYTES),
         backoff=kw.pop("backoff", lambda _n: 0.05),
         stable_seconds=kw.pop("stable_seconds", 60.0),
@@ -46,6 +48,13 @@ async def _until(check: Callable, seconds: float = 10.0) -> None:
     with anyio.fail_after(seconds):
         while not await check():  # noqa: ASYNC110  轮询外部状态（数据库、进程），没有可等的事件
             await anyio.sleep(0.05)
+
+
+async def _stream_fault(container, name: str = "feed") -> str | None:
+    """流式命令的出错（triggers.faults），没有时 None。"""
+    view = container.triggers.view(await container.triggers.get_by_name(name))
+    errors = [f.error for f in view.faults if f.source == FaultSource.STREAM]
+    return errors[0] if errors else None
 
 
 async def _sessions(container, agent_id: str):
@@ -160,15 +169,15 @@ async def test_a_command_that_keeps_exiting_is_restarted_recorded_and_alerted_on
 
         await _until(failed_often)
 
-    status = container.triggers.view(await container.triggers.get_by_name("feed")).status.model_dump(
-        mode="json"
-    )
-    assert "exited with 3" in status["error"] and "boom" in status["error"]
+    fault = await _stream_fault(container)
+    assert fault is not None and "exited with 3" in fault and "boom" in fault
     log = container.agents.workspace(alpha) / "trigger-logs" / "feed.stderr.log"
     assert log.read_text().count("boom") >= 5
     await drain(container)
-    notes = await container.notifications.list(10)
-    assert len([n for n in notes if "feed" in n.title]) == 1
+    # 连续快速退出够次数才算出错，只告警一次：交给写这条命令的 agent（#580），不推送用户
+    alerts = [x for x in await _sessions(container, alpha) if "流式命令反复退出" in x.session.title]
+    assert len(alerts) == 1
+    assert await container.notifications.list(10) == []
 
 
 async def test_a_killed_command_is_restarted_and_disabling_kills_it(container, make_agent):
@@ -320,17 +329,12 @@ async def test_a_secret_gone_after_creation_is_recorded_as_the_error(container, 
                 container.triggers.view(await container.triggers.get_by_name("feed")).status.model_dump(
                     mode="json"
                 )["failures"]
-                >= 1
+                >= 3
             )
 
         await _until(failed)
 
-    assert (
-        "NOPE"
-        in container.triggers.view(await container.triggers.get_by_name("feed")).status.model_dump(
-            mode="json"
-        )["error"]
-    )
+    assert "NOPE" in (await _stream_fault(container) or "")
 
 
 async def test_a_backlog_over_the_event_limit_waits_in_the_pipe_and_goes_one_session_at_a_time(
@@ -434,7 +438,9 @@ async def test_an_exit_is_noticed_even_when_a_child_keeps_the_pipes_and_the_chil
 async def test_running_stably_clears_the_error(container, make_agent):
     alpha = (await make_agent()).id
     await _create(
-        container, alpha, "if [ -f once ]; then sleep 30; else touch once; echo bad >&2; exit 1; fi"
+        container,
+        alpha,
+        "echo x >> tries; if [ $(wc -l < tries) -gt 3 ]; then sleep 30; else echo bad >&2; exit 1; fi",
     )
 
     async with _running(_runner(container, stable_seconds=0.3)):
@@ -443,17 +449,22 @@ async def test_running_stably_clears_the_error(container, make_agent):
             status = container.triggers.view(await container.triggers.get_by_name("feed")).status.model_dump(
                 mode="json"
             )
-            return status["running_since"] is not None and status["error"] is None and status["failures"] == 0
+            return (
+                status["running_since"] is not None
+                and status["failures"] == 0
+                and await _stream_fault(container) is None
+            )
 
         async def failed() -> bool:
             return (
                 container.triggers.view(await container.triggers.get_by_name("feed")).status.model_dump(
                     mode="json"
                 )["failures"]
-                == 1
+                == 3
             )
 
         await _until(failed)
+        assert "bad" in (await _stream_fault(container) or "")
         await _until(recovered)
 
 
@@ -514,7 +525,7 @@ async def test_an_unexpected_failure_of_one_stream_is_a_restart_and_leaves_the_o
     broken = {"count": 0}
 
     def flaky(path, header):  # noqa: ANN001, ANN202
-        if path.name.startswith("bad.") and broken["count"] < 2:
+        if path.name.startswith("bad.") and broken["count"] < 3:
             broken["count"] += 1
             raise OSError("disk full")
         real(path, header)
@@ -541,8 +552,10 @@ async def test_an_unexpected_failure_of_one_stream_is_a_restart_and_leaves_the_o
     status = container.triggers.view(await container.triggers.get_by_name("bad")).status.model_dump(
         mode="json"
     )
-    assert status["failures"] == 2 and "disk full" in status["error"]
-    assert await _contents(container, alpha) == ["handle\n\n<event>\ngood\n</event>"]
+    assert status["failures"] == 3 and "disk full" in (await _stream_fault(container, "bad") or "")
+    # 另一个照常投递（另有一封给 agent 的告警信）
+    events = [c for c in await _contents(container, alpha) if c.startswith("handle")]
+    assert events == ["handle\n\n<event>\ngood\n</event>"]
 
 
 async def test_events_survive_a_failure_while_checking_the_previous_session(container, make_agent):
@@ -601,17 +614,19 @@ async def _payloads_seen(payloads: list, n: int) -> bool:
     return len(payloads) >= n
 
 
-async def test_route_lines_hold_across_batches_and_a_batch_merges_lines_by_target():
+async def test_route_lines_hold_across_batches_without_making_the_queue_grow():
     """`@route` 按行到达顺序定目标、跨批次保持（与把整条流当一段文本相同），不取决于在哪里分批（#572）。"""
     pending = _Pending(EVENT_MAX_BYTES)
     for line in ["d1", "@route issue:5", "for 5"]:
         await pending.put(line)
     assert pending.take() == ("d1\n@route issue:5\nfor 5", 2)
 
-    for line in ["still 5", "@route agent:beta", "@route new", "n1", "@route issue:5", "5 again"]:
+    for line in ["still 5", "@route agent:beta", "@route new", "n1", "@route issue:5", "5 again", "@route x"]:
         await pending.put(line)
-    # 同一目标的行合并；后面没有内容的地址不进事件
-    assert pending.take() == ("@route issue:5\nstill 5\n5 again\n@route new\nn1", 3)
+    # 上一批的地址补在最前；连着的 `@route` 只留最后一个，末尾没有内容的地址不进这一批（带到下一批）
+    assert pending.take() == ("@route issue:5\nstill 5\n@route new\nn1\n@route issue:5\n5 again", 3)
+    await pending.put("y")
+    assert pending.take() == ("@route x\ny", 1)
 
 
 async def test_route_lines_alone_do_not_make_a_batch_ready():

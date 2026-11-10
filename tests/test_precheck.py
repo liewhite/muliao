@@ -7,7 +7,8 @@ import pytest
 from muliao.errors import NotFound
 from muliao.sessions.api import Origin
 from muliao.sessions.lanes import RUN_TASK
-from muliao.triggers.precheck import Precheck, PrecheckFailed, decide, failed, passed, set_precheck
+from muliao.triggers.faults import FaultSource, TriggerFault, faults_of, record, recovered, reset
+from muliao.triggers.precheck import Precheck, PrecheckFailed, decide, passed, set_precheck
 from muliao.triggers.service import trigger_in
 from tests.conftest import login
 from tests.test_flow import deliver, mail_of, tasks_of
@@ -54,29 +55,56 @@ async def _tick(container, trigger_id: int) -> None:
     await deliver(container)
 
 
-def test_precheck_state_alerts_once_per_failure_streak_and_restarts_with_a_new_check():
+def precheck_error(trigger) -> str | None:
+    """触发器上前置检查的出错（triggers.faults），没有时 None。"""
+    errors = [f.error for f in faults_of(trigger) if f.source == FaultSource.PRECHECK]
+    return errors[0] if errors else None
+
+
+def test_faults_alert_once_per_source_and_address_keep_the_latest_and_clear_by_source():
+    from muliao.triggers.tables import Trigger
+
+    trigger = Trigger(name="t", kind="schedule", prompt="p", faults=[])
+    boom = TriggerFault(source=FaultSource.PRECHECK, error="boom")
+    # 从正常变为出错才是新的（要告警），连续出错不再是新的，原因取最新
+    assert record(trigger, [boom]) == [boom]
+    assert record(trigger, [TriggerFault(source=FaultSource.PRECHECK, error="boom again")]) == []
+    assert precheck_error(trigger) == "boom again"
+    # 写错的地址按地址各算一条
+    a = TriggerFault(source=FaultSource.ROUTE, address="agent:a", error="no agent")
+    b = TriggerFault(source=FaultSource.ROUTE, address="issue:9", error="no issue")
+    assert record(trigger, [a]) == [a]
+    assert record(trigger, [a, b]) == [b]
+    # 恢复只清本来源；人工干预清全部
+    recovered(trigger, FaultSource.PRECHECK)
+    assert precheck_error(trigger) is None and [f.address for f in faults_of(trigger)] == [
+        "agent:a",
+        "issue:9",
+    ]
+    reset(trigger)
+    assert faults_of(trigger) == []
+
+
+def test_precheck_state_keeps_a_baseline_and_clears_its_fault_when_it_passes():
     from muliao.triggers.tables import Trigger
 
     now = datetime(2026, 1, 1)
-    trigger = Trigger(name="t", kind="schedule", prompt="p")
+    trigger = Trigger(name="t", kind="schedule", prompt="p", faults=[])
     p = Precheck(command="x", fire_when="changed")
     set_precheck(trigger, p)
 
     # 第一次 changed 检查只记基线
     assert passed(trigger, p, "a", 100, now).baseline and trigger.precheck_output == "a"
-    # 从正常变为出错才告警，连续出错不再告警；恢复后清掉原因
-    assert failed(trigger, "boom", now) and not failed(trigger, "boom again", now)
-    assert trigger.precheck_error == "boom again"
+    record(trigger, [TriggerFault(source=FaultSource.PRECHECK, error="boom")])
     assert passed(trigger, p, "b", 1000, now).event is not None
-    assert trigger.precheck_error is None and trigger.last_checked_at == now
+    assert precheck_error(trigger) is None and trigger.last_checked_at == now
     # 判定本身失败（差异超出上限）不改状态
     with pytest.raises(PrecheckFailed):
         passed(trigger, p, "c" * 200, 100, now)
     assert trigger.precheck_output == "b"
-    # 换检查：从新基线开始，旧失败不带过去
-    failed(trigger, "old", now)
+    # 换检查：从新基线开始
     set_precheck(trigger, Precheck(command="y"))
-    assert trigger.precheck_output is None and trigger.precheck_error is None
+    assert trigger.precheck_output is None
 
 
 async def test_schedule_runs_the_agent_only_when_the_precheck_has_output(container, make_agent):
@@ -144,8 +172,8 @@ async def test_a_failing_precheck_is_handed_to_the_agent_once_per_streak_not_to_
     failed = await container.triggers.get_by_name("watch")
     assert (
         failed.enabled
-        and failed.precheck_error is not None
-        and "exited with 3: no token" in failed.precheck_error
+        and precheck_error(failed) is not None
+        and "exited with 3: no token" in precheck_error(failed)
     )
     # 持续出错只告警一次，告警交给 agent（新会话，来源是这个触发器），不再通知用户
     [alert] = await _alerts(container)
@@ -161,7 +189,7 @@ async def test_a_failing_precheck_is_handed_to_the_agent_once_per_streak_not_to_
 
     (workspace / "ok").write_text("")
     await _tick(container, trigger.id)
-    assert (await container.triggers.get_by_name("watch")).precheck_error is None
+    assert precheck_error(await container.triggers.get_by_name("watch")) is None
 
     # 恢复之后再出错，再告警一次
     (workspace / "ok").unlink()
@@ -188,7 +216,7 @@ async def test_a_precheck_alert_the_agent_cannot_receive_falls_back_to_notifying
 
     monkeypatch.setattr(precheck, "run", deleted_meanwhile)
     await _tick(container, trigger.id)
-    assert "exited with 2" in (await container.triggers.get_by_name("watch")).precheck_error
+    assert "exited with 2" in precheck_error(await container.triggers.get_by_name("watch"))
 
     assert await _alerts(container) == []
     [note] = await container.notifications.list(10)
@@ -224,7 +252,7 @@ async def test_a_failing_step_inside_a_pipeline_fails_the_precheck(container, ma
     # 像 curl 失败而 jq 对空输入照样退出 0：不能被当成「没事」
     trigger, _ = await _schedule(container, alpha, Precheck(command="false | cat"))
     await _tick(container, trigger.id)
-    assert "exited with 1" in (await container.triggers.get_by_name("watch")).precheck_error
+    assert "exited with 1" in precheck_error(await container.triggers.get_by_name("watch"))
 
 
 async def test_precheck_secrets_must_exist_when_the_trigger_is_created(container, make_agent):
@@ -306,7 +334,7 @@ async def test_a_change_too_large_to_hand_over_is_recorded_and_alerted(container
     await _tick(container, trigger.id)
 
     failed = await container.triggers.get_by_name("watch")
-    assert failed.precheck_error is not None and "event limit" in failed.precheck_error
+    assert precheck_error(failed) is not None and "event limit" in precheck_error(failed)
     [alert] = await _alerts(container)
     assert "event limit" in alert
     assert len(await mail_of(container)) == 1
@@ -320,7 +348,7 @@ async def test_a_failing_precheck_on_a_manual_run_is_a_502_with_the_reason(clien
     assert resp.status_code == 502 and "boom" in resp.json()["detail"]
     # 只报给调用方：不记在触发器上（否则会压住之后自动触发时的告警），也不告警
     await deliver(container)
-    assert (await container.triggers.get_by_name("watch")).precheck_error is None
+    assert precheck_error(await container.triggers.get_by_name("watch")) is None
     assert await mail_of(container) == [] and await container.notifications.list(10) == []
     await _tick(container, trigger.id)
     assert len(await _alerts(container)) == 1
@@ -331,9 +359,21 @@ async def test_enabling_an_enabled_trigger_keeps_its_error_and_does_not_alert_ag
     trigger, _ = await _schedule(container, alpha, Precheck(command="exit 3"))
     await _tick(container, trigger.id)
     await container.triggers.update(trigger.id, enabled=True)
-    assert (await container.triggers.get_by_name("watch")).precheck_error is not None
+    assert precheck_error(await container.triggers.get_by_name("watch")) is not None
     await _tick(container, trigger.id)
     assert len(await _alerts(container)) == 1
+
+
+async def test_re_enabling_clears_the_error_and_alerts_again_if_it_still_fails(container, make_agent):
+    """重新启用是人工干预（#580）：清掉出错，还坏着就再告警一次。"""
+    alpha = (await make_agent()).id
+    trigger, _ = await _schedule(container, alpha, Precheck(command="exit 3"))
+    await _tick(container, trigger.id)
+    await container.triggers.update(trigger.id, enabled=False)
+    await container.triggers.update(trigger.id, enabled=True)
+    assert precheck_error(await container.triggers.get_by_name("watch")) is None
+    await _tick(container, trigger.id)
+    assert len(await _alerts(container)) == 2
 
 
 async def test_changing_the_precheck_clears_the_old_commands_error(container, make_agent):
@@ -342,6 +382,6 @@ async def test_changing_the_precheck_clears_the_old_commands_error(container, ma
     trigger, _ = await _schedule(container, alpha, Precheck(command="exit 3"))
     await _tick(container, trigger.id)
     await container.triggers.update(trigger.id, precheck=Precheck(command="exit 5"))
-    assert (await container.triggers.get_by_name("watch")).precheck_error is None
+    assert precheck_error(await container.triggers.get_by_name("watch")) is None
     await _tick(container, trigger.id)
     assert len(await _alerts(container)) == 2

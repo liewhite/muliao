@@ -377,10 +377,8 @@ function KindStatus({ trigger }: { trigger: Trigger }) {
             {trigger.status.running_since ? <>运行中，自 {formatTime(trigger.status.running_since)}</> : '未在运行'}
             {' '}· stderr：<code className="font-mono text-xs">{trigger.status.stderr_log}</code>
           </span>
-          {trigger.status.error && (
-            <span className="text-warning break-all">
-              连续失败 {trigger.status.failures} 次，最近一次：{trigger.status.error}
-            </span>
+          {trigger.status.failures > 0 && (
+            <span className="text-warning">连续很快退出 {trigger.status.failures} 次，按退避重启中</span>
           )}
         </span>
       )
@@ -472,18 +470,41 @@ function kindSummary(trigger: Trigger): string {
   }
 }
 
+type FaultSource = Schemas['FaultSource']
+
+/** 各种脚本出错的标题：卡片上的一句话与详情里的标题 */
+const FAULT_TITLES: Record<FaultSource, { short: string; title: string }> = {
+  precheck: { short: '前置检查出错', title: '前置检查出错，未触发' },
+  route: { short: '投递地址写错，有段被丢弃', title: '投递地址写错，这些地址的段被丢弃（其余照投）' },
+  stream: { short: '流式命令反复退出', title: '流式命令反复退出' },
+}
+
+/** 脚本出错，按来源各一个提示；改前置检查或配置、重新启用后清除，检查成功或流式命令稳定运行后清除各自的 */
+function TriggerFaults({ trigger }: { trigger: Trigger }) {
+  const sources = [...new Set(trigger.faults.map((f) => f.source))]
+  return sources.map((source) => (
+    <ErrorAlert
+      key={source}
+      title={FAULT_TITLES[source].title}
+      error={trigger.faults
+        .filter((f) => f.source === source)
+        .map((f) => (f.address ? `@route ${f.address}: ${f.error}` : f.error))
+        .join('\n')}
+    />
+  ))
+}
+
 /** 需要人注意的状态，卡片上只给一句话，原因在详情里 */
 function triggerWarning(trigger: Trigger): string | null {
   if (trigger.disabled_reason) return trigger.finished_at ? '触发失败' : '触发失败，已自动停用'
-  if (trigger.precheck_error) return '前置检查出错'
-  if (trigger.route_error) return '投递地址写错，有段被丢弃'
+  if (trigger.faults.length) return FAULT_TITLES[trigger.faults[0].source].short
   switch (trigger.kind) {
     case 'schedule':
       return trigger.status.skipped ? `已连续跳过 ${trigger.status.skipped.count} 次` : null
     case 'webhook':
       return trigger.status.has_token ? null : '还没有 token'
     case 'stream':
-      return trigger.status.error ? `连续失败 ${trigger.status.failures} 次` : null
+      return trigger.status.failures ? `连续失败 ${trigger.status.failures} 次` : null
     case 'once':
       return null
   }
@@ -657,12 +678,7 @@ function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: 
           )}
         </div>
         {trigger.disabled_reason && <ErrorAlert title="触发失败，已自动停用" error={trigger.disabled_reason} />}
-        {trigger.precheck_error && (
-          <ErrorAlert title="前置检查出错，本次未触发" error={trigger.precheck_error} />
-        )}
-        {trigger.route_error && (
-          <ErrorAlert title="投递地址写错，这些地址的段被丢弃（其余照投；改前置检查或配置、重新启用后清除）" error={trigger.route_error} />
-        )}
+        <TriggerFaults trigger={trigger} />
         {editing ? (
           <>
             <ConfigEditor value={opened} onChange={setDraft} />
@@ -865,10 +881,7 @@ function FinishedTrigger({ trigger, agents, onChange }: { trigger: Trigger; agen
           )}
         </div>
         {trigger.disabled_reason && <ErrorAlert title="触发失败" error={trigger.disabled_reason} />}
-        {trigger.precheck_error && <ErrorAlert title="前置检查出错，未触发" error={trigger.precheck_error} />}
-        {trigger.route_error && (
-          <ErrorAlert title="投递地址写错，这些地址的段被丢弃" error={trigger.route_error} />
-        )}
+        <TriggerFaults trigger={trigger} />
         <p className="whitespace-pre-wrap text-sm">{trigger.prompt}</p>
         <TriggerSessions trigger={trigger} />
         <ErrorAlert error={action.error} />

@@ -5,17 +5,17 @@
   变量、按 key 注入 secret、输出里的 secret 替换掉、自成进程组）。随服务启停；停用、删除、改配置时杀掉整个进程组，
   改了配置用新配置重新起。
 - 退出（不论退出码：它本该一直运行）或起不来（secret 不可见、日志写不进去等）都算一次失败，按退避时间重启（1、2、
-  4……秒，最多 5 分钟）。稳定运行一段时间（_STABLE_SECONDS）算恢复：清除错误、退避从头算。最近一次的原因记在
-  state["error"]（含 stderr 日志的结尾），连续快速失败达到 _ALERT_AFTER 次时通知用户一次（偶尔退出重连是常态，
-  不打扰）。进程的运行状态（running_since、error、failures）由这里维护，每个托管进程开始时清零：服务重启、换配置
-  都从头算。创建、改配置、重新启用时 configure 在同一事务里就清零并换一个新的 generation：托管进程
+  4……秒，最多 5 分钟）。偶尔退出重连是常态，连续快速失败达到 _ALERT_AFTER 次才算脚本出错（triggers.faults：
+  原因含 stderr 日志的结尾，新出现时告警一次）；稳定运行一段时间（_STABLE_SECONDS）算恢复：清除出错、退避从头算。
+  进程的运行状态（running_since、failures）由这里维护，每个托管进程开始时清零：服务重启、换配置都从头算（出错不随服务
+  重启清除：还坏着就不再告警一次）。创建、改配置、重新启用时 configure 在同一事务里就清零并换一个新的 generation：托管进程
   按它重起（停用再启用来不及被对账看到时也一定重起，这就是「重启」），新进程登记之前 running_since 为空，
   不显示旧进程的。配置没变的保存（界面只改说明）不调 configure（TriggerService.update），不重起。
 - stderr 逐块脱敏后追加进工作目录下的 trigger-logs/<名称>.stderr.log（与后台任务共用 platform.output；每次启动前
   超过 1 MiB 就轮换一份 .1），agent 可以自己读。
 - 事件按 debounce 窗口合并：第一行到达后再等 debounce_seconds，期间到达的一起成为一次触发，事件内容是这些行
-  （以换行分隔）。`@route` 行按到达顺序给之后的行定目标（跨批次保持，与把整条流当一段文本相同），攒批只合并同一目标
-  的行（_Pending）。上一次触发的会话还没做完（previous_fire_state_in，与定时触发同一个定义）时事件排队、不重叠，
+  （以换行分隔）。`@route` 行按到达顺序给之后的行定目标（跨批次保持，与把整条流当一段文本相同，_Pending），
+  分段与同一目标的合并在投递时做（routing.plan_in）。上一次触发的会话还没做完（previous_fire_state_in，与定时触发同一个定义）时事件排队、不重叠，
   它结束后合并投递；挡路的会话在等待（可能永远等不到，如没人回答的提问）时通知用户一次（这一份托管进程里每个挡路
   会话一次）。排队的事件以事件上限为界：排满了就不再读命令的输出，管道写满后命令自己阻塞——不丢、不重叠，内存与
   并行会话都有界。单行超过事件上限的丢弃并记日志。
@@ -50,8 +50,9 @@ from muliao.platform.output import CHUNK, record_output, tail
 from muliao.platform.sandbox import Confinement
 from muliao.platform.shell import DRAIN_SECONDS, kill_group, redact, spawn_bash, wait_exit_code
 from muliao.platform.tasks import Clock
-from muliao.routing.api import route_header, route_line, routed_text
+from muliao.routing.api import route_header, route_line
 from muliao.sessions.api import SessionActivity, WorkState
+from muliao.triggers.faults import Faults, FaultSource, TriggerFault, recovered
 from muliao.triggers.service import (
     TriggerService,
     parse_config,
@@ -66,7 +67,7 @@ KIND = "stream"
 
 # 稳定运行这么久算恢复：清除错误，退避与连续失败计数从头算
 _STABLE_SECONDS = 60.0
-# 连续快速失败这么多次才通知用户（每一轮连续失败只通知一次）
+# 连续快速失败这么多次才算脚本出错
 _ALERT_AFTER = 3
 _MAX_BACKOFF_SECONDS = 300.0
 # 上一次触发的会话还没做完时，隔多久再看一次
@@ -88,9 +89,7 @@ class StreamConfig(BaseModel):
 class StreamStatus(BaseModel):
     # 当前这个进程的启动时间；没有在运行（停用、刚启用或改配置后还没起来、退出后在等重启）时为 null
     running_since: datetime | None
-    # 最近一次退出或起不来的原因（含 stderr 结尾）；稳定运行一段时间后清除
-    error: str | None
-    # 连续快速失败的次数
+    # 连续快速失败的次数（达到告警次数时原因在触发器的 faults 里）
     failures: int
     # stderr 写到哪个文件（相对该 agent 的工作目录）
     stderr_log: str
@@ -121,7 +120,6 @@ class StreamKind:
         return parse_config(KIND, StreamConfig, config).model_dump(), {
             "generation": uuid.uuid4().hex,
             "running_since": None,
-            "error": None,
             "failures": 0,
         }
 
@@ -133,7 +131,6 @@ class StreamKind:
         return StreamStatus(
             # 停用时进程已被杀掉（关停时来不及写回，所以按启用状态推导，而不是信存下的值）
             running_since=state.get("running_since") if trigger.enabled else None,
-            error=state.get("error"),
             failures=state.get("failures", 0),
             stderr_log=stderr_log(trigger.name),
         )
@@ -165,54 +162,56 @@ class _Spec:
 
 @dataclass
 class _Pending:
-    """排队等投递的事件（只在内存里），总量不超过事件上限：排满时读取方等着，命令的输出留在管道里。
+    """排队等投递的事件（只在内存里）：命令输出的原行（含 `@route` 行），总量不超过事件上限：排满时读取方等着，
+    命令的输出留在管道里。
 
-    `@route` 行按到达顺序给后面的行定目标，这个状态跨批次保持：整条流的分段与把它当一段文本时相同，不取决于在哪里
-    分批。攒批只合并同一目标的行，取出时合成一段事件文本（routing.routed_text），投递时照常按 `@route` 行分到各目标。"""
+    `@route` 行按到达顺序给后面的行定目标，这个状态跨批次保持：取走一批时，最近的地址补成下一批的第一行，整条流的
+    分段因此与把它当一段文本时相同，不取决于在哪里分批。连着的 `@route` 行只留最后一个，一批末尾的 `@route` 行不进这一批
+    （它带到下一批）：后面没有内容的地址不进事件、不校验，只有 `@route` 行也不会把队列撑大。"""
 
     max_bytes: int
     # 最近一个 `@route` 行的地址（None 为默认目标）
     address: str | None = None
-    # 这一批按目标攒的行（只有内容到了的目标才在：`@route` 行只改 address，后面没内容的地址不进事件，也不校验）
-    sections: dict[str | None, list[str]] = field(default_factory=dict)
-    # 这一批的行数与合成后事件文本的字节数
-    lines: int = 0
+    # 这一批的行、其中内容行（不含 `@route` 行）的个数、合成文本的字节数
+    lines: list[str] = field(default_factory=list)
+    content: int = 0
     size: int = 0
-    # 这一批第一行到达的时间（anyio 时钟），debounce 从它算起
+    # 这一批第一行内容到达的时间（anyio 时钟），debounce 从它算起
     first_at: float = 0.0
     changed: asyncio.Event = field(default_factory=asyncio.Event)
 
     async def put(self, line: str) -> None:
-        if (address := route_line(line)) is not None:
-            self.address = address
-            return
-        while True:
-            # 合成文本里这一行占的字节：这一批新出现的目标多一行 `@route`
-            n = len(line.encode()) + 1
-            if self.address is not None and self.address not in self.sections:
-                n += len(route_header(self.address).encode()) + 1
-            if not self.lines or self.size + n <= self.max_bytes:
-                break
+        n = len(line.encode()) + 1
+        while self.content and self.size + n > self.max_bytes:
             self.changed.clear()
             await self.changed.wait()
-        if not self.lines:
-            self.first_at = anyio.current_time()
-        self.sections.setdefault(self.address, []).append(line)
-        self.lines += 1
+        if (address := route_line(line)) is not None:
+            self.address = address
+            if self.lines and route_line(self.lines[-1]) is not None:
+                self.size -= len(self.lines.pop().encode()) + 1
+        else:
+            if not self.content:
+                self.first_at = anyio.current_time()
+            self.content += 1
+        self.lines.append(line)
         self.size += n
         self.changed.set()
 
     async def ready(self, debounce: float) -> None:
         """等到有内容、且第一行内容到达后过了 debounce 秒。"""
-        while not self.lines:
+        while not self.content:
             self.changed.clear()
             await self.changed.wait()
         await anyio.sleep(max(0.0, self.first_at + debounce - anyio.current_time()))
 
     def take(self) -> tuple[str, int]:
-        """取出这一批：(事件文本, 内容行数)。最近的 `@route` 地址留着，继续给之后的行定目标。"""
-        batch = (routed_text(self.sections), self.lines)
-        self.sections, self.lines, self.size = {}, 0, 0
+        """取出这一批：(事件文本, 内容行数)。最近的 `@route` 地址补成下一批的第一行，继续给之后的行定目标。"""
+        lines = self.lines
+        if lines and route_line(lines[-1]) is not None:
+            lines = lines[:-1]
+        batch = ("\n".join(lines), self.content)
+        self.lines = [] if self.address is None else [route_header(self.address)]
+        self.content, self.size = 0, sum(len(x.encode()) + 1 for x in self.lines)
         self.changed.set()
         return batch
 
@@ -230,6 +229,7 @@ class StreamRunner:
         # agent 的命令关在什么限制里（workspace.writable.Confiner.of）
         confine: Callable[[str], Awaitable[Confinement]],
         messaging: Messaging,
+        faults: Faults,
         max_bytes: int,
         clock: Clock = utcnow,
         backoff: Callable[[int], float] = _backoff,
@@ -243,6 +243,7 @@ class StreamRunner:
         self._workspace_of = workspace_of
         self._confine = confine
         self._messaging = messaging
+        self._faults = faults
         self._max_bytes = max_bytes
         self._clock = clock
         self._backoff = backoff
@@ -291,7 +292,7 @@ class StreamRunner:
     async def _process_loop(self, spec: _Spec, config: StreamConfig, pending: _Pending) -> None:
         # 这份托管进程从头算：服务重启前的进程留下的运行状态清掉（创建、改配置、重新启用时 configure 已清过，
         # 服务重启这条路径只靠这里）
-        await self._safely(spec, self._record(spec, running_since=None, error=None, failures=0))
+        await self._safely(spec, self._record(spec, running_since=None, failures=0))
         failures = 0
         while True:
             stable = anyio.Event()
@@ -307,16 +308,12 @@ class StreamRunner:
                 failures = 0
             failures += 1
             log.warning("stream exited: %s", error, extra={"trigger": spec.name, "failures": failures})
-            await self._safely(
-                spec,
-                self._record(
-                    spec,
-                    alert=self._alert(spec, error) if failures == _ALERT_AFTER else None,
-                    running_since=None,
-                    error=error,
-                    failures=failures,
-                ),
+            fault = (
+                f"exited quickly {failures} times in a row, restarting with backoff; last exit: {error}"
+                if failures >= _ALERT_AFTER
+                else None
             )
+            await self._safely(spec, self._record(spec, fault=fault, running_since=None, failures=failures))
             await anyio.sleep(self._backoff(failures))
 
     async def _run_once(
@@ -365,7 +362,7 @@ class StreamRunner:
     async def _mark_stable(self, spec: _Spec, stable: anyio.Event) -> None:
         await anyio.sleep(self._stable_seconds)
         stable.set()
-        await self._safely(spec, self._record(spec, error=None, failures=0))
+        await self._safely(spec, self._record(spec, stable=True, failures=0))
 
     async def _read_events(
         self, spec: _Spec, stream: asyncio.StreamReader, secrets: Mapping[str, str], pending: _Pending
@@ -455,25 +452,25 @@ class StreamRunner:
 
     # ---- 状态 ----
 
-    @staticmethod
-    def _alert(spec: _Spec, error: str) -> Notify:
-        return Notify(
-            agent_id=spec.agent_id,
-            title=f"流式触发器 {spec.name} 的命令反复退出",
-            body=f"连续 {_ALERT_AFTER} 次很快退出，仍在按退避重启。最近一次：{error}"[:500],
-            session_id=None,
-            issue_id=None,
-        )
-
-    async def _record(self, spec: _Spec, alert: Notify | None = None, **values: Any) -> None:
-        """把进程的运行状态写回触发器。只写给还是这份配置、仍启用的触发器：被取消的旧进程不覆盖新进程的状态。"""
+    async def _record(
+        self, spec: _Spec, *, fault: str | None = None, stable: bool = False, **values: Any
+    ) -> None:
+        """把进程的运行状态写回触发器；fault 是脚本出错（记下，新出现时告警），stable 是稳定运行了一段时间（清掉出错）。
+        只写给还是这份配置、仍启用的触发器：被取消的旧进程不覆盖新进程的状态。"""
         async with self._db.transaction() as s:
             trigger = await s.get(Trigger, spec.trigger_id)
             if trigger is None or not trigger.enabled or _Spec.of(trigger) != spec:
                 return
             set_state(trigger, **values)
-            if alert is not None:
-                self._messaging.send_in(s, alert)
+            if stable:
+                recovered(trigger, FaultSource.STREAM)
+            if fault is not None:
+                await self._faults.report_in(
+                    s,
+                    trigger,
+                    [TriggerFault(source=FaultSource.STREAM, error=fault)],
+                    lambda _new: stream_alert(trigger, fault),
+                )
 
     @staticmethod
     async def _safely(spec: _Spec, write: Awaitable[None]) -> None:
@@ -482,6 +479,39 @@ class StreamRunner:
             await write
         except Exception:
             log.exception("stream state could not be recorded", extra={"trigger": spec.name})
+
+
+def stream_alert(trigger: Trigger, fault: str) -> str:
+    """流式命令连续快速退出、刚算作出错时交给触发器所属 agent 的信件：哪条命令、原因，以及怎么处理。"""
+    config = StreamConfig.model_validate(trigger.config)
+    return "\n".join(
+        [
+            f"The stream command of your trigger `{trigger.name}` keeps exiting; the platform keeps restarting it "
+            "with backoff, but no events come in while it is down. You wrote this command, so it is yours to fix; "
+            "the user has not been told.",
+            "",
+            f"secrets: {', '.join(config.secrets) or '(none)'}",
+            "command:",
+            "```bash",
+            config.command,
+            "```",
+            "error:",
+            "```",
+            fault,
+            "```",
+            f"Full stderr: {stderr_log(trigger.name)} in your workspace.",
+            "",
+            "What to do:",
+            "- A transient fault (network down, a remote service briefly unavailable): nothing to fix; it counts "
+            f"as recovered once it runs for {int(_STABLE_SECONDS)} seconds.",
+            "- A bug in the command: fix it with `trigger_update` (a new config restarts it); after editing a script "
+            "it runs, restart it by disabling and re-enabling the trigger.",
+            "- Something only the user can fix (a missing secret, a permission, an account): `notify_user` with "
+            "what is needed.",
+            "You are told only once until it runs stably again or you change the trigger; `trigger_list` shows the "
+            "error in `faults`.",
+        ]
+    )
 
 
 def _prepare_log(path: Path, header: str) -> None:

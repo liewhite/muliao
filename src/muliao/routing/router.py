@@ -3,12 +3,13 @@
 和 sessions.api.receive_command_in 同一个模式：这里只读（解析地址、确认 agent 与 issue 存在、校验来信），返回命令；
 发送方（如触发器）在同一事务里记下自己的状态并 send_in 这些命令，由接收的领域在自己的事务里执行——记下触发与投递
 一起提交，恰好一次；提交后由 Messaging 马上执行投递。目标不合法（地址写错、agent 或 issue 不存在、
-agent 已归档、会话不接受这个发送方续写）时：plan_in 把内容里解析不了的地址连同那段记在 Plan.rejected，routed_in 报领域
-错误（只读，不留下写入）；是整次不投（发送方回滚）还是只丢那段由发送方定。发送方自己（如触发器所属的 agent）是否可用
-由发送方在调用之前查，这里出的任何领域错误都是目标的问题，发送方不按异常类型分辨。
+agent 已归档、会话不接受这个发送方续写）时：默认目标的问题 plan_in 当场报领域错误（只读，不留下写入）；内容里 `@route`
+地址的问题（解析不了或目标不接受）连同那段记在 Plan.rejected，是整次不投（发送方回滚）还是只丢那段由发送方定。发送方
+自己（如触发器所属的 agent）是否可用由发送方在调用之前查，这里出的任何领域错误都是目标的问题，发送方不按异常类型分辨。
 """
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -82,19 +83,8 @@ async def resolve_in(s: AsyncSession, address: str, sender_agent: str) -> Target
 
 
 @dataclass(frozen=True)
-class Segment:
-    """一次投递：目标与投给它的内容（同一目标的各段已合并）。address 是内容里给它定目标的第一个地址（几个地址解析到同一
-    目标时只记第一个，报错里也只显示它）；只要有一段来自默认目标就是 None，之后再合并进来的段也不改它：投不进去时那是
-    默认目标的问题，不是内容的。"""
-
-    target: Destination
-    body: str | None
-    address: str | None
-
-
-@dataclass(frozen=True)
 class Rejected:
-    """内容里一个解析不了、或目标不接受的地址（error 是原来的领域错误），和它那段内容。"""
+    """内容里一个解析不了、或目标不接受的地址（error 是原来的领域错误），和投给它的内容。"""
 
     address: str
     body: str
@@ -103,16 +93,28 @@ class Rejected:
 
 @dataclass(frozen=True)
 class Plan:
-    segments: list[Segment]
+    """一个事件的投递：要 send_in 的各次投递（按目标第一次出现的顺序），和内容里被拒的地址。"""
+
+    routed: list[Routed]
     rejected: list[Rejected]
 
 
-async def plan_in(s: AsyncSession, payload: str | None, default: Destination, sender_agent: str) -> Plan:
-    """事件内容按 `@route` 行分到各目标（targets.split_routed），同一目标的各段按出现顺序合并。每个地址都解析，解析不了的
-    那段（后面有没有内容都一样）记在 rejected，要不要整次拒绝由发送方定；没有内容的段不投。没有内容（payload 为 None，
-    如定时触发）时是默认目标的一次投递；有内容但各段都是空的时 segments 为空。只读。"""
+async def plan_in(
+    s: AsyncSession,
+    sender: Sender,
+    payload: str | None,
+    default: Destination,
+    compose: Callable[[str | None], str],
+) -> Plan:
+    """事件内容按 `@route` 行分到各目标（targets.split_routed），同一目标的各段按出现顺序合并，每个目标一次投递，投递的
+    内容是 compose(合并后的内容)（发送方在前面加上自己的说明）。没有内容（payload 为 None，如定时触发）时是默认目标的一次
+    投递 compose(None)；各段都是空的时 routed 为空，没有内容的段不投。只读。
+
+    默认目标投不进去时当场报领域错误（那是发送方配置的问题，routed_in）；和默认目标合并的段跟着默认目标走。内容里的地址
+    每个都解析（后面有没有内容都一样），解析不了或目标不接受的连同那段记在 rejected，要不要整次拒绝由发送方定。"""
     if payload is None:
-        return Plan(segments=[Segment(target=default, body=None, address=None)], rejected=[])
+        return Plan(routed=[await routed_in(s, sender, default, compose(None))], rejected=[])
+    # 每个目标：合并的内容、给它定目标的第一个地址（来自默认目标就是 None：投不进去时是默认目标的问题，不是内容的）
     planned: dict[Destination, tuple[list[str], str | None]] = {}
     rejected: list[Rejected] = []
     for address, body in split_routed(payload):
@@ -120,18 +122,24 @@ async def plan_in(s: AsyncSession, payload: str | None, default: Destination, se
             target: Destination = default
         else:
             try:
-                target = await resolve_in(s, address, sender_agent)
+                target = await resolve_in(s, address, sender.agent_id)
             except DomainError as e:
                 rejected.append(Rejected(address=address, body=body, error=e))
                 continue
         if body.strip():
             bodies, first = planned.get(target, ([], address))
             planned[target] = ([*bodies, body], None if address is None else first)
-    segments = [
-        Segment(target=target, body="\n".join(bodies), address=address)
-        for target, (bodies, address) in planned.items()
-    ]
-    return Plan(segments=segments, rejected=rejected)
+    routed: list[Routed] = []
+    for target, (bodies, address) in planned.items():
+        body = "\n".join(bodies)
+        try:
+            routed.append(await routed_in(s, sender, target, compose(body)))
+        except DomainError as e:
+            # 只读校验失败不留下任何写入，记下这段即可
+            if address is None:
+                raise
+            rejected.append(Rejected(address=address, body=body, error=e))
+    return Plan(routed=routed, rejected=rejected)
 
 
 async def routed_in(s: AsyncSession, sender: Sender, target: Destination, content: str) -> Routed:

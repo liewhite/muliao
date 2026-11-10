@@ -6,12 +6,12 @@ webhook 的请求体，定时与手动触发为空）。退出码 0 时按 fire_
   命令可以把游标（如上次读到的消息 id）存在工作目录里，自己做增量。
 - changed：与上一次的输出逐字比较，变了才触发，交给 agent 的是差异加完整输出；命令只需打印当前状态，上一次的输出
   存在触发器上。第一次运行只记录基线、不触发（没有可比较的，叫 agent 只会白花一次模型调用）。
-非 0 退出、超时、输出过大、secret 不可见：检查本身失败（PrecheckFailed），不触发，原因记在触发器上，并在从正常变为
-出错时告警一次。不当作「没事」跳过——那会把脚本的故障变成静默的漏触发。
+非 0 退出、超时、输出过大、secret 不可见：检查本身失败（PrecheckFailed），不触发，原因记成触发器的出错（triggers.faults：
+从正常变为出错时告警一次，检查成功时清除）。不当作「没事」跳过——那会把脚本的故障变成静默的漏触发。
 
-检查在触发器上的状态（precheck、precheck_output 基线、precheck_error、last_checked_at）只在这里迁移：换检查（set_precheck）
-从新基线开始、清掉旧失败；检查期间触发器变了，结果作废（current_in）；成功（passed：判定是否触发并清掉失败）、失败（failed：
-记下原因，从正常变为出错时要告警）。投信、告警的投递由 TriggerService 编排。
+检查在触发器上的状态（precheck、precheck_output 基线、last_checked_at）只在这里迁移：换检查（set_precheck）从新基线
+开始；检查期间触发器变了，结果作废（current_in）；成功（passed：判定是否触发，清掉检查的出错）、失败（failed：记下检查
+时间）。投信、记录出错与告警由 TriggerService 编排。
 """
 
 import difflib
@@ -31,6 +31,7 @@ from muliao.agents.api import Vault
 from muliao.errors import InvalidInput, NotFound, ScriptFailed
 from muliao.platform.sandbox import Confinement
 from muliao.platform.shell import run_bash
+from muliao.triggers.faults import FaultSource, recovered
 from muliao.triggers.tables import Trigger
 from muliao.workspace.api import denial_note
 
@@ -86,10 +87,9 @@ def precheck_of(trigger: Trigger) -> Precheck | None:
 
 
 def set_precheck(trigger: Trigger, precheck: Precheck | None) -> None:
-    """换上（或去掉）检查：新的检查从新的基线开始比较；旧命令的失败也不记到新配置上（新命令失败时要能再告警一次）。"""
+    """换上（或去掉）检查：新的检查从新的基线开始比较（旧命令的出错由 TriggerService.update 按人工干预清掉）。"""
     trigger.precheck = None if precheck is None else precheck.model_dump()
     trigger.precheck_output = None
-    trigger.precheck_error = None
 
 
 async def current_in(s: AsyncSession, trigger_id: int, checked: dict[str, Any]) -> Trigger | None:
@@ -103,28 +103,19 @@ async def current_in(s: AsyncSession, trigger_id: int, checked: dict[str, Any]) 
 
 
 def passed(trigger: Trigger, precheck: Precheck, output: str, max_bytes: int, now: datetime) -> Decision:
-    """检查正常结束（current_in 取到的触发器）：判定这次触发不触发（decide），记下检查时间、清掉之前的失败，changed
+    """检查正常结束（current_in 取到的触发器）：判定这次触发不触发（decide），记下检查时间、清掉检查的出错，changed
     检查存下这次的输出作基线。判定本身失败（差异过大）时抛 PrecheckFailed、不改状态，由调用方在另一个事务里记失败。"""
     decision = decide(precheck, output, trigger.precheck_output, max_bytes)
-    if trigger.precheck_error is not None:
-        log.info(
-            "trigger precheck recovered",
-            extra={"trigger": trigger.name, "previous_error": trigger.precheck_error},
-        )
-    trigger.last_checked_at, trigger.precheck_error = now, None
+    trigger.last_checked_at = now
+    recovered(trigger, FaultSource.PRECHECK)
     if precheck.fire_when == "changed":
         trigger.precheck_output = output
     return decision
 
 
-def failed(trigger: Trigger, error: str, now: datetime) -> bool:
-    """记下检查失败的原因；返回是否要告警：只在从正常变为出错时告警一次（每分钟检查一次的触发器坏了不会每分钟告警）。"""
-    healthy_before = trigger.precheck_error is None
-    trigger.last_checked_at, trigger.precheck_error = now, error
-    log.warning(
-        "trigger precheck failed: %s", error, extra={"trigger": trigger.name, "alert": healthy_before}
-    )
-    return healthy_before
+def failed(trigger: Trigger, now: datetime) -> None:
+    """检查失败：记下检查时间（原因由调用方记成出错，triggers.faults）。"""
+    trigger.last_checked_at = now
 
 
 def precheck_alert(trigger: Trigger, error: str) -> str:

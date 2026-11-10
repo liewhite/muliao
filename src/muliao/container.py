@@ -68,6 +68,7 @@ from muliao.speech.api import Transcriber, build_transcriber
 from muliao.triggers.api import EVENT_MAX_BYTES, TriggerService, Webhooks
 from muliao.triggers.api import SESSION_NOTE as TRIGGER_SESSION_NOTE
 from muliao.triggers.due import DueRunner
+from muliao.triggers.faults import Faults
 from muliao.triggers.once import OnceDue, OnceKind
 from muliao.triggers.precheck import PrecheckRunner
 from muliao.triggers.schedule import ScheduleDue, ScheduleKind
@@ -161,6 +162,8 @@ class Assembly:
     notifications: Notifications
     mcp: McpRegistry
     triggers: TriggerService
+    # 触发器脚本出错的记录与告警（流式托管与触发共用）
+    trigger_faults: Faults
     due_triggers: DueRunner
     # 流式触发器托管的常驻命令
     streams: StreamRunner
@@ -375,6 +378,8 @@ def assemble(
         vault, agents.workspace, confiner.of, settings.runtime.precheck_timeout_seconds, EVENT_MAX_BYTES
     )
     issues = IssueService(db, messaging, tz, activity, ports.stopper)
+    # 触发器脚本出错的记录与告警，触发与流式托管共用
+    faults = Faults(messaging, tz)
     triggers = TriggerService(
         db,
         {
@@ -385,11 +390,12 @@ def assemble(
         vault,
         precheck,
         messaging,
+        faults,
     )
     # 按到期时间触发的方式共用一个扫描循环，各自给出到期时间与这次到期被用掉之后这一行怎么变
     due_triggers = DueRunner(db, triggers, [ScheduleDue(activity, schedule_kind, messaging), OnceDue()])
     streams = StreamRunner(
-        db, triggers, activity, vault, agents.workspace, confiner.of, messaging, EVENT_MAX_BYTES
+        db, triggers, activity, vault, agents.workspace, confiner.of, messaging, faults, EVENT_MAX_BYTES
     )
     webhooks = Webhooks(db, triggers)
     vapid = VapidKeys(settings.vapid_key_path)
@@ -496,6 +502,7 @@ def assemble(
         notifications=notifications,
         mcp=mcp,
         triggers=triggers,
+        trigger_faults=faults,
         due_triggers=due_triggers,
         streams=streams,
         webhooks=webhooks,

@@ -19,6 +19,7 @@ from muliao.triggers.api import (
     ScheduleStatus,
     StreamConfig,
     StreamStatus,
+    TriggerFault,
     TriggerKind,
     TriggerKindName,
     TriggerView,
@@ -109,10 +110,10 @@ class _TriggerOutBase(BaseModel):
     last_checked_at: datetime | None
     last_fired_at: datetime | None
     last_session_id: str | None
-    # 被自动停用的原因；最近一次前置检查失败的原因；事件内容里写错而被丢掉的各种 `@route` 地址与原因（换前置检查、改配置或重新启用时清除）
+    # 被自动停用的原因（重新启用时清除）
     disabled_reason: str | None
-    precheck_error: str | None
-    route_error: str | None
+    # 脚本出错：前置检查失败、事件内容里写错而被丢掉的 `@route`（每个地址一条）、流式命令反复退出（triggers.faults）
+    faults: list[TriggerFault]
     # 结束的时间：不为空表示它不会再触发了（一次性触发器跑完），只能查看与删除
     finished_at: datetime | None
 
@@ -180,8 +181,7 @@ def _out_of(view: TriggerView, names: AgentNames) -> TriggerOut:
             last_fired_at=t.last_fired_at,
             last_session_id=t.last_session_id,
             disabled_reason=t.disabled_reason,
-            precheck_error=t.precheck_error,
-            route_error=t.route_error,
+            faults=view.faults,
             finished_at=t.finished_at,
         )
     )

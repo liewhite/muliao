@@ -14,6 +14,7 @@ from muliao.errors import InvalidInput
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 from muliao.platform.values import KEEP
 from muliao.routing.api import ADDRESS_HELP
+from muliao.triggers.faults import TriggerFault
 from muliao.triggers.precheck import Precheck
 from muliao.triggers.service import TriggerService, route_address
 from muliao.triggers.tables import Trigger
@@ -36,10 +37,10 @@ class TriggerInfo(BaseModel):
     status: dict[str, Any]
     enabled: bool
     precheck: Precheck | None
-    # 被自动停用的原因；最近一次前置检查失败的原因；事件内容里写错而被丢掉的各种 `@route` 地址与原因（换前置检查、改配置或重新启用时清除）
+    # 被自动停用的原因（重新启用时清除）
     disabled_reason: str | None
-    precheck_error: str | None
-    route_error: str | None
+    # 脚本出错（triggers.faults）
+    faults: list[TriggerFault]
     # 最近一次触发开出的会话；已结束的（跑完的一次性触发器）在这里能看到它的结果去了哪
     last_session_id: str | None
     # 不为空表示它已经跑完、不会再触发了
@@ -57,7 +58,7 @@ bash command run in the agent's workspace before each firing, with the event bod
 With fire_when "output", exit 0 with output fires and the output becomes the event the agent sees, exit 0 \
 with no output skips; with "changed", it fires only when the output differs from the last run and the \
 agent gets the diff plus the output (the first run only records a baseline). A non-zero exit, or running \
-longer than {timeout:g} seconds (the command is then killed), is recorded as the trigger's error; when the \
+longer than {timeout:g} seconds (the command is then killed), is recorded in the trigger's `faults`; when the \
 check goes from healthy to failing, the trigger's agent gets one new conversation with the error to fix it \
 (`trigger_run` only reports a failure back to its caller). Keep the precheck cheap and well under that \
 limit, retries included; slow work (full scans, long retry loops) belongs in the agent's run, not in the \
@@ -70,9 +71,10 @@ goes to `route`. Each part gets `prompt` in front. So channel logic (which proje
 to, which issue a monitor writes to) lives in the script. Only a line starting exactly with `@route` counts, \
 so a script passing on outside text (messages, web pages) must indent any such line in it. An `@route` address \
 that is wrong or whose target no longer exists drops just that part: the rest is delivered, the trigger stays \
-enabled, the error is added to `route_error` and its agent gets a new conversation once per distinct bad \
-address; `route_error` is cleared when the precheck or config changes or the trigger is re-enabled (`trigger_run` \
-and webhooks reject the whole firing instead, with the error). A default `route` whose target is gone disables \
+enabled, the error is added to `faults` and its agent gets a new conversation once per distinct bad \
+address (`trigger_run` and webhooks reject the whole firing instead, with the error). `faults` (a failing \
+precheck, bad `@route` addresses, a stream command that keeps exiting) are cleared when the precheck or config \
+changes or the trigger is re-enabled, and a precheck's or stream's own fault also once it works again. A default `route` whose target is gone disables \
 the trigger with the reason."""
 
 
@@ -95,8 +97,7 @@ def triggers_toolset(
             enabled=t.enabled,
             precheck=view.precheck,
             disabled_reason=t.disabled_reason,
-            precheck_error=t.precheck_error,
-            route_error=t.route_error,
+            faults=view.faults,
             last_session_id=t.last_session_id,
             finished_at=t.finished_at,
         )
@@ -112,7 +113,7 @@ def triggers_toolset(
         """List triggers: things that wake an agent (schedules, webhooks, ...), delivering to their `route`. Returns a
         JSON array of triggers, each with `name`, `kind`, `agent`, `prompt`, `config`, `route`, `status` (kind-specific
         state such as the next firing time or the webhook URL), `enabled`, `precheck`, `disabled_reason`,
-        `precheck_error`, `route_error`, `last_session_id` and `finished_at` (ISO 8601; set once it will not fire again).
+        `faults` (`source`, `error`, `address`), `last_session_id` and `finished_at` (ISO 8601; set once it will not fire again).
 
         Args:
             finished: List the finished ones instead — `once` triggers that already ran and are gone from
