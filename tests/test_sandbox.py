@@ -11,7 +11,7 @@ from muliao.agents.assets import load_tree
 from muliao.errors import Forbidden, InvalidInput
 from muliao.platform.sandbox import Category, Confinement, Sandbox, WritablePaths, real_forms, sandbox_for
 from muliao.platform.shell import run_bash
-from muliao.workspace.writable import DEFAULT_WRITABLE, Confiner, check_write, denial_note
+from muliao.workspace.writable import DEFAULT_WRITABLE, Confiner, check_read, check_write, denial_note
 from tests.test_tools import run_tools
 
 ADAPTERS = [pytest.param("darwin", marks=pytest.mark.skipif(sys.platform != "darwin", reason="macOS only"))]
@@ -506,6 +506,21 @@ async def test_private_files_are_readable_and_writable_only_by_an_admin(containe
         [("run_shell", {"command": f"cat {config} {backups}/config.toml.1", "timeout": 30}), calls[1]],
     )
     assert outputs[0].count("hunter22") == 2 and "hunter22" in outputs[1]
+
+
+async def test_report_mode_lets_reads_of_private_files_through(platform, tmp_path):
+    secret = tmp_path / "config.toml"
+    secret.write_text("key\n")
+    c = Confinement(
+        sandbox_for("report", Path.home(), platform),
+        WritablePaths.of([(True, tmp_path), (True, Path("/dev"))], "agent-x"),
+        Path.home(),
+        lambda p: "",
+        real_forms(secret),
+    )
+    result = await _sh(c, tmp_path, f"cat {secret}")
+    assert (result.exit_code, result.stdout) == (0, "key\n")
+    check_read(c, secret)
 
 
 async def test_a_precheck_cannot_read_a_private_file(container, make_agent):

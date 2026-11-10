@@ -184,7 +184,8 @@ class Settings(_Section):
     @property
     def private_files(self) -> tuple[Path, ...]:
         """只有 admin 能读写的平台文件（#539，workspace.writable）：配置文件（登录密码、cookie 签名密钥、vault 解密 key、
-        LLM key）与改它时留的 `.prev`、它旁边的备份目录 backups/（部署前备份的数据库、配置、资源树）、推送私钥。"""
+        LLM key）、它旁边可能有的副本 `.prev`（手工留的）、它旁边的备份目录 backups/（部署时的备份脚本约定的位置，
+        放数据库、配置、资源树的副本；平台代码不写它）、推送私钥。"""
         if self._file is None:
             return (self.vapid_key_path,)
         f = self._file

@@ -569,7 +569,7 @@ agent 在任何一次运行里都可以在自己的资源目录里建 `skills/<�
 
 **威胁模型：agent 与运行服务的系统用户同等可信。** agent 能执行任意 shell 命令，故意绕开（如经 launchctl 让沙箱外的进程代读）就能读到服务能读到的一切——包括配置文件里的 `vault.key` 与 LLM API key、数据库文件。下面的措施只防止 secret **意外**进入对话记录、日志和前端，不防 agent 本身：
 
-- 平台的私有文件只有 admin 能读写（#539，`config.Settings.private_files`）：配置文件与它旁边的 `<配置文件>.prev`、备份目录 `backups/`、推送私钥 `vapid_private.pem`。写沙箱对非 admin 还禁止读这些路径的内容（存在与否、大小等元数据照样可见），`read_file` 按同一份判断拒绝（`workspace.writable.check_read`），写也放在所有授权之后收回；被拒时补一句「这是平台的私有文件、找用户或 admin」。数据库文件不在内：很多 agent 正当地读它（#537）。
+- 平台的私有文件只有 admin 能读写（#539，`config.Settings.private_files`）：配置文件与它旁边可能有的手工副本 `<配置文件>.prev`、备份目录 `backups/`（部署备份脚本约定的位置，平台代码不写它）、推送私钥 `vapid_private.pem`。写沙箱对非 admin 还禁止读这些路径的内容（存在与否、大小等元数据照样可见），`read_file` 按同一份判断拒绝（`workspace.writable.check_read`），写也放在所有授权之后收回；被拒时补一句「这是平台的私有文件、找用户或 admin」。数据库文件不在内：很多 agent 正当地读它（#537）。
 
 能缩小的是**提示注入的影响面**：处理外部事件或网页内容的 agent 用自己的 deny 收窄（如 `use:tool:trigger_*`），不分给它用不到的 MCP 与 secret，这样即使输入里带有恶意指令，能动的东西也有限；base 本身没有管理类工具（记忆的增删、agent 与角色管理），也改不了别人的资产与全局记忆。
 
