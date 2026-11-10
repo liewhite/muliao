@@ -59,7 +59,7 @@ class AssetSource:
         key = (await asyncio.to_thread(fingerprint, self.root), tuple(sorted(known.items())))
         if key == self._key and self._snapshot is not None:
             return self._snapshot
-        snapshot = await asyncio.to_thread(load_tree, self.root, known, self.memory_max_chars)
+        snapshot = await asyncio.to_thread(load_tree, self.root, known, self.memory_max_chars, self._snapshot)
         snapshot = self._checked(snapshot)
         self._key, self._snapshot = key, snapshot
         if snapshot.problems:

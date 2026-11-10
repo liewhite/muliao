@@ -268,6 +268,35 @@ roles = []
     assert [s.name for s in await container.skills.index(alpha.id)] == ["digest"]
 
 
+async def test_an_unparsable_access_toml_keeps_the_last_rules_and_reports_to_their_admin(
+    container, make_agent
+):
+    """access.toml 整个读不出来时沿用上次读到的规则（#550）：否则谁都没了 admin，这条问题报不到人，也没人能改回文件。"""
+    boss = await make_agent("boss", roles=("admin",))
+    await make_agent("alpha")
+    assert (await container.assets.snapshot()).administers(boss.id)
+    path = root(container) / "platform" / "access.toml"
+    good = path.read_text()
+    write(path, good + "\n[agents.alpha\n")
+    snapshot = await container.assets.snapshot()
+    assert snapshot.administers(boss.id)
+    [reported] = [p.reason for p in snapshot.problems_for(boss.id)]
+    assert reported.startswith("cannot parse") and "last read successfully stay in effect" in reported
+    # 坏着时 admin 用文件工具改回来：格式校验只拦新问题，改好的照常写入
+    await container.assets.vet(path, good)
+    write(path, good)
+    snapshot = await container.assets.snapshot()
+    assert snapshot.administers(boss.id) and snapshot.problems == ()
+
+
+def test_an_unparsable_access_toml_without_an_earlier_read_leaves_only_the_fixed_parts(tmp_path):
+    write(tmp_path / "platform" / "access.toml", "[agents.alpha\n")
+    snapshot = load_tree(tmp_path, {}, 4000, None)
+    assert snapshot.rules == {}
+    [problem] = snapshot.problems
+    assert "only the fixed parts of built-in roles apply" in problem.reason
+
+
 async def test_memory_over_the_limit_is_loaded_but_reported(container, make_agent):
     await make_agent("alpha")
     write(root(container) / "alpha" / "memory.md", "x" * (container.memory.max_chars + 1))
@@ -280,7 +309,7 @@ def test_hidden_entries_are_ignored(tmp_path):
     (tmp_path / ".git").mkdir()
     write(tmp_path / ".DS_Store", "x")
     write(tmp_path / "platform" / "memory" / ".swp", "x")
-    snapshot = load_tree(tmp_path, {}, 4000)
+    snapshot = load_tree(tmp_path, {}, 4000, None)
     assert snapshot.problems == ()
 
 
@@ -495,3 +524,18 @@ async def test_deleting_an_agent_removes_its_directory_but_keeps_what_others_use
     assert (r / "platform" / "skills" / "kept" / "SKILL.md").exists()
     assert not (r / "platform" / "skills" / "gone").exists()
     assert "[agents.alpha]" not in (r / "platform" / "access.toml").read_text()
+
+
+async def test_deleting_an_agent_whose_directory_is_not_loaded_frees_its_name(container, make_agent):
+    """目录没加载成功（agent.toml 坏了）也删掉目录与 access.toml 里那一节，同名能再建（#550）。"""
+    await container.distribution.create(RoleSpec("readers", "r", [], []), actor="user")
+    alpha = await make_agent("alpha", roles=("readers",))
+    r = root(container)
+    write(r / "alpha" / "agent.toml", "broken")
+    assert alpha.id not in (await container.assets.snapshot()).agents
+    await container.agent_lifecycle.delete(alpha.id, actor="user")
+    await drain(container)
+    assert not (r / "alpha").exists()
+    assert "[agents.alpha]" not in (r / "platform" / "access.toml").read_text()
+    again = await make_agent("alpha")
+    assert again.id in (await container.assets.snapshot()).agents

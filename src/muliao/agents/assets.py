@@ -210,10 +210,11 @@ def _visible(entries: list[Path]) -> list[Path]:
 class _Reader:
     """读一棵树：一次性的状态（收集到的资源与问题）。"""
 
-    def __init__(self, root: Path, known: Mapping[str, str], memory_max_chars: int):
+    def __init__(self, root: Path, known: Mapping[str, str], memory_max_chars: int, last: Snapshot | None):
         self.root = root
         self.known = known
         self.memory_max_chars = memory_max_chars
+        self.last = last
         self.problems: list[Problem] = []
         # 每种资源：名字 → 找到的各处（冲突时不止一处）
         self.found: dict[StoredKind, dict[str, list[Asset]]] = {k: {} for k in StoredKind}
@@ -271,15 +272,28 @@ class _Reader:
                 )
         path = self.root / PLATFORM / ACCESS_FILE
         access = access_file.read(path, {a.name: a.id for a in agents.values()})
+        roles, rules = access.roles, access.rules
+        if access.readable:
+            consequence = ""
+        elif self.last is not None:
+            # 整个文件读不出来：沿用上一份快照的规则（它自己也可能是沿用来的），否则所有 agent 都没了 admin，
+            # 平台的问题报不到人（problems_for），也没有 agent 能改回这个文件
+            roles, rules = dict(self.last.roles), dict(self.last.rules)
+            consequence = "; the rules last read successfully stay in effect until it is fixed"
+        else:
+            consequence = (
+                "; no earlier version was read since the service started, so only the fixed parts of built-in "
+                "roles apply (no agent has admin)"
+            )
         for p in access.problems:
-            self.problem(path, p.reason, p.agent_id)
+            self.problem(path, p.reason + consequence, p.agent_id)
         return Snapshot(
             self.root,
             dict(self.known),
             agents,
             {kind: self.resolved(kind) for kind in StoredKind},
-            access.roles,
-            access.rules,
+            roles,
+            rules,
             tuple(self.problems),
             {k: frozenset(v) for k, v in self.unloaded.items()},
             {k: dict(v) for k, v in self.shadowed.items()},
@@ -473,10 +487,10 @@ class _Reader:
         self.guarded(StoredKind.SECRET, path.stem, path, owner, load)
 
 
-def load_tree(root: Path, known: Mapping[str, str], memory_max_chars: int) -> Snapshot:
-    """读整棵树。known 是数据库里的 agent（id → 名字，含正在删除的）：agent 目录按 agent.toml 的 id 对上它们。同步 IO，
-    调用方放到线程里。"""
-    return _Reader(root, known, memory_max_chars).read()
+def load_tree(root: Path, known: Mapping[str, str], memory_max_chars: int, last: Snapshot | None) -> Snapshot:
+    """读整棵树。known 是数据库里的 agent（id → 名字，含正在删除的）：agent 目录按 agent.toml 的 id 对上它们。last 是上一份
+    快照（本进程还没读过为 None）：access.toml 整个读不出来时沿用它的角色与规则。同步 IO，调用方放到线程里。"""
+    return _Reader(root, known, memory_max_chars, last).read()
 
 
 def fingerprint(root: Path) -> tuple[tuple[str, int, int], ...]:

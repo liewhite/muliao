@@ -225,7 +225,7 @@ async def test_an_agent_writes_its_workspace_the_defaults_and_its_grants_minus_p
 
     async def scope_of(agent: str) -> WriteScope:
         return WriteScope(
-            tree, (tree / "a1",), ("~/proj",), ("~/proj/secret",), agent, load_tree(tree, {}, 4000)
+            tree, (tree / "a1",), ("~/proj",), ("~/proj/secret",), agent, load_tree(tree, {}, 4000, None)
         )
 
     confiner = Confiner(sandbox, lambda a: tmp_path / "ws" / a, scope_of, home=home, private=())

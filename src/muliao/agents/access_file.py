@@ -2,8 +2,8 @@
 改动）都在这一处。
 
 读：坏掉的单条规则、不认识的角色各自跳过并记一条问题，其余照常（不让一个笔误拿掉一个 agent 的全部角色）；整个文件读不
-出来时只剩内置角色的固定部分，没有任何 agent 的规则。纯函数，问题交给调用方（读树的 agents.assets、写前校验的
-agents.asset_files）。
+出来时 readable 为 False（只剩内置角色的固定部分，没有任何 agent 的规则），由读树的一方决定沿用什么（agents.assets）。
+纯函数，问题交给调用方（读树的 agents.assets、写前校验的 agents.asset_files）。
 写：界面上的角色与 agent 规则、建 / 改名 / 删 agent，用 tomlkit 读改写，人手写的注释与排版保留；调用方在
 AssetSource.writing() 里串行调用。"""
 
@@ -61,11 +61,13 @@ class AccessProblem:
 
 @dataclass(frozen=True)
 class Access:
-    """读出的内容：全部角色（内置在前，按定义顺序；自建的按名称）、各 agent 的规则（按 id，没写的 agent 只有 base）。"""
+    """读出的内容：全部角色（内置在前，按定义顺序；自建的按名称）、各 agent 的规则（按 id，没写的 agent 只有 base）。
+    readable：整个文件读出来了；False 时 roles 只有内置角色的固定部分、rules 为空，problems 里是读不出的原因。"""
 
     roles: dict[str, Role]
     rules: dict[str, AgentRules]
     problems: tuple[AccessProblem, ...]
+    readable: bool
 
 
 def read(path: Path, agents: Mapping[str, str]) -> Access:
@@ -97,11 +99,11 @@ class _Parser:
         self.problems.append(AccessProblem(reason, agent_id))
 
     def done(self) -> Access:
-        return Access(self.roles, self.rules, tuple(self.problems))
+        return Access(self.roles, self.rules, tuple(self.problems), readable=True)
 
     def unreadable(self, error: str) -> Access:
-        self.problem(f"cannot parse: {error}; only the fixed parts of built-in roles apply")
-        return self.done()
+        self.problem(f"cannot parse: {error}")
+        return Access(self.roles, self.rules, tuple(self.problems), readable=False)
 
     def parse(self, text: str | None) -> Access:
         if text is None:
