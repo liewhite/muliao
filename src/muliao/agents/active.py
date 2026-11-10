@@ -1,9 +1,8 @@
 """agent 目录子域给同领域别的子域的事务内查询（agents 表只经目录读写）：
 
-- agent 是否还可用（check_active_in，别的子域只用它：不拿到 agents 表的行）：正在删除的按不存在处理（docs/architecture.md 第 10 节「删除 agent」）；是否能运行：归档的
-  另外不能运行（runnable_row_in）。
-- 名称：agent_names_in（含正在删除的）、agent_name_in。
-- 正在删除的 agent：deleting_ids（子查询；它们的条目按不存在处理）。
+- agent 的行（active_row_in / runnable_row_in，只给目录子域自己用）：正在删除的按不存在处理（docs/architecture.md 第 10 节
+  「删除 agent」）；归档的另外不能运行。
+- 名称：agent_names_in（含正在删除的）。
 
 agent 只会从可用变为正在删除、再变为不存在。为某个 agent 写数据（包括它的条目与记忆）之前，在写入的同一事务里
 检查它还可用（agents.service.active_agent_in）：事务串行，检查通过的写入一定落在删除标记之前，被删除流程一起删掉。
@@ -11,7 +10,7 @@ agent 只会从可用变为正在删除、再变为不存在。为某个 agent �
 
 from dataclasses import dataclass
 
-from sqlalchemy import Select, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.tables import Agent
@@ -19,16 +18,11 @@ from muliao.errors import Conflict, NotFound
 
 
 async def active_row_in(s: AsyncSession, agent_id: str) -> Agent:
-    """还可用的 agent 的行：只给目录子域自己（service）用，别的子域用 check_active_in。"""
+    """还可用的 agent 的行：只给目录子域自己（service）用，别的领域用 agents.service.active_agent_in。"""
     agent = await s.get(Agent, agent_id)
     if agent is None or agent.deleting_by is not None:
         raise NotFound(f"agent {agent_id!r} not found")
     return agent
-
-
-async def check_active_in(s: AsyncSession, agent_id: str) -> None:
-    """agent 还可用（正在删除的按不存在处理，NotFound）。为它写条目、记忆、规则之前在同一写事务里查。"""
-    await active_row_in(s, agent_id)
 
 
 class AgentArchived(Conflict):
@@ -57,23 +51,8 @@ class AgentNames:
 
 
 async def agent_names_in(s: AsyncSession) -> AgentNames:
-    """在调用方的事务里取全部 agent 的名称（AgentNames）。"""
+    """在调用方的事务里取全部 agent（含正在删除的）的名称：展示用，也是读资源树时按 id 对上 agent 目录的依据（agents.source）。"""
     return AgentNames({agent_id: name for agent_id, name in await s.execute(select(Agent.id, Agent.name))})
-
-
-async def agent_name_in(s: AsyncSession, agent_id: str) -> str | None:
-    """agent 的名称（包括正在删除的）；不存在时 None。"""
-    return await s.scalar(select(Agent.name).where(Agent.id == agent_id))
-
-
-def deleting_ids() -> Select[tuple[str]]:
-    """正在删除的 agent 的 id（子查询：别的子域在自己的查询里排除它们名下的数据）。"""
-    return select(Agent.id).where(Agent.deleting_by.is_not(None))
-
-
-async def known_agents_in(s: AsyncSession) -> dict[str, str]:
-    """数据库里全部 agent（含正在删除的）的 id → 名字：读资源树时按 id 对上 agent 目录（agents.assets）。"""
-    return {agent_id: name for agent_id, name in await s.execute(select(Agent.id, Agent.name))}
 
 
 @dataclass(frozen=True)

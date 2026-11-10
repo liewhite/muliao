@@ -138,7 +138,8 @@ class Listing:
     agent_id: str | None = None
     origins: Sequence[Origin] | None = None
     origin_ref: str | None = None
-    # 关键字：标题或任一条消息（pydantic-ai 消息 JSON 原文，含用户消息、回复、工具调用与结果）含有它，不区分 ASCII 大小写
+    # 关键字：标题或任一条消息的可搜索文字（sessions.history.searchable_text：用户消息、回复、工具调用，不含工具结果）
+    # 含有它，不区分 ASCII 大小写
     keyword: str | None = None
 
 

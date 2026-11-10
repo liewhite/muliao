@@ -73,7 +73,7 @@ muliao/
 
 | 子域 | 表 | 模块 | 给别的子域的接口 |
 |---|---|---|---|
-| 目录 | `agents`（身份、默认、分组、归档、删除标记；名字等镜像列） | `service.py`（`AgentService`）、`active.py`（含镜像同步 `sync_mirror_in`）、`naming.py`、`ids.py` | `check_active_in`（行本身 `active_row_in` / `runnable_row_in` 只给目录自己用）、`agent_names_in` / `agent_name_in`、`known_agents_in`、`deleting_ids`；删除流程的 `deletable_in`、`mark_deleting_in`、`set_archived_in`、`deletion_actor_in`、`remove_in` |
+| 目录 | `agents`（身份、默认、分组、归档、删除标记；名字等镜像列） | `service.py`（`AgentService`）、`active.py`（含镜像同步 `sync_mirror_in`）、`naming.py`、`ids.py` | `agent_names_in`（行本身 `active_row_in` / `runnable_row_in` 只给目录自己用）；删除流程的 `deletable_in`、`mark_deleting_in`、`set_archived_in`、`deletion_actor_in`、`remove_in` |
 | 分发 | —（规则在 `access.toml`） | `permissions.py`（内置工具与规则）、`roles.py`（写入前的校验）、`agent_rules.py`、`access.py`（能用 / 能改、`Sharing`、`Reach`）、`access_file.py`（改 access.toml）、`distribution.py`（门面 `Distribution`） | 都是对快照的纯函数：`grants_for`、`sharing_of`、`check_change` / `changeable` / `writable` / `usable`、`reach_of` |
 | 资源 | —（文件；旧表 `items`、`item_files`、`roles`、`agent_rules`、`revisions` 无人读写，待 #503 删） | `assets.py`（布局、读树、写文件）、`source.py`（`AssetSource`：快照与镜像同步）、`skills.py` / `skill_package.py`、`mcp.py` / `mcp_config.py`、`secrets.py` / `secrets_format.py`、`memory.py`（`MemoryStore`）、`catalog.py`（门面 `ItemCatalog`） | `Snapshot` 的查询（`asset`、`of_kind`、`path_of`、`problems_for`） |
 

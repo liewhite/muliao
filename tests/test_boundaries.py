@@ -218,7 +218,7 @@ def test_tables_owned_by_one_module_are_only_queried_there():
 
 
 def test_other_agents_subdomains_check_an_agent_without_taking_its_row():
-    """agents 表的行只在目录子域（service、active）手里：别的子域查 agent 还可用用 check_active_in。"""
+    """agents 表的行只在目录子域（service、active）手里：别处要确认 agent 还可用，调 agents.service.active_agent_in。"""
     rows = {"muliao.agents.active.active_row_in", "muliao.agents.active.runnable_row_in"}
     problems = [
         f"agents/{path.name}:{line} imports {name.rsplit('.', 1)[1]}"

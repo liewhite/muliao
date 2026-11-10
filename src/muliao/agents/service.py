@@ -263,7 +263,7 @@ class AgentService:
     async def verify_stored(self) -> None:
         """启动检查：已存 agent 的模型与思考档位必须能按当前配置运行，与新建、修改时同一套规则。配置改动（删 provider）
         在启动时暴露，而不是散落到每个任务里失败。正在删除的不查。先报出已删除 agent 的残留工作目录（只记录，不阻止启动）。
-        分发规则的检查在 Distribution.verify_stored。"""
+        分发规则不在这里查：读资源树时坏规则跳过并报出（agents.assets）。"""
         await self._report_leftovers()
         broken = []
         for agent in await self.list():
@@ -468,7 +468,7 @@ class AgentService:
             return set((await s.scalars(select(Agent.id))).all())
 
     async def remove_workspace(self, agent_id: str) -> None:
-        """删除 agent 的工作目录（删除 agent 的流程里；它的条目与记忆随数据库行删除）。"""
+        """删除 agent 的工作目录（删除 agent 的流程里；它的资源目录另由 lifecycle._retire_assets 处理）。"""
         workspace = self.workspace(agent_id)
         if workspace.exists():
             # 工作目录里可能有 venv、clone 的仓库、后台任务日志：放到线程里删，不阻塞事件循环

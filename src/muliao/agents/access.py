@@ -75,7 +75,7 @@ class Source:
 
 @dataclass(frozen=True)
 class Provenance:
-    """只解释、不判断：能不能用由 Grants 判断，这里说明是哪些来源放行的。最终规则是各来源（roles.sources_of）的并集，即各
+    """只解释、不判断：能不能用由 Grants 判断，这里说明是哪些来源放行的。最终规则是各来源（AgentRules.sources）的并集，即各
     allow 的并集加上全部 deny，所以「某个来源放行」＝它的 allow 匹配且最终的 deny 没拦。"""
 
     agent_id: str

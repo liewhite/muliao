@@ -18,7 +18,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from muliao.agents import asset_files
-from muliao.agents.active import Mirrored, known_agents_in, sync_mirror_in
+from muliao.agents.active import Mirrored, agent_names_in, sync_mirror_in
 from muliao.agents.assets import AGENT_FILE, Problem, Snapshot, fingerprint, load_tree
 from muliao.agents.thinking import Thinking, check_thinking_level
 from muliao.errors import InvalidInput
@@ -51,7 +51,7 @@ class AssetSource:
 
     async def _current(self) -> Snapshot:
         async with self._db.transaction() as s:
-            known = await known_agents_in(s)
+            known = (await agent_names_in(s)).by_id
         key = (await asyncio.to_thread(fingerprint, self.root), tuple(sorted(known.items())))
         if key == self._key and self._snapshot is not None:
             return self._snapshot

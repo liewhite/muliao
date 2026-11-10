@@ -166,7 +166,7 @@ def kind_of(pattern: str) -> Kind | None:
 
 def check_patterns(patterns: Sequence[str]) -> None:
     """不查数据库的规则校验：形式合法、不重复，tool 规则至少匹配一个登记的工具（拼错的在写入时报出，而不是悄悄什么都不
-    匹配）。别的种类的规则是否匹配现有资产由写入方在事务里查（agents.roles.check_new_items_in）。"""
+    匹配）。别的种类的规则是否匹配现有资产由写入方对着快照查（agents.roles.check_new_items）。"""
     bad = [
         p
         for p in patterns
@@ -225,7 +225,7 @@ class Rules:
 class Role:
     name: str
     description: str
-    # 可编辑的规则（roles 表）
+    # 可编辑的规则（access.toml 的 [roles.<名>]）
     rules: Rules
     # 内置角色在代码里固定的规则（自建角色为空）
     fixed: Rules

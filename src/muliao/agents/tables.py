@@ -57,8 +57,7 @@ def _owner_ref() -> ForeignKey:
 
 
 class AgentRulesRow(Base):
-    """agent 的分发规则（agents.agent_rules，分发子域）：角色名（不含每个 agent 隐含的 base）与它自己的 allow / deny
-    （`kind:glob`）。每个 agent 一行，与 agent 的行同一事务创建、随它级联删除。"""
+    """旧：agent 的角色名与它自己的 allow / deny（现在在 access.toml 的 [agents.<名>]）。"""
 
     __tablename__ = "agent_rules"
 
@@ -69,8 +68,7 @@ class AgentRulesRow(Base):
 
 
 class RoleRow(Base):
-    """角色可编辑的规则（agents.roles）：用户自建的角色，与内置角色 base、admin 可编辑的部分（它们固定的部分在
-    agents.permissions，行可以不存在）。自建的被 agent 引用时不能删，内置的不能删。"""
+    """旧：角色可编辑的规则（现在在 access.toml 的 [roles.<名>]）。"""
 
     __tablename__ = "roles"
 
@@ -83,12 +81,8 @@ class RoleRow(Base):
 
 
 class Item(Base):
-    """存在表里的 AI 资产（agents.items）：skill、MCP server、secret、记忆，按种类名字全局唯一。owner 为 None 是平台的，否则是该 agent 的；
-    谁能用、谁能改见 agents.access。
-
-    content 的含义因种类而异：skill 是 SKILL.md 全文（附件在 item_files），MCP server 是配置 JSON（McpConfig），secret 为空
-    （密文在 secret，由 agents/secrets.py 的 Vault 加解密），记忆是正文。description 是 skill 与 secret 的描述（skill 的也在 SKILL.md 的 frontmatter 里，
-    写入时解析出来存一份，列 skill 索引不必解析全文）。"""
+    """旧：skill、MCP server、secret、记忆（现在是资源目录里的文件）。owner 为 None 是平台的；content 是 SKILL.md 全文、MCP
+    配置 JSON 或记忆正文，secret 的密文在 secret 列。"""
 
     __tablename__ = "items"
     __table_args__ = (
@@ -109,7 +103,7 @@ class Item(Base):
 
 
 class ItemFile(Base):
-    """skill 的附件（SKILL.md 之外的文件：脚本、配置、参考文档），UTF-8 文本。"""
+    """旧：skill 的附件（SKILL.md 之外的文件），UTF-8 文本。"""
 
     __tablename__ = "item_files"
 
@@ -121,11 +115,7 @@ class ItemFile(Base):
 
 
 class Revision(Base):
-    """条目、记忆、角色与 agent 分发规则的一版（agents.revisions）：谁、何时、改前改后、说明。只追加；对象或 agent
-    删除后仍保留（审计）。
-
-    subject 是 kinds.Subject（skill、mcp、secret、memory、role、agent）；name 是资产名、角色名，agent 规则是 agent 的 id。before / after 是这一版前后的文档（各对象自己的文本形式，见 agents.revisions 的
-    模块说明），新建时 before 为 None、删除时 after 为 None。secret 的文档只有描述，不含值。"""
+    """旧：条目、记忆、角色与 agent 分发规则的修改历史（谁、何时、改前改后、说明）；资源改成文件后没有版本。"""
 
     __tablename__ = "revisions"
     __table_args__ = (
