@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.platform.db import Database, utcnow
 from muliao.platform.tasks import Clock, TaskQueue
-from muliao.sessions.holds import abandon, active_holders_in, active_holders_of_in, get_in, hold_in
+from muliao.sessions.holds import abandon, active_holders_of_in, active_holds, get_in, hold_in
 from muliao.sessions.tables import WakeUp
 from muliao.sessions.work import deliver_in
 
@@ -108,11 +108,12 @@ class WakeUps:
     async def check(self) -> int:
         now = self._clock()
         async with self._db.transaction() as s:
-            active = await active_holders_in(s)
+            active = active_holds()
             due = (
                 await s.scalars(
                     select(WakeUp)
-                    .where(WakeUp.holder.in_(active), WakeUp.due_at <= now)
+                    .join(active, active.c.holder == WakeUp.holder)
+                    .where(WakeUp.due_at <= now)
                     .order_by(WakeUp.due_at)
                 )
             ).all()

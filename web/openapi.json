@@ -4897,14 +4897,7 @@
             "default": "delegation"
           },
           "thread_session_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
+            "type": "string",
             "title": "Thread Session Id"
           },
           "check_seconds": {

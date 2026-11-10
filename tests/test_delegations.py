@@ -12,11 +12,10 @@ from sqlalchemy import select
 from muliao.errors import Conflict
 from muliao.platform.tables import Task, TaskStatus
 from muliao.sessions.conventions import STOPPED_TOOL_RESULT
-from muliao.sessions.holds import active_holders_in
 from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.origins import Origin
 from muliao.sessions.pending import UserAnswered
-from muliao.sessions.tables import Delegation, HoldStatus, Mail, MailKind, MailState, SessionHold
+from muliao.sessions.tables import HoldStatus, Mail, MailKind, MailState, SessionHold, ThreadCall
 from tests.scripted import scripted
 from tests.test_flow import deliver, drain, history_of, note_args, start, tasks_of
 from tests.test_mailbox import Recorder
@@ -219,8 +218,9 @@ async def test_an_ask_has_no_check_in_and_no_timeout(container, make_agent, mode
     later = utcnow() + timedelta(days=1)
     assert await ThreadChecks(container.db, container.queue, clock=lambda: later).check() == 0
     async with container.db.transaction() as s:
-        [record] = (await s.scalars(select(Delegation))).all()
-        assert list(await active_holders_in(s)) == [record.holder]
+        [record] = (await s.scalars(select(ThreadCall))).all()
+        [hold] = (await s.scalars(select(SessionHold))).all()
+    assert record.holder == hold.holder and hold.status == HoldStatus.ACTIVE
     assert record.check_seconds is None
 
 
@@ -267,7 +267,7 @@ async def test_delegate_task_takes_a_heartbeat_only_with_report_back(container, 
     assert "heartbeat_seconds must be greater than 0" in outputs[1]
     assert outputs[2] == "delegated to reviewer in thread 'c'"
     async with container.db.transaction() as s:
-        records = (await s.scalars(select(Delegation))).all()
+        records = (await s.scalars(select(ThreadCall))).all()
     assert [r.check_seconds for r in records] == [90.0]
 
 
@@ -765,13 +765,11 @@ async def test_a_reported_thread_is_deleted_only_after_stopping_and_the_delegato
         ).all()
     assert "was stopped" in event.content
     assert await container.thread_checks.check() == 0
-    # 委派记录留着，它的 thread 引用随 thread 删除置空；之后推不出这个 thread
+    # 委派记录随 thread 删除；之后推不出这个 thread
     from muliao.sessions.delegation import delegation_holder, threads_of_holds_in
-    from muliao.sessions.delegations import records_among
 
     holder = delegation_holder(parent.id, "call-5")
     async with container.db.transaction() as s:
-        assert (await records_among(s, [holder]))[holder].thread_id is None
         assert await threads_of_holds_in(s, [holder]) == {}
 
 

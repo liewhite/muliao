@@ -597,31 +597,25 @@ function WaitRow({ wait, now, ctx, actions }: { wait: Wait; now: number; ctx: Se
       )
     case 'delegation': {
       const id = wait.thread_session_id
-      const thread = id === null ? undefined : ctx.threads.get(id)
+      const thread = ctx.threads.get(id)
       return (
         <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
           <GitBranch className="size-3.5 shrink-0 text-muted" />
-          {id === null ? (
-            <span className="shrink-0">thread（已删除）</span>
-          ) : (
-            <Link to={sessionRoute(id)} className="max-w-full truncate text-accent hover:underline">
-              {thread ? `${thread.thread}（${agentLabel(ctx.agents, thread.agent_id)}）` : 'thread'}
-            </Link>
-          )}
+          <Link to={sessionRoute(id)} className="max-w-full truncate text-accent hover:underline">
+            {thread ? `${thread.thread}（${agentLabel(ctx.agents, thread.agent_id)}）` : 'thread'}
+          </Link>
           {detail}
-          {id !== null && (
-            <Button
-              size="sm"
-              variant="ghost"
-              className="ml-auto shrink-0"
-              isDisabled={actions.busy}
-              onPress={() => actions.run(() => api.stop(id))}
-              aria-description="停止做这项委派的 thread，结局以「被停止」交回"
-            >
-              <Square className="size-3.5" />
-              停止 thread
-            </Button>
-          )}
+          <Button
+            size="sm"
+            variant="ghost"
+            className="ml-auto shrink-0"
+            isDisabled={actions.busy}
+            onPress={() => actions.run(() => api.stop(id))}
+            aria-description="停止做这项委派的 thread，结局以「被停止」交回"
+          >
+            <Square className="size-3.5" />
+            停止 thread
+          </Button>
         </div>
       )
     }

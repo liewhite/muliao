@@ -8,9 +8,9 @@ from pydantic_ai.messages import ModelResponse, TextPart
 
 from muliao.platform.db import utcnow
 from muliao.sessions.activity import Waiting, WorkState, waiting_among
-from muliao.sessions.delegations import record_in
 from muliao.sessions.holds import hold_in
 from muliao.sessions.questions import Option, Question
+from muliao.sessions.thread_calls import record_call_in
 from muliao.sessions.waits import ApprovalWait, AskWait, DelegationWait, JobWait, WakeWait, waits_of_in
 from muliao.sessions.wakeups import schedule_in
 from tests.conftest import login
@@ -39,21 +39,9 @@ async def test_each_kind_of_wait_is_named_in_the_order_it_began(container, make_
     async with container.db.transaction() as s:
         await hold_in(s, session.id, "job:7", awaited=False)
         await hold_in(s, session.id, "delegation:x:r", awaited=False)
-        await record_in(
-            s,
-            holder="delegation:x:r",
-            parent_id=session.id,
-            thread_id=thread.id,
-            check_seconds=30,
-        )
+        await record_call_in(s, session.id, "r", thread.id, holder="delegation:x:r", check_seconds=30)
         await hold_in(s, session.id, "delegation:x:a", awaited=False, call_id="a")
-        await record_in(
-            s,
-            holder="delegation:x:a",
-            parent_id=session.id,
-            thread_id=thread.id,
-            check_seconds=None,
-        )
+        await record_call_in(s, session.id, "a", thread.id, holder="delegation:x:a")
         await schedule_in(s, session.id, "w1", due, "check the deploy", awaited=False)
         [waiting] = (await waiting_among(s, [session.id])).values()
         waits = await waits_of_in(

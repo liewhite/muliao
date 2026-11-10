@@ -1823,7 +1823,7 @@ export interface components {
              */
             kind: "delegation";
             /** Thread Session Id */
-            thread_session_id: string | null;
+            thread_session_id: string;
             /** Check Seconds */
             check_seconds: number | null;
             /**

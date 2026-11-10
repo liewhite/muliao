@@ -187,28 +187,6 @@ class SessionHold(Base):
     __table_args__ = (Index("uq_session_holds_holder", "holder", unique=True),)
 
 
-class Delegation(Base):
-    """一项要交回结局的委派（ask_agent、delegate_task(report_back)）的发起参数（委派子域，sessions.delegations）。它的进行
-    状态在发起方的占用上（holder 相同），是否结清在 thread 一侧以 holder 为关联 id 的信件上；这里只记委派自己的事：做它的
-    thread、心跳间隔。行永久保留，随发起会话删除。"""
-
-    __tablename__ = "delegations"
-
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    # 发起方占用的占用者，也是 thread 信件的关联 id：delegation:<发起会话>:<工具调用 id>
-    holder: Mapped[str] = mapped_column(String(200))
-    parent_session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"), index=True)
-    # 做这项委派的 thread；thread 被删除后为 None（那时委派已经以「被删除」结清）
-    thread_session_id: Mapped[str | None] = mapped_column(
-        ForeignKey("sessions.id", ondelete="SET NULL", name="fk_delegations_thread_session_id"), index=True
-    )
-    # 运行中检查的间隔（秒）：并发等待的委派（delegate_task(report_back) 的 heartbeat_seconds）；阻塞的为 None
-    check_seconds: Mapped[float | None]
-    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
-
-    __table_args__ = (Index("uq_delegations_holder", "holder", unique=True),)
-
-
 class WakeUp(Base):
     """会话自己约的一次到点唤醒（wake_me，到点唤醒子域 sessions.wakeups）：到点时向会话投一封事件信件，它接着做。还在不在
     等看会话上同 holder 的占用（active）；改期、取消、会话被停止都让占用不再 active。行永久保留，随会话删除。"""
@@ -247,7 +225,9 @@ class ApprovalRequest(Base):
 class ThreadCall(Base):
     """哪次工具调用开出或续写了哪个 thread（sessions.thread_calls）：在开出/续写 thread 的同一个事务里记下，是界面把
     thread 显示在调用处的唯一来源，与调用有没有结果、结果是谁补的无关。续写同一个 thread 时每次调用各一行；随发起会话
-    或 thread 删除。"""
+    或 thread 删除。要交回结局的调用（ask_agent、delegate_task(report_back)）就是一项委派，行上再记它在发起方的占用者
+    与心跳间隔（#546 前另存在 delegations 表）。委派的进行状态在发起方的占用上，是否结清在 thread 一侧以占用者为
+    关联 id 的信件上。"""
 
     __tablename__ = "thread_calls"
 
@@ -258,5 +238,12 @@ class ThreadCall(Base):
     thread_session_id: Mapped[str] = mapped_column(
         ForeignKey("sessions.id", ondelete="CASCADE", name="fk_thread_calls_thread_session_id"), index=True
     )
+    # 委派在发起方的占用者（delegation:<发起会话>:<调用 id>），也是 thread 信件的关联 id；不交回结局的调用为 None
+    holder: Mapped[str | None] = mapped_column(String(200))
+    # 并发等待的委派（delegate_task(report_back) 的 heartbeat_seconds）的运行中检查间隔（秒）；其余为 None
+    check_seconds: Mapped[float | None]
 
-    __table_args__ = (Index("uq_thread_calls_call", "parent_session_id", "call_id", unique=True),)
+    __table_args__ = (
+        Index("uq_thread_calls_call", "parent_session_id", "call_id", unique=True),
+        Index("uq_thread_calls_holder", "holder", unique=True, sqlite_where=holder.isnot(None)),
+    )

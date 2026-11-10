@@ -10,8 +10,8 @@
 - 运行中检查（ThreadChecks）：并发等待的（report_back）按 heartbeat_seconds 给发起方投检查信件；阻塞等待的
   （ask_agent）不设超时，运行本身有界。
 
-委派的进行状态只有发起方的占用（active / released / cleared）一处；发起参数（thread、心跳间隔）在委派记录
-（sessions.delegations）。
+委派的进行状态只有发起方的占用（active / released / cleared）一处；发起参数（thread、心跳间隔）记在发出它的那次
+调用的记录上（sessions.thread_calls）。
 """
 
 from __future__ import annotations
@@ -28,13 +28,12 @@ from muliao.agents.api import AgentInfo, agent_in
 from muliao.platform.db import Database, utcnow
 from muliao.platform.tasks import Clock, TaskQueue, TaskView
 from muliao.sessions.activity import WorkState, work_states_in
-from muliao.sessions.delegations import DelegationRecord, records_among
 from muliao.sessions.directory import among_in
-from muliao.sessions.holds import active_holders_in
 from muliao.sessions.pending import AgentAnswer
 from muliao.sessions.runs import latest_runs_among
 from muliao.sessions.sources import thread_source
 from muliao.sessions.tables import Session
+from muliao.sessions.thread_calls import DelegationRecord, active_reporting_in, delegations_among
 from muliao.sessions.work import CheckBeats, deliver_in, post_check_in
 
 log = logging.getLogger(__name__)
@@ -131,17 +130,13 @@ async def hand_back_in(
 
 
 async def threads_of_holds_in(s: AsyncSession, holders: Sequence[str]) -> dict[str, str]:
-    """委派占用者 → 做这项委派的 thread（委派的记录，sessions.delegations）。不是委派的占用（后台任务）与 thread 已被
+    """委派占用者 → 做这项委派的 thread（委派的记录，sessions.thread_calls）。不是委派的占用（后台任务）与 thread 已被
     删除的委派不在结果里。"""
-    return {
-        holder: record.thread_id
-        for holder, record in (await records_among(s, holders)).items()
-        if record.thread_id is not None
-    }
+    return {holder: record.thread_id for holder, record in (await delegations_among(s, holders)).items()}
 
 
 class ThreadChecks:
-    """委派的运行中检查（WorkWatcher 的一种工作，sessions.work），按委派记录的发起参数（sessions.delegations），只看
+    """委派的运行中检查（WorkWatcher 的一种工作，sessions.work），按委派记录的发起参数（sessions.thread_calls），只看
     发起方占用还 active、并发等待的委派（delegate_task(report_back)，带 check_seconds）：每过一个间隔给发起方投一封
     检查信件。阻塞等待的（ask_agent）没有检查也没有超时：发问方停在调用上一直等到结局（运行本身有界）。"""
 
@@ -156,21 +151,16 @@ class ThreadChecks:
         posted = 0
         now = self._clock()
         async with self._db.transaction() as s:
-            active = await active_holders_in(s)
-            records = [
-                (r, r.check_seconds)
-                for r in (await records_among(s, active)).values()
-                if r.check_seconds is not None
-            ]
-            self._beats.keep({r.holder for r, _ in records})
+            active = await active_reporting_in(s)
+            self._beats.keep({a.record.holder for a in active})
             # (发起会话, thread) -> 到期的委派与它的间隔
             due: dict[tuple[str, str], tuple[DelegationRecord, float]] = {}
-            for record, interval in records:
-                child_id = record.thread_id
-                if child_id is None:
-                    # thread 删除时委派已经以「被删除」结清，占用随之释放
-                    raise RuntimeError(f"active delegation {record.holder} has a deleted thread")
-                if not self._beats.due(record.holder, record.created_at, interval, now):
+            for a in active:
+                record, child_id = a.record, a.record.thread_id
+                interval = record.check_seconds
+                if interval is None:
+                    raise RuntimeError(f"reporting delegation {record.holder} has no check interval")
+                if not self._beats.due(record.holder, a.since, interval, now):
                     continue
                 self._beats.checked(record.holder, now)
                 # 同一个发起方对同一个 thread 的几项委派同时到期，检查一次
@@ -183,7 +173,7 @@ class ThreadChecks:
             for (_, child_id), (record, interval) in due.items():
                 child = children.get(child_id)
                 if child is None:
-                    # 不变量断言：thread 删除时记录上的引用置空，不会给出已删除的 thread
+                    # 不变量断言：thread 删除时记录随之删除，不会给出已删除的 thread
                     raise RuntimeError(f"delegation {record.holder} points to a missing thread {child_id}")
                 if child.agent_id not in agents:
                     agents[child.agent_id] = await agent_in(s, child.agent_id)

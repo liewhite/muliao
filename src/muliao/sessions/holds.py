@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Collection
 
-from sqlalchemy import select
+from sqlalchemy import Subquery, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.platform.db import utcnow
@@ -95,12 +95,14 @@ async def active_holders_of_in(s: AsyncSession, session_id: str) -> list[str]:
     return list(rows.all())
 
 
-async def active_holders_in(s: AsyncSession) -> list[str]:
-    """全部 active 占用的占用者，按登记先后（委派的运行中检查按它找还在进行的委派）。"""
-    rows = await s.scalars(
-        select(SessionHold.holder).where(SessionHold.status == HoldStatus.ACTIVE).order_by(SessionHold.id)
+def active_holds() -> Subquery:
+    """全部 active 占用（列 holder、created_at、id），给别的子域在一条查询里连表（到点唤醒、委派的运行中检查按它找
+    还在进行的工作），不先把全部占用者取出来。"""
+    return (
+        select(SessionHold.holder, SessionHold.created_at, SessionHold.id)
+        .where(SessionHold.status == HoldStatus.ACTIVE)
+        .subquery("active_holds")
     )
-    return list(rows.all())
 
 
 async def has_active_in(s: AsyncSession, session_id: str) -> bool:

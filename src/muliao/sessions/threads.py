@@ -13,7 +13,6 @@ from muliao.errors import InvalidInput
 from muliao.platform.tasks import TaskQueue
 from muliao.sessions.activity import WorkState, work_states_in
 from muliao.sessions.delegation import delegation_holder, thread_name, threads_of_holds_in
-from muliao.sessions.delegations import record_in
 from muliao.sessions.directory import thread_in, threads_named_in, threads_of
 from muliao.sessions.history import latest_answers_among
 from muliao.sessions.holds import get_in as get_hold_in
@@ -117,7 +116,7 @@ class Threads:
     ) -> Session:
         """要交回结局的委派（ask_agent、delegate_task(report_back)），在调用方的一个事务里：打开或找到 thread，在发起方
         登记占用（suspends 时这次调用从此算作已交出），往 thread 投一封以占用者为关联 id 的信件（委派的全部状态，结局的
-        交回见 sessions.delegation），并记下这次调用开出或续写了这个 thread（sessions.thread_calls）。thread 名不合法时抛
+        交回见 sessions.delegation），并记下这次调用开出或续写了这个 thread、是哪项委派（sessions.thread_calls）。thread 名不合法时抛
         InvalidInput，什么都没写。call_id：发出它的工具调用，按它幂等：续跑重新执行这次调用时只返回已经投递到的
         thread。suspends：这次调用挂起、等结局作为它的结果（ask_agent），占用带上 call_id。awaited：用户是否在等发起方
         的回答。check_seconds：并发等待时的运行中检查间隔（阻塞等待的为 None，不设超时）。"""
@@ -132,14 +131,7 @@ class Threads:
             return child
         child = await self.open(s, parent_id=parent_id, agent=agent, thread=thread)
         await hold_in(s, parent_id, holder, call_id=call_id if suspends else None, awaited=awaited)
-        await record_call_in(s, parent_id, call_id, child.id)
-        await record_in(
-            s,
-            holder=holder,
-            parent_id=parent_id,
-            thread_id=child.id,
-            check_seconds=check_seconds,
-        )
+        await record_call_in(s, parent_id, call_id, child.id, holder=holder, check_seconds=check_seconds)
         await receive(
             s,
             self._queue,

@@ -12,7 +12,7 @@ export function waitKey(w: Wait): string {
     case 'job':
       return `job:${w.job_id}`
     case 'delegation':
-      return `delegation:${w.thread_session_id ?? 'gone'}:${w.since}`
+      return `delegation:${w.thread_session_id}:${w.since}`
     case 'wake':
       return `wake:${w.due_at}`
     case 'ask':

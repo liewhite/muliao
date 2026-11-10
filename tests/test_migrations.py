@@ -630,7 +630,8 @@ def test_threads_per_agent_heartbeats_and_timeouts_backfill_and_downgrade(tmp_pa
             "values ('p', ?, ?, 0, 'active', '2026-01-01')",
             [("delegation:p:k1", None), ("delegation:p:k2", "call"), ("job:1", None)],
         )
-    migrate(path)
+    # 停在 delegations 并进 thread_calls（#546）之前
+    migrate(path, "3b90f72a224e")
     with sqlite3.connect(path) as conn:
         assert conn.execute("select check_seconds from jobs").fetchall() == [(60.0,)]
         # 委派的参数后来搬进了 delegations（#244）；两项委派都没有 thread 信件
@@ -1214,6 +1215,79 @@ def test_thread_calls_are_backfilled_from_result_metadata_and_delegations_and_do
     assert "thread_calls" not in _tables(path)
 
 
+def test_delegations_move_onto_their_thread_calls_and_downgrade(tmp_path):
+    """#546：委派的占用者与心跳间隔搬到发出它的调用那行，thread 已删除的委派随表删除；delegations 里 thread 还在却
+    对不上调用的拒绝升级。降级建回 delegations，created_at 取发起方占用的登记时刻。"""
+    from alembic import command
+
+    from muliao.platform.db import _migration_engine
+
+    path = tmp_path / "m.db"
+    migrate(path, "3b90f72a224e")
+    t, held = "2026-01-01 00:00:00", "2026-01-02 00:00:00"
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "insert into agents (id, name, description, model, created_at, updated_at) "
+            "values ('a1', 'a1', 'd', 'p:m', ?, ?)",
+            (t, t),
+        )
+        conn.executemany(
+            "insert into sessions (id, agent_id, title, origin, parent_session_id, thread, kind, "
+            "created_at, updated_at) values (?, 'a1', 't', ?, ?, ?, ?, ?, ?)",
+            [("p", "user", None, None, "conversation", t, t), ("c", "delegation", "p", "r", "thread", t, t)],
+        )
+        conn.executemany(
+            "insert into thread_calls (parent_session_id, call_id, thread_session_id) values ('p', ?, 'c')",
+            [("send",), ("ask",), ("report",)],
+        )
+        conn.executemany(
+            "insert into session_holds (session_id, holder, call_id, awaited, status, created_at) "
+            "values ('p', ?, ?, 0, 'released', ?)",
+            [
+                ("delegation:p:ask", "ask", held),
+                ("delegation:p:report", None, held),
+                ("delegation:p:gone", None, held),
+            ],
+        )
+        conn.executemany(
+            "insert into delegations (holder, parent_session_id, thread_session_id, check_seconds, created_at) "
+            "values (?, 'p', ?, ?, ?)",
+            [
+                ("delegation:p:ask", "c", None, t),
+                ("delegation:p:report", "c", 30.0, t),
+                ("delegation:p:gone", None, 60.0, t),
+            ],
+        )
+
+    migrate(path)
+    assert "delegations" not in _tables(path)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute(
+            "select call_id, holder, check_seconds from thread_calls order by call_id"
+        ).fetchall() == [
+            ("ask", "delegation:p:ask", None),
+            ("report", "delegation:p:report", 30.0),
+            ("send", None, None),
+        ]
+
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "3b90f72a224e")
+    with sqlite3.connect(path) as conn:
+        assert "holder" not in {r[1] for r in conn.execute("pragma table_info(thread_calls)")}
+        assert conn.execute(
+            "select holder, parent_session_id, thread_session_id, check_seconds, created_at "
+            "from delegations order by holder"
+        ).fetchall() == [
+            ("delegation:p:ask", "p", "c", None, held),
+            ("delegation:p:report", "p", "c", 30.0, held),
+        ]
+        # 对不上调用的委派：拒绝升级，什么都不改
+        conn.execute("delete from thread_calls where call_id = 'report'")
+    with pytest.raises(RuntimeError, match="delegations without their thread call"):
+        migrate(path)
+    assert "delegations" in _tables(path)
+
+
 def test_todo_issues_become_in_progress_or_waiting_run_ended_gets_origin_and_downgrade(tmp_path):
     """#258：todo 有没完成上游的变 waiting、其余变 in_progress；未投递完的 run_ended 事件补上会话来源；降级 waiting 回 todo。"""
     from alembic import command
@@ -1408,7 +1482,7 @@ def test_delegation_deadline_is_dropped_keeping_the_delegations_and_downgrade(tm
             [("ask", None, "2026-01-01 00:10:00", t), ("report", 30.0, None, t)],
         )
 
-    migrate(path)
+    migrate(path, "3b90f72a224e")
     expected = [("ask", None), ("report", 30.0)]
     with sqlite3.connect(path) as conn:
         assert "deadline" not in {r[1] for r in conn.execute("pragma table_info(delegations)")}

@@ -157,7 +157,6 @@ SESSIONS_TABLES: dict[str, set[str]] = {
     # 外部工作
     "SessionHold": {"holds"},
     # 委派
-    "Delegation": {"delegations"},
     "WakeUp": {"wakeups"},
     "ThreadCall": {"thread_calls"},
     # 交互：停下来等批准的调用

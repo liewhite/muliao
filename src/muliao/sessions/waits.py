@@ -11,8 +11,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.sessions.activity import Waiting
-from muliao.sessions.delegations import records_among as delegations_among
 from muliao.sessions.sources import job_id_of_holder
+from muliao.sessions.thread_calls import delegations_among
 from muliao.sessions.wakeups import records_among as wakeups_among
 
 
@@ -28,8 +28,9 @@ class DelegationWait(BaseModel):
     """在等委派出去的工作交回结局（ask_agent，或 delegate_task 带 report_back）。"""
 
     kind: Literal["delegation"] = "delegation"
-    # 做它的 thread（会话详情的 threads 里有它的 agent 与名字）；thread 已删除为 null
-    thread_session_id: str | None
+    # 做它的 thread（会话详情的 threads 里有它的 agent 与名字）。thread 删除前委派已经结清、占用释放，等待项里的 thread
+    # 总在
+    thread_session_id: str
     # report_back 的心跳间隔（秒）；ask_agent 为 null
     check_seconds: float | None
     since: datetime
