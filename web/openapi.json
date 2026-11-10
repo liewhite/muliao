@@ -7205,6 +7205,17 @@
             ],
             "title": "Precheck Error"
           },
+          "route_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Route Error"
+          },
           "finished_at": {
             "anyOf": [
               {
@@ -7243,6 +7254,7 @@
           "last_session_id",
           "disabled_reason",
           "precheck_error",
+          "route_error",
           "finished_at",
           "kind",
           "config",
@@ -8181,6 +8193,17 @@
             ],
             "title": "Precheck Error"
           },
+          "route_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Route Error"
+          },
           "finished_at": {
             "anyOf": [
               {
@@ -8219,6 +8242,7 @@
           "last_session_id",
           "disabled_reason",
           "precheck_error",
+          "route_error",
           "finished_at",
           "kind",
           "config",
@@ -9316,6 +9340,17 @@
             ],
             "title": "Precheck Error"
           },
+          "route_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Route Error"
+          },
           "finished_at": {
             "anyOf": [
               {
@@ -9354,6 +9389,7 @@
           "last_session_id",
           "disabled_reason",
           "precheck_error",
+          "route_error",
           "finished_at",
           "kind",
           "config",
@@ -10249,6 +10285,17 @@
             ],
             "title": "Precheck Error"
           },
+          "route_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Route Error"
+          },
           "finished_at": {
             "anyOf": [
               {
@@ -10287,6 +10334,7 @@
           "last_session_id",
           "disabled_reason",
           "precheck_error",
+          "route_error",
           "finished_at",
           "kind",
           "config",

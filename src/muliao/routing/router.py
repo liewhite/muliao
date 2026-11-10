@@ -3,8 +3,9 @@
 和 sessions.api.receive_command_in 同一个模式：这里只读（解析地址、确认 agent 与 issue 存在、校验来信），返回命令；
 发送方（如触发器）在同一事务里记下自己的状态并 send_in 这些命令，由接收的领域在自己的事务里执行——记下触发与投递
 一起提交，恰好一次；提交后发送方让投递任务马上执行（Worker.run_now）。目标不合法（地址写错、agent 或 issue 不存在、
-agent 已归档、会话不接受这个发送方续写）时报领域错误，发送方的事务回滚，整次都不投。发送方自己（如触发器所属的
-agent）是否可用由发送方在调用之前查，这里出的任何领域错误都是目标的问题，发送方不按异常类型分辨。
+agent 已归档、会话不接受这个发送方续写）时：plan_in 把内容里解析不了的地址连同那段记在 Plan.rejected，routed_in 报领域
+错误（只读，不留下写入）；是整次不投（发送方回滚）还是只丢那段由发送方定。发送方自己（如触发器所属的 agent）是否可用
+由发送方在调用之前查，这里出的任何领域错误都是目标的问题，发送方不按异常类型分辨。
 """
 
 import logging
@@ -80,20 +81,56 @@ async def resolve_in(s: AsyncSession, address: str, sender_agent: str) -> Target
     return NewTo(agent_id=agent_id) if parsed.to == "new" else LatestOf(agent_id=agent_id)
 
 
-async def plan_in(
-    s: AsyncSession, payload: str | None, default: Destination, sender_agent: str
-) -> list[tuple[Destination, str | None]]:
-    """事件内容按 `@route` 行分到各目标（targets.split_routed）：[(目标, 这段内容)]，同一目标的各段按出现顺序合并。
-    每个地址都解析（写错的地址整次报错，后面有没有内容都一样），没有内容的段不投。没有内容（payload 为 None，如定时
-    触发）时是默认目标的一次投递；有内容但各段都是空的时为空列表。只读。"""
+@dataclass(frozen=True)
+class Segment:
+    """一次投递：目标与投给它的内容（同一目标的各段已合并）。address 是内容里给它定目标的第一个地址；有一段投到默认
+    目标时为 None：投不进去时那是默认目标的问题，不是内容的。"""
+
+    target: Destination
+    body: str | None
+    address: str | None
+
+
+@dataclass(frozen=True)
+class Rejected:
+    """内容里一个解析不了、或目标不接受的地址（error 是原来的领域错误），和它那段内容。"""
+
+    address: str
+    body: str
+    error: DomainError
+
+
+@dataclass(frozen=True)
+class Plan:
+    segments: list[Segment]
+    rejected: list[Rejected]
+
+
+async def plan_in(s: AsyncSession, payload: str | None, default: Destination, sender_agent: str) -> Plan:
+    """事件内容按 `@route` 行分到各目标（targets.split_routed），同一目标的各段按出现顺序合并。每个地址都解析，解析不了的
+    那段（后面有没有内容都一样）记在 rejected，要不要整次拒绝由发送方定；没有内容的段不投。没有内容（payload 为 None，
+    如定时触发）时是默认目标的一次投递；有内容但各段都是空的时 segments 为空。只读。"""
     if payload is None:
-        return [(default, None)]
-    planned: dict[Destination, list[str]] = {}
+        return Plan(segments=[Segment(target=default, body=None, address=None)], rejected=[])
+    planned: dict[Destination, tuple[list[str], str | None]] = {}
+    rejected: list[Rejected] = []
     for address, body in split_routed(payload):
-        target = default if address is None else await resolve_in(s, address, sender_agent)
+        if address is None:
+            target: Destination = default
+        else:
+            try:
+                target = await resolve_in(s, address, sender_agent)
+            except DomainError as e:
+                rejected.append(Rejected(address=address, body=body, error=e))
+                continue
         if body.strip():
-            planned.setdefault(target, []).append(body)
-    return [(target, "\n".join(bodies)) for target, bodies in planned.items()]
+            bodies, first = planned.get(target, ([], address))
+            planned[target] = ([*bodies, body], None if address is None else first)
+    segments = [
+        Segment(target=target, body="\n".join(bodies), address=address)
+        for target, (bodies, address) in planned.items()
+    ]
+    return Plan(segments=segments, rejected=rejected)
 
 
 async def routed_in(s: AsyncSession, sender: Sender, target: Destination, content: str) -> Routed:

@@ -390,7 +390,7 @@ async def test_an_unexpected_failure_of_one_due_trigger_is_logged_without_disabl
     fired = []
     real_fire = triggers.fire
 
-    async def fire(trigger_id, payload=None):  # noqa: ANN001, ANN202
+    async def fire(trigger_id, payload=None, **_kw):  # noqa: ANN001, ANN202
         if trigger_id == ids[0]:
             raise CorruptState("agent resources missing")
         fired.append(trigger_id)
@@ -450,7 +450,7 @@ async def test_an_activated_fire_rejected_with_a_conflict_disables_the_trigger(
         name="t", agent_id=alpha, kind="schedule", prompt="x", config={"cron": "* * * * *"}
     )
 
-    async def rejected(_trigger_id, _payload=None):  # noqa: ANN001, ANN202
+    async def rejected(_trigger_id, _payload=None, **_kw):  # noqa: ANN001, ANN202
         raise Conflict("letter rejected")
 
     monkeypatch.setattr(triggers, "fire", rejected)

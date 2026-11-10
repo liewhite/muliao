@@ -1818,3 +1818,26 @@ def test_script_grants_table_is_created_and_dropped_on_downgrade(tmp_path):
         tables = {r[0] for r in conn.execute("select name from sqlite_master where type = 'table'")}
         assert "script_grants" not in tables and "approval_requests" in tables
     migrate(path)
+
+
+def test_triggers_get_a_null_route_error_and_downgrade_drops_it(tmp_path):
+    """#569：已有触发器的 route_error 为 NULL（没有丢过段）；降级删掉这一列，触发器保留。"""
+    from alembic import command
+
+    from muliao.platform.db import _migration_engine
+
+    path = tmp_path / "m.db"
+    migrate(path, "c4a81f6e9b23")
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "insert into triggers (name, agent_id, prompt, kind, config, state, enabled, created_at) "
+            "values ('w', 'a1', 'p', 'webhook', '{}', '{}', 1, '2026-01-01 00:00:00')"
+        )
+    migrate(path)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("select route_error from triggers").fetchall() == [(None,)]
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "c4a81f6e9b23")
+    with sqlite3.connect(path) as conn:
+        assert "route_error" not in {r[1] for r in conn.execute("pragma table_info(triggers)")}
+        assert conn.execute("select name from triggers").fetchall() == [("w",)]

@@ -115,8 +115,9 @@ async def test_mail_validated_before_archiving_is_dropped_on_delivery(container,
     # 触发记下了、投信的定向命令还在排队（只校验了来信，会话还没建，agent 不忙）
     async with container.db.transaction() as s:
         fired = await container.triggers._deliver_in(  # noqa: SLF001
-            s, await s.get(type(trigger), trigger.id), None, None
+            s, await s.get(type(trigger), trigger.id), None, None, False
         )
+    assert fired.fired is not None
     await container.agent_lifecycle.set_archived(alpha.id, True)
     await deliver(container)
     async with container.db.transaction() as s:

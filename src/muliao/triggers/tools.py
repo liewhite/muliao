@@ -36,9 +36,10 @@ class TriggerInfo(BaseModel):
     status: dict[str, Any]
     enabled: bool
     precheck: Precheck | None
-    # 被自动停用的原因；最近一次前置检查失败的原因
+    # 被自动停用的原因；最近一次前置检查失败的原因；最近一次触发里事件内容中写错而被丢掉的 `@route` 地址与原因
     disabled_reason: str | None
     precheck_error: str | None
+    route_error: str | None
     # 最近一次触发开出的会话；已结束的（跑完的一次性触发器）在这里能看到它的结果去了哪
     last_session_id: str | None
     # 不为空表示它已经跑完、不会再触发了
@@ -67,8 +68,11 @@ or a stream's lines) can send parts elsewhere: a line `@route <address>` sends t
 the next such line, to that address (parts to the same address are joined); the part before the first one \
 goes to `route`. Each part gets `prompt` in front. So channel logic (which project a Slack message belongs \
 to, which issue a monitor writes to) lives in the script. Only a line starting exactly with `@route` counts, \
-so a script passing on outside text (messages, web pages) must indent any such line in it. A bad address (or a target that no longer \
-exists) rejects the firing, which disables the trigger with the reason."""
+so a script passing on outside text (messages, web pages) must indent any such line in it. An `@route` address \
+that is wrong or whose target no longer exists drops just that part: the rest is delivered, the trigger stays \
+enabled, the error is recorded as `route_error` and its agent gets one new conversation about it (`trigger_run` \
+and webhooks reject the whole firing instead, with the error). A default `route` whose target is gone disables \
+the trigger with the reason."""
 
 
 def triggers_toolset(
@@ -91,6 +95,7 @@ def triggers_toolset(
             precheck=view.precheck,
             disabled_reason=t.disabled_reason,
             precheck_error=t.precheck_error,
+            route_error=t.route_error,
             last_session_id=t.last_session_id,
             finished_at=t.finished_at,
         )
@@ -106,7 +111,7 @@ def triggers_toolset(
         """List triggers: things that wake an agent (schedules, webhooks, ...), delivering to their `route`. Returns a
         JSON array of triggers, each with `name`, `kind`, `agent`, `prompt`, `config`, `route`, `status` (kind-specific
         state such as the next firing time or the webhook URL), `enabled`, `precheck`, `disabled_reason`,
-        `precheck_error`, `last_session_id` and `finished_at` (ISO 8601; set once it will not fire again).
+        `precheck_error`, `route_error`, `last_session_id` and `finished_at` (ISO 8601; set once it will not fire again).
 
         Args:
             finished: List the finished ones instead — `once` triggers that already ran and are gone from

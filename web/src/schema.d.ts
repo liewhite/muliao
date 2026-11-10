@@ -2564,6 +2564,8 @@ export interface components {
             disabled_reason: string | null;
             /** Precheck Error */
             precheck_error: string | null;
+            /** Route Error */
+            route_error: string | null;
             /** Finished At */
             finished_at: string | null;
             /**
@@ -2947,6 +2949,8 @@ export interface components {
             disabled_reason: string | null;
             /** Precheck Error */
             precheck_error: string | null;
+            /** Route Error */
+            route_error: string | null;
             /** Finished At */
             finished_at: string | null;
             /**
@@ -3312,6 +3316,8 @@ export interface components {
             disabled_reason: string | null;
             /** Precheck Error */
             precheck_error: string | null;
+            /** Route Error */
+            route_error: string | null;
             /** Finished At */
             finished_at: string | null;
             /**
@@ -3662,6 +3668,8 @@ export interface components {
             disabled_reason: string | null;
             /** Precheck Error */
             precheck_error: string | null;
+            /** Route Error */
+            route_error: string | null;
             /** Finished At */
             finished_at: string | null;
             /**

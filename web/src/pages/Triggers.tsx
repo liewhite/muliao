@@ -476,6 +476,7 @@ function kindSummary(trigger: Trigger): string {
 function triggerWarning(trigger: Trigger): string | null {
   if (trigger.disabled_reason) return trigger.finished_at ? '触发失败' : '触发失败，已自动停用'
   if (trigger.precheck_error) return '前置检查出错'
+  if (trigger.route_error) return '有事件的投递地址写错'
   switch (trigger.kind) {
     case 'schedule':
       return trigger.status.skipped ? `已连续跳过 ${trigger.status.skipped.count} 次` : null
@@ -658,6 +659,9 @@ function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: 
         {trigger.disabled_reason && <ErrorAlert title="触发失败，已自动停用" error={trigger.disabled_reason} />}
         {trigger.precheck_error && (
           <ErrorAlert title="前置检查出错，本次未触发" error={trigger.precheck_error} />
+        )}
+        {trigger.route_error && (
+          <ErrorAlert title="上次触发里这些投递地址写错，那几段已丢弃（其余照投）" error={trigger.route_error} />
         )}
         {editing ? (
           <>
@@ -862,6 +866,9 @@ function FinishedTrigger({ trigger, agents, onChange }: { trigger: Trigger; agen
         </div>
         {trigger.disabled_reason && <ErrorAlert title="触发失败" error={trigger.disabled_reason} />}
         {trigger.precheck_error && <ErrorAlert title="前置检查出错，未触发" error={trigger.precheck_error} />}
+        {trigger.route_error && (
+          <ErrorAlert title="投递地址写错，那几段已丢弃" error={trigger.route_error} />
+        )}
         <p className="whitespace-pre-wrap text-sm">{trigger.prompt}</p>
         <TriggerSessions trigger={trigger} />
         <ErrorAlert error={action.error} />

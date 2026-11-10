@@ -9,7 +9,7 @@ from muliao.issues.api import ActivityKind, IssueStatus
 from muliao.routing.targets import parse_address, routed_text, split_routed
 from muliao.sessions.api import Origin
 from muliao.sessions.tables import Mail, Session
-from muliao.triggers.api import Precheck, route_address
+from muliao.triggers.api import route_address
 from tests.test_flow import deliver
 
 
@@ -174,26 +174,73 @@ async def test_issue_route_records_an_event_and_delivers_it_like_a_user_comment(
     assert "<event>\nagain\n</event>" in (events[1].body or "")
 
 
-async def test_a_bad_route_rejects_the_firing_and_an_activated_firing_disables_the_trigger(
+async def test_a_bad_route_rejects_a_firing_someone_waits_for_and_drops_just_its_part_when_activated(
     container, make_agent
 ):
+    """#569：调用方在等的（webhook、trigger_run）整次报错；激活机制只丢那一段、其余照投，触发器保持启用，记在 route_error，
+    只在从没有变为有时给触发器的 agent 开一个告警会话；一次没丢段的触发清除它。"""
     alpha = await make_agent("alpha")
-    trigger = await container.triggers.create(
-        name="feed",
-        agent_id=alpha.id,
-        kind="webhook",
-        prompt="p",
-        config={},
-        precheck=Precheck(command="echo ok; echo '@route agent:nobody'; echo lost"),
-    )
+    trigger = await _webhook(container, alpha.id)
+    bad = "ok\n@route agent:nobody\nlost"
 
     with pytest.raises(InvalidInput, match="no agent named 'nobody'"):
-        await container.triggers.fire(trigger.id, "x")
+        await container.triggers.fire(trigger.id, bad)
     assert await _sessions(container) == []  # 整次都不投
+    assert (await container.triggers.get_by_name("feed")).route_error is None
 
-    await container.triggers.fire_activated(trigger.id, "x")
+    await container.triggers.fire_activated(trigger.id, bad)
+    await deliver(container)
     after = await container.triggers.get_by_name("feed")
-    assert not after.enabled and "nobody" in (after.disabled_reason or "")
+    assert after.enabled and after.disabled_reason is None
+    assert after.route_error is not None and "@route agent:nobody" in after.route_error
+    [alert] = [x for x in await _sessions(container) if "投递地址出错" in x.title]
+    [event] = [x for x in await _sessions(container) if x.id != alert.id]
+    assert await _mail(container, event.id) == ["Handle it.\n\n<event>\nok\n</event>"]
+    assert alert.agent_id == alpha.id
+    [letter] = await _mail(container, alert.id)
+    assert "`@route agent:nobody`" in letter and "lost" in letter
+
+    # 还在出错：照样丢段、不再告警；各段都丢了就不触发
+    await container.triggers.fire_activated(trigger.id, "@route agent:nobody\nlost again")
+    await deliver(container)
+    assert len(await _sessions(container)) == 2
+
+    await container.triggers.fire_activated(trigger.id, "fine")
+    await deliver(container)
+    assert (await container.triggers.get_by_name("feed")).route_error is None
+
+    await container.triggers.fire_activated(trigger.id, bad)
+    await deliver(container)
+    assert len(await _sessions(container)) == 5  # 又一次事件 + 重新出错的一次告警
+
+
+async def test_a_part_whose_target_refuses_it_is_dropped_but_a_bad_default_target_still_disables(
+    container, make_agent, monkeypatch
+):
+    """地址解析得了、投递时目标不接受：内容里的地址只丢那段；和默认目标合并的段或默认目标本身不接受仍是触发器配置的问题。"""
+    from muliao.errors import Forbidden
+    from muliao.routing.api import NewTo
+    from muliao.triggers import service
+
+    alpha, beta = await make_agent("alpha"), await make_agent("beta")
+    real = service.routed_in
+
+    async def refusing(s, sender, target, content):
+        if target == NewTo(agent_id=beta.id):
+            raise Forbidden("beta refuses")
+        return await real(s, sender, target, content)
+
+    monkeypatch.setattr(service, "routed_in", refusing)
+    trigger = await _webhook(container, alpha.id)
+    await container.triggers.fire_activated(trigger.id, "mine\n@route agent:beta\nfor beta")
+    await deliver(container)
+    after = await container.triggers.get_by_name("feed")
+    assert after.enabled and "beta refuses" in (after.route_error or "")
+
+    stored = await container.triggers.update(trigger.id, route="agent:beta")
+    await container.triggers.fire_activated(stored.id, "x\n@route agent:beta\ny")
+    after = await container.triggers.get_by_name("feed")
+    assert not after.enabled and "beta refuses" in (after.disabled_reason or "")
 
 
 async def test_the_default_route_is_checked_when_set_and_again_when_its_target_is_gone(container, make_agent):
@@ -228,7 +275,8 @@ async def test_an_address_without_content_is_still_checked(container, make_agent
 async def test_a_route_to_an_archived_agent_is_a_bad_target_not_the_trigger_being_archived(
     container, make_agent
 ):
-    """目标 agent 归档是目标不合法：整次不投、激活的触发停用并记原因；不当成触发器自己的 agent 归档而静默跳过。"""
+    """目标 agent 归档是目标不合法，不当成触发器自己的 agent 归档而静默跳过：默认目标是它时整次不投、激活的触发停用并记原因；
+    内容里的地址是它时激活的触发只丢那段（#569）。"""
     alpha, beta = await make_agent("alpha"), await make_agent("beta")
     trigger = await container.triggers.create(
         name="later", agent_id=alpha.id, kind="once", prompt="p", config={"at": "2099-01-01T00:00"}
@@ -241,8 +289,12 @@ async def test_a_route_to_an_archived_agent_is_a_bad_target_not_the_trigger_bein
     with pytest.raises(InvalidInput, match="invalid route 'session:beta'.*archived"):
         await container.triggers.update(stored.id, route="session:beta")
 
+    await container.triggers.fire_activated(stored.id, "x")
+    after = await container.triggers.get_by_name("feed")
+    assert not after.enabled and "archived" in (after.disabled_reason or "")
+
     await container.triggers.fire_activated(trigger.id, "mine\n@route agent:beta\nfor beta")
     await deliver(container)
-    assert await _sessions(container) == []  # 默认目标那段也不投
     after = await container.triggers.get_by_name("later")
-    assert not after.enabled and "archived" in (after.disabled_reason or "")
+    assert after.enabled and "archived" in (after.route_error or "")
+    assert {s.agent_id for s in await _sessions(container)} == {alpha.id}  # 自己那段与告警
