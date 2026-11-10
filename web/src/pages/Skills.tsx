@@ -1,10 +1,12 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { Button, Card, toast } from '@heroui/react'
 import { Download, Plus, Trash2, Upload } from 'lucide-react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { api, ApiError, asAgentId, skillFileUrl, type AgentId, type AssetOf, type Schemas, type Skill } from '../api'
 import { FileBrowser } from './FileBrowser'
-import { AssetAccess, OwnerSelect } from './assetParts'
+import { AssetAccess, OwnerSelect, StaleDraft } from './assetParts'
+import { useVersionedDraft } from '../drafts'
+import { useRefetch } from '../events'
 import { ActionButton,
   CollapsibleForm,
   EmptyHint,
@@ -140,42 +142,103 @@ function SkippedFiles({ what, skipped }: { what: string; skipped: Schemas['Skipp
   )
 }
 
+/** skill 的描述与正文（新建与编辑共用），值由调用方管 */
+function SkillFields({ value, set }: { value: SkillText; set: (patch: Partial<SkillText>) => void }) {
+  return (
+    <>
+      <TextInput
+        label="描述"
+        hint="何时使用这个 skill，会出现在 agent 的 skill 索引里"
+        value={value.description}
+        onChange={(description) => set({ description })}
+        isRequired
+      />
+      <TextAreaInput label="内容（Markdown）" value={value.body} onChange={(body) => set({ body })} rows={18} mono />
+    </>
+  )
+}
+
+type SkillText = Pick<Skill, 'description' | 'body'>
+
 export function SkillEditor() {
   const [params] = useSearchParams()
+  const existing = params.get('name')
+  return existing ? <ExistingSkill name={existing} /> : <NewSkill />
+}
+
+function NewSkill() {
+  const navigate = useNavigate()
+  const [owner, setOwner] = useState<AgentId | null>(null)
+  const [name, setName] = useState('')
+  const [text, setText] = useState<SkillText>({ description: '', body: '' })
+  const action = useAction()
+  return (
+    <Page title="新建 skill" back={SKILLS}>
+      <Card>
+        <Card.Content className="flex flex-col gap-4">
+          <OwnerSelect value={owner} onChange={setOwner} />
+          <TextInput label="名称" hint="小写字母、数字、- 或 _" value={name} onChange={setName} mono isRequired />
+          <SkillFields value={text} set={(patch) => setText((prev) => ({ ...prev, ...patch }))} />
+          <ErrorAlert error={action.error} />
+          <div className="flex gap-2">
+            <ActionButton
+              isPending={action.busy}
+              onPress={() =>
+                void action
+                  .run(async () => {
+                    await api.saveSkill(name, { owner, ...text, version: null })
+                    toast.success('skill 已保存')
+                  })
+                  .then((ok) => ok && navigate(SKILLS))
+              }
+            >
+              保存
+            </ActionButton>
+          </div>
+        </Card.Content>
+      </Card>
+    </Page>
+  )
+}
+
+/** 已有的 skill：agent 随时会改它，随 changed 重新拉取，保存带打开时的版本 */
+function ExistingSkill({ name }: { name: string }) {
+  const loaded = useLoad(() => api.skill(name), [name])
+  useRefetch('agents', loaded.reload)
+  return (
+    <Page title={name} back={SKILLS}>
+      <Loading state={loaded}>{(s) => <SkillDraft latest={s} />}</Loading>
+    </Page>
+  )
+}
+
+function SkillDraft({ latest }: { latest: Skill }) {
   const navigate = useNavigate()
   const confirm = useConfirm()
-  const existing = params.get('name')
-  const back = SKILLS
   const agents = useAgents()
-  const [skill, setSkill] = useState<Skill>({ owner: null, name: existing ?? '', description: '', body: '' })
-  const loaded = useLoad(() => (existing ? api.skill(existing) : Promise.resolve(null)), [existing])
+  const { name, owner } = latest
+  const doc = useVersionedDraft(latest, (s): SkillText => ({ description: s.description, body: s.body }))
   const action = useAction()
-  // 上一次导出没打进包的文件，带着是哪个 skill 的：切到别的 skill 就不显示
-  const [exportSkipped, setExportSkipped] = useState<{ name: string; skipped: Schemas['SkippedOut'][] } | null>(null)
-  useEffect(() => {
-    if (loaded.data) setSkill(loaded.data)
-  }, [loaded.data])
-
-  const set = (patch: Partial<Skill>) => setSkill((prev) => ({ ...prev, ...patch }))
+  // 上一次导出没打进包的文件
+  const [exportSkipped, setExportSkipped] = useState<Schemas['SkippedOut'][] | null>(null)
 
   async function save() {
     const ok = await action.run(async () => {
-      await api.saveSkill(skill.name, { owner: skill.owner, description: skill.description, body: skill.body })
+      await api.saveSkill(name, { owner, ...doc.draft, version: doc.version })
       toast.success('skill 已保存')
     })
-    if (ok) navigate(back)
+    if (ok) navigate(SKILLS)
   }
 
   async function exportPackage() {
-    if (!existing) return
     setExportSkipped(null)
     await action.run(async () => {
-      const exported = await api.exportSkill(existing)
-      setExportSkipped({ name: existing, skipped: exported.skipped })
+      const exported = await api.exportSkill(name)
+      setExportSkipped(exported.skipped)
       const url = URL.createObjectURL(exported.blob)
       const link = document.createElement('a')
       link.href = url
-      link.download = `${existing}.skill`
+      link.download = `${name}.skill`
       link.click()
       // 点击触发的下载异步开始，太早释放会取消它
       setTimeout(() => URL.revokeObjectURL(url), 10_000)
@@ -183,85 +246,46 @@ export function SkillEditor() {
   }
 
   async function remove() {
-    if (!existing) return
-    const ok = await confirm({ title: `删除 skill「${existing}」？`, confirmLabel: '删除', danger: true })
-    if (ok && (await action.run(() => api.deleteSkill(existing)))) navigate(back)
+    const ok = await confirm({ title: `删除 skill「${name}」？`, confirmLabel: '删除', danger: true })
+    if (ok && (await action.run(() => api.deleteSkill(name)))) navigate(SKILLS)
   }
 
   return (
-    <Page title={existing ?? '新建 skill'} back={back}>
-      <Loading state={loaded}>
-        {() => (
-          <div className="flex flex-col gap-4">
-            <Card>
-              <Card.Content className="flex flex-col gap-4">
-                {existing ? (
-                  <div className="text-sm text-muted">
-                    归属：{skill.owner === null ? '平台' : agentLabel(agents.data, asAgentId(skill.owner))}
-                  </div>
-                ) : (
-                  <OwnerSelect
-                    value={skill.owner === null ? null : asAgentId(skill.owner)}
-                    onChange={(owner) => set({ owner })}
-                  />
-                )}
-                {!existing && (
-                  <TextInput
-                    label="名称"
-                    hint="小写字母、数字、- 或 _"
-                    value={skill.name}
-                    onChange={(name) => set({ name })}
-                    mono
-                    isRequired
-                  />
-                )}
-                <TextInput
-                  label="描述"
-                  hint="何时使用这个 skill，会出现在 agent 的 skill 索引里"
-                  value={skill.description}
-                  onChange={(description) => set({ description })}
-                  isRequired
-                />
-                <TextAreaInput label="内容（Markdown）" value={skill.body} onChange={(body) => set({ body })} rows={18} mono />
-                <ErrorAlert error={action.error} />
-                <div className="flex gap-2">
-                  <ActionButton isPending={action.busy} onPress={() => void save()}>
-                    保存
-                  </ActionButton>
-                  {existing && (
-                    <Button variant="secondary" isDisabled={action.busy} onPress={() => void exportPackage()}>
-                      <Download className="size-4" />
-                      导出 .skill
-                    </Button>
-                  )}
-                  {existing && (
-                    <Button variant="danger-soft" isDisabled={action.busy} onPress={() => void remove()}>
-                      <Trash2 className="size-4" />
-                      删除
-                    </Button>
-                  )}
-                </div>
-                {exportSkipped?.name === existing && <SkippedFiles what="打进导出的包" skipped={exportSkipped.skipped} />}
-              </Card.Content>
-            </Card>
-            {existing && (
-              <section className="flex flex-col gap-2">
-                <h2 className="text-base font-semibold">文件</h2>
-                <FileBrowser
-                  key={existing}
-                  source={{
-                    id: existing,
-                    list: (path) => api.skillFiles(existing, path),
-                    fileUrl: (path) => skillFileUrl(existing, path),
-                  }}
-                  label="skill 目录"
-                  emptyText="skill 目录是空的"
-                />
-              </section>
-            )}
+    <div className="flex flex-col gap-4">
+      <Card>
+        <Card.Content className="flex flex-col gap-4">
+          <div className="text-sm text-muted">归属：{owner === null ? '平台' : agentLabel(agents.data, asAgentId(owner))}</div>
+          <SkillFields value={doc.draft} set={(patch) => doc.setDraft((prev) => ({ ...prev, ...patch }))} />
+          {doc.stale && <StaleDraft what="这个 skill" onDiscard={doc.discard} />}
+          <ErrorAlert error={action.error} />
+          <div className="flex gap-2">
+            <ActionButton isPending={action.busy} onPress={() => void save()}>
+              保存
+            </ActionButton>
+            <Button variant="secondary" isDisabled={action.busy} onPress={() => void exportPackage()}>
+              <Download className="size-4" />
+              导出 .skill
+            </Button>
+            <Button variant="danger-soft" isDisabled={action.busy} onPress={() => void remove()}>
+              <Trash2 className="size-4" />
+              删除
+            </Button>
           </div>
-        )}
-      </Loading>
-    </Page>
+          {exportSkipped && <SkippedFiles what="打进导出的包" skipped={exportSkipped} />}
+        </Card.Content>
+      </Card>
+      <section className="flex flex-col gap-2">
+        <h2 className="text-base font-semibold">文件</h2>
+        <FileBrowser
+          source={{
+            id: name,
+            list: (path) => api.skillFiles(name, path),
+            fileUrl: (path) => skillFileUrl(name, path),
+          }}
+          label="skill 目录"
+          emptyText="skill 目录是空的"
+        />
+      </section>
+    </div>
   )
 }

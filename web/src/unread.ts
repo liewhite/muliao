@@ -3,7 +3,7 @@
 
 import { useEffect, useSyncExternalStore } from 'react'
 import { api } from './api'
-import { isTaskOf, useServerEvents, type PageEvent } from './events'
+import { useRefetch } from './events'
 
 let unread = 0
 // 请求序号：并发刷新时只让最新一次的结果落下，晚到的旧响应不能覆盖新值
@@ -18,7 +18,7 @@ function setBadge(count: number) {
   )
 }
 
-/** 从服务端重新取未读数；标记已读之后调用 */
+/** 从服务端重新取未读数 */
 export async function refreshUnread(): Promise<void> {
   const id = ++latest
   const { count } = await api.unreadNotifications()
@@ -42,18 +42,9 @@ export function useUnreadCount(): number {
 /** 刷新未读数，失败只记日志：用于后台同步，不打断用户的操作 */
 export const refreshUnreadLogged = () => void refreshUnread().catch((e) => console.error('unread count refresh failed', e))
 
-/** 这个服务端事件之后通知可能变了：写下了新通知（不论有没有推送订阅）、一条领域事件处理完（如 SessionRead 排在
- * 更早的投递后面、由 worker 稍后标记通知已读），或断线期间可能错过了事件 */
-export const notificationsMayHaveChanged = (e: PageEvent) =>
-  e.type === 'connected' ||
-  e.type === 'notification' ||
-  (isTaskOf(e, 'event') && e.status === 'done')
-
-/** 登录后在应用根部调用一次：新通知投递、断线重连、回到前台、收到推送时刷新 */
+/** 登录后在应用根部调用一次：通知变了（谁标的已读、写下新通知都一样，见 events.shouldRefetch）、回到前台、收到推送时刷新 */
 export function useUnreadSync() {
-  useServerEvents((e) => {
-    if (notificationsMayHaveChanged(e)) refreshUnreadLogged()
-  })
+  useRefetch('notifications', refreshUnread)
   useEffect(() => {
     refreshUnreadLogged()
     // 推送里的未读数是投递那一刻的，可能晚于应用里的标记已读才到；Service Worker 设完角标后通知窗口按服务端的数纠正

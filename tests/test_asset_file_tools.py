@@ -11,7 +11,7 @@ SKILL_MD = "---\ndescription: does things\n---\nbody\n"
 
 async def _setup(container, make_agent):
     me = await make_agent("alice", model="tools")
-    await container.skills.write("helper", "helps", "body", actor="user", owner=me.id)
+    await container.skills.write("helper", "helps", "body", version=None, actor="user", owner=me.id)
     tree = container.settings.assets_dir
     return me, tree, tree / "alice"
 

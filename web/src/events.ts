@@ -1,6 +1,6 @@
 // 全局 SSE 连接。事件只用于实时展示；收到 task 状态变化或重连时，页面应从 API 重新拉取（数据库是唯一事实源）。
 
-import { useEffect, useRef, useSyncExternalStore } from 'react'
+import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 import { api, type Item, type LiveSegment, type Schemas } from './api'
 
 /** 一条完整的会话条目（工具调用、工具结果），与历史同一个投影（后端 transcript）；文字可能截断过 */
@@ -81,23 +81,17 @@ export interface ConnectedEvent {
   type: 'connected'
 }
 
-/** 前端页面可以自己改的几类数据：列表与详情分屏并排时，详情里的改动要让列表重新拉取 */
-export type Resource = 'sessions' | 'agents' | 'issues'
-
 /**
- * 这个页面自己改了某类数据（前端自己产生，见 announceChange）。服务端不为这些改动发事件（删会话、标已读、
- * 增删改 agent），同一页面上并排展示同类数据的列表据此重新拉取。
+ * 数据的类别：后端的领域（schema.Domain）。任何一方（这个页面、别的页面、agent、触发器、推送通知上的操作）改了它，
+ * 服务端都发 changed（schema.ChangedEvent），展示它的页面据此重新拉取
  */
-export interface ChangedEvent {
-  type: 'changed'
-  resource: Resource
-}
+export type Resource = Schemas['ChangedEvent']['resource']
 
 /** 服务端定时发的心跳（api/app.py），只用来判断连接是否还活着，不交给页面 */
 type HeartbeatEvent = Schemas['HeartbeatEvent']
 
-/** 交给页面的事件：服务端发的（除了心跳），加上前端自己产生的连上、改动事件 */
-export type PageEvent = Exclude<Schemas['ServerEvent'], HeartbeatEvent> | ConnectedEvent | ChangedEvent
+/** 交给页面的事件：服务端发的（除了心跳），加上前端自己产生的连上事件 */
+export type PageEvent = Exclude<Schemas['ServerEvent'], HeartbeatEvent> | ConnectedEvent
 
 type Listener = (e: PageEvent) => void
 
@@ -109,13 +103,16 @@ export type TaskKind = Schemas['TaskOut']['kind']
 export const isTaskOf = (e: PageEvent, ...kinds: TaskKind[]): e is Schemas['TaskEvent'] =>
   e.type === 'task' && (kinds as string[]).includes(e.kind)
 
-/** 展示 resource 的列表/详情页是否要从 API 重新拉取：连上了（之前可能丢了事件）、某次运行的状态变了（运行里
- * 可能改了它），或这个页面自己改了它；会话的未读由通知派生，写下指向会话的新通知时会话也要重新拉取 */
+/** 展示时还用到别的类别的：会话的未读由通知派生 */
+const DERIVED_FROM: Partial<Record<Resource, Resource[]>> = { sessions: ['notifications'] }
+
+/** 展示 resource 的列表/详情页是否要从 API 重新拉取：连上了（之前可能丢了事件）、它（或它派生自的类别）变了，或某次运行
+ * 的状态变了：运行状态在任务表（平台的，不发 changed），会话、issue 上显示的忙闲由它派生；AI 资源是文件，agent 在运行里
+ * 直接改（文件工具、shell）服务端看不到，运行结束时也重新拉取 */
 export const shouldRefetch = (e: PageEvent, resource: Resource) =>
   e.type === 'connected' ||
   isTaskOf(e, 'run') ||
-  (e.type === 'changed' && e.resource === resource) ||
-  (e.type === 'notification' && e.session_id !== null && resource === 'sessions')
+  (e.type === 'changed' && (e.resource === resource || (DERIVED_FROM[resource] ?? []).includes(e.resource)))
 
 /** 这个页面跑的前端是否已经不是服务端当前的版本：页面加载后第一次心跳给出的版本，之后变了就是升级过 */
 export function isOutdated(loadedVersion: string | null, serverVersion: string | null): boolean {
@@ -192,11 +189,6 @@ function emit(event: PageEvent) {
   })
 }
 
-/** 这个页面改了 resource（删会话、标已读、增删改 agent 之类）：通知并排展示它的列表重新拉取 */
-export function announceChange(resource: Resource) {
-  emit({ type: 'changed', resource })
-}
-
 /** 连接已死就丢掉它重新连接；连上时页面收到 connected，从数据库重新拉取 */
 function checkAlive() {
   if (source === null) return
@@ -237,10 +229,37 @@ export function useServerEvents(listener: Listener) {
   useEffect(() => listenServerEvents((e) => ref.current(e)), [])
 }
 
-/** 展示 resource 的页面：shouldRefetch 时重新拉取 */
+/**
+ * 把 reload 包成「进行中最多再排一次」：运行中每步都在提交，changed 会一个接一个地来，请求不堆积；进行中又来的那些合并成
+ * 它结束后的一次（那时才读，一定看得到它们）
+ */
+export function coalesced(reload: () => Promise<void>): () => void {
+  let running = false
+  let again = false
+  const run = () => {
+    if (running) {
+      again = true
+      return
+    }
+    running = true
+    void reload()
+      .catch((e) => console.error('refetching failed', e))
+      .finally(() => {
+        running = false
+        if (again) {
+          again = false
+          run()
+        }
+      })
+  }
+  return run
+}
+
+/** 展示 resource 的页面：shouldRefetch 时重新拉取（合并密集的事件，见 coalesced） */
 export function useRefetch(resource: Resource, reload: () => Promise<void>) {
+  const refetch = useMemo(() => coalesced(reload), [reload])
   useServerEvents((e) => {
-    if (shouldRefetch(e, resource)) void reload()
+    if (shouldRefetch(e, resource)) refetch()
   })
 }
 

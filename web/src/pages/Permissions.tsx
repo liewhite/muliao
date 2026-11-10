@@ -1,4 +1,6 @@
 import { useState } from 'react'
+import { useFieldDraft } from '../drafts'
+import { useRefetch } from '../events'
 import { Button, Card, Chip, CloseButton, ComboBox, Disclosure, Input, Label, ListBox, Description } from '@heroui/react'
 import { Pencil, Trash2 } from 'lucide-react'
 import { Link } from 'react-router-dom'
@@ -164,6 +166,7 @@ export function RulesInput({
 /** 规则补全的候选：全部资产（含工具）及每种的 `use:kind:*` */
 function useCandidates(): string[] {
   const assets = useLoad(() => api.assets(), [])
+  useRefetch('agents', assets.reload)
   return ruleCandidates(assets.data ?? [])
 }
 
@@ -180,6 +183,7 @@ export function PermissionsInput({
   onChange: (v: PermissionValue) => void
 }) {
   const roles = useLoad(() => api.roles(), [])
+  useRefetch('agents', roles.reload)
   const candidates = useCandidates()
   const key = JSON.stringify(value)
   const reach = useLoad(() => api.previewAgent({ agent_id: agentId, ...value }), [agentId, key])
@@ -243,38 +247,75 @@ export function PermissionsInput({
   )
 }
 
-function RoleForm({ role, onSaved }: { role?: Role; onSaved: () => void }) {
-  const [name, setName] = useState(role?.name ?? '')
-  const [description, setDescription] = useState(role?.description ?? '')
-  const [allow, setAllow] = useState(role?.allow ?? [])
-  const [deny, setDeny] = useState(role?.deny ?? [])
+/** 角色的描述与规则（新建与编辑共用），值由调用方管；下面按规则预览保存后能用的 */
+function RoleFields({
+  name,
+  value,
+  set,
+}: {
+  name: string | null
+  value: RoleInput
+  set: (patch: Partial<RoleInput>) => void
+}) {
   const candidates = useCandidates()
   const reach = useLoad(
-    () => api.previewRole({ name: role?.name ?? null, allow, deny }),
-    [role?.name, JSON.stringify([allow, deny])],
+    () => api.previewRole({ name, allow: value.allow, deny: value.deny }),
+    [name, JSON.stringify([value.allow, value.deny])],
   )
-  const action = useAction()
-
-  async function save() {
-    const body: RoleInput = { description, allow, deny }
-    if (await action.run(() => (role ? api.updateRole(role.name, body) : api.createRole(name, body)))) onSaved()
-  }
-
   return (
-    <div className="flex flex-col gap-3">
-      {!role && <TextInput label="名称" hint="小写字母、数字、- 和 _" mono value={name} onChange={setName} isRequired />}
-      <TextInput label="描述" value={description} onChange={setDescription} isRequired />
+    <>
+      <TextInput label="描述" value={value.description} onChange={(description) => set({ description })} isRequired />
       <RulesInput
         label="收录（允许）"
         hint="动作:种类:名字，可用通配符，如 use:skill:relay-host、use:secret:RELAY_*、*:memory:trading（成员能用也能改）"
-        value={allow}
-        onChange={setAllow}
+        value={value.allow}
+        onChange={(allow) => set({ allow })}
         candidates={candidates}
       />
-      <RulesInput label="禁止" hint="优先于所有允许（包括别的角色给的）" value={deny} onChange={setDeny} candidates={candidates} />
+      <RulesInput
+        label="禁止"
+        hint="优先于所有允许（包括别的角色给的）"
+        value={value.deny}
+        onChange={(deny) => set({ deny })}
+        candidates={candidates}
+      />
       {reach.error ? <ErrorAlert error={reach.error} title="规则有误" /> : reach.data && <ReachView reach={reach.data} what="保存后能用" />}
+    </>
+  )
+}
+
+function RoleCreateForm({ onSaved }: { onSaved: () => void }) {
+  const [name, setName] = useState('')
+  const [value, setValue] = useState<RoleInput>({ description: '', allow: [], deny: [] })
+  const action = useAction()
+  return (
+    <div className="flex flex-col gap-3">
+      <TextInput label="名称" hint="小写字母、数字、- 和 _" mono value={name} onChange={setName} isRequired />
+      <RoleFields name={null} value={value} set={(patch) => setValue((prev) => ({ ...prev, ...patch }))} />
       <ErrorAlert error={action.error} />
-      <ActionButton isPending={action.busy} onPress={() => void save()}>
+      <ActionButton
+        isPending={action.busy}
+        onPress={() => void action.run(() => api.createRole(name, value)).then((ok) => ok && onSaved())}
+      >
+        保存
+      </ActionButton>
+    </div>
+  )
+}
+
+/** 编辑：只提交改过的字段，编辑期间 agent 改了 access.toml 里别的字段不会被旧值盖掉；没动过的字段跟着刷新 */
+function RoleEditForm({ role, onSaved }: { role: Role; onSaved: () => void }) {
+  const form = useFieldDraft<RoleInput>({ description: role.description, allow: role.allow, deny: role.deny })
+  const action = useAction()
+  return (
+    <div className="flex flex-col gap-3">
+      <RoleFields name={role.name} value={form.draft} set={form.set} />
+      <ErrorAlert error={action.error} />
+      <ActionButton
+        isDisabled={Object.keys(form.changes).length === 0}
+        isPending={action.busy}
+        onPress={() => void action.run(() => api.updateRole(role.name, form.changes)).then((ok) => ok && onSaved())}
+      >
         保存
       </ActionButton>
     </div>
@@ -344,7 +385,7 @@ function RoleCard({ role, onChanged }: { role: Role; onChanged: () => void }) {
         </div>
         <ReachView reach={role.reach} />
         {editing && (
-          <RoleForm
+          <RoleEditForm
             role={role}
             onSaved={() => {
               setEditing(false)
@@ -373,6 +414,7 @@ function RoleCard({ role, onChanged }: { role: Role; onChanged: () => void }) {
 /** 角色：内置角色（base、admin）的固定规则只读、可编辑部分可改，不能删；自建角色可增删改。每个角色列出收录的资产与分给的 agent */
 export function Roles() {
   const roles = useLoad(() => api.roles(), [])
+  useRefetch('agents', roles.reload)
   const [formKey, setFormKey] = useState(0)
   return (
     <Page title="角色">
@@ -381,7 +423,7 @@ export function Roles() {
         的人人可用；其余角色在 agent 配置里勾选，从它的下一次运行起生效。
       </p>
       <CollapsibleForm title="新建角色">
-        <RoleForm
+        <RoleCreateForm
           key={formKey}
           onSaved={() => {
             setFormKey((k) => k + 1)

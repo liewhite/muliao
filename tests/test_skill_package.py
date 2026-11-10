@@ -66,7 +66,7 @@ async def test_an_imported_skill_exports_the_same_files_and_keeps_extra_frontmat
 async def test_importing_over_an_existing_skill_needs_replace_and_then_swaps_its_files(container, make_agent):
     skills = container.skills
     beta = (await make_agent("beta")).id
-    meta = await skills.write("digest", "old", "old body", actor=beta, owner=beta)
+    meta = await skills.write("digest", "old", "old body", version=None, actor=beta, owner=beta)
     directory = meta.path.parent
     (directory / "old.py").write_text("old = 1\n")
     package = _zip({"digest/SKILL.md": SKILL_MD, "digest/scripts/fetch.py": "new = 1\n"})

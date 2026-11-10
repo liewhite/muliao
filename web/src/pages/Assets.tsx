@@ -1,4 +1,5 @@
 import { Card, Tabs, type Key } from '@heroui/react'
+import { useRefetch } from '../events'
 import { useSearchParams } from 'react-router-dom'
 import { api, asAgentId, type CatalogAsset, type AssetKind, type AssetOf } from '../api'
 import { KIND_LABEL, KINDS, filterAssets, isKind, type OwnerFilter } from '../rules'
@@ -68,6 +69,7 @@ export default function Assets() {
   const kind: AssetKind = isKind(kindParam) ? kindParam : 'skill'
   const owner = ownerFilterOf(params.get('owner'))
   const assets = useLoad(() => api.assets(), [])
+  useRefetch('agents', assets.reload)
   const agents = useAgents()
   const set = (patch: Record<string, string>) => setParams({ kind, owner, ...patch }, { replace: true })
 

@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Button, Card, toast } from '@heroui/react'
 import { ChevronDown, ChevronRight, Trash2 } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { api, type AgentId, type AssetOf } from '../api'
-import { AssetAccess, OwnerSelect } from './assetParts'
+import { api, type AgentId, type AssetOf, type Memory } from '../api'
+import { useVersionedDraft } from '../drafts'
+import { useRefetch } from '../events'
+import { AssetAccess, OwnerSelect, StaleDraft } from './assetParts'
 import {
   ActionButton,
   CollapsibleForm,
@@ -21,46 +23,61 @@ import {
 /** 全局记忆的名字（后端 agents/permissions.py 的 GLOBAL_MEMORY）：base 固定收录，不能删 */
 export const GLOBAL_MEMORY = 'global'
 
-/** 一块记忆：编辑正文、保存（写的是它的文件） */
+/** 一块记忆：编辑正文、保存（写的是它的文件）。agent 随时会改它：随 changed 重新拉取，保存带打开时的版本 */
 export function MemoryEditor({ name, hint, onSaved }: { name: string; hint: string; onSaved?: () => void }) {
   const memory = useLoad(() => api.memory(name), [name])
-  const [content, setContent] = useState('')
-  const action = useAction()
-  useEffect(() => {
-    if (memory.data) setContent(memory.data.content)
-  }, [memory.data])
-
+  useRefetch('agents', memory.reload)
   return (
     <Loading state={memory}>
-      {(m) => (
-        <div className="flex flex-col gap-3">
-          <TextAreaInput
-            label={`记忆 ${m.name}（${content.length}/${m.max_chars} 字符）`}
-            hint={hint}
-            value={content}
-            onChange={setContent}
-            rows={14}
-            mono
-          />
-          <ErrorAlert error={action.error} />
-          <ActionButton
-            isDisabled={content === m.content}
-            isPending={action.busy}
-            onPress={() =>
-              void action.run(async () => {
-                await api.saveMemory(name, { content })
-                toast.success('记忆已保存')
-                await memory.reload()
-                onSaved?.()
-              })
-            }
-          >
-            保存记忆
-          </ActionButton>
-          <div className="font-mono text-xs break-all text-muted">{m.path}</div>
-        </div>
-      )}
+      {(m) => <MemoryDraft latest={m} hint={hint} reload={memory.reload} onSaved={onSaved} />}
     </Loading>
+  )
+}
+
+function MemoryDraft({
+  latest,
+  hint,
+  reload,
+  onSaved,
+}: {
+  latest: Memory
+  hint: string
+  reload: () => Promise<void>
+  onSaved?: () => void
+}) {
+  const doc = useVersionedDraft(latest, (m) => m.content)
+  const action = useAction()
+  const content = doc.draft
+  return (
+    <div className="flex flex-col gap-3">
+      <TextAreaInput
+        label={`记忆 ${latest.name}（${content.length}/${latest.max_chars} 字符）`}
+        hint={hint}
+        value={content}
+        onChange={doc.setDraft}
+        rows={14}
+        mono
+      />
+      {doc.stale && <StaleDraft what="这块记忆" onDiscard={doc.discard} />}
+      <ErrorAlert error={action.error} />
+      <ActionButton
+        isDisabled={!doc.dirty}
+        isPending={action.busy}
+        onPress={() =>
+          void action.run(async () => {
+            const saved = await api.saveMemory(latest.name, { content, version: doc.version })
+            toast.success('记忆已保存')
+            // 存下的是规整过空白的：草稿换成它，重新拉取到这个版本时就对上了
+            doc.setDraft(saved.content)
+            await reload()
+            onSaved?.()
+          })
+        }
+      >
+        保存记忆
+      </ActionButton>
+      <div className="font-mono text-xs break-all text-muted">{latest.path}</div>
+    </div>
   )
 }
 
@@ -71,7 +88,7 @@ function MemoryForm({ onSaved }: { onSaved: () => void }) {
 
   async function save() {
     const ok = await action.run(async () => {
-      await api.saveMemory(name, { owner, content: '' })
+      await api.saveMemory(name, { owner, content: '', version: null })
       toast.success(`已新建记忆 ${name}`)
     })
     if (ok) {

@@ -249,8 +249,10 @@ async def _tree_fixture(container, make_agent):
     from muliao.agents.api import RoleSpec
 
     alice = await make_agent("alice", model="tools")
-    await container.skills.write("alice-skill", "alice's skill", "body", actor="user", owner=alice.id)
-    await container.memory.put("trading", "shared notes", actor="user", owner=None)
+    await container.skills.write(
+        "alice-skill", "alice's skill", "body", version=None, actor="user", owner=alice.id
+    )
+    await container.memory.put("trading", "shared notes", version=None, actor="user", owner=None)
     await container.distribution.create(RoleSpec("trader", "trades", ["*:memory:trading"], []), actor="user")
     bob = await make_agent("bob", model="tools", roles=("trader",))
     carol = await make_agent("carol", model="tools")

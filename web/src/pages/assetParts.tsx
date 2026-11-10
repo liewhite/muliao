@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Button, Chip } from '@heroui/react'
+import { Alert, Button, Chip } from '@heroui/react'
 import { Link } from 'react-router-dom'
 import { agentRoute, api, asAgentId, type AgentId, type CatalogAsset } from '../api'
 import { ActionButton, ErrorAlert, SelectInput, agentLabel, useAction, useAgents } from '../ui'
@@ -111,5 +111,21 @@ export function AssetAccess({ asset, onTransferred }: { asset: CatalogAsset; onT
         />
       )}
     </div>
+  )
+}
+
+/** 编辑期间别处（agent、自进化、另一个页面）改了它：草稿是按旧内容改的，保存会被拒绝（409），只能丢掉修改载入最新 */
+export function StaleDraft({ what, onDiscard }: { what: string; onDiscard: () => void }) {
+  return (
+    <Alert status="warning">
+      <Alert.Indicator />
+      <Alert.Content>
+        <Alert.Title>{what}在你编辑期间被别处改过</Alert.Title>
+        <Alert.Description>你的修改是按旧内容做的，保存会被拒绝。先复制要保留的内容，再载入最新的重新改。</Alert.Description>
+      </Alert.Content>
+      <Button size="sm" variant="secondary" onPress={onDiscard}>
+        载入最新（丢弃我的修改）
+      </Button>
+    </Alert>
   )
 }

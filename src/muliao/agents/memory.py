@@ -49,10 +49,8 @@ class MemoryInfo:
     content: str
     updated_at: datetime
     path: Path
-
-
-def _info(a: assets.Asset) -> MemoryInfo:
-    return MemoryInfo(a.name, a.owner, a.text, a.updated_at, a.path)
+    # content 的版本（assets.version_of）：整体改写时交回
+    version: str
 
 
 class MemoryStore:
@@ -62,7 +60,8 @@ class MemoryStore:
         self.max_chars = max_chars
 
     async def read(self, name: str) -> MemoryInfo:
-        return _info((await self._source.snapshot()).asset(_KIND, name))
+        a = (await self._source.snapshot()).asset(_KIND, name)
+        return MemoryInfo(a.name, a.owner, a.text, a.updated_at, a.path, assets.version_of(a.text))
 
     async def for_run(self, agent_id: str) -> list[MemoryBlock]:
         """组装一次运行的指令时读：这个 agent 能用的每一块（自己的与规则分来的），按名字。"""
@@ -75,12 +74,23 @@ class MemoryStore:
             for a in usable_by(snapshot, _KIND, grants)
         ]
 
-    async def put(self, name: str, content: str, *, actor: str, owner: str | None = None) -> MemoryInfo:
-        """新建或整体改写（用户在界面上编辑）：已有的要 actor 能改（Grants.can 的 write），owner 不变；新建的归 owner。"""
+    async def put(
+        self, name: str, content: str, *, actor: str, version: str | None, owner: str | None = None
+    ) -> MemoryInfo:
+        """新建或整体改写（用户在界面上编辑）：已有的要 actor 能改（Grants.can 的 write），owner 不变；新建的归 owner。
+        version 是打开编辑时的版本（新建为 None），期间被别处改过就 Conflict（assets.check_version）。"""
         async with self._source.writing() as snapshot:
             existing = writable(snapshot, _KIND, name, actor)
             path = existing.path if existing is not None else self._new_path(snapshot, name, owner)
-            await asyncio.to_thread(write_atomic, path, _file_text(self._tidied(name, content)))
+            text = _file_text(self._tidied(name, content))
+
+            def put() -> None:
+                # agent 改文件不经这把锁：比对用此刻文件里的，紧挨着写，窗口最小
+                current = assets.memory_text(path) if existing is not None else None
+                assets.check_version(current, version, f"memory {name!r}")
+                write_atomic(path, text)
+
+            await asyncio.to_thread(put)
         return await self.read(name)
 
     def _new_path(self, snapshot: assets.Snapshot, name: str, owner: str | None) -> Path:

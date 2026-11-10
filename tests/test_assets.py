@@ -103,7 +103,7 @@ async def test_a_name_used_by_two_agents_loads_neither_and_reports_both(containe
         [("alpha/skills/dup", alpha.id), ("beta/skills/dup", beta.id)]
     )
     with pytest.raises(Conflict, match="not loaded"):
-        await container.skills.write("dup", "When testing", "x", actor="user", owner=None)
+        await container.skills.write("dup", "When testing", "x", version=None, actor="user", owner=None)
 
 
 async def test_a_copy_of_a_platform_asset_breaks_only_the_copy(container, make_agent):
@@ -222,7 +222,7 @@ async def test_a_name_on_disk_but_not_loaded_cannot_be_created_again(container, 
         "---\nname: digest\n---\nno description\n",
     )
     with pytest.raises(Conflict, match="not loaded"):
-        await container.skills.write("digest", "When digesting", "x", actor="user", owner=None)
+        await container.skills.write("digest", "When digesting", "x", version=None, actor="user", owner=None)
 
 
 async def test_editing_agent_toml_takes_effect_and_a_broken_one_fails_the_run(container, make_agent, models):
@@ -446,52 +446,109 @@ async def test_memory_api_writes_files_and_follows_ownership(client, container, 
     await login(client)
     got = (await client.get("/api/assets/memory/global")).json()
     assert (got["content"], got["owner"], got["max_chars"]) == ("", None, 4000)
-    resp = await client.put("/api/assets/memory/global", json={"content": "first  \n\n\nsecond"})
+    resp = await client.put(
+        "/api/assets/memory/global", json={"content": "first  \n\n\nsecond", "version": got["version"]}
+    )
     assert resp.json()["content"] == "first\n\nsecond"
     assert (root(container) / "platform" / "memory" / "global.md").read_text() == "first\n\nsecond\n"
-    assert (await client.put("/api/assets/memory/alpha", json={"content": "- tea"})).json()[
-        "owner"
-    ] == agent.id
-    created = await client.put("/api/assets/memory/trading", json={"content": "x"})
+    alpha = (await client.get("/api/assets/memory/alpha")).json()
+    put = await client.put("/api/assets/memory/alpha", json={"content": "- tea", "version": alpha["version"]})
+    assert put.json()["owner"] == agent.id
+    created = await client.put("/api/assets/memory/trading", json={"content": "x", "version": None})
     assert created.json()["owner"] is None
-    assert (await client.put("/api/assets/memory/Bad Name", json={"content": "x"})).status_code == 422
+    bad = await client.put("/api/assets/memory/Bad Name", json={"content": "x", "version": None})
+    assert bad.status_code == 422
     # 私有记忆名字就是 agent 名
     assert (
-        await client.put("/api/assets/memory/other", json={"content": "x", "owner": agent.id})
+        await client.put(
+            "/api/assets/memory/other", json={"content": "x", "owner": agent.id, "version": None}
+        )
     ).status_code == 422
     assert (await client.delete("/api/assets/memory/trading")).status_code == 204
     assert not (root(container) / "platform" / "memory" / "trading.md").exists()
     assert (await client.delete("/api/assets/memory/global")).status_code == 422
     assert (await client.get("/api/assets/memory/nope")).status_code == 404
-    over = await client.put("/api/assets/memory/global", json={"content": "x" * 4001})
+    current = resp.json()["version"]
+    over = await client.put("/api/assets/memory/global", json={"content": "x" * 4001, "version": current})
     assert over.status_code == 422
+
+
+async def test_saving_memory_or_skill_changed_elsewhere_since_opening_is_a_conflict(client, container):
+    """界面保存带打开时的版本：期间 agent（直接改文件）或别的页面改过、删掉、抢先建了，都 409，不盖掉别人的改动。"""
+    await login(client)
+    opened = (await client.get("/api/assets/memory/global")).json()
+    path = root(container) / "platform" / "memory" / "global.md"
+    path.write_text("- written by an agent\n")
+    resp = await client.put(
+        "/api/assets/memory/global", json={"content": "mine", "version": opened["version"]}
+    )
+    assert resp.status_code == 409
+    assert path.read_text() == "- written by an agent\n"
+    # 新建撞上已有的不再把它清空
+    assert (
+        await client.put("/api/assets/memory/global", json={"content": "", "version": None})
+    ).status_code == 409
+    assert path.read_text() == "- written by an agent\n"
+    # 重新打开拿到新版本就能存
+    again = (await client.get("/api/assets/memory/global")).json()
+    resp = await client.put(
+        "/api/assets/memory/global", json={"content": "mine", "version": again["version"]}
+    )
+    assert resp.status_code == 200
+
+    body = {"owner": None, "description": "d", "body": "steps"}
+    assert (await client.put("/api/assets/skill/s", json={**body, "version": None})).status_code == 200
+    skill = (await client.get("/api/assets/skill/s")).json()
+    md = await container.skills.directory("s") / "SKILL.md"
+    md.write_text(md.read_text() + "more by an agent\n")
+    resp = await client.put("/api/assets/skill/s", json={**body, "version": skill["version"]})
+    assert resp.status_code == 409 and "more by an agent" in md.read_text()
+    assert (await client.put("/api/assets/skill/s", json={**body, "version": None})).status_code == 409
+    fresh = (await client.get("/api/assets/skill/s")).json()["version"]
+    assert (await client.put("/api/assets/skill/s", json={**body, "version": fresh})).status_code == 200
+    # 打开之后被删掉了
+    assert (await client.delete("/api/assets/skill/s")).status_code == 204
+    assert (await client.put("/api/assets/skill/s", json={**body, "version": fresh})).status_code == 409
 
 
 async def test_writes_need_write_permission(container, make_agent):
     alpha = await make_agent("alpha")
     beta = await make_agent("beta")
-    await container.memory.put("trading", "x", actor="user")
+    await container.memory.put("trading", "x", version=None, actor="user")
     with pytest.raises(Forbidden, match="belongs to the platform"):
-        await container.memory.put("trading", "y", actor=alpha.id)
+        await container.memory.put("trading", "y", version=None, actor=alpha.id)
     with pytest.raises(Forbidden, match="agent 'beta'"):
-        await container.memory.put("beta", "y", actor=alpha.id)
+        await container.memory.put("beta", "y", version=None, actor=alpha.id)
     await container.distribution.create(RoleSpec("trader", "t", ["*:memory:trading"], []), actor="user")
     await container.agents.update(alpha.id, AgentPatch(roles=["trader"]), actor="user")
-    await container.memory.put("trading", "y", actor=alpha.id)
+    await container.memory.put(
+        "trading", "y", version=(await container.memory.read("trading")).version, actor=alpha.id
+    )
     assert (await container.memory.read("trading")).content == "y"
-    await container.memory.put("beta", "own", actor=beta.id)
+    await container.memory.put(
+        "beta", "own", version=(await container.memory.read("beta")).version, actor=beta.id
+    )
 
 
 async def test_skills_are_written_imported_exported_and_deleted_as_directories(container, make_agent):
     alpha = await make_agent("alpha")
-    meta = await container.skills.write("digest", "When digesting", "Do it.", actor="user", owner=alpha.id)
+    meta = await container.skills.write(
+        "digest", "When digesting", "Do it.", version=None, actor="user", owner=alpha.id
+    )
     directory = root(container) / "alpha" / "skills" / "digest"
     assert meta.path == directory / "SKILL.md"
     write(directory / "scripts" / "run.sh", "#!/bin/sh\necho hi\n")
     os.chmod(directory / "scripts" / "run.sh", 0o755)
     # 界面改正文：附件不动，frontmatter 别的键保留
     write(directory / "SKILL.md", "---\nname: digest\ndescription: old\nlicense: MIT\n---\nOld.\n")
-    await container.skills.write("digest", "When digesting", "New.", actor="user", owner=None)
+    await container.skills.write(
+        "digest",
+        "When digesting",
+        "New.",
+        version=(await container.skills.read("digest")).version,
+        actor="user",
+        owner=None,
+    )
     text = (directory / "SKILL.md").read_text()
     assert "license: MIT" in text and "New." in text
     assert (directory / "scripts" / "run.sh").exists()
@@ -544,7 +601,9 @@ async def test_secrets_are_encrypted_files(container, make_agent):
 
 async def test_transferring_moves_the_file_to_the_new_owner(container, make_agent):
     alpha = await make_agent("alpha")
-    await container.skills.write("digest", "When digesting", "Do it.", actor="user", owner=alpha.id)
+    await container.skills.write(
+        "digest", "When digesting", "Do it.", version=None, actor="user", owner=alpha.id
+    )
     await container.catalog.transfer(StoredKind.SKILL, "digest", None, "user")
     assert (root(container) / "platform" / "skills" / "digest" / "SKILL.md").exists()
     assert await owned(container, "skill", None) == ["digest"]
@@ -552,7 +611,7 @@ async def test_transferring_moves_the_file_to_the_new_owner(container, make_agen
         await container.catalog.transfer(StoredKind.SKILL, "digest", None, "user")
     await container.catalog.transfer(StoredKind.MEMORY, "alpha", None, "user")
     assert (root(container) / "platform" / "memory" / "alpha.md").exists()
-    await container.memory.put("trading", "x", actor="user")
+    await container.memory.put("trading", "x", version=None, actor="user")
     with pytest.raises(InvalidInput, match="named after the agent"):
         await container.catalog.transfer(StoredKind.MEMORY, "trading", alpha.id, "user")
     await container.catalog.transfer(StoredKind.MEMORY, "alpha", alpha.id, "user")
@@ -600,8 +659,8 @@ async def test_creating_and_renaming_an_agent_writes_its_directory_and_rules(con
 
 async def test_deleting_an_agent_removes_its_directory_but_keeps_what_others_use(container, make_agent):
     alpha = await make_agent("alpha")
-    await container.skills.write("kept", "When kept", "x", actor="user", owner=alpha.id)
-    await container.skills.write("gone", "When gone", "x", actor="user", owner=alpha.id)
+    await container.skills.write("kept", "When kept", "x", version=None, actor="user", owner=alpha.id)
+    await container.skills.write("gone", "When gone", "x", version=None, actor="user", owner=alpha.id)
     await container.distribution.create(RoleSpec("readers", "r", ["use:skill:kept"], []), actor="user")
     await make_agent("beta", roles=("readers",))
     await container.agent_lifecycle.delete(alpha.id, actor="user")

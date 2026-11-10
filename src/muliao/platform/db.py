@@ -143,6 +143,8 @@ def migrate(db_path: Path, target: str = "head") -> None:
 
 # 一个事务写过的表名 -> 不合规时报错
 WriteCheck = Callable[[frozenset[str]], None]
+# 一个事务写过的表名（提交前）-> 提交成功后要做的事
+AfterCommit = Callable[[frozenset[str]], Callable[[], None]]
 
 
 def _track_writes(s: AsyncSession) -> set[str]:
@@ -176,10 +178,19 @@ class Database:
       等锁处（安全）收到取消。
     """
 
-    def __init__(self, engine: AsyncEngine, *, check_writes: WriteCheck | None = None):
-        """check_writes：提交前拿到这个事务写过的表名（开发期断言，见 schema.single_domain_writes）。"""
+    def __init__(
+        self,
+        engine: AsyncEngine,
+        *,
+        check_writes: WriteCheck | None = None,
+        after_commit: AfterCommit | None = None,
+    ):
+        """check_writes：提交前拿到这个事务写过的表名（开发期断言，见 schema.single_domain_writes）。after_commit：
+        写过表的事务提交前拿到它写过的表名、给出提交成功后要做的事（组合根据此给前端发数据变了的事件，
+        schema.changes_of）：算错了在提交前报错、回滚，提交之后只做不会失败的事。"""
         self.engine = engine
         self._check_writes = check_writes
+        self._after_commit = after_commit
         self._factory = async_sessionmaker(engine, expire_on_commit=False)
         self._lock = asyncio.Lock()
         self._holder: asyncio.Task[object] | None = None
@@ -213,12 +224,15 @@ class Database:
                 self._holder = current
                 try:
                     async with self._factory() as s, s.begin():
-                        if self._check_writes is None:
-                            yield s
-                        else:
-                            written = _track_writes(s)
-                            yield s
-                            await s.flush()
-                            self._check_writes(frozenset(written))
+                        written = _track_writes(s)
+                        yield s
+                        # 提交时的 flush 也会写，先 flush 让记下的表完整
+                        await s.flush()
+                        tables = frozenset(written)
+                        if self._check_writes is not None:
+                            self._check_writes(tables)
+                        then = self._after_commit(tables) if tables and self._after_commit else None
+                    if then is not None:
+                        then()
                 finally:
                     self._holder = None

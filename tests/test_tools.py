@@ -78,7 +78,7 @@ async def test_get_agent_shows_roles_resulting_tools_and_every_permission(contai
         actor="user",
     )
     narrow = await container.agents.find_by_name("narrow")
-    await container.skills.write("notes", "d", "b", actor=narrow.id, owner=narrow.id)
+    await container.skills.write("notes", "d", "b", version=None, actor=narrow.id, owner=narrow.id)
     me = await make_agent("manager", model="tools", roles=["admin"])
     [output] = await run_tools(container, models, me.id, [("get_agent", {"agent": "narrow"})])
 
@@ -920,9 +920,9 @@ async def test_read_file_returns_an_image_file_as_an_image_the_model_sees_and_st
 
 async def test_the_skill_index_lists_own_skills_and_those_given_by_roles(container, make_agent, models):
     alpha = (await make_agent("alpha", model="m")).id
-    await container.skills.write("good", "a good skill", "x", actor="user", owner=None)
-    await container.skills.write("hidden", "not given", "x", actor="user", owner=None)
-    await container.skills.write("mine", "my skill", "x", actor=alpha, owner=alpha)
+    await container.skills.write("good", "a good skill", "x", version=None, actor="user", owner=None)
+    await container.skills.write("hidden", "not given", "x", version=None, actor="user", owner=None)
+    await container.skills.write("mine", "my skill", "x", version=None, actor=alpha, owner=alpha)
     await share(container, "use:skill:good")
     seen: list[str] = []
 

@@ -53,6 +53,7 @@ from muliao.platform.sandbox import sandbox_for
 from muliao.platform.tables import EVENT_TASK
 from muliao.platform.tasks import Retries, RetryPolicy, TaskAdmin, TaskQueue
 from muliao.platform.worker import RunNow, Worker, register_handlers
+from muliao.schema import ChangedEvent, changes_of
 from muliao.sessions.api import OWN_NOTES, Origin, OriginNotes, SessionDomain, SessionPorts, SessionService
 from muliao.sessions.ask_user import ask_user_toolset
 from muliao.sessions.compaction import Compactor
@@ -308,8 +309,18 @@ def assemble(
     # 「配置了哪些可选能力」只在这里判断一次，注册的工具与权限表核对都由它导出
     web_tools = [] if web is None else [web_toolset(web, settings.runtime.tool_output_max_chars)]
     tz = ZoneInfo(settings.timezone)
-    db = Database(create_engine(settings.db_path), check_writes=check_writes)
     bus = EventBus()
+
+    def publish_changes(tables: frozenset[str]) -> Callable[[], None]:
+        events = changes_of(tables)
+
+        def publish() -> None:
+            for e in events:
+                bus.publish(e)
+
+        return publish
+
+    db = Database(create_engine(settings.db_path), check_writes=check_writes, after_commit=publish_changes)
     live = LiveSegments(bus)
     queue = TaskQueue(db, retries=retries_of(settings.runtime))
     # 领域事件与定向命令：订阅与命令处理者在下面各领域构造之后登记
@@ -317,7 +328,13 @@ def assemble(
     # 马上执行已提交的投递（Worker.run_now）：worker 由各领域的处理器组成，在最后构造、绑定
     run_now = RunNow()
     check_model = model_checker or models.check
-    assets = AssetSource(db, settings.assets_dir, settings.runtime.memory_max_chars, check_model)
+    assets = AssetSource(
+        db,
+        settings.assets_dir,
+        settings.runtime.memory_max_chars,
+        check_model,
+        changed=lambda: bus.publish(ChangedEvent(resource="agents")),
+    )
     vault = Vault(assets, settings.vault.key.get_secret_value())
     files = FileStore(db, settings.files_dir, settings.runtime.upload_max_bytes)
     skills = SkillStore(assets)

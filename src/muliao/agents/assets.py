@@ -25,6 +25,7 @@ Problem（路径与原因）。名字冲突的（同一种类的同名资源在�
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import shutil
@@ -443,7 +444,7 @@ class _Reader:
             if owner is None:
                 # 界面新建的要是 slug；agent 删除或转移时挪来的私有记忆带着 agent 名（可以是中文），能当文件名就行
                 file_name(label(StoredKind.MEMORY), name)
-            text = path.read_text(encoding="utf-8").strip()
+            text = memory_text(path)
             if len(text) > self.memory_max_chars:
                 # 照常加载（截断更糟），但要让它缩短
                 self.problem(
@@ -512,6 +513,28 @@ def fingerprint(root: Path) -> tuple[tuple[str, int, int], ...]:
 
 
 # ---- 写入（平台自己写的：界面、vault_set、建 agent、迁移） ----
+
+
+def memory_text(path: Path) -> str:
+    """记忆文件的正文（读树、保存前比对版本都按它读）。"""
+    return path.read_text(encoding="utf-8").strip()
+
+
+def version_of(text: str) -> str:
+    """界面编辑的内容的版本（摘要）：打开编辑时随内容拿到（由读出的同一份内容算出），整体改写时交回（check_version）。"""
+    return hashlib.sha256(text.encode()).hexdigest()[:16]
+
+
+def check_version(current: str | None, version: str | None, what: str) -> None:
+    """整体改写之前，在 AssetSource.writing() 里按此刻的内容 current（None：还不存在，要新建）调用：version 是打开编辑时的
+    版本（新建为 None）。对不上就是期间被别处（agent、自进化、另一个页面）改过、删掉或抢先建了：Conflict，不盖掉别人的改动。"""
+    if current is None:
+        if version is not None:
+            raise Conflict(f"{what} was deleted after you opened it")
+    elif version is None:
+        raise Conflict(f"{what} already exists; open it to edit")
+    elif version_of(current) != version:
+        raise Conflict(f"{what} was changed elsewhere after you opened it; reload it and redo your edit")
 
 
 def remove(path: Path) -> None:

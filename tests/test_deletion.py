@@ -404,7 +404,9 @@ async def test_a_run_that_starts_after_the_mark_does_not_fail_on_its_memory(cont
     from tests.test_flow import run_only
 
     agent = await make_agent("alpha")
-    await container.memory.put("alpha", "- fact", actor="user")
+    await container.memory.put(
+        "alpha", "- fact", version=(await container.memory.read("alpha")).version, actor="user"
+    )
     await start(container, agent.id, "hi")
     async with container.db.transaction() as s:
         (await s.get(Agent, agent.id)).deleting_by = "user"

@@ -11,7 +11,7 @@ from muliao.sessions.api import NewChat, Origin, UserMessage
 from muliao.sessions.tables import Session
 from muliao.triggers.api import Precheck
 from muliao.triggers.service import TriggerAgentArchived
-from tests.conftest import agent_update, login
+from tests.conftest import login
 from tests.test_flow import deliver, drain
 
 PROGRESS = IssueStatus.IN_PROGRESS
@@ -187,8 +187,8 @@ async def test_archive_over_http_marks_the_agent_and_conversations_get_409(clien
     resp = await client.post("/api/sessions", json={"agent_id": agent["id"], "prompt": "hi"})
     assert resp.status_code == 409 and "archived" in resp.text
     assert (await client.delete(path)).json()["archived_at"] is None
-    # 整体替换时 null 即不分组
-    resp = await client.put(f"/api/agents/{agent['id']}", json={**agent_update(agent), "group": None})
+    # 空串即不分组
+    resp = await client.patch(f"/api/agents/{agent['id']}", json={"group": ""})
     assert resp.json()["config"]["group"] is None
 
 

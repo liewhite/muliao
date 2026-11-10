@@ -114,7 +114,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AgentUpdate"
+                  "$ref": "#/components/schemas/AgentDefaults"
                 }
               }
             }
@@ -271,10 +271,10 @@
           }
         }
       },
-      "put": {
+      "patch": {
         "summary": "Update Role",
-        "description": "整体替换角色的描述与可编辑的规则（内置角色也可以，固定的部分不变）；从带它的 agent 的下一次运行起生效。",
-        "operationId": "update_role_api_roles__name__put",
+        "description": "改角色的描述与可编辑的规则（内置角色也可以，固定的部分不变）；从带它的 agent 的下一次运行起生效。",
+        "operationId": "update_role_api_roles__name__patch",
         "parameters": [
           {
             "name": "name",
@@ -291,7 +291,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/RoleIn"
+                "$ref": "#/components/schemas/RoleUpdate"
               }
             }
           }
@@ -447,9 +447,9 @@
           }
         }
       },
-      "put": {
+      "patch": {
         "summary": "Update Agent",
-        "operationId": "update_agent_api_agents__agent_id__put",
+        "operationId": "update_agent_api_agents__agent_id__patch",
         "parameters": [
           {
             "name": "agent_id",
@@ -3965,6 +3965,79 @@
         ],
         "title": "AgentCreate"
       },
+      "AgentDefaults": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Roles"
+          },
+          "allow": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Allow"
+          },
+          "deny": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Deny"
+          },
+          "thinking": {
+            "type": "string",
+            "enum": [
+              "default",
+              "off",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "title": "Thinking"
+          },
+          "group": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "description",
+          "model",
+          "roles",
+          "allow",
+          "deny",
+          "thinking",
+          "group"
+        ],
+        "title": "AgentDefaults",
+        "description": "新建 agent 时表单预填的值。"
+      },
       "AgentOut": {
         "properties": {
           "id": {
@@ -4089,47 +4162,96 @@
       "AgentUpdate": {
         "properties": {
           "name": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Name"
           },
           "description": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Description"
           },
           "model": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Model"
           },
           "roles": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Roles"
           },
           "allow": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Allow"
           },
           "deny": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Deny"
           },
           "thinking": {
-            "type": "string",
-            "enum": [
-              "default",
-              "off",
-              "low",
-              "medium",
-              "high",
-              "xhigh"
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "default",
+                  "off",
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh"
+                ]
+              },
+              {
+                "type": "null"
+              }
             ],
             "title": "Thinking"
           },
@@ -4146,18 +4268,8 @@
           }
         },
         "type": "object",
-        "required": [
-          "name",
-          "description",
-          "model",
-          "roles",
-          "allow",
-          "deny",
-          "thinking",
-          "group"
-        ],
         "title": "AgentUpdate",
-        "description": "整体替换：所有字段必填，不会用默认值覆盖已有配置。name 可改（只用于展示）。"
+        "description": "只改给出的字段（缺省或 null 是不变）：界面只提交用户改过的，编辑期间 agent 自己改了另一个字段不会被旧值盖掉。"
       },
       "AnsweredQuestion": {
         "properties": {
@@ -4922,6 +5034,37 @@
           "to"
         ],
         "title": "Change[str]"
+      },
+      "ChangedEvent": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "changed",
+            "title": "Type",
+            "default": "changed"
+          },
+          "resource": {
+            "type": "string",
+            "enum": [
+              "agents",
+              "files",
+              "history",
+              "issues",
+              "notifications",
+              "sessions",
+              "triggers",
+              "usage",
+              "workspace"
+            ],
+            "title": "Resource"
+          }
+        },
+        "type": "object",
+        "required": [
+          "resource"
+        ],
+        "title": "ChangedEvent",
+        "description": "一个领域的数据变了（推给前端 SSE，展示它的页面从接口重新拉取）：写过它的表的事务提交后发（platform.db 的\nafter_commit），平台自己改 AI 资源文件后也以 agents 发（agents.source）。不管是谁改的：页面自己、agent、触发器、\n推送通知上的操作都一样。"
       },
       "CodeBlock": {
         "properties": {
@@ -6713,11 +6856,23 @@
           "content": {
             "type": "string",
             "title": "Content"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
           }
         },
         "type": "object",
         "required": [
-          "content"
+          "content",
+          "version"
         ],
         "title": "MemoryIn"
       },
@@ -6754,6 +6909,10 @@
           "max_chars": {
             "type": "integer",
             "title": "Max Chars"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
           }
         },
         "type": "object",
@@ -6763,7 +6922,8 @@
           "content",
           "updated_at",
           "path",
-          "max_chars"
+          "max_chars",
+          "version"
         ],
         "title": "MemoryOut"
       },
@@ -7656,6 +7816,52 @@
         ],
         "title": "RolePreviewIn"
       },
+      "RoleUpdate": {
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "allow": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allow"
+          },
+          "deny": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deny"
+          }
+        },
+        "type": "object",
+        "title": "RoleUpdate",
+        "description": "只改给出的字段（缺省或 null 是不变）：界面只提交用户改过的，编辑期间 agent 改了别的字段不会被旧值盖掉。"
+      },
       "RouteHelpOut": {
         "properties": {
           "address_help": {
@@ -8192,6 +8398,9 @@
             "$ref": "#/components/schemas/NotificationEvent"
           },
           {
+            "$ref": "#/components/schemas/ChangedEvent"
+          },
+          {
             "$ref": "#/components/schemas/HeartbeatEvent"
           }
         ],
@@ -8565,6 +8774,10 @@
           "body": {
             "type": "string",
             "title": "Body"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
           }
         },
         "type": "object",
@@ -8572,7 +8785,8 @@
           "name",
           "description",
           "owner",
-          "body"
+          "body",
+          "version"
         ],
         "title": "SkillDetail"
       },
@@ -8616,13 +8830,25 @@
           "body": {
             "type": "string",
             "title": "Body"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
           }
         },
         "type": "object",
         "required": [
           "owner",
           "description",
-          "body"
+          "body",
+          "version"
         ],
         "title": "SkillIn"
       },

@@ -39,11 +39,14 @@ class AssetSource:
         memory_max_chars: int,
         # (模型, 思考档位) 在当前配置下不能运行时报 InvalidInput（agent_runtime.llm.ModelRegistry.check）
         model_checker: Callable[[str, Thinking], None],
+        # 平台自己改完资源文件之后调用（组合根给前端发 agents 的数据变了，schema.ChangedEvent）
+        changed: Callable[[], None],
     ):
         self._db = db
         self.root = root
         self.memory_max_chars = memory_max_chars
         self._check_model = model_checker
+        self._changed = changed
         self._key: object = None
         self._snapshot: Snapshot | None = None
         # 读（重新加载）与平台自己的读-改-写共用一把锁：写入期间不会读到写了一半的树
@@ -112,3 +115,5 @@ class AssetSource:
                 yield await self._current()
             finally:
                 self._key = None
+                # 失败的写也可能改过文件（再改回去），一律通知
+                self._changed()

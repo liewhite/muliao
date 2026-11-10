@@ -19,8 +19,8 @@ type WithAgentId<T, K extends keyof T> = T extends unknown
   : never
 
 export type Agent = WithAgentId<Schemas['AgentOut'], 'id'>
-/** 修改 agent 的请求体：整体替换，字段全部必填（新建用 Schemas['AgentCreate']） */
-export type AgentInput = Schemas['AgentUpdate']
+/** agent 表单的一整份值（新建时预填的缺省、编辑时打开的当前值）；修改只提交改过的字段（Schemas['AgentUpdate']） */
+export type AgentInput = Schemas['AgentDefaults']
 export type Session = WithAgentId<Schemas['SessionOut'], 'agent_id'>
 /** 对等批准的调用的决定：批准、拒绝、始终允许 */
 export type ApprovalChoice = NonNullable<Schemas['ReplyIn']['approvals']>[string]
@@ -120,8 +120,6 @@ export type Issue = Schemas['IssueOut']
 /** 时间线上的一条，按 kind 区分：收窄后就是这种的内容（body）与变化（change）；后端 api/issues.py */
 export type IssueActivity = IssueDetail['activities'][number]
 export type IssueDetail = Schemas['IssueDetailOut']
-// 新建表单预填的值，形状同整体替换的 AgentInput
-export type AgentDefaults = Schemas['AgentUpdate']
 /** agent 工作目录里的一项；目录的 size 为 null */
 export type WorkspaceEntry = Schemas['EntryOut']
 
@@ -269,7 +267,8 @@ export const api = {
   /** 全部角色：内置在前（base 每个 agent 隐含），自建的按名称；各带只按它自己的规则能用的工具与资产 */
   roles: () => branded<Role[]>(call('get', '/api/roles')),
   createRole: (name: string, body: RoleInput) => call('post', '/api/roles/{name}', { path: { name }, body }),
-  updateRole: (name: string, body: RoleInput) => call('put', '/api/roles/{name}', { path: { name }, body }),
+  /** 只改给出的字段 */
+  updateRole: (name: string, body: Schemas['RoleUpdate']) => call('patch', '/api/roles/{name}', { path: { name }, body }),
   deleteRole: (name: string) => call('delete', '/api/roles/{name}', { path: { name } }),
   /** agent 配置（还没保存的也行）最终能用的工具与资产：与运行时同一套计算；agent_id 为 null 是还没建的 */
   previewAgent: (body: Schemas['AgentPreviewIn']) => call('post', '/api/agent-preview', { body }),
@@ -303,8 +302,9 @@ export const api = {
   providerModels: (name: string) => call('get', '/api/providers/{name}/models', { path: { name } }),
   agent: (agent_id: AgentId) => branded<Agent>(call('get', '/api/agents/{agent_id}', { path: { agent_id } })),
   createAgent: (body: Schemas['AgentCreate']) => branded<Agent>(call('post', '/api/agents', { body })),
-  updateAgent: (agent_id: AgentId, body: AgentInput) =>
-    branded<Agent>(call('put', '/api/agents/{agent_id}', { path: { agent_id }, body })),
+  /** 只改给出的字段 */
+  updateAgent: (agent_id: AgentId, body: Schemas['AgentUpdate']) =>
+    branded<Agent>(call('patch', '/api/agents/{agent_id}', { path: { agent_id }, body })),
   deleteAgent: (agent_id: AgentId) => call('delete', '/api/agents/{agent_id}', { path: { agent_id } }),
   /** 设为（true）或取消（false）系统默认 agent：Web 新会话默认选中它 */
   setDefaultAgent: (agent_id: AgentId, on: boolean) =>
@@ -322,13 +322,13 @@ export const api = {
     ),
   /** 一块记忆（global 是全局记忆，agent 的私有记忆名字是它建时的名字） */
   memory: (name: string) => branded<Memory>(call('get', '/api/assets/memory/{name}', { path: { name } })),
-  /** 新建的归 owner（缺省为平台）；已有的整体改写正文与描述，owner 不变 */
+  /** 新建的归 owner（缺省为平台）；已有的整体改写正文，owner 不变。version 是打开时的版本（新建为 null），期间被别处改过 409 */
   saveMemory: (name: string, body: WithAgentId<Schemas['MemoryIn'], 'owner'>) =>
     branded<Memory>(call('put', '/api/assets/memory/{name}', { path: { name }, body })),
   deleteMemory: (name: string) => call('delete', '/api/assets/memory/{name}', { path: { name } }),
 
   skill: (name: string) => call('get', '/api/assets/skill/{name}', { path: { name } }),
-  /** 新建的归 owner；已有的整体改写正文与描述，owner 不变 */
+  /** 新建的归 owner；已有的整体改写正文与描述，owner 不变。version 同 saveMemory */
   saveSkill: (name: string, body: Schemas['SkillIn']) => call('put', '/api/assets/skill/{name}', { path: { name }, body }),
   deleteSkill: (name: string) => call('delete', '/api/assets/skill/{name}', { path: { name } }),
   /** skill 目录里 path（相对 skill 目录，空为根）这一层，同工作目录浏览 */

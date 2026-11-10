@@ -43,8 +43,8 @@ class AgentCreate(BaseModel):
     group: str | None = None
 
 
-class AgentUpdate(BaseModel):
-    """整体替换：所有字段必填，不会用默认值覆盖已有配置。name 可改（只用于展示）。"""
+class AgentDefaults(BaseModel):
+    """新建 agent 时表单预填的值。"""
 
     name: str
     description: str
@@ -107,11 +107,11 @@ async def _out(c: C, a: AgentInfo) -> AgentOut:
 
 
 @router.get("/agent-defaults")
-async def agent_defaults(c: C) -> AgentUpdate:
+async def agent_defaults(c: C) -> AgentDefaults:
     """新建 agent 时表单预填的值：创建时套用的同一份缺省（AgentSpec 的字段缺省，模型取 AgentService.defaults），
     前端不另写一份。"""
     spec = AgentSpec(name="", description="")
-    return AgentUpdate(
+    return AgentDefaults(
         name=spec.name,
         description=spec.description,
         model=c.agents.defaults.model,
@@ -227,10 +227,20 @@ async def create_role(c: C, name: str, body: RoleIn) -> RoleOut:
     return RoleOut.of(await c.distribution.view(name))
 
 
-@router.put("/roles/{name}")
-async def update_role(c: C, name: str, body: RoleIn) -> RoleOut:
-    """整体替换角色的描述与可编辑的规则（内置角色也可以，固定的部分不变）；从带它的 agent 的下一次运行起生效。"""
-    await c.distribution.update(RoleSpec(name, body.description, body.allow, body.deny), actor=USER)
+class RoleUpdate(BaseModel):
+    """只改给出的字段（缺省或 null 是不变）：界面只提交用户改过的，编辑期间 agent 改了别的字段不会被旧值盖掉。"""
+
+    description: str | None = None
+    allow: list[str] | None = None
+    deny: list[str] | None = None
+
+
+@router.patch("/roles/{name}")
+async def update_role(c: C, name: str, body: RoleUpdate) -> RoleOut:
+    """改角色的描述与可编辑的规则（内置角色也可以，固定的部分不变）；从带它的 agent 的下一次运行起生效。"""
+    await c.distribution.patch(
+        name, actor=USER, description=body.description, allow=body.allow, deny=body.deny
+    )
     return RoleOut.of(await c.distribution.view(name))
 
 
@@ -335,20 +345,23 @@ def _mcp_out(u: UsedAsset) -> McpAssetOut:
     return McpAssetOut(**AssetOut.of(u).model_dump(), transport=u.mcp.transport, enabled=u.mcp.enabled)
 
 
-@router.put("/agents/{agent_id}")
+class AgentUpdate(BaseModel):
+    """只改给出的字段（缺省或 null 是不变）：界面只提交用户改过的，编辑期间 agent 自己改了另一个字段不会被旧值盖掉。"""
+
+    name: str | None = None
+    description: str | None = None
+    model: str | None = None
+    roles: list[str] | None = None
+    allow: list[str] | None = None
+    deny: list[str] | None = None
+    thinking: Thinking | None = None
+    # 空串为不分组
+    group: str | None = None
+
+
+@router.patch("/agents/{agent_id}")
 async def update_agent(c: C, agent_id: str, body: AgentUpdate) -> AgentOut:
-    # 整体替换就是所有字段都给出的修改
-    patch = AgentPatch(
-        name=body.name,
-        description=body.description,
-        model=body.model,
-        roles=body.roles,
-        allow=body.allow,
-        deny=body.deny,
-        thinking=body.thinking,
-        # null 与空串都是不分组（AgentPatch 里 None 是「不变」）
-        group=body.group or "",
-    )
+    patch = AgentPatch(**body.model_dump())
     return await _out(c, await c.agents.update(agent_id, patch, actor=USER))
 
 

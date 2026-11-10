@@ -146,11 +146,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /**
-         * Update Role
-         * @description 整体替换角色的描述与可编辑的规则（内置角色也可以，固定的部分不变）；从带它的 agent 的下一次运行起生效。
-         */
-        put: operations["update_role_api_roles__name__put"];
+        put?: never;
         /** Create Role */
         post: operations["create_role_api_roles__name__post"];
         /**
@@ -160,7 +156,11 @@ export interface paths {
         delete: operations["delete_role_api_roles__name__delete"];
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Update Role
+         * @description 改角色的描述与可编辑的规则（内置角色也可以，固定的部分不变）；从带它的 agent 的下一次运行起生效。
+         */
+        patch: operations["update_role_api_roles__name__patch"];
         trace?: never;
     };
     "/api/agents": {
@@ -190,14 +190,14 @@ export interface paths {
         };
         /** Get Agent */
         get: operations["get_agent_api_agents__agent_id__get"];
-        /** Update Agent */
-        put: operations["update_agent_api_agents__agent_id__put"];
+        put?: never;
         post?: never;
         /** Delete Agent */
         delete: operations["delete_agent_api_agents__agent_id__delete"];
         options?: never;
         head?: never;
-        patch?: never;
+        /** Update Agent */
+        patch: operations["update_agent_api_agents__agent_id__patch"];
         trace?: never;
     };
     "/api/agents/{agent_id}/assets": {
@@ -1418,6 +1418,31 @@ export interface components {
             /** Group */
             group?: string | null;
         };
+        /**
+         * AgentDefaults
+         * @description 新建 agent 时表单预填的值。
+         */
+        AgentDefaults: {
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /** Model */
+            model: string;
+            /** Roles */
+            roles: string[];
+            /** Allow */
+            allow: string[];
+            /** Deny */
+            deny: string[];
+            /**
+             * Thinking
+             * @enum {string}
+             */
+            thinking: "default" | "off" | "low" | "medium" | "high" | "xhigh";
+            /** Group */
+            group: string | null;
+        };
         /** AgentOut */
         AgentOut: {
             /** Id */
@@ -1454,28 +1479,25 @@ export interface components {
         };
         /**
          * AgentUpdate
-         * @description 整体替换：所有字段必填，不会用默认值覆盖已有配置。name 可改（只用于展示）。
+         * @description 只改给出的字段（缺省或 null 是不变）：界面只提交用户改过的，编辑期间 agent 自己改了另一个字段不会被旧值盖掉。
          */
         AgentUpdate: {
             /** Name */
-            name: string;
+            name?: string | null;
             /** Description */
-            description: string;
+            description?: string | null;
             /** Model */
-            model: string;
+            model?: string | null;
             /** Roles */
-            roles: string[];
+            roles?: string[] | null;
             /** Allow */
-            allow: string[];
+            allow?: string[] | null;
             /** Deny */
-            deny: string[];
-            /**
-             * Thinking
-             * @enum {string}
-             */
-            thinking: "default" | "off" | "low" | "medium" | "high" | "xhigh";
+            deny?: string[] | null;
+            /** Thinking */
+            thinking?: ("default" | "off" | "low" | "medium" | "high" | "xhigh") | null;
             /** Group */
-            group: string | null;
+            group?: string | null;
         };
         /** AnsweredQuestion */
         AnsweredQuestion: {
@@ -1785,6 +1807,25 @@ export interface components {
             from: string;
             /** To */
             to: string;
+        };
+        /**
+         * ChangedEvent
+         * @description 一个领域的数据变了（推给前端 SSE，展示它的页面从接口重新拉取）：写过它的表的事务提交后发（platform.db 的
+         *     after_commit），平台自己改 AI 资源文件后也以 agents 发（agents.source）。不管是谁改的：页面自己、agent、触发器、
+         *     推送通知上的操作都一样。
+         */
+        ChangedEvent: {
+            /**
+             * Type
+             * @default changed
+             * @constant
+             */
+            type: "changed";
+            /**
+             * Resource
+             * @enum {string}
+             */
+            resource: "agents" | "files" | "history" | "issues" | "notifications" | "sessions" | "triggers" | "usage" | "workspace";
         };
         /**
          * CodeBlock
@@ -2403,6 +2444,8 @@ export interface components {
             owner?: string | null;
             /** Content */
             content: string;
+            /** Version */
+            version: string | null;
         };
         /** MemoryOut */
         MemoryOut: {
@@ -2421,6 +2464,8 @@ export interface components {
             path: string;
             /** Max Chars */
             max_chars: number;
+            /** Version */
+            version: string;
         };
         /**
          * NotificationEvent
@@ -2756,6 +2801,18 @@ export interface components {
             /** Deny */
             deny: string[];
         };
+        /**
+         * RoleUpdate
+         * @description 只改给出的字段（缺省或 null 是不变）：界面只提交用户改过的，编辑期间 agent 改了别的字段不会被旧值盖掉。
+         */
+        RoleUpdate: {
+            /** Description */
+            description?: string | null;
+            /** Allow */
+            allow?: string[] | null;
+            /** Deny */
+            deny?: string[] | null;
+        };
         /** RouteHelpOut */
         RouteHelpOut: {
             /** Address Help */
@@ -2958,7 +3015,7 @@ export interface components {
          * @description SSE 里每条 data 的形状（api.app 的 /events）。具名是为了在 OpenAPI 里成为一个组件：前端的事件联合直接取它，
          *     不另列一遍（openapi-typescript 还不认识 OpenAPI 3.2 的 itemSchema）。OpenAPI 的 discriminator 不能嵌套，这里不标。
          */
-        ServerEvent: components["schemas"]["TaskEvent"] | components["schemas"]["SavedEvent"] | components["schemas"]["RunItemEvent"] | components["schemas"]["RunDeltaEvent"] | components["schemas"]["NotificationEvent"] | components["schemas"]["HeartbeatEvent"];
+        ServerEvent: components["schemas"]["TaskEvent"] | components["schemas"]["SavedEvent"] | components["schemas"]["RunItemEvent"] | components["schemas"]["RunDeltaEvent"] | components["schemas"]["NotificationEvent"] | components["schemas"]["ChangedEvent"] | components["schemas"]["HeartbeatEvent"];
         /** SessionDetail */
         SessionDetail: {
             session: components["schemas"]["SessionOut"];
@@ -3074,6 +3131,8 @@ export interface components {
             owner: string | null;
             /** Body */
             body: string;
+            /** Version */
+            version: string;
         };
         /** SkillImportOut */
         SkillImportOut: {
@@ -3089,6 +3148,8 @@ export interface components {
             description: string;
             /** Body */
             body: string;
+            /** Version */
+            version: string | null;
         };
         /** SkillOut */
         SkillOut: {
@@ -3724,7 +3785,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["AgentUpdate"];
+                    "application/json": components["schemas"]["AgentDefaults"];
                 };
             };
         };
@@ -3815,41 +3876,6 @@ export interface operations {
             };
         };
     };
-    update_role_api_roles__name__put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RoleIn"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RoleOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     create_role_api_roles__name__post: {
         parameters: {
             query?: never;
@@ -3902,6 +3928,41 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_role_api_roles__name__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoleUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoleOut"];
+                };
             };
             /** @description Validation Error */
             422: {
@@ -3998,7 +4059,36 @@ export interface operations {
             };
         };
     };
-    update_agent_api_agents__agent_id__put: {
+    delete_agent_api_agents__agent_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_agent_api_agents__agent_id__patch: {
         parameters: {
             query?: never;
             header?: never;
@@ -4021,35 +4111,6 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["AgentOut"];
                 };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_agent_api_agents__agent_id__delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                agent_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
             };
             /** @description Validation Error */
             422: {

@@ -6,7 +6,7 @@ from pydantic_ai.profiles import ModelProfile
 
 from muliao.agents.api import BASE
 from muliao.api.auth import Auth
-from tests.conftest import agent_update, login, share
+from tests.conftest import login, share
 from tests.scripted import scripted
 
 
@@ -49,7 +49,8 @@ async def test_skill_and_memory_endpoints(client):
     ).json()["id"]
 
     resp = await client.put(
-        "/api/assets/skill/shared", json={"owner": None, "description": "for all", "body": "steps"}
+        "/api/assets/skill/shared",
+        json={"owner": None, "description": "for all", "body": "steps", "version": None},
     )
     assert resp.status_code == 200
     skills = [i for i in (await client.get("/api/assets")).json() if i["kind"] == "skill"]
@@ -58,10 +59,12 @@ async def test_skill_and_memory_endpoints(client):
     ]
     assert (await client.get("/api/assets/skill/shared")).json()["body"].strip() == "steps"
 
-    resp = await client.put("/api/assets/memory/alpha", json={"content": "- fact"})
+    version = (await client.get("/api/assets/memory/alpha")).json()["version"]
+    resp = await client.put("/api/assets/memory/alpha", json={"content": "- fact", "version": version})
     assert (resp.json()["content"], resp.json()["owner"]) == ("- fact", agent_id)
     for name in ("alpha", "global"):
-        too_long = {"content": "x" * 10_000}
+        version = (await client.get(f"/api/assets/memory/{name}")).json()["version"]
+        too_long = {"content": "x" * 10_000, "version": version}
         assert (await client.put(f"/api/assets/memory/{name}", json=too_long)).status_code == 422
 
 
@@ -82,7 +85,8 @@ async def test_a_skill_exported_over_http_imports_into_another_owner(client, con
     agent_id = (await make_agent()).id
     await login(client)
     await client.put(
-        "/api/assets/skill/shared", json={"owner": None, "description": "for all", "body": "steps"}
+        "/api/assets/skill/shared",
+        json={"owner": None, "description": "for all", "body": "steps", "version": None},
     )
     # 二进制文件不进包，同导入一样列出来（响应头里的 JSON，非 ASCII 转义）
     (await container.skills.directory("shared") / "图.png").write_bytes(b"\x89PNG\xff")
@@ -210,7 +214,7 @@ async def test_agent_cannot_be_named_user(client):
     await login(client)
     assert (await client.post("/api/agents", json={"name": "user", "description": "x"})).status_code == 422
     agent = (await client.post("/api/agents", json={"name": "a1", "description": "x"})).json()
-    resp = await client.put(f"/api/agents/{agent['id']}", json={**agent_update(agent), "name": " user "})
+    resp = await client.patch(f"/api/agents/{agent['id']}", json={"name": " user "})
     assert resp.status_code == 422
     assert "reserved" in resp.json()["detail"]
 
@@ -222,7 +226,7 @@ async def test_agent_identified_by_id_and_renamable(client, container):
     # 目录用 id，不受名称影响
     assert container.agents.workspace(agent["id"]).is_dir()
 
-    resp = await client.put(path, json={**agent_update(agent), "name": "Research Assistant 📚"})
+    resp = await client.patch(path, json={"name": "Research Assistant 📚"})
     assert resp.status_code == 200 and resp.json()["name"] == "Research Assistant 📚"
     assert (await client.get(path)).json()["id"] == agent["id"]
 
@@ -230,18 +234,7 @@ async def test_agent_identified_by_id_and_renamable(client, container):
     assert session["agent_id"] == agent["id"]  # 会话跟随 id，改名不影响
 
     other = (await client.post("/api/agents", json={"name": "other", "description": "x"})).json()
-    clash = {
-        "name": "other",
-        "description": "d",
-        "model": agent["config"]["model"],
-        "roles": agent["roles"],
-        "allow": [],
-        "deny": [],
-        "mcp_servers": [],
-        "thinking": "default",
-        "group": None,
-    }
-    assert (await client.put(path, json=clash)).status_code == 409
+    assert (await client.patch(path, json={"name": "other"})).status_code == 409
     assert (await client.delete(f"/api/agents/{other['id']}")).status_code == 204
 
 
@@ -454,11 +447,11 @@ async def test_agent_thinking_is_set_and_validated_over_http(client, models):
     assert resp.status_code == 201, resp.text
     agent = resp.json()
     assert agent["config"]["thinking"] == "high"
-    body = {k: v for k, v in agent_update(agent).items() if k != "thinking"}
-    resp = await client.put(f"/api/agents/{agent['id']}", json={**body, "thinking": "off"})
+    path = f"/api/agents/{agent['id']}"
+    resp = await client.patch(path, json={"thinking": "off"})
     assert resp.json()["config"]["thinking"] == "off"
-    # 整体替换：thinking 必填；不在档位里的值拒绝
-    assert (await client.put(f"/api/agents/{agent['id']}", json=body)).status_code == 422
-    resp = await client.put(f"/api/agents/{agent['id']}", json={**body, "thinking": "max"})
+    # 没给的字段不变；不在档位里的值拒绝
+    assert (await client.patch(path, json={"description": "d2"})).json()["config"]["thinking"] == "off"
+    resp = await client.patch(path, json={"thinking": "max"})
     assert resp.status_code == 422
     assert (await client.get(f"/api/agents/{agent['id']}")).json()["config"]["thinking"] == "off"

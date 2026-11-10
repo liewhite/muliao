@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { useRefetch } from '../events'
 import { Chip, Disclosure } from '@heroui/react'
 import { Link } from 'react-router-dom'
 import { api, type AgentAsset, type AgentId } from '../api'
@@ -62,6 +63,7 @@ function Rows<T extends AgentAsset>({
 /** agent 能用的资产：记忆（含合并后注入指令的预览）、skill、secret、MCP，各标来源；服务端按与运行时同一套规则算 */
 export function AgentAssetsView({ agent }: { agent: AgentId }) {
   const assets = useLoad(() => api.agentAssets(agent), [agent])
+  useRefetch('agents', assets.reload)
   return (
     <Loading state={assets}>
       {(a) => (

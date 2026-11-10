@@ -17,6 +17,8 @@ import {
 } from '../api'
 import { selectableAgents } from '../agentGroups'
 import { groupTriggersByAgent } from '../triggerGroups'
+import { useRefetch } from '../events'
+import { changedFields } from '../drafts'
 import { inAnHour, wallClock } from '../wallClock'
 import {
   ActionButton,
@@ -588,14 +590,17 @@ function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: 
   const from = useReturnState()
   const confirm = useConfirm()
   const [editing, setEditing] = useState(false)
+  // 进入编辑时的值：编辑期间列表随 changed 重新拉取（下次触发时间、agent 改了它），编辑器以它为起点、只提交相对它改过的
+  const [opened, setOpened] = useState(trigger)
   const [prompt, setPrompt] = useState(trigger.prompt)
   const [draft, setDraft] = useState<KindConfig | null>(trigger)
   const [precheck, setPrecheck] = useState<Precheck | null>(trigger.precheck)
   const [route, setRoute] = useState(trigger.route)
   const action = useAction()
 
-  // 每次进入编辑都从已保存的值开始：取消过的草稿不会在下一次保存时被提交
+  // 每次进入编辑都从当前的值开始：取消过的草稿不会在下一次保存时被提交
   function startEditing() {
+    setOpened(trigger)
     setPrompt(trigger.prompt)
     setDraft(trigger)
     setPrecheck(trigger.precheck)
@@ -603,17 +608,15 @@ function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: 
     setEditing(true)
   }
 
-  const precheckChanged = JSON.stringify(precheck) !== JSON.stringify(trigger.precheck)
   const save = () =>
     action.run(async () => {
       if (draft === null) throw new Error('配置不合法')
-      // 前置检查没改就不提交：改了会重置 changed 模式的基线
-      await api.updateTrigger(trigger.id, {
-        prompt,
-        config: draft.config,
-        ...(precheckChanged ? { precheck } : {}),
-        ...(route.trim() !== trigger.route ? { route: route.trim() || 'new' } : {}),
-      })
+      // 只提交改过的：没动的字段别人可能改过；前置检查改了还会重置 changed 模式的基线
+      const patch = changedFields(
+        { prompt: opened.prompt, config: opened.config, precheck: opened.precheck, route: opened.route },
+        { prompt, config: draft.config, precheck, route: route.trim() || 'new' },
+      )
+      if (Object.keys(patch).length > 0) await api.updateTrigger(trigger.id, patch)
       setEditing(false)
       onChange()
     })
@@ -658,8 +661,8 @@ function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: 
         )}
         {editing ? (
           <>
-            <ConfigEditor value={trigger} onChange={setDraft} />
-            <PrecheckEditor precheck={trigger.precheck} onChange={setPrecheck} />
+            <ConfigEditor value={opened} onChange={setDraft} />
+            <PrecheckEditor precheck={opened.precheck} onChange={setPrecheck} />
             <RouteInput value={route} onChange={setRoute} />
             <TextAreaInput label="处理说明" value={prompt} onChange={setPrompt} rows={5} />
           </>
@@ -862,6 +865,7 @@ function FinishedTrigger({ trigger, agents, onChange }: { trigger: Trigger; agen
 
 function FinishedTriggers({ agents }: { agents: Agent[] | undefined }) {
   const finished = useLoad(() => api.triggers(true), [])
+  useRefetch('triggers', finished.reload)
   const [openId, setOpenId] = useState<number | null>(null)
   return (
     <Loading state={finished}>
@@ -888,6 +892,7 @@ function FinishedTriggers({ agents }: { agents: Agent[] | undefined }) {
 /** 自动发起会话的入口：定时、webhook……方式的差异只在各自的配置与操作。按 agent 分组的卡片网格，点卡片看详情 */
 export default function Triggers() {
   const triggers = useLoad(() => api.triggers(), [])
+  useRefetch('triggers', triggers.reload)
   const kinds = useLoad(() => api.triggerKinds(), [])
   const agents = useAgents()
   // 详情跟着列表走：重新加载后显示最新内容，删掉后自动关闭
@@ -917,7 +922,7 @@ export default function Triggers() {
                 <DetailModal trigger={open} onClose={() => setOpenId(null)}>
                   {(t) => (
                     <TriggerItem
-                      key={`${t.id}-${t.prompt}-${t.route}-${JSON.stringify(t.config)}-${JSON.stringify(t.precheck)}`}
+                      key={t.id}
                       trigger={t}
                       agents={agents.data}
                       onChange={reload}

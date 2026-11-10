@@ -80,6 +80,8 @@ class SkillScripts:
 class Skill:
     meta: SkillMeta
     body: str
+    # SKILL.md 的版本（assets.version_of）：整体改写时交回
+    version: str
 
 
 @dataclass(frozen=True)
@@ -164,17 +166,17 @@ class SkillStore:
     async def read(self, name: str) -> Skill:
         asset = (await self._source.snapshot()).asset(_KIND, name)
         text = await asyncio.to_thread((asset.path / SKILL_FILE).read_text, encoding="utf-8")
-        return Skill(_meta(asset), frontmatter.loads(text).content)
+        return Skill(_meta(asset), frontmatter.loads(text).content, assets.version_of(text))
 
     async def directory(self, name: str) -> Path:
         """skill 的目录（界面只读浏览它的文件用）。"""
         return (await self._source.snapshot()).asset(_KIND, name).path
 
     async def write(
-        self, name: str, description: str, body: str, *, actor: str, owner: str | None
+        self, name: str, description: str, body: str, *, actor: str, owner: str | None, version: str | None
     ) -> SkillMeta:
         """新建或整体改写 SKILL.md（附件不变；frontmatter 里别的键保留）。已有的要 actor 能改（Grants.can 的 write），owner 不变；
-        新建的归 owner。"""
+        新建的归 owner。version 是打开编辑时 SKILL.md 的版本（新建为 None），期间被别处改过就 Conflict（assets.check_version）。"""
         validate_slug(label(_KIND), name)
         description = skill_package.valid_description(description)
         async with self._source.writing() as snapshot:
@@ -183,11 +185,9 @@ class SkillStore:
             md = directory / SKILL_FILE
 
             def put() -> None:
-                post = (
-                    frontmatter.loads(md.read_text(encoding="utf-8"))
-                    if md.is_file()
-                    else frontmatter.Post("")
-                )
+                current = md.read_text(encoding="utf-8") if existing is not None else None
+                assets.check_version(current, version, f"skill {name!r}")
+                post = frontmatter.Post("") if current is None else frontmatter.loads(current)
                 post.content = body.strip() + "\n"
                 post["name"], post["description"] = name, description
                 write_atomic(md, frontmatter.dumps(post) + "\n")

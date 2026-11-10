@@ -15,7 +15,6 @@ import {
 } from '../api'
 import { useRefetch } from '../events'
 import { useReturnState, useRouteParam } from '../nav'
-import { refreshUnread } from '../unread'
 import {
   PRIORITIES,
   PRIORITY_LABEL,
@@ -392,7 +391,6 @@ export default function IssueView() {
   useEffect(() => {
     void api
       .markIssueNotificationsRead(issueId)
-      .then(refreshUnread)
       .catch((e) => console.error('marking issue notifications read failed', e))
   }, [issueId])
   return (

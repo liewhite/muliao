@@ -180,12 +180,16 @@ class MemoryOut(BaseModel):
     path: str
     # 每一块的上限
     max_chars: int
+    # content 的版本：保存时交回
+    version: str
 
 
 class MemoryIn(BaseModel):
     # 新建时的 owner（缺省为平台）；已有的不变
     owner: str | None = None
     content: str
+    # 打开编辑时的版本（MemoryOut.version），新建为 null；期间被别处改过、删掉或抢先建了时 409
+    version: str | None
 
 
 def _memory_out(c: C, m: MemoryInfo) -> MemoryOut:
@@ -196,6 +200,7 @@ def _memory_out(c: C, m: MemoryInfo) -> MemoryOut:
         updated_at=m.updated_at,
         path=str(m.path),
         max_chars=c.memory.max_chars,
+        version=m.version,
     )
 
 
@@ -208,7 +213,9 @@ async def get_memory(c: C, name: str) -> MemoryOut:
 async def put_memory(c: C, name: str, body: MemoryIn) -> MemoryOut:
     """新建的归 owner（归平台的名字要是 slug；agent 的私有记忆名字就是 agent 名）；已有的整体改写正文，owner 不变。谁能用由
     角色收录它（`use:memory:<名>`）。"""
-    return _memory_out(c, await c.memory.put(name, body.content, actor=USER, owner=body.owner))
+    return _memory_out(
+        c, await c.memory.put(name, body.content, actor=USER, version=body.version, owner=body.owner)
+    )
 
 
 @router.delete("/assets/memory/{name}", status_code=204)
@@ -232,6 +239,8 @@ class SkillOut(BaseModel):
 
 class SkillDetail(SkillOut):
     body: str
+    # SKILL.md 的版本：保存时交回
+    version: str
 
 
 class SkillIn(BaseModel):
@@ -239,19 +248,25 @@ class SkillIn(BaseModel):
     owner: str | None
     description: str
     body: str
+    # 打开编辑时的版本（SkillDetail.version），新建为 null；期间被别处改过、删掉或抢先建了时 409
+    version: str | None
 
 
 @router.get("/assets/skill/{name}")
 async def get_skill(c: C, name: str) -> SkillDetail:
     skill = await c.skills.read(name)
     meta = skill.meta
-    return SkillDetail(name=meta.name, description=meta.description, owner=meta.owner, body=skill.body)
+    return SkillDetail(
+        name=meta.name, description=meta.description, owner=meta.owner, body=skill.body, version=skill.version
+    )
 
 
 @router.put("/assets/skill/{name}")
 async def put_skill(c: C, name: str, body: SkillIn) -> SkillOut:
     """新建的归 owner；已有的整体改写正文与描述（附件不变），owner 不变。"""
-    meta = await c.skills.write(name, body.description, body.body, actor=USER, owner=body.owner)
+    meta = await c.skills.write(
+        name, body.description, body.body, actor=USER, owner=body.owner, version=body.version
+    )
     return SkillOut.of(meta)
 
 

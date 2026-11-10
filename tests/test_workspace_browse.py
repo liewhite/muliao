@@ -103,7 +103,7 @@ async def test_skill_directory_is_browsed_the_same_way(container, client, tmp_pa
     """skill 页的文件浏览（GET /api/assets/skill/{name}/files 与 /file）：同一套列目录、读文件与越界规则。"""
     await login(client)
     resp = await client.put(
-        "/api/assets/skill/tool", json={"owner": None, "description": "d", "body": "steps"}
+        "/api/assets/skill/tool", json={"owner": None, "description": "d", "body": "steps", "version": None}
     )
     assert resp.status_code == 200
     root = await container.skills.directory("tool")

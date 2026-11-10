@@ -58,11 +58,10 @@ import { AttachButton, AttachmentList, PendingUploads, useUploads, type Uploads 
 import { appendTranscript, useVoiceInput, type VoiceInput } from '../voice'
 import { VoiceButton } from '../VoiceButton'
 import { isSendShortcut, SEND_HINT } from '../sendKey'
-import { announceChange, isTaskOf, liveItems, mergeLive, useRefetch, useServerEvents, withoutCovered, type RunEvent } from '../events'
+import { isTaskOf, liveItems, mergeLive, useRefetch, useServerEvents, withoutCovered, type RunEvent } from '../events'
 import { STATUS_LABEL, issueIdOf, issueRoute } from '../issues'
 import { useReturnState, useRouteParam } from '../nav'
 import { StatusDot } from './Issues'
-import { refreshUnread, refreshUnreadLogged } from '../unread'
 import { CODE_BLOCK, ErrorAlert, Loading, Markdown, Page, agentLabel, formatTime, useAction, useAgents, useConfirm, useLoad } from '../ui'
 
 /**
@@ -822,14 +821,7 @@ function useFollowBottom() {
 
 /** 用户看过了这个会话：指向它的通知标为已读（会话的未读由通知派生），标记本身幂等 */
 function markSessionRead(id: string) {
-  void api
-    .markRead(id)
-    .then(() => {
-      // 分屏时旁边的会话列表要去掉未读点
-      announceChange('sessions')
-      return refreshUnread()
-    })
-    .catch((e) => console.error('marking session read failed', e))
+  void api.markRead(id).catch((e) => console.error('marking session read failed', e))
 }
 
 export default function SessionView() {
@@ -910,9 +902,6 @@ export default function SessionView() {
       danger: true,
     })
     if (ok && (await action.run(() => api.deleteSession(id)))) {
-      // 指向它的通知随会话删除
-      refreshUnreadLogged()
-      announceChange('sessions')
       navigate(parentRoute)
     }
   }
@@ -969,13 +958,7 @@ export default function SessionView() {
               active={detail.data !== undefined && detail.data.state !== 'idle'}
               onSend={() => void send()}
               onStop={() =>
-                // 停止没在运行的会话（等后台任务、委派）不产生前端收得到的事件：自己重新拉取，列表也跟着变
-                void action.run(() =>
-                  api.stop(id).then(() => {
-                    announceChange('sessions')
-                    return detail.reload()
-                  }),
-                )
+                void action.run(() => api.stop(id).then(detail.reload))
               }
             />
           </div>

@@ -10,7 +10,7 @@ import {
   newSessionRoute,
   workspaceFileUrl,
   type Agent,
-  type AgentDefaults,
+  type AgentId,
   type AgentInput,
 } from '../api'
 import { ActionButton,
@@ -35,8 +35,8 @@ import { AgentAssetsView } from './AgentAssets'
 import { HistoryList } from './History'
 import { FileBrowser } from './FileBrowser'
 import { SitePageList } from './SitePages'
-import { refreshUnreadLogged } from '../unread'
-import { announceChange } from '../events'
+import { useRefetch } from '../events'
+import { useFieldDraft } from '../drafts'
 import { groupAgents } from '../agentGroups'
 
 /** 目录没加载（agent.toml 坏了、目录名对不上等）：不能运行 */
@@ -136,13 +136,10 @@ export function AgentList() {
   )
 }
 
-function initialInput(agent: Agent | undefined, defaults: AgentDefaults): AgentInput {
-  // 配置没加载的 agent 不显示表单（见调用处），这里 config 一定有
-  if (agent?.config) {
-    const { name, roles, allow, deny, config } = agent
-    return { ...config, name, roles, allow, deny }
-  }
-  return defaults
+/** 已加载配置的 agent 的当前值（配置没加载的不显示表单，见调用处） */
+function currentInput(agent: Agent, config: NonNullable<Agent['config']>): AgentInput {
+  const { name, roles, allow, deny } = agent
+  return { ...config, name, roles, allow, deny }
 }
 
 type Thinking = AgentInput['thinking']
@@ -214,23 +211,18 @@ function ModelInput({
   )
 }
 
-function AgentForm({ agent, defaults, onSaved }: { agent?: Agent; defaults: AgentDefaults; onSaved: (a: Agent) => void }) {
-  const [input, setInput] = useState<AgentInput>(() => initialInput(agent, defaults))
-  const action = useAction()
-  const set = (patch: Partial<AgentInput>) => setInput((prev) => ({ ...prev, ...patch }))
-
-  async function save() {
-    await action.run(async () => {
-      const saved = agent ? await api.updateAgent(agent.id, input) : await api.createAgent(input)
-      toast.success(agent ? '已保存' : '已创建')
-      // 分屏时旁边的 agent 列表（以及各处的 agent 名称）跟着更新
-      announceChange('agents')
-      onSaved(saved)
-    })
-  }
-
+/** agent 的各项配置（新建与编辑共用），值由调用方管 */
+function AgentFields({
+  agentId,
+  input,
+  set,
+}: {
+  agentId: AgentId | null
+  input: AgentInput
+  set: (patch: Partial<AgentInput>) => void
+}) {
   return (
-    <div className="flex flex-col gap-4">
+    <>
       <TextInput
         label="名称"
         hint="只用于显示，可随时修改，不能与其他 agent 重名"
@@ -252,18 +244,62 @@ function AgentForm({ agent, defaults, onSaved }: { agent?: Agent; defaults: Agen
         onChange={(group) => set({ group })}
       />
       <ModelInput
-        value={input.model ?? ''}
+        value={input.model}
         onChange={(model) => set({ model })}
         thinking={input.thinking}
         onThinkingChange={(thinking) => set({ thinking })}
       />
       <PermissionsInput
-        agentId={agent?.id ?? null}
+        agentId={agentId}
         value={{ roles: input.roles, allow: input.allow, deny: input.deny }}
         onChange={(p) => set(p)}
       />
+    </>
+  )
+}
+
+function AgentCreateForm({ defaults, onSaved }: { defaults: AgentInput; onSaved: (a: Agent) => void }) {
+  const [input, setInput] = useState(defaults)
+  const action = useAction()
+  return (
+    <div className="flex flex-col gap-4">
+      <AgentFields agentId={null} input={input} set={(patch) => setInput((prev) => ({ ...prev, ...patch }))} />
       <ErrorAlert error={action.error} />
-      <ActionButton isPending={action.busy} onPress={() => void save()}>
+      <ActionButton
+        isPending={action.busy}
+        onPress={() =>
+          void action.run(async () => {
+            const created = await api.createAgent(input)
+            toast.success('已创建')
+            onSaved(created)
+          })
+        }
+      >
+        保存
+      </ActionButton>
+    </div>
+  )
+}
+
+/** 编辑：只提交改过的字段，编辑期间 agent 自己改了别的字段（改它的 agent.toml）不会被旧值盖掉；没动过的字段跟着刷新 */
+function AgentEditForm({ agent, current, onSaved }: { agent: AgentId; current: AgentInput; onSaved: () => void }) {
+  const form = useFieldDraft(current)
+  const action = useAction()
+  return (
+    <div className="flex flex-col gap-4">
+      <AgentFields agentId={agent} input={form.draft} set={form.set} />
+      <ErrorAlert error={action.error} />
+      <ActionButton
+        isDisabled={Object.keys(form.changes).length === 0}
+        isPending={action.busy}
+        onPress={() =>
+          void action.run(async () => {
+            await api.updateAgent(agent, form.changes)
+            toast.success('已保存')
+            onSaved()
+          })
+        }
+      >
         保存
       </ActionButton>
     </div>
@@ -278,7 +314,7 @@ export function AgentCreate() {
       <Card>
         <Card.Content>
           <Loading state={defaults}>
-            {(d) => <AgentForm defaults={d} onSaved={(a) => navigate(agentRoute(a.id), { replace: true })} />}
+            {(d) => <AgentCreateForm defaults={d} onSaved={(a) => navigate(agentRoute(a.id), { replace: true })} />}
           </Loading>
         </Card.Content>
       </Card>
@@ -300,8 +336,7 @@ export function AgentDetail() {
   const navigate = useNavigate()
   const confirm = useConfirm()
   const agent = useLoad(() => api.agent(id), [id])
-  // 新建时的默认值来自服务端
-  const defaults = useLoad(() => api.agentDefaults(), [])
+  useRefetch('agents', agent.reload)
   const [tab, setTab] = useState<Key>('config')
   const action = useAction()
   const name = agent.data?.name ?? id
@@ -314,9 +349,6 @@ export function AgentDetail() {
       danger: true,
     })
     if (ok && (await action.run(() => api.deleteAgent(id)))) {
-      // 它的会话连同指向它们的通知一起删除
-      refreshUnreadLogged()
-      announceChange('agents')
       navigate('/agents')
     }
   }
@@ -332,7 +364,6 @@ export function AgentDetail() {
     }
     if (await action.run(() => api.setAgentArchived(id, on))) {
       toast.success(on ? '已归档' : '已取消归档')
-      announceChange('agents')
       void agent.reload()
     }
   }
@@ -340,8 +371,6 @@ export function AgentDetail() {
   async function toggleDefault(on: boolean) {
     if (await action.run(() => api.setDefaultAgent(id, on))) {
       toast.success(on ? '已设为默认 agent' : '已取消默认')
-      // 列表里的「默认」标记与新会话的默认选择跟着更新
-      announceChange('agents')
       void agent.reload()
     }
   }
@@ -421,16 +450,7 @@ export function AgentDetail() {
                   {a.config === null ? (
                     <p className="text-sm text-danger">{CONFIG_NOT_LOADED}；修好 {a.name}/agent.toml 后才能在这里改</p>
                   ) : (
-                    <Loading state={defaults}>
-                      {(d) => (
-                        <AgentForm
-                          key={`${a.id}-${a.name}-${a.config?.description}`}
-                          agent={a}
-                          defaults={d}
-                          onSaved={() => void agent.reload()}
-                        />
-                      )}
-                    </Loading>
+                    <AgentEditForm agent={a.id} current={currentInput(a, a.config)} onSaved={() => void agent.reload()} />
                   )}
                 </Card.Content>
               </Card>

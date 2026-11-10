@@ -41,16 +41,13 @@ describe('shouldRefetch', () => {
     expect(shouldRefetch(task('deliver'), 'sessions')).toBe(false)
   })
 
-  it('refetches after this page changed the same resource only', () => {
+  it('refetches when the server says the same resource changed, whoever changed it', () => {
     expect(shouldRefetch({ type: 'changed', resource: 'sessions' }, 'sessions')).toBe(true)
     expect(shouldRefetch({ type: 'changed', resource: 'agents' }, 'sessions')).toBe(false)
   })
 
-  it('refetches sessions when a notification is written: their unread mark comes from notifications', () => {
-    const note = { type: 'notification', notification_id: 1, session_id: 's' } as const
-    expect(shouldRefetch(note, 'sessions')).toBe(true)
-    expect(shouldRefetch(note, 'agents')).toBe(false)
-    // 系统通知（前置检查告警投不到 agent 时的兜底、推送测试）不指向会话
-    expect(shouldRefetch({ ...note, session_id: null }, 'sessions')).toBe(false)
+  it('refetches sessions when notifications change: their unread mark comes from notifications', () => {
+    expect(shouldRefetch({ type: 'changed', resource: 'notifications' }, 'sessions')).toBe(true)
+    expect(shouldRefetch({ type: 'changed', resource: 'notifications' }, 'agents')).toBe(false)
   })
 })

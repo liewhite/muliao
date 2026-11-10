@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useRefetch } from '../events'
 import { Button, Card, Chip } from '@heroui/react'
 import { Search } from 'lucide-react'
 import { api, type AgentId, type HistoryEntry } from '../api'
@@ -18,6 +19,7 @@ export function HistoryList({ agent }: { agent: AgentId }) {
   const [input, setInput] = useState('')
   const [query, setQuery] = useState('')
   const history = useLoad(() => api.agentHistory(agent, query || undefined), [agent, query])
+  useRefetch('history', history.reload)
 
   return (
     <div className="flex flex-col gap-3">

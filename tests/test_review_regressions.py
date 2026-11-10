@@ -62,7 +62,8 @@ async def test_deleting_session_or_agent_with_running_task_is_rejected(container
         await container.agent_lifecycle.delete(alpha, actor="user")
 
 
-async def test_agent_api_rejects_partial_update(container, tmp_path):
+async def test_agent_api_changes_only_the_given_fields(container, tmp_path):
+    """只改给出的字段：界面只提交用户改过的，没给的（这里是 model）保持当前值，编辑期间 agent 自己改的不被旧值盖掉。"""
     from tests.conftest import app_of, login
 
     app = app_of(container, tmp_path / "no-web")
@@ -71,10 +72,10 @@ async def test_agent_api_rejects_partial_update(container, tmp_path):
         agent = (
             await client.post("/api/agents", json={"name": "a", "description": "d", "model": "custom"})
         ).json()
-        assert (
-            await client.put(f"/api/agents/{agent['id']}", json={"description": "new"})
-        ).status_code == 422
-        assert (await client.get(f"/api/agents/{agent['id']}")).json()["config"]["model"] == "custom"
+        resp = await client.patch(f"/api/agents/{agent['id']}", json={"description": "new"})
+        assert resp.status_code == 200
+        assert resp.json()["config"] == {**agent["config"], "description": "new"}
+        assert resp.json()["config"]["model"] == "custom"
 
 
 async def test_vault_set_value_is_redacted_from_saved_history(container, make_agent, models):

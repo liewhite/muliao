@@ -182,14 +182,6 @@ class Distribution:
             await self._write_role(snapshot, spec, Rules())
         return await self.get(spec.name)
 
-    async def update(self, spec: RoleSpec, *, actor: str) -> Role:
-        """整体替换描述与可编辑的规则（名称不改：agent 按名称引用它）；内置角色也可以（固定的部分不变）。改动从带这个角色
-        的 agent 的下一次运行起生效。"""
-        _check(spec)
-        async with self._source.writing() as snapshot:
-            await self._write_role(snapshot, spec, _role(snapshot, spec.name).rules)
-        return await self.get(spec.name)
-
     async def patch(
         self,
         name: str,
@@ -199,7 +191,8 @@ class Distribution:
         allow: Sequence[str] | None = None,
         deny: Sequence[str] | None = None,
     ) -> Role:
-        """只改给出的字段（None 为不改），读与写串行：并发的局部修改互不覆盖。规则同 update。"""
+        """只改给出的字段（None 为不改），读与写串行：并发的局部修改互不覆盖。名称不改（agent 按名称引用它）；内置角色也可以
+        （固定的部分不变）。改动从带这个角色的 agent 的下一次运行起生效。"""
         async with self._source.writing() as snapshot:
             role = _role(snapshot, name)
             spec = RoleSpec(

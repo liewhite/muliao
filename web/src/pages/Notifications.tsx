@@ -5,7 +5,6 @@ import { Link } from 'react-router-dom'
 import { api, type AppNotification } from '../api'
 import { useServerEvents } from '../events'
 import { useReturnState } from '../nav'
-import { notificationsMayHaveChanged, refreshUnread } from '../unread'
 import { EmptyHint, Loading, Page, formatTime, useLoad } from '../ui'
 
 function NotificationCard({ n }: { n: AppNotification }) {
@@ -34,8 +33,9 @@ function NotificationCard({ n }: { n: AppNotification }) {
 export default function Notifications() {
   const from = useReturnState()
   const notifications = useLoad(() => api.notifications(), [])
+  // 只在有新通知（或重连）时重新拉取：自己标的已读不重拉，列表里的未读标记留到下次加载
   useServerEvents((e) => {
-    if (notificationsMayHaveChanged(e)) void notifications.reload()
+    if (e.type === 'connected' || e.type === 'notification') void notifications.reload()
   })
 
   // 看到了就是已读：只标到这次列出的最新一条，之后才到的保持未读；列表里的未读标记保留到下次加载，让用户看出哪些是新的
@@ -44,7 +44,6 @@ export default function Notifications() {
     if (newest === undefined) return
     void api
       .markNotificationsRead(newest)
-      .then(refreshUnread)
       .catch((e) => console.error('marking notifications read failed', e))
   }, [newest])
 

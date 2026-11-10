@@ -43,7 +43,7 @@ import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import 'katex/dist/katex.min.css'
 import { FILES_PATH, api, type Agent, type AgentId } from './api'
-import { listenServerEvents, shouldRefetch } from './events'
+import { coalesced, listenServerEvents, shouldRefetch } from './events'
 import { normalizeMath } from './markdown'
 import { remarkIssueRefs } from './issueRefs'
 import { isSendShortcut, SEND_HINT } from './sendKey'
@@ -143,11 +143,14 @@ async function reloadAgents(): Promise<void> {
   agentsSubscribers.forEach((s) => s())
 }
 
+// 事件触发的重新拉取合并密集的事件（同 useRefetch）
+const refetchAgents = coalesced(reloadAgents)
+
 function subscribeAgents(onChange: () => void) {
   agentsSubscribers.add(onChange)
   if (agentsUnlisten === null) {
     agentsUnlisten = listenServerEvents((e) => {
-      if (shouldRefetch(e, 'agents')) void reloadAgents()
+      if (shouldRefetch(e, 'agents')) refetchAgents()
     })
     void reloadAgents()
   }

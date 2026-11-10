@@ -126,11 +126,6 @@ async def client(container: Assembly, tmp_path: Path) -> AsyncIterator[httpx.Asy
         yield c
 
 
-def agent_update(agent: dict) -> dict:
-    """GET /api/agents/{id} 的结果换成整体替换（PUT）的请求体：配置在 config 里，请求体是平的。"""
-    return {k: agent[k] for k in ("name", "roles", "allow", "deny")} | agent["config"]
-
-
 async def login(client: httpx.AsyncClient) -> None:
     resp = await client.post("/api/auth/login", json={"password": "password1"})
     assert resp.status_code == 204
@@ -138,13 +133,10 @@ async def login(client: httpx.AsyncClient) -> None:
 
 async def share(container: Assembly, *rules: str) -> None:
     """把条目加进 base 角色（每个 agent 都能用），即原来的「公共」条目。"""
-    from muliao.agents.api import RoleSpec
 
     base = await container.distribution.get("base")
     allow = [*base.rules.allow, *rules]
-    await container.distribution.update(
-        RoleSpec("base", base.description, allow, list(base.rules.deny)), actor="user"
-    )
+    await container.distribution.patch("base", actor="user", allow=allow)
 
 
 async def owned(container: Assembly, kind: str, owner: str | None) -> list[str]:
