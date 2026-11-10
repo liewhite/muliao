@@ -164,8 +164,16 @@ async def trigger_in(s: AsyncSession, trigger_id: int) -> Trigger:
     """在调用方事务里取这一行（触发器领域内部用，不公开：HTTP 层与别的领域经 TriggerService 的命令与查询）。"""
     trigger = await s.get(Trigger, trigger_id)
     if trigger is None:
-        raise NotFound(f"trigger {trigger_id} not found")
+        raise TriggerNotFound(f"trigger {trigger_id} not found")
     return trigger
+
+
+class TriggerNotFound(NotFound):
+    """触发器不存在（已删除）。"""
+
+
+class TriggerDisabled(Conflict):
+    """触发器已停用，不触发。"""
 
 
 def set_state(trigger: Trigger, **values: Any) -> None:
@@ -511,7 +519,7 @@ class TriggerService:
         """没有调用方等着结果的激活机制（到期扫描、流式）用的 fire：失败按统一的规则处理，不上抛领域错误。
         - 前置检查失败：已记在触发器上；脚本的故障往往是暂时的，保持启用；
         - agent 已归档（AgentArchived）：跳过，触发器保持启用；一次性触发器那一次已用掉，推送告诉用户任务没做；
-        - 被停用或删除（Conflict / NotFound）：不是触发失败，只记日志，不覆盖失败原因；
+        - 被停用或删除（TriggerDisabled / TriggerNotFound）：不是触发失败，只记日志，不覆盖失败原因；
         - 其余领域错误（如来信被拒绝）：停用并记 disabled_reason。
         契约之外的异常照常上抛。webhook 的调用方在等结果，直接用 fire。"""
         try:
@@ -522,7 +530,7 @@ class TriggerService:
             # 定时与流式的只是跳过这一次；一次性触发器已用掉它那一次（到期时已结束），任务没做，agent 也收不到信：告诉用户
             log.info("activated fire skipped: %s", e, extra={"trigger_id": trigger_id})
             await self._tell_user_once_skipped(trigger_id)
-        except (Conflict, NotFound) as e:
+        except (TriggerDisabled, TriggerNotFound) as e:
             log.info("activated fire skipped: %s", e, extra={"trigger_id": trigger_id})
         except DomainError as e:
             reason = f"{type(e).__name__}: {e}"
@@ -552,7 +560,7 @@ class TriggerService:
         async with self._db.transaction() as s:
             trigger = await trigger_in(s, trigger_id)
             if not trigger.enabled:
-                raise Conflict(f"trigger {trigger.name!r} is disabled")
+                raise TriggerDisabled(f"trigger {trigger.name!r} is disabled")
             # 归档的 agent（AgentArchived，即 Conflict）：不跑前置检查、不触发；激活机制的 fire_activated 只记日志，触发器
             # 保持启用，取消归档后照常触发
             await runnable_agent_in(s, trigger.agent_id)

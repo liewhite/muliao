@@ -68,8 +68,16 @@ async def test_optional_parameters_are_left_out_when_not_configured():
 
 async def test_silence_transcribes_to_empty_text():
     assert await _transcriber(lambda _r: _result("  ")).transcribe(b"x", "audio/mp4") == ""
-    no_text = httpx.Response(200, json={"output": {}, "request_id": "r"})
-    assert await _transcriber(lambda _r: no_text).transcribe(b"x", "audio/mp4") == ""
+
+
+@pytest.mark.parametrize("body", [{"output": {}}, {"output": None}, {"code": "x"}, [1]])
+async def test_a_response_without_text_is_a_service_failure_not_silence(body):
+    resp = httpx.Response(200, json=body)
+    with pytest.raises(UpstreamFailed, match="unexpected response"):
+        await _transcriber(lambda _r: resp).transcribe(b"x", "audio/mp4")
+    not_json = httpx.Response(200, text="<html>")
+    with pytest.raises(UpstreamFailed, match="unexpected response"):
+        await _transcriber(lambda _r: not_json).transcribe(b"x", "audio/mp4")
 
 
 @pytest.mark.parametrize(

@@ -148,7 +148,12 @@ class ScheduleDue:
         return next_run_at(trigger)
 
     async def consume_in(self, s: AsyncSession, trigger: Trigger, now: datetime) -> str | None:
-        set_state(trigger, next_run_at=self._kind.next_run(_cron(trigger), now).isoformat())
+        try:
+            following = self._kind.next_run(_cron(trigger), now)
+        except InvalidInput as e:
+            # 存下的表达式是配置时校验过的：现在算不出下次时间是存下的数据坏了
+            raise CorruptState(f"trigger {trigger.id} ({trigger.name}): {e}") from e
+        set_state(trigger, next_run_at=following.isoformat())
         previous = await previous_fire_state_in(s, self._activity, trigger)
         if previous == WorkState.IDLE:
             set_state(trigger, skipped=None)

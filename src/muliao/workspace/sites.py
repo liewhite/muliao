@@ -79,8 +79,9 @@ class Sites:
                 if found is None:
                     continue
                 page_dir, index = found
-                # index.html 一定在内：时间至少有一个
-                modified = max(f.stat().st_mtime for f in page_dir.iterdir() if f.is_file())
+                modified = max(
+                    [index.stat().st_mtime, *(f.stat().st_mtime for f in page_dir.iterdir() if f.is_file())]
+                )
                 pages.append(
                     SitePage(
                         name=d.name,
@@ -88,7 +89,7 @@ class Sites:
                         modified=datetime.fromtimestamp(modified, UTC),
                     )
                 )
-            except (OSError, ValueError):
+            except OSError:
                 continue
         return sorted(pages, key=lambda p: p.name)
 

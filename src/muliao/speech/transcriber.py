@@ -8,12 +8,12 @@
 """
 
 import base64
-import json
 import logging
 import time
 from typing import Protocol, assert_never
 
 import httpx
+from pydantic import BaseModel, ValidationError
 
 from muliao.config import TranscriptionConfig
 from muliao.errors import InvalidInput, UpstreamFailed
@@ -59,6 +59,17 @@ class Transcriber(Protocol):
     async def transcribe(self, audio: bytes, media_type: str) -> str:
         """转写出的文字（首尾空白已去掉）；听不到人说话时为空字符串。"""
         ...
+
+
+class _Output(BaseModel):
+    text: str
+
+
+class _Response(BaseModel):
+    """百炼同步接口的响应里用到的字段：不合这个形状的响应是服务端故障（UpstreamFailed），不当成听不到人说话。"""
+
+    output: _Output
+    usage: dict[str, object] | None = None
 
 
 class DashScopeTranscriber:
@@ -115,10 +126,10 @@ class DashScopeTranscriber:
         if resp.status_code != 200:
             raise self._failed(f"HTTP {resp.status_code}: {resp.text[:500]}", fmt, len(audio))
         try:
-            body = resp.json()
-        except json.JSONDecodeError as e:
-            raise self._failed(f"non-JSON response: {resp.text[:200]}", fmt, len(audio)) from e
-        text = ((body.get("output") or {}).get("text") or "").strip()
+            body = _Response.model_validate_json(resp.content)
+        except ValidationError as e:
+            raise self._failed(f"unexpected response {resp.text[:200]!r}: {e}", fmt, len(audio)) from e
+        text = body.output.text.strip()
         log.info(
             "audio transcribed",
             extra={
@@ -127,7 +138,7 @@ class DashScopeTranscriber:
                 "bytes": len(audio),
                 "chars": len(text),
                 "seconds": round(time.monotonic() - started, 2),
-                "usage": body.get("usage"),
+                "usage": body.usage,
             },
         )
         return text

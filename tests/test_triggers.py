@@ -7,7 +7,7 @@ import pytest
 
 from muliao.agents.api import AgentPatch, McpTransport, RoleSpec, mcp_config
 from muliao.api.triggers import TriggerOut
-from muliao.errors import InvalidInput
+from muliao.errors import Conflict, InvalidInput
 from muliao.sessions.api import Origin, SessionActivity, WorkState
 from muliao.sessions.mailbox import queued_in
 from muliao.sessions.tables import MailKind
@@ -371,27 +371,54 @@ async def test_a_trigger_corrupted_after_being_listed_is_disabled_when_it_fires(
     assert trigger.last_session_id is None
 
 
-async def test_corrupt_state_outside_the_trigger_itself_is_not_blamed_on_it(
-    container, make_agent, monkeypatch
+async def test_an_unexpected_failure_of_one_due_trigger_is_logged_without_disabling_or_stopping_others(
+    container, make_agent, monkeypatch, caplog
 ):
-    """触发链路上别处的数据坏了（不是这个触发器自己存的）按程序错误上抛，不停用触发器。"""
+    """触发链路上别处的数据坏了（不是这个触发器自己存的）按程序错误记 ERROR 日志，不停用触发器，也不拖住同一轮的其他触发器。"""
     from muliao.errors import CorruptState
 
     alpha = (await make_agent()).id
     triggers, schedules = _schedule(container)
+    ids = []
+    for name in ("broken", "ok"):
+        trigger = await triggers.create(
+            name=name, agent_id=alpha, kind="schedule", prompt="x", config={"cron": "* * * * *"}
+        )
+        await _make_due(container, trigger.id)
+        ids.append(trigger.id)
+    fired = []
+    real_fire = triggers.fire
+
+    async def fire(trigger_id, payload=None):  # noqa: ANN001, ANN202
+        if trigger_id == ids[0]:
+            raise CorruptState("agent resources missing")
+        fired.append(trigger_id)
+        return await real_fire(trigger_id, payload)
+
+    monkeypatch.setattr(triggers, "fire", fire)
+    assert await schedules.fire_due() == 2
+    assert fired == [ids[1]]
+    assert "agent resources missing" in caplog.text
+    assert (await triggers.get_by_name("broken")).enabled
+
+
+async def test_an_activated_fire_rejected_with_a_conflict_disables_the_trigger(
+    container, make_agent, monkeypatch
+):
+    """只有触发器自己被停用、删除才算跳过；别的 Conflict / NotFound（如来信被拒绝）同其余领域错误一样停用并记原因。"""
+    alpha = (await make_agent()).id
+    triggers, _ = _schedule(container)
     trigger = await triggers.create(
-        name="ok", agent_id=alpha, kind="schedule", prompt="x", config={"cron": "* * * * *"}
+        name="t", agent_id=alpha, kind="schedule", prompt="x", config={"cron": "* * * * *"}
     )
-    await _make_due(container, trigger.id)
 
-    async def broken_fire(_trigger_id, _payload=None):  # noqa: ANN001, ANN202
-        raise CorruptState("agent resources missing")
+    async def rejected(_trigger_id, _payload=None):  # noqa: ANN001, ANN202
+        raise Conflict("letter rejected")
 
-    monkeypatch.setattr(triggers, "fire", broken_fire)
-    with pytest.raises(ExceptionGroup) as raised:
-        await schedules.fire_due()
-    assert raised.group_contains(CorruptState, match="agent resources missing")
-    assert (await triggers.get_by_name("ok")).enabled
+    monkeypatch.setattr(triggers, "fire", rejected)
+    await triggers.fire_activated(trigger.id)
+    after = await triggers.get_by_name("t")
+    assert not after.enabled and after.disabled_reason == "Conflict: letter rejected"
 
 
 @pytest.mark.parametrize(

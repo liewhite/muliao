@@ -28,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.api import agent_names_in, runnable_agent_in
 from muliao.agents.events import AgentDeleting
-from muliao.errors import Conflict, InvalidInput, NotFound
+from muliao.errors import Conflict, CorruptState, InvalidInput, NotFound
 from muliao.issues.delivery import IssueDelivery
 from muliao.issues.events import PostIssueEvent
 from muliao.issues.graph import (
@@ -86,6 +86,13 @@ def _session_events_lane(event: RunFailed | SessionDeleted) -> str:
     """同一个会话的事件在同一条 lane 上按发布顺序处理：RunFailed 一定先于 SessionDeleted 发布（会话忙时不能删除），
     它记下的动态（带这个会话）一定在删除的置空之前。RunEnded 不在这里：它在提交事务里确认会话还是那个 issue 会话才记。"""
     return f"issues:{event.session_id}"
+
+
+def _issue_of(session_id: str, origin_ref: str | None) -> int:
+    """issue 会话的 origin_ref 是 issue 号（建会话时写入）：缺了是存下的数据坏了，不当成别的来源静默跳过。"""
+    if origin_ref is None:
+        raise CorruptState(f"issue session {session_id} has no issue number (origin_ref)")
+    return int(origin_ref)
 
 
 @dataclass(frozen=True)
@@ -235,9 +242,9 @@ class IssueService:
         """issue 会话里的一次运行结束了：issue 指派给这个 agent、却因此停滞（还是 in_progress，会话空闲）时，以它的名义记一条
         UNSETTLED 并投进那个会话，请它表态（rules.ask_to_settle）。停在挂起的调用上、被用户停止的不问；会话已经又有事要做
         （信箱里还有信、在等后台任务）时不算停滞，不问。其他来源的会话、已被删除的 issue 不处理。"""
-        if event.origin != Origin.ISSUE or event.origin_ref is None or event.stopped or event.paused:
+        if event.origin != Origin.ISSUE or event.stopped or event.paused:
             return no_commit
-        issue_id = int(event.origin_ref)
+        issue_id = _issue_of(event.session_id, event.origin_ref)
 
         async def commit(s: AsyncSession) -> None:
             issue = await s.get(Issue, issue_id)
@@ -291,9 +298,9 @@ class IssueService:
         """issue 会话里的运行最终失败：在 issue 时间线上以该 agent 的名义记一笔（失败的是它的运行）。通知用户由通知领域
         订阅 RunFailed 做，这里不重复发。不投递这条动态、不改状态：投进会话就是自动重试，永久性的错误会陪它无限循环；
         之后有新动态时照常投递、唤醒它。其他来源的会话、已被删除的 issue 不处理。"""
-        if event.origin != Origin.ISSUE or event.origin_ref is None:
+        if event.origin != Origin.ISSUE:
             return no_commit
-        issue_id = int(event.origin_ref)
+        issue_id = _issue_of(event.session_id, event.origin_ref)
 
         async def commit(s: AsyncSession) -> None:
             issue = await s.get(Issue, issue_id)

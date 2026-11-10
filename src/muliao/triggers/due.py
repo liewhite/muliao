@@ -17,7 +17,7 @@ from typing import Protocol
 import anyio
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.errors import CorruptState, DomainError
+from muliao.errors import CorruptState
 from muliao.platform.db import Database, utcnow
 from muliao.platform.tasks import Clock
 from muliao.triggers.service import TriggerService
@@ -41,7 +41,7 @@ class DueKind(Protocol):
     async def consume_in(self, s: AsyncSession, trigger: Trigger, now: datetime) -> str | None:
         """在到期的事务里消耗这次到期：改这一行，使它不再在 now 到期（定时推进到下次，一次性的结束）。
 
-        返回非 None 表示这次不触发（原因记日志）；这次到期无论如何都已经被消耗掉。
+        返回非 None 表示这次不触发（原因记日志）；这次到期无论如何都已经被消耗掉。存下的配置或状态不合法时抛 CorruptState（停用这一个）。
         """
         ...
 
@@ -88,23 +88,27 @@ class DueRunner:
     async def fire_due(self) -> int:
         now = self._clock()
         due = [t.id for t, at in await self._pending() if at <= now]
-        # 到期的触发器并发执行：一个慢的前置检查不拖住同一轮里的其他触发器。意外的异常（契约之外）让整组取消并上抛，
-        # 由后台循环的崩溃处理暴露，不会留下没人接收的异常
+        # 到期的触发器并发执行：一个慢的前置检查不拖住同一轮里的其他触发器；一个触发器的意外异常只记在它自己身上（_fire_one）
         async with anyio.create_task_group() as group:
             for trigger_id in due:
                 group.start_soon(self._fire_one, trigger_id, now)
         return len(due)
 
     async def _fire_one(self, trigger_id: int, now: datetime) -> None:
+        """一个到期的触发器。契约之外的异常（如数据库暂时不可用、bug）只记日志：不取消同一轮里的其他触发器，也不拖崩扫描
+        循环（与流式触发的投递循环同一做法，triggers.stream）。消耗没提交的下一轮重来；已消耗、触发时失败的不再重试（至多一次）。"""
         try:
-            if not await self._consume(trigger_id, now):
+            try:
+                if not await self._consume(trigger_id, now):
+                    return
+            except CorruptState as e:
+                # 只有这个触发器自己存下的数据（到期规则读的配置与状态）坏了才停用它
+                await self._disable(trigger_id, f"{type(e).__name__}: {e}")
                 return
-        except (CorruptState, DomainError) as e:
-            # 只有这个触发器自己存下的数据（到期规则读的配置与状态）坏了才停用它；触发链路上别处的 CorruptState 照常上抛
-            await self._disable(trigger_id, f"{type(e).__name__}: {e}")
-            return
-        # 触发本身的失败按激活机制共用的规则处理（见 TriggerService.fire_activated）
-        await self._triggers.fire_activated(trigger_id)
+            # 触发本身的失败按激活机制共用的规则处理（见 TriggerService.fire_activated）
+            await self._triggers.fire_activated(trigger_id)
+        except Exception:
+            log.exception("due fire failed", extra={"trigger_id": trigger_id})
 
     async def _consume(self, trigger_id: int, now: datetime) -> bool:
         """按最新的行消耗这次到期；返回是否应当触发。"""
