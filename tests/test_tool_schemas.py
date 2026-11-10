@@ -68,6 +68,27 @@ async def test_deferred_tools_are_registered_under_their_table_names(container):
     assert not missing, missing
 
 
+async def test_ask_user_arguments_are_parsed_by_the_same_rules_as_the_tool(container):
+    """挂起的提问按解析得出问题认（deferred.deferred_call）：解析规则比工具宽，工具会拒绝的调用被中途打断后
+    就会被当成挂起的提问（#563）。"""
+    from muliao.sessions.questions import _AskArgs
+
+    def rules(schema: object) -> object:
+        # 只比校验规则，不比给模型看的说明（值是文字的 title/description；同名的字段值是 schema，留着）
+        if isinstance(schema, dict):
+            return {
+                k: rules(v)
+                for k, v in schema.items()
+                if not (k in ("title", "description") and isinstance(v, str))
+            }
+        if isinstance(schema, list):
+            return [rules(v) for v in schema]
+        return schema
+
+    tool = session_tools(container)["ask_user"].function_schema.json_schema
+    assert rules(tool) == rules(_AskArgs.model_json_schema())
+
+
 async def test_edit_file_single_change_parameters_mirror_the_fields_of_one_edit(container):
     """edit_file 的单处修改参数与 edits 里每一项是同一组定位方式：一边加了另一边没跟上，模型就会在两种写法里看到
     不同的能力。"""

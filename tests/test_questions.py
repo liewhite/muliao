@@ -590,7 +590,7 @@ def test_an_ask_whose_arguments_were_rejected_has_no_questions():
 
     from muliao.sessions.deferred import questions_in
 
-    for args in ({"questions": []}, "{not json", {}):
+    for args in ({"questions": []}, "{not json", {}, {"questions": QUESTIONS, "extra": 1}):
         assert questions_in(ToolCallPart("ask_user", args, tool_call_id="a")) == []
 
 

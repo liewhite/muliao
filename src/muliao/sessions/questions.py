@@ -75,6 +75,11 @@ SKIPPED = AskResult(
 
 
 class _AskArgs(BaseModel):
+    """ask_user 工具的参数，校验规则与工具本身一致（含不收多余的键，test_tool_schemas 守住）：解析得出问题就是工具会
+    接受的调用。"""
+
+    model_config = ConfigDict(extra="forbid")
+
     questions: Questions
 
 
@@ -84,7 +89,8 @@ _ASK_ARGS: TypeAdapter[_AskArgs] = TypeAdapter(_AskArgs)
 def questions_of(call: ToolCallPart) -> list[Question]:
     """一次 ask_user 调用里的问题，按工具参数的同一个 Questions 类型解析。参数可以不合法：被工具 schema 退回、交还
     模型重试的，运行中刚生成、还没校验的，或这一步中途被打断、从没校验过的（回复在工具执行前保存，#563）。这时
-    没有问题，这次调用不是提问（deferred.deferred_call）。"""
+    没有问题，这次调用不是提问（deferred.deferred_call）。收紧 Questions 的约束会让历史里仍挂着、已不合新约束的提问
+    变成普通调用。"""
     try:
         return _ASK_ARGS.validate_json(call.args_as_json_str()).questions
     except ValidationError:
