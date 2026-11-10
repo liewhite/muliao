@@ -67,6 +67,16 @@ def test_forgotten_entries_are_dropped():
     assert set(t._failures) == {"2.2.2.2"}
 
 
+def test_refailing_ip_is_not_dropped_by_pruning():
+    # 1.1.1.1 先失败、后又失败：清理按最后一次失败的时间算，不能因为它最早出现就被删
+    t = LoginThrottle()
+    t.failed("1.1.1.1", 0.0)
+    t.failed("2.2.2.2", 1.0)
+    t.failed("1.1.1.1", 2.0)
+    t.failed("3.3.3.3", LoginThrottle.FORGET_AFTER + 1.5)
+    assert set(t._failures) == {"1.1.1.1", "3.3.3.3"}
+
+
 async def test_login_rejects_even_right_password_while_backing_off(client):
     for _ in range(FREE):
         assert (await client.post("/api/auth/login", json={"password": "nope"})).status_code == 401

@@ -109,7 +109,8 @@ def _public_routes() -> APIRouter:
         now = time.monotonic()
         wait = throttle.retry_after(ip, now)
         if wait > 0:
-            log.warning("login throttled", extra={"client": ip, "retry_after": round(wait)})
+            # 退避期内被拒的不改计数，有人狂刷时不让它刷满日志；进入退避的那次失败已有 warning
+            log.debug("login throttled", extra={"client": ip, "retry_after": round(wait)})
             seconds = math.ceil(wait)
             raise HTTPException(
                 status_code=429,

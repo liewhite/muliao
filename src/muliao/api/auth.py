@@ -52,13 +52,13 @@ class Auth:
 
 
 class LoginThrottle:
-    """登录失败按来源 IP 退避（#540）：同一 IP 连续输错 FREE_FAILURES 次后，每再错一次都要等一段时间才能再试，
+    """登录失败按来源 IP 退避（#540）：同一 IP 连续输错，从第 FREE_FAILURES 次起每次输错后都要等一段时间才能再试，
     等待时间从 BASE_DELAY 起翻倍、最长 MAX_DELAY；等待期内连正确密码也拒绝（不校验密码），登录成功清零，
     最后一次失败过了 FORGET_AFTER 也清零。只记失败，正常输对密码的不受影响。
 
     来源 IP 是 request.client.host：uvicorn 的 proxy_headers 只采信受信代理（默认 127.0.0.1，本机 userspace
-    tailscaled 转进来的连接就是它）带的 X-Forwarded-For，公网入口 Traefik 丢掉客户端自带的这个头、换成真实 IP。
-    只在内存里：重启清零，可以接受。"""
+    tailscaled 转进来的连接就是它）带的 X-Forwarded-For，公网入口 Traefik 给的是真实 IP。tailnet 成员算可信：
+    它们直连时能自填这个头。只在内存里：重启清零，可以接受。"""
 
     FREE_FAILURES = 5
     BASE_DELAY = 30.0
@@ -82,9 +82,16 @@ class LoginThrottle:
         return max(0.0, self._failures[ip][1] + delay - now)
 
     def failed(self, ip: str, now: float) -> None:
-        # 顺带清掉已遗忘的条目，换着 IP 试也不让表无限增长
-        self._failures = {k: v for k, v in self._failures.items() if now - v[1] < self.FORGET_AFTER}
-        self._failures[ip] = (self._current(ip, now) + 1, now)
+        count = self._current(ip, now) + 1
+        # 先删再插，表按最后一次失败的时间排序（now 是单调时钟）：从表头清掉已遗忘的条目，删到第一条没过期的就停，
+        # 换着 IP 试也不让表无限增长、每次失败的开销不随表长增长
+        self._failures.pop(ip, None)
+        while self._failures:
+            oldest = next(iter(self._failures))
+            if now - self._failures[oldest][1] < self.FORGET_AFTER:
+                break
+            del self._failures[oldest]
+        self._failures[ip] = (count, now)
 
     def succeeded(self, ip: str) -> None:
         self._failures.pop(ip, None)
