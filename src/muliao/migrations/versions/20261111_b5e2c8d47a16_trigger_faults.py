@@ -35,7 +35,7 @@ def upgrade() -> None:
         routes: dict[str | None, str] = {}
         for line in (route_error or "").splitlines():
             m = _ROUTE_LINE.match(line)
-            # 写入时总是这个格式；对不上的整行当原因、地址留空，不丢
+            # 写入时总是这个格式；万一对不上，整行当原因、地址留空（这样的行只留最后一行）
             routes[m.group(1) if m else None] = m.group(2) if m else line
         faults += [
             {"source": "route", "error": error, "address": address} for address, error in routes.items()
