@@ -15,14 +15,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from muliao.agents import assets
+from muliao.agents import assets, memory_file
 from muliao.agents.access import changeable, grants_for, usable_by, writable
 from muliao.agents.kinds import Kind, StoredKind, label
-from muliao.agents.naming import validate_slug
 from muliao.agents.permissions import GLOBAL_MEMORY
 from muliao.agents.source import AssetSource
 from muliao.errors import InvalidInput
-from muliao.platform.fs import write_atomic
 
 _KIND = StoredKind.MEMORY
 _LABEL = label(_KIND)
@@ -54,10 +52,13 @@ class MemoryInfo:
 
 
 class MemoryStore:
-    def __init__(self, source: AssetSource, max_chars: int):
+    def __init__(self, source: AssetSource):
         self._source = source
-        # 每一块各自的上限
-        self.max_chars = max_chars
+
+    @property
+    def max_chars(self) -> int:
+        """每一块各自的上限。"""
+        return self._source.memory_max_chars
 
     async def read(self, name: str) -> MemoryInfo:
         a = (await self._source.snapshot()).asset(_KIND, name)
@@ -79,24 +80,21 @@ class MemoryStore:
     ) -> MemoryInfo:
         """新建或整体改写（用户在界面上编辑）：已有的要 actor 能改（Grants.can 的 write），owner 不变；新建的归 owner。
         version 是打开编辑时的版本（新建为 None），期间被别处改过就 Conflict（assets.check_version）。"""
-        async with self._source.writing() as snapshot:
-            existing = writable(snapshot, _KIND, name, actor)
-            path = existing.path if existing is not None else self._new_path(snapshot, name, owner)
-            text = _file_text(self._tidied(name, content))
+        snapshot = await self._source.snapshot()
+        existing = writable(snapshot, _KIND, name, actor)
+        path = existing.path if existing is not None else self._new_path(snapshot, name, owner)
 
-            def put() -> None:
-                # agent 改文件不经这把锁：比对用此刻文件里的，紧挨着写，窗口最小
-                current = assets.memory_text(path) if existing is not None else None
-                assets.check_version(current, version, f"memory {name!r}")
-                write_atomic(path, text)
+        def unchanged(path: Path) -> None:
+            # 此刻文件里的（写入口在锁里、紧挨着写之前调用）：期间被删、被抢先建、被改过都对不上
+            current = memory_file.text_of(path) if path.is_file() else None
+            assets.check_version(current, version, f"memory {name!r}")
 
-            await asyncio.to_thread(put)
+        await self._source.write({path: content}, unchanged)
         return await self.read(name)
 
     def _new_path(self, snapshot: assets.Snapshot, name: str, owner: str | None) -> Path:
-        if owner is None:
-            validate_slug(_LABEL, name)
-        else:
+        """新建的位置；名字的规则（新建的平台记忆是 slug、不与别的重名）由写入口校验（asset_files.vet）。"""
+        if owner is not None:
             agent = snapshot.agents.get(owner)
             if agent is None or agent.name != name:
                 raise InvalidInput(
@@ -112,28 +110,3 @@ class MemoryStore:
         async with self._source.writing() as snapshot:
             asset = changeable(snapshot, _KIND, name, actor)
             await asyncio.to_thread(assets.remove, asset.path)
-
-    def _tidied(self, name: str, content: str) -> str:
-        """每条写入存之前都经过这里：规整空白（tidy），再按规整后的长度查上限。"""
-        content = tidy(content)
-        if len(content) > self.max_chars:
-            raise InvalidInput(f"memory {name!r} would be {len(content)} chars, limit is {self.max_chars}")
-        return content
-
-
-def tidy(content: str) -> str:
-    """记忆写入前规整空白（每条写入都经过这里）：每行去掉行尾空白，连续空行合并成一个，去掉首尾空行，不留结尾换行，存下的
-    就是指令里显示的样子。只动空白：记忆一条一行，空行个数和行尾空格没有意义，而指令里看不出它们（#361）。"""
-    lines: list[str] = []
-    for line in content.splitlines():
-        line = line.rstrip()
-        if line or (lines and lines[-1]):
-            lines.append(line)
-    while lines and not lines[-1]:
-        lines.pop()
-    return "\n".join(lines)
-
-
-def _file_text(content: str) -> str:
-    """存进文件的样子：规整后的正文加结尾换行（读树时去掉首尾空白，指令里显示的就是规整后的正文）。"""
-    return content + "\n" if content else ""

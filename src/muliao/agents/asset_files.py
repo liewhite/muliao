@@ -1,6 +1,7 @@
-"""文件工具写资源目录里的文件之前的校验（#500）：write_file / edit_file 把写成后的全文交来，不合格式就拒绝并说明原因、
-这是谁的资源、正确的写法在公共 skill 的哪一节。规则与读树（agents.assets）是同一套：读树时会被跳过、报成问题的写法，
-这里在写之前就挡住。用 shell 写的不经过这里，下次读树时照样报出。
+"""AI 资源文件的写前校验（#500、#578）：写入口 AssetSource.write（界面编辑与文件工具都经它）把要写成的全文交来，这里按读树
+（agents.assets）的同一套规则校验——布局与名字问 place_of，各种文件的格式问各自的格式模块（memory_file、agent_file、
+skill_package、mcp_config、secrets_format、access_file）——返回实际存下的全文；不合格就拒绝并说明原因、这是谁的资源、
+正确的写法在公共 skill 的哪一节。用 shell 写的不经过这里，下次读树时照样报出。
 
 只校验格式与名字，不管谁能写（那是写沙箱的事，agents.access.write_scope）。隐藏文件（`.` 开头的路径段）不加载，不校验。
 """
@@ -11,24 +12,23 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Literal, get_args
 
-from muliao.agents import access_file, agent_file
-from muliao.agents.agent_file import AGENT_FILE
+from muliao.agents import access_file, agent_file, memory_file
+from muliao.agents.agent_file import AgentFile
 from muliao.agents.assets import (
-    ACCESS_FILE,
-    MCP_DIR,
-    MEMORY_DIR,
     PLATFORM,
-    PRIVATE_MEMORY_FILE,
-    SECRETS_DIR,
-    SKILLS_DIR,
+    Config,
+    Entry,
+    Misplaced,
+    Shelf,
     Snapshot,
+    is_directory,
+    place_of,
 )
 from muliao.agents.kinds import StoredKind, label
 from muliao.agents.mcp_config import parse_mcp_file
-from muliao.agents.naming import file_name, validate_slug
-from muliao.agents.secrets_format import parse_secret_file, validate_key
+from muliao.agents.naming import validate_slug
+from muliao.agents.secrets_format import parse_secret_file
 from muliao.agents.skill_package import SKILL_FILE, approval_scripts, parse_frontmatter
-from muliao.agents.thinking import Thinking
 from muliao.errors import Conflict, InvalidInput
 from muliao.platform.fs import real
 
@@ -45,6 +45,21 @@ class _Rejected(Exception):
         self.reason, self.section = reason, section
 
 
+class AssetRejected(InvalidInput):
+    """写入口拒绝的一份资源文件：消息只是原因（界面上给用户看）；for_agent 是交给 agent 的完整说明（文件工具用）：是谁的
+    资源文件、什么都没写、看公共 skill 哪一节。"""
+
+    def __init__(self, reason: str, section: Section, path: Path, whose: str, root: Path):
+        super().__init__(reason)
+        self.reason, self.section, self.path, self.whose, self.root = reason, section, path, whose, root
+
+    def for_agent(self) -> str:
+        return (
+            f"{self.path} ({self.whose} asset files under {self.root}): {self.reason}; nothing was written. The "
+            f"layout and file formats are in the {SKILL} skill, section {self.section!r}."
+        )
+
+
 def in_tree(root: Path, path: Path) -> bool:
     """path 在资源目录里（按真实路径）。"""
     r, p = real(root), real(path)
@@ -56,13 +71,14 @@ def vet(
     path: Path,
     text: str,
     memory_max_chars: int,
-    check_model: Callable[[str, Thinking], None],
-) -> None:
-    """path（在资源目录里）要写成 text：不合格时 InvalidInput，说明原因、是谁的、看公共 skill 哪一节。"""
+    check_agent: Callable[[AgentFile], None],
+) -> str:
+    """path（在资源目录里）要写成 text：返回实际要存下的全文（记忆规整过空白，别的原样）；不合格时 AssetRejected（原因、是谁的、
+    看公共 skill 哪一节）。同步 IO（读现有的文件比对）。"""
     root = real(snapshot.root)
     rel = real(path).relative_to(root).parts
     if any(p.startswith(".") for p in rel):
-        return
+        return text
     by_name = {n: a for a, n in snapshot.names.items()}
     owner: str | None = None
     if rel[0] != PLATFORM:
@@ -71,12 +87,18 @@ def vet(
         "the platform's" if rel[0] == PLATFORM else f"agent {rel[0]!r}'s" if owner is not None else "no one's"
     )
     try:
-        _check(snapshot, rel, owner, text, memory_max_chars, check_model)
+        return _check(snapshot, rel, owner, text, memory_max_chars, check_agent)
     except _Rejected as e:
-        raise InvalidInput(
-            f"{path} ({whose} asset files under {snapshot.root}): {e.reason}; nothing was written. The layout "
-            f"and file formats are in the {SKILL} skill, section {e.section!r}."
-        ) from e
+        raise AssetRejected(e.reason, e.section, path, whose, snapshot.root) from e
+
+
+# 每种资源的说明在公共 skill 的哪一节
+_SECTIONS: dict[StoredKind, Section] = {
+    StoredKind.MEMORY: "Memory",
+    StoredKind.SKILL: "Skills",
+    StoredKind.MCP: "MCP servers",
+    StoredKind.SECRET: "Secrets",
+}
 
 
 def _check(
@@ -85,8 +107,8 @@ def _check(
     owner: str | None,
     text: str,
     memory_max_chars: int,
-    check_model: Callable[[str, Thinking], None],
-) -> None:
+    check_agent: Callable[[AgentFile], None],
+) -> str:
     head, rest = rel[0], rel[1:]
     if not rest:
         raise _Rejected("the root holds only platform/ and agent directories", "Layout")
@@ -96,80 +118,74 @@ def _check(
             f"{head}/ is not an existing agent's directory; agent directories are made by create_agent",
             "Layout",
         )
-    base = snapshot.root / head
-    if rest == (ACCESS_FILE,) and platform:
-        _access(snapshot, text)
-    elif rest == (AGENT_FILE,) and not platform:
-        assert owner is not None
-        _agent(owner, text, check_model)
-    elif rest == (PRIVATE_MEMORY_FILE,) and not platform:
-        _memory(base / PRIVATE_MEMORY_FILE, text, memory_max_chars)
-    elif platform and len(rest) == 2 and rest[0] == MEMORY_DIR and rest[1].endswith(".md"):
-        name = rest[1].removesuffix(".md")
-        _named(lambda: file_name(label(StoredKind.MEMORY), name), "Memory")
-        _new(snapshot, StoredKind.MEMORY, name, base / MEMORY_DIR / rest[1], "Memory")
-        _memory(base / MEMORY_DIR / rest[1], text, memory_max_chars)
-    elif len(rest) >= 3 and rest[0] == SKILLS_DIR:
-        name = rest[1]
-        _named(lambda: validate_slug(label(StoredKind.SKILL), name), "Skills")
-        _new(snapshot, StoredKind.SKILL, name, base / SKILLS_DIR / name, "Skills")
-        if rest[2:] == (SKILL_FILE,):
-            try:
-                approval_scripts(base / SKILLS_DIR / name, parse_frontmatter(text, name).approval)
-            except InvalidInput as e:
-                raise _Rejected(str(e), "Skills") from e
-    elif len(rest) == 2 and rest[0] == MCP_DIR and rest[1].endswith(".json"):
-        name = rest[1].removesuffix(".json")
-        _named(lambda: validate_slug(label(StoredKind.MCP), name), "MCP servers")
-        _new(snapshot, StoredKind.MCP, name, base / MCP_DIR / rest[1], "MCP servers")
-        try:
-            parse_mcp_file(text)
-        except InvalidInput as e:
-            raise _Rejected(str(e), "MCP servers") from e
-    elif len(rest) == 2 and rest[0] == SECRETS_DIR and rest[1].endswith(".toml"):
-        _secret(base / SECRETS_DIR / rest[1], rest[1].removesuffix(".toml"), text)
-    else:
-        raise _Rejected(f"{'/'.join(rest)} is not a place for an asset file in {head}/", "Layout")
-
-
-def _named(validate: Callable[[], object], section: Section) -> None:
     try:
-        validate()
-    except InvalidInput as e:
-        raise _Rejected(str(e), section) from e
+        place = place_of(rest, None if platform else head)
+    except Misplaced as e:
+        raise _Rejected(str(e), "Layout" if e.kind is None else _SECTIONS[e.kind]) from e
+    match place:
+        case Config():
+            if platform:
+                _access(snapshot, text)
+            else:
+                assert owner is not None
+                _agent(owner, text, check_agent)
+            return text
+        case Shelf(kind=kind) | Entry(kind=kind, inner=()) if is_directory(kind):
+            raise _Rejected(f"{'/'.join(rest)} is a directory, not a file", _SECTIONS[kind])
+        case Entry(kind=kind, name=name, inner=inner):
+            section = _SECTIONS[kind]
+            item = snapshot.root / head / Path(*rest[: len(rest) - len(inner)])
+            _new(snapshot, kind, name, item, platform, section)
+            try:
+                return _content(kind, name, item, inner, text, memory_max_chars)
+            except InvalidInput as e:
+                raise _Rejected(str(e), section) from e
 
 
-def _new(snapshot: Snapshot, kind: StoredKind, name: str, path: Path, section: Section) -> None:
-    """新建一项资源（它的文件或目录还不在磁盘上）：名字每种资源全局唯一，别处已有的不让建（读树时两处都会被跳过）。"""
+def _content(
+    kind: StoredKind, name: str, item: Path, inner: tuple[str, ...], text: str, memory_max_chars: int
+) -> str:
+    """一项资源的文件要写成 text 时存下的全文；不合规则时 InvalidInput。"""
+    match kind:
+        case StoredKind.MEMORY:
+            # 只为比长度：读坏了的（非 UTF-8）也要能整个覆盖修好
+            old = item.read_text(encoding="utf-8", errors="replace") if item.is_file() else None
+            return memory_file.stored(text, old, memory_max_chars)
+        case StoredKind.SKILL:
+            if inner == (SKILL_FILE,):
+                approval_scripts(item, parse_frontmatter(text, name).approval)
+            return text
+        case StoredKind.MCP:
+            parse_mcp_file(text)
+            return text
+        case StoredKind.SECRET:
+            _secret(item, name, text)
+            return text
+
+
+def _new(
+    snapshot: Snapshot, kind: StoredKind, name: str, path: Path, platform: bool, section: Section
+) -> None:
+    """新建一项资源（它的文件或目录还不在磁盘上）：名字每种资源全局唯一，别处已有的不让建（读树时两处都会被跳过）；新建
+    的平台记忆要是 slug（读树还认能当文件名的：agent 删除或转移时挪来的私有记忆带着 agent 名，不经这里）。"""
     if path.exists():
         return
     try:
+        if kind == StoredKind.MEMORY and platform:
+            validate_slug(label(kind), name)
         snapshot.check_free(kind, name)
-    except Conflict as e:
+    except (Conflict, InvalidInput) as e:
         raise _Rejected(str(e), section) from e
 
 
-def _memory(path: Path, text: str, limit: int) -> None:
-    """超过上限且比原来长才拒绝：已经超长的（shell 追加、上限调低）可以一段段删短，不必一次删够。"""
-    size = len(text.strip())
-    old = len(path.read_text(encoding="utf-8", errors="replace").strip()) if path.is_file() else 0
-    if size > limit and size > old:
-        raise _Rejected(f"memory would be {size} chars, over the limit of {limit}; condense it", "Memory")
-
-
-def _agent(agent_id: str, text: str, check_model: Callable[[str, Thinking], None]) -> None:
+def _agent(agent_id: str, text: str, check_agent: Callable[[AgentFile], None]) -> None:
     try:
         data = agent_file.parse(text)
+        check_agent(data)
     except InvalidInput as e:
         raise _Rejected(str(e), "agent.toml") from e
     if data.id != agent_id:
         raise _Rejected(f"id must stay {agent_id!r} (it ties the directory to the agent)", "agent.toml")
-    if not data.description.strip():
-        raise _Rejected("description must not be empty", "agent.toml")
-    try:
-        check_model(data.model, data.thinking)
-    except InvalidInput as e:
-        raise _Rejected(str(e), "agent.toml") from e
 
 
 def _access(snapshot: Snapshot, text: str) -> None:
@@ -190,10 +206,6 @@ def _access(snapshot: Snapshot, text: str) -> None:
 def _secret(path: Path, key: str, text: str) -> None:
     """密文只能由 vault_set 加密写入；已有的 secret 可以只改 description（密文原样不动）。"""
     hint = "secret values are encrypted by the platform: store them with vault_set"
-    try:
-        validate_key(key)
-    except InvalidInput as e:
-        raise _Rejected(str(e), "Secrets") from e
     if not path.is_file():
         raise _Rejected(f"new secrets are not written by hand; {hint}", "Secrets")
     try:

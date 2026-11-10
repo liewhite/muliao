@@ -338,13 +338,12 @@ def assemble(
     vault = Vault(assets, settings.vault.key.get_secret_value())
     files = FileStore(db, settings.files_dir, settings.runtime.upload_max_bytes)
     skills = SkillStore(assets)
-    memory = MemoryStore(assets, settings.runtime.memory_max_chars)
+    memory = MemoryStore(assets)
     tools = available_tools(web_configured=bool(web_tools))
     agents = AgentService(
         db,
         assets,
         settings.workspaces_dir,
-        check_model,
         AgentDefaults(settings.llm.default_model),
     )
     distribution = Distribution(assets, tools, agents.get_active)

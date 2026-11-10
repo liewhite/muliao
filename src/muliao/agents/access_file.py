@@ -220,10 +220,11 @@ def edit(path: Path, change: Callable[[TOMLDocument], None]) -> None:
     doc = tomlkit.parse(text) if text is not None else tomlkit.document()
     change(doc)
     out = tomlkit.dumps(doc)
-    # 改完也要合法：比如删掉的角色还被一节对不上已加载目录的 [agents.X] 引用着（调用方只看得到已加载的 agent）
+    # 改完也要合法（与读树、文件工具同一套规则，角色名与描述等只在这里查）：比如描述空了，或删掉的角色还被一节对不上
+    # 已加载目录的 [agents.X] 引用着（调用方只看得到已加载的 agent）
     after = parse(out, {})
     if not after.readable:
-        raise Conflict("; ".join(p.reason for p in after.problems))
+        raise InvalidInput("; ".join(p.reason for p in after.problems))
     write_atomic(path, out)
 
 

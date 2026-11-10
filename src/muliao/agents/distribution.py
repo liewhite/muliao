@@ -25,7 +25,6 @@ from muliao.agents.access import (
 from muliao.agents.assets import Snapshot
 from muliao.agents.kinds import Kind, StoredKind, as_kind
 from muliao.agents.mcp import McpServer, server_of
-from muliao.agents.naming import validate_slug
 from muliao.agents.permissions import (
     FIXED_RULES,
     Action,
@@ -72,12 +71,6 @@ class UsedAsset:
     editable: bool
     # MCP server 的配置与启用状态；别的种类为 None
     mcp: McpServer | None
-
-
-def _check(spec: RoleSpec) -> None:
-    validate_slug("role", spec.name)
-    if not spec.description.strip():
-        raise InvalidInput("role description must not be empty")
 
 
 def _role(snapshot: Snapshot, name: str) -> Role:
@@ -175,7 +168,6 @@ class Distribution:
         return _role(await self._source.snapshot(), name)
 
     async def create(self, spec: RoleSpec, *, actor: str) -> Role:
-        _check(spec)
         async with self._source.writing() as snapshot:
             if spec.name in snapshot.roles:
                 raise Conflict(f"role {spec.name!r} already exists")
@@ -201,7 +193,6 @@ class Distribution:
                 role.rules.allow if allow is None else allow,
                 role.rules.deny if deny is None else deny,
             )
-            _check(spec)
             await self._write_role(snapshot, spec, role.rules)
         return await self.get(name)
 

@@ -17,8 +17,7 @@ import frontmatter
 
 from muliao.agents import assets, skill_package
 from muliao.agents.access import changeable, usable, writable
-from muliao.agents.kinds import StoredKind, label
-from muliao.agents.naming import validate_slug
+from muliao.agents.kinds import StoredKind
 from muliao.agents.skill_package import SKILL_FILE, SkillFile, Skipped, parse_frontmatter
 from muliao.agents.source import AssetSource
 from muliao.errors import NotFound
@@ -178,22 +177,21 @@ class SkillStore:
     ) -> SkillMeta:
         """新建或整体改写 SKILL.md（附件不变；frontmatter 里别的键保留）。已有的要 actor 能改（Grants.can 的 write），owner 不变；
         新建的归 owner。version 是打开编辑时 SKILL.md 的版本（新建为 None），期间被别处改过就 Conflict（assets.check_version）。"""
-        validate_slug(label(_KIND), name)
         description = skill_package.valid_description(description)
-        async with self._source.writing() as snapshot:
-            existing = writable(snapshot, _KIND, name, actor)
-            directory = existing.path if existing is not None else snapshot.path_of(_KIND, name, owner)
-            md = directory / SKILL_FILE
+        snapshot = await self._source.snapshot()
+        existing = writable(snapshot, _KIND, name, actor)
+        md = (existing.path if existing is not None else snapshot.path_of(_KIND, name, owner)) / SKILL_FILE
+        current = await asyncio.to_thread(md.read_text, encoding="utf-8") if existing is not None else None
+        post = frontmatter.Post("") if current is None else frontmatter.loads(current)
+        post.content = body.strip() + "\n"
+        post["name"], post["description"] = name, description
 
-            def put() -> None:
-                current = md.read_text(encoding="utf-8") if existing is not None else None
-                assets.check_version(current, version, f"skill {name!r}")
-                post = frontmatter.Post("") if current is None else frontmatter.loads(current)
-                post.content = body.strip() + "\n"
-                post["name"], post["description"] = name, description
-                write_atomic(md, frontmatter.dumps(post) + "\n")
+        def unchanged(path: Path) -> None:
+            # 此刻文件里的（写入口在锁里、紧挨着写之前调用）：期间被删、被抢先建、被改过都对不上
+            now = path.read_text(encoding="utf-8") if path.is_file() else None
+            assets.check_version(now, version, f"skill {name!r}")
 
-            await asyncio.to_thread(put)
+        await self._source.write({md: frontmatter.dumps(post) + "\n"}, unchanged)
         return _meta((await self._source.snapshot()).asset(_KIND, name))
 
     async def files(self, name: str) -> SkillFiles:

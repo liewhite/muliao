@@ -4,6 +4,11 @@
 import json
 import os
 
+import pytest
+
+from muliao.agents.api import RoleSpec
+from muliao.agents.service import AgentPatch
+from muliao.errors import Conflict, InvalidInput
 from tests.test_tools import run_tools
 
 SKILL_MD = "---\ndescription: does things\n---\nbody\n"
@@ -222,20 +227,23 @@ async def test_an_oversized_memory_can_be_shortened_step_by_step(container, make
 async def test_a_write_landing_while_the_check_runs_is_not_overwritten(
     container, make_agent, models, monkeypatch
 ):
-    # 校验要 await：等待期间别处写进来的，write_file 与 edit_file 都不能盖掉
+    # 校验期间（不经写入口，如 shell）别处写进来的，write_file 与 edit_file 都不能盖掉
+    from muliao.agents import asset_files
+
     me, _tree, mine = await _setup(container, make_agent)
     memory = mine / "memory.md"
     memory.write_text("note\n")
-    vet = container.assets.vet
+    vet = asset_files.vet
 
-    async def racing_vet(path, text):
-        await vet(path, text)
+    def racing_vet(snapshot, path, text, *args):
+        stored = vet(snapshot, path, text, *args)
         if path == memory:
             memory.write_text(memory.read_text() + "theirs\n")
             st = memory.stat()
             os.utime(memory, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000))
+        return stored
 
-    monkeypatch.setattr(container.assets, "vet", racing_vet)
+    monkeypatch.setattr(asset_files, "vet", racing_vet)
     outputs = await run_tools(
         container,
         models,
@@ -252,8 +260,8 @@ async def test_a_write_landing_while_the_check_runs_is_not_overwritten(
 
 
 def test_every_rejection_names_a_section_of_the_assets_skill():
-    """报错里的 `section '<名>'` 必须是公共 skill assets-files 的小节标题（Section）：源码里传给 _Rejected / _named / _new 的
-    小节名都在 SECTIONS 里；SECTIONS 变了，要同步改 skill 的 `## <名>` 标题（#501）。"""
+    """报错里的 `section '<名>'` 必须是公共 skill assets-files 的小节标题（Section）：源码里传给 _Rejected / _new 的与各种资源
+    的（_SECTIONS）小节名合起来就是 SECTIONS；SECTIONS 变了，要同步改 skill 的 `## <名>` 标题（#501）。"""
     import ast
     import inspect
 
@@ -265,11 +273,11 @@ def test_every_rejection_names_a_section_of_the_assets_skill():
         for call in ast.walk(tree)
         if isinstance(call, ast.Call)
         and isinstance(call.func, ast.Name)
-        and call.func.id in {"_Rejected", "_named", "_new"}
+        and call.func.id in {"_Rejected", "_new"}
         and call.args
         and isinstance(call.args[-1], ast.Constant)
     }
-    assert used == set(asset_files.SECTIONS)
+    assert used | set(asset_files._SECTIONS.values()) == set(asset_files.SECTIONS)
     assert asset_files.SECTIONS == (
         "Layout",
         "Memory",
@@ -279,3 +287,129 @@ def test_every_rejection_names_a_section_of_the_assets_skill():
         "agent.toml",
         "Roles and permissions",
     )
+
+
+# ---- 界面与文件工具经同一个写入口（#578）：同一份内容结论一致 ----
+
+
+async def _ui(call) -> str:
+    """界面那一路的结论：写成了是 ok，被拒是错误信息。"""
+    try:
+        await call
+    except (InvalidInput, Conflict) as e:
+        return f"refused: {e}"
+    return "ok"
+
+
+def _tool(output: str) -> str:
+    return "ok" if output.startswith(("edited ", "created ", "overwrote ")) else f"refused: {output}"
+
+
+async def test_the_app_and_the_file_tools_reach_the_same_conclusion(container, make_agent, models):
+    root = await make_agent("root", model="tools", roles=("admin",))
+    tree = container.settings.assets_dir
+    memory = tree / "root" / "memory.md"
+    toml = tree / "root" / "agent.toml"
+    access = tree / "platform" / "access.toml"
+    await container.distribution.create(RoleSpec("ops", "runs things", [], []), actor="user")
+    long = "a" * 3000 + "\n" + "b" * 2100
+
+    async def memory_ui(content: str) -> str:
+        info = await container.memory.read("root")
+        return await _ui(container.memory.put("root", content, actor="user", version=info.version))
+
+    async def memory_tool(content: str) -> str:
+        out = await run_tools(
+            container,
+            models,
+            root.id,
+            [("read_file", {"path": str(memory)}), ("write_file", {"path": str(memory), "content": content})],
+        )
+        return _tool(out[1])
+
+    # 已经超长的记忆：删短一些（仍超长）两边都放行，变长两边都拒绝
+    for write in (memory_ui, memory_tool):
+        memory.write_text(long + "\n")
+        assert await write(long[:-50]) == "ok", write
+        assert (await write(long + "b")).startswith("refused"), write
+    # 空白规整两边一样：存下的就是指令里显示的样子（#361）
+    for write in (memory_ui, memory_tool):
+        memory.write_text("x\n")
+        assert await write("first  \n\n\n\nsecond\n\n") == "ok"
+        assert memory.read_text() == "first\n\nsecond\n"
+
+    # agent.toml 的描述不能空
+    ui = await _ui(container.agents.update(root.id, AgentPatch(description="  "), actor="user"))
+    out = await run_tools(
+        container,
+        models,
+        root.id,
+        [
+            (
+                "edit_file",
+                {
+                    "path": str(toml),
+                    "old_text": 'description = "test agent"',
+                    "new_text": 'description = " "',
+                },
+            )
+        ],
+    )
+    assert "description must not be empty" in ui and "description must not be empty" in _tool(out[0])
+
+    # 角色的描述不能空
+    ui = await _ui(container.distribution.patch("ops", actor="user", description=" "))
+    out = await run_tools(
+        container,
+        models,
+        root.id,
+        [
+            (
+                "edit_file",
+                {
+                    "path": str(access),
+                    "old_text": 'description = "runs things"',
+                    "new_text": 'description = ""',
+                },
+            )
+        ],
+    )
+    assert "description must not be empty" in ui and "description must not be empty" in _tool(out[0])
+
+    # 新建的平台记忆名字要是 slug
+    ui = await _ui(container.memory.put("Bad Name", "x", actor="user", version=None))
+    out = await run_tools(
+        container,
+        models,
+        root.id,
+        [("write_file", {"path": str(tree / "platform/memory/Bad Name.md"), "content": "x"})],
+    )
+    assert "invalid memory name" in ui and "invalid memory name" in _tool(out[0])
+    # 界面上只给原因，文件工具另带上给 agent 的说明（看 assets-files 哪一节）
+    assert "assets-files" not in ui and "section 'Memory'" in out[0]
+
+
+def test_layout_maps_paths_and_assets_both_ways():
+    from muliao.agents.assets import Config, Entry, Misplaced, Shelf, place_of, rel_of
+    from muliao.agents.kinds import StoredKind
+
+    for kind, name in [
+        (StoredKind.MEMORY, "trading"),
+        (StoredKind.SKILL, "helper"),
+        (StoredKind.MCP, "srv"),
+        (StoredKind.SECRET, "TOKEN"),
+    ]:
+        for agent in (None, "alice"):
+            if kind == StoredKind.MEMORY and agent is not None:
+                assert place_of(rel_of(kind, "alice", True), agent) == Entry(kind, "alice")
+                continue
+            assert place_of(rel_of(kind, name, agent is not None), agent) == Entry(kind, name)
+    assert place_of(("skills", "helper", "SKILL.md"), None) == Entry(
+        StoredKind.SKILL, "helper", ("SKILL.md",)
+    )
+    assert place_of(("skills",), "alice") == Shelf(StoredKind.SKILL)
+    assert place_of(("agent.toml",), "alice") == Config("agent.toml")
+    assert place_of(("access.toml",), None) == Config("access.toml")
+    for rel, agent in [(("memory", "x.md"), "alice"), (("mcp", "x.txt"), None), (("notes.txt",), None)]:
+        with pytest.raises(Misplaced):
+            place_of(rel, agent)

@@ -10,14 +10,14 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 
 from muliao.agents import assets
 from muliao.agents.access import changeable, usable
 from muliao.agents.kinds import StoredKind, label
-from muliao.agents.mcp_config import McpConfig, McpServer, McpTransport, mcp_config, mcp_file
-from muliao.agents.naming import validate_slug
+from muliao.agents.mcp_config import McpConfig, McpServer, McpTransport, mcp_config, mcp_file, parse_mcp_file
 from muliao.agents.source import AssetSource
-from muliao.platform.fs import write_atomic
+from muliao.errors import Conflict
 
 log = logging.getLogger(__name__)
 
@@ -61,21 +61,22 @@ class McpRegistry:
         self, name: str, config: McpConfig, *, actor: str, owner: str | None, probe: bool
     ) -> tuple[McpServer, list[str]]:
         """新增 server（启用的，归 owner）。probe=True 时先按 actor 能用的 secret 连接验证，验证失败不写入。"""
-        validate_slug(label(_KIND), name)
         server = McpServer(owner=owner, name=name, config=config, enabled=True)
-        # 连接验证之前先查一次（已有同名的不必白跑一次连接）；写入时那次才是准的
-        self._check_free((await self._source.snapshot()), name)
+        # 连接验证之前先查一次（已有同名的不必白跑一次连接）；写入口按此刻的树再查（asset_files.vet）
+        snapshot = await self._source.snapshot()
+        path = snapshot.path_of(_KIND, name, owner)
+        snapshot.check_free(_KIND, name)
         tools = await self.probe(server, actor) if probe else []
-        async with self._source.writing() as snapshot:
-            self._check_free(snapshot, name)
-            path = snapshot.path_of(_KIND, name, owner)
-            await asyncio.to_thread(write_atomic, path, mcp_file(config, True))
+
+        def new(path: Path) -> None:
+            if path.exists():
+                raise Conflict(
+                    f"{label(_KIND)} {name!r} already exists; names are unique, choose another name"
+                )
+
+        await self._source.write({path: mcp_file(config, True)}, new)
         log.info("mcp server added", extra={"owner": owner, "mcp": name, "tools": len(tools)})
         return server, tools
-
-    @staticmethod
-    def _check_free(snapshot: assets.Snapshot, name: str) -> None:
-        snapshot.check_free(_KIND, name)
 
     async def remove(self, name: str, actor: str) -> None:
         async with self._source.writing() as snapshot:
@@ -83,8 +84,13 @@ class McpRegistry:
             await asyncio.to_thread(assets.remove, asset.path)
 
     async def set_enabled(self, name: str, enabled: bool, actor: str) -> McpServer:
-        async with self._source.writing() as snapshot:
-            server = server_of(changeable(snapshot, _KIND, name, actor))
-            path = snapshot.asset(_KIND, name).path
-            await asyncio.to_thread(write_atomic, path, mcp_file(server.config, enabled))
-            return McpServer(server.owner, name, server.config, enabled)
+        asset = changeable(await self._source.snapshot(), _KIND, name, actor)
+        server = server_of(asset)
+
+        def unchanged(path: Path) -> None:
+            # 只改启用状态：期间配置被别处改过、删掉的不盖掉
+            if not path.is_file() or parse_mcp_file(path.read_text(encoding="utf-8"))[0] != server.config:
+                raise Conflict(f"{label(_KIND)} {name!r} was changed elsewhere meanwhile; reload and retry")
+
+        await self._source.write({asset.path: mcp_file(server.config, enabled)}, unchanged)
+        return McpServer(server.owner, name, server.config, enabled)

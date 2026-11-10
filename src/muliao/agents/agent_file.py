@@ -4,10 +4,11 @@
 from __future__ import annotations
 
 import tomllib
+from collections.abc import Mapping
 from pathlib import Path
 
 import tomlkit
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from muliao.agents.thinking import Thinking
 from muliao.errors import InvalidInput
@@ -25,13 +26,27 @@ class AgentFile(BaseModel):
     thinking: Thinking = "default"
     group: str | None = None
 
+    @field_validator("description")
+    @classmethod
+    def _described(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("description must not be empty")
+        return value
+
 
 def parse(text: str) -> AgentFile:
     """不合格式时 InvalidInput。"""
     try:
-        return AgentFile.model_validate(tomllib.loads(text))
+        data = tomllib.loads(text)
     except tomllib.TOMLDecodeError as e:
         raise InvalidInput(f"invalid {AGENT_FILE}: {e}") from e
+    return of(data)
+
+
+def of(data: Mapping[str, object]) -> AgentFile:
+    """按这些字段的 AgentFile（平台自己写时也经这里）；不合规则时 InvalidInput。"""
+    try:
+        return AgentFile.model_validate(data)
     except ValidationError as e:
         raise InvalidInput(f"invalid {AGENT_FILE}: {validation_reason(e)}") from e
 

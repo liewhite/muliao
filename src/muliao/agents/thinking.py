@@ -4,12 +4,5 @@ provider 怎么换算、模型不支持时怎么处理都由 pydantic_ai 与服�
 
 from typing import Literal, get_args
 
-from muliao.errors import InvalidInput
-
 Thinking = Literal["default", "off", "low", "medium", "high", "xhigh"]
 THINKING_LEVELS: tuple[Thinking, ...] = get_args(Thinking)
-
-
-def check_thinking_level(thinking: str) -> None:
-    if thinking not in THINKING_LEVELS:
-        raise InvalidInput(f"thinking must be one of {list(THINKING_LEVELS)}, got {thinking!r}")

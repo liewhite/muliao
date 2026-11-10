@@ -349,7 +349,7 @@ async def test_deleting_a_role_still_referenced_by_an_unloaded_agent_is_refused(
     path = root(container) / "platform" / "access.toml"
     write(path, path.read_text() + '\n[agents.ghost]\nroles = ["watcher"]\n')
     before = path.read_text()
-    with pytest.raises(Conflict, match="not defined"):
+    with pytest.raises(InvalidInput, match="not defined"):
         await container.distribution.delete("watcher", actor="user")
     assert path.read_text() == before
 
@@ -374,9 +374,8 @@ async def test_an_unparsable_access_toml_keeps_the_last_rules_and_reports_to_the
     assert "last read successfully stay in effect" in reported[0]
     # 坏着时 admin 用文件工具改回原文：读得出来就放行（原文那条单节问题不挡），仍读不出的照样拦
     with pytest.raises(InvalidInput, match="cannot parse"):
-        await container.assets.vet(path, good + "\n[agents.beta\n")
-    await container.assets.vet(path, good)
-    write(path, good)
+        await container.assets.write({path: good + "\n[agents.beta\n"})
+    await container.assets.write({path: good})
     snapshot = await container.assets.snapshot()
     assert snapshot.administers(boss.id)
     assert [p.reason for p in snapshot.problems if p.path == path] == [

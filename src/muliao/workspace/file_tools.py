@@ -15,11 +15,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai import BinaryContent, FunctionToolset, RunContext, ToolReturn
 
 from muliao.agent_runtime.api import TOOL_ATTACHMENTS, attachment_of
-from muliao.agents.api import AssetSource
+from muliao.agents.api import AssetRejected, AssetSource, Written
 from muliao.errors import Forbidden, InvalidInput, NotFound
 from muliao.files.api import INLINE_IMAGE_TYPES, FileStore
 from muliao.platform import text_edit
-from muliao.platform.fs import read_text, real, write_atomic, write_text
+from muliao.platform.fs import read_text, real, write_text
 from muliao.platform.sandbox import Confinement
 from muliao.platform.text_edit import truncate
 from muliao.platform.tool_views import Args, CodeBlock, ToolRender, ViewBlock, diff, rendered_by
@@ -214,14 +214,18 @@ def file_toolset(
         target = reach(await confiner.of(ctx.deps.agent_id), ctx.deps.workspace, path, "write")
         existed = target.is_file()
         if assets.contains(target):
-            await assets.vet(target, content)
-            # vet 要等（读树、线程）：核对放在它之后、与写盘之间不再有 await，等待期间别处写进来的也拦得住
-            if target.is_file():  # 校验期间别处新建的也算已存在
-                _check_fresh(ctx.deps, target)
-            write_atomic(target, content)
+
+            def fresh(path: Path) -> None:
+                # 写入口在锁里、紧挨着写之前调用：校验期间别处新建或改了的也拦得住
+                if path.is_file():
+                    _check_fresh(ctx.deps, path)
+
+            done = (await _write_assets(assets, {target: content}, fresh))[target]
+            content = done.text
+            _remember(ctx.deps, target, done.mtime_ns)
         else:
             write_text(target, content)
-        _remember(ctx.deps, target)
+            _remember(ctx.deps, target)
         verb = "overwrote" if existed else "created"
         return f"{verb} {target} ({len(content.splitlines())} lines, {len(content)} chars)"
 
@@ -325,23 +329,32 @@ def file_toolset(
         after, counts = file_edit.apply_each(before, [(c.target, c) for c in located])
         # 盘上要写的文本（按 CRLF 编辑的换回 CRLF）：校验与写盘是同一份
         stored = {t: c.replace("\n", "\r\n") if t in crlf else c for t, c in after.items()}
-        in_tree = {t for t in after if assets.contains(t)}
-        for target in in_tree:
-            await assets.vet(target, stored[target])
-        changed = [str(t) for t in in_tree if t.stat().st_mtime_ns != stamps[t]]
-        if changed:
-            raise InvalidInput(
-                f"{', '.join(changed)} changed while this edit was being checked (someone else wrote it); "
-                "nothing was written: redo the edit on the current content"
-            )
-        # 全部校验通过才写盘；资源目录里的原子写入（读树的不会读到写了一半的文件）
-        written: list[Path] = []
-        for target, content in stored.items():
+        in_tree = {t: stored[t] for t in after if assets.contains(t)}
+
+        def unchanged(target: Path) -> None:
+            # 写入口在锁里、紧挨着写之前调用：读 before 之后别处改了就整次不写
+            if not target.is_file() or target.stat().st_mtime_ns != stamps[target]:
+                raise InvalidInput(
+                    f"{target} changed while this edit was being checked (someone else wrote it); "
+                    "nothing was written: redo the edit on the current content"
+                )
+
+        # 资源目录里的先经写入口：全部校验通过才写（原子写入，记忆规整空白），回显按实际存下的
+        if in_tree:
             try:
-                if target in in_tree:
-                    write_atomic(target, content)
-                else:
-                    write_text(target, content)
+                for target, done in (await _write_assets(assets, in_tree, unchanged)).items():
+                    after[target] = _as_lf(done.text)[0]
+                    _remember(ctx.deps, target, done.mtime_ns)
+            except OSError as e:
+                raise _io_error(
+                    e, " Asset files of this edit may be partly written; nothing else was written."
+                ) from e
+        written: list[Path] = list(in_tree)
+        for target, content in stored.items():
+            if target in in_tree:
+                continue
+            try:
+                write_text(target, content)
             except OSError as e:
                 done = (
                     f" Already written: {', '.join(map(str, written))}."
@@ -426,10 +439,22 @@ def _read_image(target: Path, media_type: str, max_bytes: int) -> list[str | Bin
     return [f"{target} ({media_type}, {len(data)} bytes)", BinaryContent(data, media_type=media_type)]
 
 
-def _remember(scope: RunScope, target: Path) -> None:
+async def _write_assets(
+    assets: AssetSource, texts: dict[Path, str], guard: Callable[[Path], None]
+) -> dict[Path, Written]:
+    """经写入口写资源文件；被拒时交给 agent 的是完整说明（是谁的、看 assets-files 哪一节）。"""
+    try:
+        return await assets.write(texts, guard)
+    except AssetRejected as e:
+        raise InvalidInput(e.for_agent()) from e
+
+
+def _remember(scope: RunScope, target: Path, mtime_ns: int | None = None) -> None:
     """记下这次驱动读到（或刚写成）的文件当时的修改时间（RunScope.reads）。读之前记：读的过程中被改了，记下的是旧的，
-    之后覆盖时按「改过了」拒绝，不会放过。"""
-    if target.is_file():
+    之后覆盖时按「改过了」拒绝，不会放过。写入口写成的给出它在锁里取的 mtime_ns（之后别处的写入不会被记成这次的）。"""
+    if mtime_ns is not None:
+        scope.reads[real(target)] = mtime_ns
+    elif target.is_file():
         scope.reads[real(target)] = target.stat().st_mtime_ns
 
 

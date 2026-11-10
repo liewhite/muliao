@@ -4,8 +4,10 @@
   生效（运行开始时组装指令、算工具与分发、解析 secret，都读它）。
 - agent 的配置（描述、模型、思考档位、分组）只在快照里（Snapshot.loaded_agent），数据库只有身份（id、名字、归档、默认）。
   模型或思考档位在当前配置下不能运行的记成 Problem 报给它；它的运行在取模型时当场失败，不沿用旧值。
-- 平台自己写资源（界面、vault_set、建 / 改名 / 删 agent）时在 writing() 里做：与读共用一把锁，读-改-写串行。
-- 文件工具写资源目录里的文件之前问 contains / vet（agents.asset_files）：按读树的规则校验格式（#500）。
+- 改写一个资源文件（界面编辑记忆、SKILL.md、MCP，文件工具 write_file / edit_file）只经写入口 write()：在锁里按读树的
+  规则校验（agents.asset_files.vet，#500、#578）再原子写入，界面与文件工具对同一份内容结论一致。
+- 平台的其余写入（vault_set 加密、导入 skill 整个目录、建 / 改名 / 删 agent、改 access.toml、删除与转移）在 writing() 里
+  做：与读共用一把锁，读-改-写串行；agent.toml 的规则在 AgentFile 与 check_agent，access.toml 的在 access_file。
 """
 
 from __future__ import annotations
@@ -13,22 +15,33 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import logging
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 
 from muliao.agents import asset_files
 from muliao.agents.active import agent_names_in
-from muliao.agents.agent_file import AGENT_FILE
+from muliao.agents.agent_file import AGENT_FILE, AgentFile
 from muliao.agents.assets import Problem, Snapshot, fingerprint, load_tree
 from muliao.agents.kinds import StoredKind
 from muliao.agents.permissions import GLOBAL_MEMORY
-from muliao.agents.thinking import Thinking, check_thinking_level
+from muliao.agents.thinking import Thinking
 from muliao.errors import InvalidInput
 from muliao.platform.db import Database
 from muliao.platform.fs import write_atomic
 
 log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class Written:
+    """写入口写成的一份文件。"""
+
+    # 实际存下的全文（记忆规整过空白，asset_files.vet）
+    text: str
+    # 写成时的修改时间
+    mtime_ns: int
 
 
 class AssetSource:
@@ -77,7 +90,6 @@ class AssetSource:
         problems = []
         for a in snapshot.agents.values():
             try:
-                check_thinking_level(a.thinking)
                 self._check_model(a.model, a.thinking)
             except InvalidInput as e:
                 problems.append(
@@ -91,12 +103,34 @@ class AssetSource:
         """path 是资源目录里的文件（按真实路径）。"""
         return asset_files.in_tree(self.root, path)
 
-    async def vet(self, path: Path, text: str) -> None:
-        """文件工具把资源目录里的 path 写成 text 之前：不合格式时 InvalidInput（agents.asset_files）。"""
-        snapshot = await self.snapshot()
-        await asyncio.to_thread(
-            asset_files.vet, snapshot, path, text, self.memory_max_chars, self._check_model
-        )
+    def check_agent(self, data: AgentFile) -> None:
+        """agent.toml 的内容在当前配置下能运行（模型与思考档位），否则 InvalidInput。格式与字段的规则在 AgentFile。"""
+        self._check_model(data.model, data.thinking)
+
+    async def write(
+        self, texts: Mapping[Path, str], guard: Callable[[Path], None] | None = None
+    ) -> dict[Path, Written]:
+        """把资源目录里的这些文件写成 texts：改写资源文件的唯一入口。在锁里按此刻的树逐份校验（asset_files.vet，不合格是
+        AssetRejected），再交给 guard 做调用方自己的核对（打开编辑时的版本、读过没有；不过就抛错），全部通过才逐个原子写入；
+        有一份不过就一份都不写。返回每份实际存下的（Written）。"""
+        async with self.writing() as snapshot:
+
+            def write() -> dict[Path, Written]:
+                stored = {
+                    p: asset_files.vet(snapshot, p, t, self.memory_max_chars, self.check_agent)
+                    for p, t in texts.items()
+                }
+                if guard is not None:
+                    for p in stored:
+                        guard(p)
+                written = {}
+                for p, t in stored.items():
+                    write_atomic(p, t)
+                    # 写成时就取，仍在锁里：之后别处的写入不会被记成这次的
+                    written[p] = Written(t, p.stat().st_mtime_ns)
+                return written
+
+            return await asyncio.to_thread(write)
 
     async def ensure_global_memory(self) -> None:
         """全局记忆归平台、base 固定收录、不能删：资源目录里没有它（全新安装）时建一个空的。启动时调用。"""

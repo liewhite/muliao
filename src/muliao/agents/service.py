@@ -29,7 +29,7 @@ from muliao.agents.naming import new_agent_name, normalize_agent_name
 from muliao.agents.permissions import AgentRules
 from muliao.agents.source import AssetSource
 from muliao.agents.tables import Agent
-from muliao.agents.thinking import THINKING_LEVELS, Thinking, check_thinking_level
+from muliao.agents.thinking import THINKING_LEVELS, Thinking
 from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.platform.db import Database, utcnow
 from muliao.platform.fs import write_atomic
@@ -92,23 +92,10 @@ class AgentPatch:
 
 @dataclass(frozen=True)
 class _AgentFields:
-    """agent 的可修改字段合并 patch 之后的值（AgentService._validated）。"""
+    """agent 的可修改字段合并 patch 之后的值（AgentService._fields）：名字（只认数据库、也是目录名）与 agent.toml 的内容。"""
 
     name: str
-    description: str
-    model: str
-    thinking: Thinking
-    group: str | None
-
-    def file(self, agent_id: str) -> AgentFile:
-        """agent.toml 里的内容（名字不在文件里：目录名就是名字）。"""
-        return AgentFile(
-            id=agent_id,
-            description=self.description,
-            model=self.model,
-            thinking=self.thinking,
-            group=self.group,
-        )
+    file: AgentFile
 
 
 @dataclass(frozen=True)
@@ -257,14 +244,11 @@ class AgentService:
         db: Database,
         source: AssetSource,
         workspaces_dir: Path,
-        # (模型, 思考档位) 在当前配置下不能运行时报 InvalidInput（agent_runtime.llm.ModelRegistry.check）
-        model_checker: Callable[[str, Thinking], None],
         defaults: AgentDefaults,
     ):
         self._db = db
         self._source = source
         self._workspaces_dir = workspaces_dir
-        self._check_model = model_checker
         self.defaults = defaults
 
     def workspace(self, agent_id: str) -> Path:
@@ -284,12 +268,16 @@ class AgentService:
         if leftovers:
             log.warning("workspaces of deleted agents remain", extra={"agent_ids": leftovers})
 
-    def _check(self, fields: _AgentFields) -> None:
-        """不依赖快照的校验；分发规则在写入时按快照校验（distribution.check_agent_rules）。"""
-        check_thinking_level(fields.thinking)
-        if not fields.description.strip():
-            raise InvalidInput("agent description must not be empty")
-        self._check_model(fields.model, fields.thinking)
+    def _fields(
+        self, agent_id: str, name: str, description: str, model: str, thinking: Thinking, group: str | None
+    ) -> _AgentFields:
+        """校验过的字段（不合规则时 InvalidInput）：agent.toml 的规则在 AgentFile 与 AssetSource.check_agent，与文件工具改
+        它时同一套；分发规则在写入时按快照校验（distribution.check_agent_rules）。"""
+        file = agent_file.of(
+            {"id": agent_id, "description": description, "model": model, "thinking": thinking, "group": group}
+        )
+        self._source.check_agent(file)
+        return _AgentFields(name, file)
 
     @staticmethod
     async def _check_name_free(s: AsyncSession, snapshot: Snapshot, name: str, agent_id: str | None) -> None:
@@ -313,16 +301,16 @@ class AgentService:
 
     async def create(self, spec: AgentSpec, *, actor: str) -> AgentInfo:
         """actor：创建者，"user" 或创建它的 agent 的 id。建资源目录（agent.toml、空的私有记忆）、写它的规则、插行、建工作目录。"""
-        fields = _AgentFields(
-            name=new_agent_name(spec.name),
-            description=spec.description,
-            model=self.defaults.model if spec.model is None else spec.model,
-            thinking=spec.thinking,
-            group=None if spec.group is None else normalize_group(spec.group),
-        )
-        self._check(fields)
-        name = fields.name
         agent_id = new_agent_id()
+        fields = self._fields(
+            agent_id,
+            new_agent_name(spec.name),
+            spec.description,
+            self.defaults.model if spec.model is None else spec.model,
+            spec.thinking,
+            None if spec.group is None else normalize_group(spec.group),
+        )
+        name = fields.name
         rules = AgentRules.of(spec.roles, spec.allow, spec.deny)
         async with self._source.writing() as snapshot:
             check_agent_rules(snapshot, rules)
@@ -332,9 +320,7 @@ class AgentService:
             # 先查 access.toml：不合法时什么都不写（否则写到一半，撤回时改它又失败）
             await asyncio.to_thread(access_file.check_valid, snapshot.access_path)
             try:
-                await asyncio.to_thread(
-                    _write_new_agent, directory, snapshot.access_path, agent_id, fields, rules
-                )
+                await asyncio.to_thread(_write_new_agent, directory, snapshot.access_path, fields, rules)
                 async with self._db.transaction() as s:
                     # description / model 是待 #503 删的旧镜像列（NOT NULL），只填空串：配置只在 agent.toml
                     agent = Agent(id=agent_id, name=name, description="", model="")
@@ -356,7 +342,7 @@ class AgentService:
             async with self._db.transaction() as s:
                 agent = await active_row_in(s, agent_id)
                 directory = snapshot.loaded_agent(agent_id)
-                fields = self._validated(agent.name, directory, patch)
+                fields = self._validated(agent_id, agent.name, directory, patch)
                 await self._check_name_free(s, snapshot, fields.name, agent_id)
             before = snapshot.rules_of(agent_id)
             rules = AgentRules.of(
@@ -372,7 +358,6 @@ class AgentService:
                 directory.path,
                 snapshot.access_path,
                 directory.name,
-                agent_id,
                 fields,
                 rules,
             )
@@ -399,18 +384,17 @@ class AgentService:
             await s.flush()
             return info_of(agent)
 
-    def _validated(self, name: str, config: AgentDir, patch: AgentPatch) -> _AgentFields:
+    def _validated(self, agent_id: str, name: str, config: AgentDir, patch: AgentPatch) -> _AgentFields:
         """patch 合并到 agent 当前值（名字认数据库，配置认 agent.toml）之后的字段（分发规则之外），校验过（不合法时报
         InvalidInput）。"""
-        fields = _AgentFields(
-            name=name if patch.name is None else new_agent_name(patch.name),
-            description=config.description if patch.description is None else patch.description,
-            model=config.model if patch.model is None else patch.model,
-            thinking=config.thinking if patch.thinking is None else patch.thinking,
-            group=config.group if patch.group is None else normalize_group(patch.group),
+        return self._fields(
+            agent_id,
+            name if patch.name is None else new_agent_name(patch.name),
+            config.description if patch.description is None else patch.description,
+            config.model if patch.model is None else patch.model,
+            config.thinking if patch.thinking is None else patch.thinking,
+            config.group if patch.group is None else normalize_group(patch.group),
         )
-        self._check(fields)
-        return fields
 
     async def get_active(self, agent_id: str) -> AgentInfo:
         """还可用的 agent：正在删除的按不存在处理（例如读它的记忆、资产时）。为它写数据的检查在写入的地方：数据库数据在
@@ -472,11 +456,9 @@ class AgentService:
                 )
 
 
-def _write_new_agent(
-    directory: Path, access: Path, agent_id: str, fields: _AgentFields, rules: AgentRules
-) -> None:
+def _write_new_agent(directory: Path, access: Path, fields: _AgentFields, rules: AgentRules) -> None:
     directory.mkdir(parents=True)
-    write_atomic(directory / AGENT_FILE, agent_file.dump(directory / AGENT_FILE, fields.file(agent_id)))
+    write_atomic(directory / AGENT_FILE, agent_file.dump(directory / AGENT_FILE, fields.file))
     write_atomic(directory / PRIVATE_MEMORY_FILE, "")
     access_file.edit(access, lambda doc: access_file.set_agent_rules(doc, fields.name, rules))
 
@@ -487,7 +469,7 @@ def _undo_new_agent(directory: Path, access: Path, name: str) -> None:
 
 
 def _write_agent_update(
-    directory: Path, access: Path, old_name: str, agent_id: str, fields: _AgentFields, rules: AgentRules
+    directory: Path, access: Path, old_name: str, fields: _AgentFields, rules: AgentRules
 ) -> Callable[[], None]:
     """改 agent 的文件，返回把它们改回去的函数。改名先挪目录（挪不了就什么都没改），再改 agent.toml 与 access.toml；后面
     任何一步失败都当场改回去再报错。"""
@@ -508,7 +490,7 @@ def _write_agent_update(
             target.rename(directory)
 
     try:
-        write_atomic(target / AGENT_FILE, agent_file.dump(target / AGENT_FILE, fields.file(agent_id)))
+        write_atomic(target / AGENT_FILE, agent_file.dump(target / AGENT_FILE, fields.file))
 
         def change(doc: TOMLDocument) -> None:
             if fields.name != old_name:
