@@ -3509,7 +3509,7 @@
             "required": false,
             "schema": {
               "type": "integer",
-              "default": 100,
+              "default": 20,
               "title": "Limit"
             }
           }
@@ -8036,8 +8036,7 @@
           "compaction_threshold_tokens": {
             "anyOf": [
               {
-                "type": "integer",
-                "minimum": 1000.0
+                "type": "integer"
               },
               {
                 "type": "null"

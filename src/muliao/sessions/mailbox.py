@@ -26,12 +26,11 @@ from muliao.platform.tasks import TaskQueue
 from muliao.platform.tooling import Audience
 from muliao.sessions.approvals import requested_among, requested_in
 from muliao.sessions.history import since_last_response, since_last_response_among
-from muliao.sessions.holds import get_in
 from muliao.sessions.lanes import RUN_TASK, session_lane
 from muliao.sessions.origins import Origin
 from muliao.sessions.pending import OpenAsks, handed_out_in, open_asks_of, waiting
 from muliao.sessions.runs import RunPayload, handed_to, latest_run, run_unfinished_in
-from muliao.sessions.tables import HoldStatus, Mail, MailKind, MailState, Session
+from muliao.sessions.tables import Mail, MailKind, MailState, Session
 
 log = logging.getLogger(__name__)
 
@@ -318,34 +317,6 @@ async def has_queued_from(s: AsyncSession, session_id: str, source: str) -> bool
             )
         )
     )
-
-
-async def post_check_in(
-    s: AsyncSession, queue: TaskQueue, session_id: str, holder: str, source: str, text: str
-) -> bool:
-    """运行中检查（platform.checks.WorkWatcher 的节奏）：在调用方事务里给发起会话投一封检查信件（不推送）；这个来源
-    已有信件排着时不投（不堆积）。工作的占用已不是 active（会话被停止，或
-    会话已删除）时也不投：停止之后不唤醒会话。返回是否投了。"""
-    hold = await get_in(s, session_id, holder)
-    if hold is None:
-        if await s.get(Session, session_id) is not None:
-            raise RuntimeError(f"session {session_id} has no hold {holder} for its running work")
-        return False
-    if hold.status != HoldStatus.ACTIVE:
-        return False
-    if await has_queued_from(s, session_id, source):
-        return False
-    await post_in(
-        s,
-        queue,
-        session_id,
-        kind=MailKind.EVENT,
-        source=source,
-        content=text,
-        awaited=False,
-        check_in=True,
-    )
-    return True
 
 
 async def open_asks_in(s: AsyncSession, session_id: str) -> OpenAsks:

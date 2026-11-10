@@ -39,8 +39,8 @@ from muliao.platform.sandbox import Confinement
 from muliao.platform.shell import DRAIN_SECONDS, LEFT_RUNNING_NOTE, kill_group, read_until_exit, spawn_bash
 from muliao.platform.tasks import Clock, Commit, no_commit
 from muliao.sessions.api import (
+    CheckBeats,
     SessionWork,
-    check_due,
     hold_registered_in,
     job_holder,
     job_id_of_holder,
@@ -115,8 +115,8 @@ class JobRunner:
         self._workspace_of = workspace_of
         self._clock = clock
         self._running: dict[int, _Running] = {}
-        # 有人监督的任务上一次发检查的时刻（还没发过的以开始时刻算）：只是节拍，重启后任务已被记为中断，不必落库
-        self._last_check: dict[int, datetime] = {}
+        # 有人监督的任务上一次发检查的时刻（还没发过的以开始时刻算）；重启后任务已被记为中断
+        self._beats: CheckBeats[int] = CheckBeats()
         # 正在启动（行已写入、监督者还没接手）的任务
         self._starting: set[int] = set()
         # 监督者所在的任务组：服务运行期间（running）存在
@@ -148,8 +148,6 @@ class JobRunner:
     ) -> Job:
         """awaited：发起它的那次运行里用户是否在等回答（完成通知随它推送）。check_seconds：运行中检查的间隔。
         shell：command 是 agent 自己写的（run_shell），不是 skill_run 拼出的 skill 脚本调用（见 Vault.resolve_many）。"""
-        if not check_seconds > 0:  # 也拒绝 NaN
-            raise ValueError(f"check_seconds must be greater than 0, got {check_seconds}")
         group = self._group
         if group is None:
             raise RuntimeError("background jobs can only start while the job runner is running")
@@ -446,17 +444,14 @@ class JobRunner:
             )
         # 只检查有人监督的：登记监督之前占用已经登记（_launch），启动中的任务还没有占用，不检查
         supervised = list(self._running)
-        for job_id in set(self._last_check) - set(supervised):
-            del self._last_check[job_id]
+        self._beats.keep(supervised)
         async with self._db.transaction() as s:
             candidates = (
                 await s.scalars(select(Job).where(Job.status == JobStatus.RUNNING, Job.id.in_(supervised)))
             ).all()
         now = self._clock()
         running = [
-            job
-            for job in candidates
-            if check_due(self._last_check.get(job.id, job.started_at), job.check_seconds, now)
+            job for job in candidates if self._beats.due(job.id, job.started_at, job.check_seconds, now)
         ]
         if not running:
             return 0
@@ -473,7 +468,7 @@ class JobRunner:
                 self._messaging.send_in(
                     s, WorkCheckIn(session_id=job.session_id, holder=job_holder(job.id), text=text)
                 )
-                self._last_check[job.id] = now
+                self._beats.checked(job.id, now)
                 sent += 1
         return sent
 

@@ -9,7 +9,6 @@ from muliao.api.files import FileOut
 from muliao.api.tasks import TaskOut
 from muliao.container import Container
 from muliao.sessions.api import (
-    MIN_COMPACTION_THRESHOLD_TOKENS,
     ApprovalChoice,
     ApprovalWait,
     AskWait,
@@ -203,7 +202,7 @@ class StartIn(BaseModel):
     # 先经 POST /api/files 上传得到的 id
     attachments: list[str] = []
     # 这个会话自己的压缩阈值（token）；不给用全局默认（GET /api/features 的 compaction_threshold_tokens）
-    compaction_threshold_tokens: int | None = Field(None, ge=MIN_COMPACTION_THRESHOLD_TOKENS)
+    compaction_threshold_tokens: int | None = None
 
 
 class ReplyIn(BaseModel):

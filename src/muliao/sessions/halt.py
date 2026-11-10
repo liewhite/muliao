@@ -44,7 +44,8 @@ log = logging.getLogger(__name__)
 
 
 async def close_history_in(s: AsyncSession, queue: TaskQueue, session_id: str) -> None:
-    """停止时让会话历史停在不会被续跑的地方（唯一事实源是库里的历史）。运行中被停止时运行已经保存了这些，这里没事可做。
+    """停止时让会话历史停在不会被续跑的地方（唯一事实源是库里的历史）。运行中被停止时运行先把当前这一步已产生的部分存库
+    （Steps.save_tail），补结果与停止标记都在这里一处做。
     只看最后一条模型回复起的那一段（history.since_last_response）：没出结果的调用只可能在那里。"""
     history = await since_last_response(s, session_id)
     if closing := stopped_results(history):
@@ -53,8 +54,10 @@ async def close_history_in(s: AsyncSession, queue: TaskQueue, session_id: str) -
             raise RuntimeError(f"session {session_id} has tool calls but no run")
         await append_in(s, session_id, run.id, [marked_stopped(closing[0])])
         return
-    if history and isinstance(history[-1], ModelRequest) and not is_stopped(history[-1]):
-        await mark_last_stopped_in(s, session_id)
+    # 没得到回复的请求，或生成到一半被打断的回复（pydantic-ai 记 state='interrupted'）：标上停止；完整的回复不标
+    if history and not is_stopped(last := history[-1]):
+        if isinstance(last, ModelRequest) or last.state == "interrupted":
+            await mark_last_stopped_in(s, session_id)
 
 
 class Halted(StrEnum):

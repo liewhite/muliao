@@ -19,7 +19,7 @@ from muliao.platform.shell import LEFT_RUNNING_NOTE, run_bash
 from muliao.platform.text_edit import truncate
 from muliao.platform.tool_views import TerminalBlock, ToolRender, ViewBlock, rendered_by
 from muliao.platform.tooling import RunScope
-from muliao.sessions.api import DEFAULT_CHECK_SECONDS
+from muliao.sessions.api import check_interval
 from muliao.workspace.file_tools import ShellLimits, file_toolset
 from muliao.workspace.grants import GRANTED_NOTE, ScriptCall, ScriptGrants
 from muliao.workspace.runner import JobRunner
@@ -210,9 +210,7 @@ def workspace_toolset(
                 "background jobs have no timeout; leave `timeout` out (set `heartbeat_seconds` for how often "
                 "you want to hear about it, kill it with job_kill)"
             )
-        check = DEFAULT_CHECK_SECONDS if heartbeat_seconds is None else heartbeat_seconds
-        if not check > 0:  # 也拒绝 NaN
-            raise InvalidInput("heartbeat_seconds must be greater than 0")
+        check = check_interval(heartbeat_seconds)
         if ask_approval:
             require_approval()
         job = await jobs.start(

@@ -19,7 +19,7 @@ from muliao.platform.tool_views import ToolRenders, truncated
 from muliao.sessions.compaction import Compactor, Verdict
 from muliao.sessions.content import Content, ContentBuilder, append_content, mark_events
 from muliao.sessions.conventions import attach_run_context
-from muliao.sessions.history import append_in, marked_stopped, stopped_results
+from muliao.sessions.history import SessionContext, append_in, latest_compaction, load_context
 from muliao.sessions.live import LiveSegments
 from muliao.sessions.mailbox import consume_in, queued_in
 from muliao.sessions.tables import Mail, Message, Session
@@ -148,6 +148,26 @@ class Steps:
             state.live = None
             raise CompactionDue()
 
+    async def compact(self, state: RunState, fresh_run_context: str) -> SessionContext:
+        """运行中途该压缩了（CompactionDue，触发它的请求已经保存）：压缩，从库里重新加载上下文（摘要 + 切点之后），并把这次
+        运行的状态对上它，返回续跑用的上下文。挂着运行上下文的那条请求被压进了摘要时，模型不再看得到它：下一条新请求
+        重新挂一段（fresh_run_context，时间取现在）。"""
+        compacted = await self._compactor.compact(state.session, state.agent)
+        async with self._db.transaction() as s:
+            context = await load_context(s, state.session.id)
+            compaction = await latest_compaction(s, state.session.id)
+        if (
+            compaction is not None
+            and state.run_context_row is not None
+            and state.run_context_row <= compaction.through_message_id
+        ):
+            state.run_context = fresh_run_context
+            state.run_context_row = None
+        state.stale_responses = context.stale_responses
+        state.compaction_exhausted = compacted == 0
+        state.resending = True
+        return context
+
     def _compaction_due(self, state: RunState, messages: list[ModelMessage]) -> bool:
         """该停下压缩了（规则见 Compactor.verdict）。压缩不下去时这次运行不再判断。"""
         if state.compaction_exhausted:
@@ -165,7 +185,9 @@ class Steps:
         state.saved = len(messages)
 
     async def save_tail(self, state: RunState) -> None:
-        """运行停在挂起的调用上时，挂起之外已经执行完的工具结果在最后一条请求里，一起保存。"""
+        """保存运行中的历史里还没保存的部分：运行停在挂起的调用上时，挂起之外已经执行完的工具结果在最后一条请求里；被停止时
+        是当前这一步已产生的部分（包括生成到一半的回答），没出结果的调用与停止标记由停止从库里补齐（sessions.halt）。
+        开头取走、还没随请求交给模型的信件（state.taken）不算处理过。"""
         if state.live is not None and len(state.live) > state.saved:
             await self._save(state, state.live[state.saved :], consumed=[])
             state.saved = len(state.live)
@@ -177,18 +199,6 @@ class Steps:
         if state.last_row is None:
             raise RuntimeError(f"run {state.run_id} saved interrupted tool results without a row")
         return state.last_row.id
-
-    async def save_stopped(self, state: RunState) -> int:
-        """运行被停止：保存运行中的历史里还没保存的部分，没出结果的调用补上「被停止」的结果，最后一条标上停止。
-        还没拿到运行中的历史（停在第一次请求之前）时没有要保存的，历史由停止从库里补齐（sessions.halt）。返回保存的条数。"""
-        if state.live is None:
-            return 0
-        tail = [*state.live[state.saved :], *stopped_results(state.live)]
-        if tail:
-            tail[-1] = marked_stopped(tail[-1])
-            # 开头取走、还没随请求交给模型的信件（state.taken）不算处理过，随信箱清空
-            await self._save(state, tail, consumed=[])
-        return len(tail)
 
     async def _save(
         self, state: RunState, messages: Sequence[ModelMessage], *, consumed: Sequence[Mail]

@@ -38,7 +38,6 @@ from muliao.sessions.history import (
     interrupted_results,
     last_message_id_in,
     last_saved_by_in,
-    latest_compaction,
     load_context,
     saved_by_in,
 )
@@ -214,9 +213,9 @@ class Consumer:
             handled=[*earlier, *adopted],
             messages=load_messages(r.payload for r in saved_rows),
             last_row=saved_rows[-1] if saved_rows else None,
+            stale_responses=context.stale_responses,
+            compaction_exhausted=verdict == Verdict.HOPELESS or compacted == 0,
         )
-        state.stale_responses = context.stale_responses
-        state.compaction_exhausted = verdict == Verdict.HOPELESS or compacted == 0
         self._active[session_id] = state
         # 被打断的那一步里没出结果的调用不重新执行——副作用可能已经发生，而我们无从知道，重放一条重启服务的命令
         # 会让恢复无限循环。补上「被中断、没有重新执行」的结果交给模型判断：没有挂起的调用时这次运行就从这条补
@@ -273,22 +272,8 @@ class Consumer:
                 break
             except CompactionDue:
                 # 这次请求已经保存：压缩，再从库里加载上下文（摘要 + 切点之后），从它续跑
-                compacted = await self._compactor.compact(session, agent)
-                async with self._db.transaction() as s:
-                    context = await load_context(s, session.id)
-                    compaction = await latest_compaction(s, session.id)
-                if (
-                    compaction is not None
-                    and state.run_context_row is not None
-                    and state.run_context_row <= compaction.through_message_id
-                ):
-                    # 挂着运行上下文的那条请求被压进了摘要，模型不再看得到它：下一条新请求重新挂一段（时间取现在）
-                    state.run_context = self._runtime.run_context(audience)
-                    state.run_context_row = None
+                context = await self._steps.compact(state, self._runtime.run_context(audience))
                 history, prompt, deferred = context.messages, None, None
-                state.stale_responses = context.stale_responses
-                state.compaction_exhausted = compacted == 0
-                state.resending = True
         await self._steps.save_tail(state)
         return self._finisher.commit(state, end_of(outcome))
 
@@ -322,8 +307,9 @@ class Consumer:
 
     async def _stopped(self, run_id: int, session_id: str) -> Commit:
         state = self._active.get(session_id)
-        saved = 0 if state is None else await self._steps.save_stopped(state)
-        log.info("run stopped by user", extra={"session_id": session_id, "run_id": run_id, "saved": saved})
+        if state is not None:
+            await self._steps.save_tail(state)
+        log.info("run stopped by user", extra={"session_id": session_id, "run_id": run_id})
         if await self._halt(session_id) == Halted.GONE:
             # 正在运行的会话忙，不能被删除：走到这里是 bug
             raise RuntimeError(f"session {session_id} was deleted while its run was being stopped")

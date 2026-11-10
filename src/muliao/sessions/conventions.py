@@ -50,7 +50,7 @@ INTERRUPTED_TOOL_RESULT = (
 # 交给模型的事件信件（sessions.mailbox）：每条事件是用户消息内容里独立的一段，格式见 format_event；
 # 那条 ModelRequest 的 metadata[RUN_EVENTS] 是这些段在内容里的下标
 RUN_EVENTS = "muliao_events"
-# 其中运行中检查（sessions.mailbox.post_check_in 投的信件）的下标记在 metadata[RUN_CHECK_INS]，是 RUN_EVENTS 的子集
+# 其中运行中检查（sessions.work.post_check_in 投的信件）的下标记在 metadata[RUN_CHECK_INS]，是 RUN_EVENTS 的子集
 RUN_CHECK_INS = "muliao_check_ins"
 _EVENT = re.compile(r'\A<event source="(?P<source>[^"]*)">\n(?P<content>.*)\n</event>\Z', re.DOTALL)
 

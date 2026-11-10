@@ -123,7 +123,7 @@ class Mail(Base):
     # 结局（sessions.work）为 None。「用户说了什么」只按它认（sessions.recall）。迁移前的行按会话与内容回填
     origin: Mapped[Origin | None] = mapped_column(StrEnumType(Origin))
     content: Mapped[str] = mapped_column(Text)
-    # 事件是运行中检查（mailbox.post_check_in 投的，工作还在进行）：交给模型时记进 RUN_CHECK_INS，界面合并连续的检查
+    # 事件是运行中检查（work.post_check_in 投的，工作还在进行）：交给模型时记进 RUN_CHECK_INS，界面合并连续的检查
     check_in: Mapped[bool] = mapped_column(default=False, server_default="0")
     # 随消息发送的文件 id（muliao.files.store）
     attachments: Mapped[list[str]] = mapped_column(JSON, default=list)

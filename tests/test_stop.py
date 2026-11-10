@@ -212,6 +212,40 @@ async def test_stopping_mid_stream_keeps_the_partial_answer_and_never_stores_a_t
     assert items[-1] == ("stopped", "")
 
 
+async def test_stopping_a_text_answer_mid_stream_marks_it_stopped(client, container, make_agent, models):
+    """生成到一半、还没有工具调用的回答：照样保存并标上停止（停止从库里补齐，sessions.halt）。"""
+    from pydantic_ai.models.function import FunctionModel
+
+    await login(client)
+    agent = await make_agent("talker", model="streaming")
+
+    async def stream(messages: list[ModelMessage], info: AgentInfo):
+        yield "half an answer"
+        await asyncio.Event().wait()
+
+    models.models["streaming"] = FunctionModel(
+        lambda _m, _i: ModelResponse(parts=[TextPart("unused")]), stream_function=stream
+    )
+    session_id = (await client.post("/api/sessions", json={"agent_id": agent.id, "prompt": "talk"})).json()[
+        "id"
+    ]
+    worker = asyncio.create_task(drain(container, limit_seconds=20))
+
+    async def streaming() -> bool:
+        live = container.live.snapshot(session_id)
+        return live is not None and any(
+            e.event == "delta" and e.item_type == "assistant" for e in live.events
+        )
+
+    await _wait_for(streaming)
+    assert (await client.post(f"/api/sessions/{session_id}/stop")).status_code == 202
+    await worker
+    items = [
+        (i["type"], i["text"]) for i in (await client.get(f"/api/sessions/{session_id}")).json()["items"]
+    ]
+    assert items[-2:] == [("assistant", "half an answer"), ("stopped", "")]
+
+
 async def test_stoppable_runs_tell_a_user_stop_from_an_outer_cancellation(container):
     import pytest
 

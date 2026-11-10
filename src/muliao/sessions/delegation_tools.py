@@ -14,7 +14,7 @@ from muliao.sessions.activity import WorkState
 from muliao.sessions.deferred import ASK_AGENT
 from muliao.sessions.halt import Halted, StopSession
 from muliao.sessions.threads import Threads, validate_thread
-from muliao.sessions.work import DEFAULT_CHECK_SECONDS
+from muliao.sessions.work import check_interval
 
 _ANSWER_PREVIEW = 500
 
@@ -80,9 +80,7 @@ def delegation_toolset(
             raise InvalidInput(
                 "heartbeat_seconds needs `report_back: true`; without it the result goes to the user, not to you"
             )
-        check = DEFAULT_CHECK_SECONDS if heartbeat_seconds is None else heartbeat_seconds
-        if not check > 0:  # 也拒绝 NaN
-            raise InvalidInput("heartbeat_seconds must be greater than 0")
+        check = check_interval(heartbeat_seconds)
         if ctx.tool_call_id is None:
             raise RuntimeError("delegate_task was called without a tool call id")
         async with db.transaction() as s:

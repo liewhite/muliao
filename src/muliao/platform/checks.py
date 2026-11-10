@@ -1,5 +1,5 @@
 """运行中检查（心跳）的节拍：循环每 TICK_SECONDS 让每种并发工作（后台任务、委派）看一遍哪些到期了。间隔与到期的
-规则、投信都在会话领域（sessions.work 的 DEFAULT_CHECK_SECONDS / check_due，sessions.mailbox.post_check_in），这里
+规则、投信都在会话领域（sessions.work 的 check_interval、CheckBeats、post_check_in），这里
 只管节拍。设计见 docs/architecture.md「占用与结清」。
 """
 

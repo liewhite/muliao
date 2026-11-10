@@ -31,12 +31,11 @@ from muliao.sessions.activity import WorkState, work_states_in
 from muliao.sessions.delegations import DelegationRecord, records_among
 from muliao.sessions.directory import among_in
 from muliao.sessions.holds import active_holders_in
-from muliao.sessions.mailbox import post_check_in
 from muliao.sessions.pending import AgentAnswer
 from muliao.sessions.runs import latest_runs_among
 from muliao.sessions.sources import thread_source
 from muliao.sessions.tables import Session
-from muliao.sessions.work import check_due, deliver_in
+from muliao.sessions.work import CheckBeats, deliver_in, post_check_in
 
 log = logging.getLogger(__name__)
 
@@ -150,8 +149,8 @@ class ThreadChecks:
         self._db = db
         self._queue = queue
         self._clock = clock
-        # 并发委派上一次投检查的时刻（还没投过的以登记时刻算）：只是节拍，重启后从登记时刻重新算，不落库
-        self._last_check: dict[str, datetime] = {}
+        # 并发委派上一次投检查的时刻（还没投过的以登记时刻算）
+        self._beats: CheckBeats[str] = CheckBeats()
 
     async def check(self) -> int:
         posted = 0
@@ -163,9 +162,7 @@ class ThreadChecks:
                 for r in (await records_among(s, active)).values()
                 if r.check_seconds is not None
             ]
-            watched = {r.holder for r, _ in records}
-            for gone in set(self._last_check) - watched:
-                del self._last_check[gone]
+            self._beats.keep({r.holder for r, _ in records})
             # (发起会话, thread) -> 到期的委派与它的间隔
             due: dict[tuple[str, str], tuple[DelegationRecord, float]] = {}
             for record, interval in records:
@@ -173,9 +170,9 @@ class ThreadChecks:
                 if child_id is None:
                     # thread 删除时委派已经以「被删除」结清，占用随之释放
                     raise RuntimeError(f"active delegation {record.holder} has a deleted thread")
-                if not check_due(self._last_check.get(record.holder, record.created_at), interval, now):
+                if not self._beats.due(record.holder, record.created_at, interval, now):
                     continue
-                self._last_check[record.holder] = now
+                self._beats.checked(record.holder, now)
                 # 同一个发起方对同一个 thread 的几项委派同时到期，检查一次
                 due.setdefault((record.parent_id, child_id), (record, interval))
             child_ids = {child_id for _, child_id in due}

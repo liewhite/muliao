@@ -9,7 +9,7 @@ from pydantic_ai import FunctionToolset, RunContext
 
 from muliao.agents.api import AgentNames, AgentService
 from muliao.errors import InvalidInput
-from muliao.history.service import MAX_LIMIT, HistoryEntry, HistoryLog, HistoryRecord
+from muliao.history.service import DEFAULT_LIMIT, MAX_LIMIT, HistoryEntry, HistoryLog, HistoryRecord
 from muliao.issues.api import IssueService, UserActions
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 from muliao.sessions.api import SESSION_READ, Activity, SessionRecall, indented, place
@@ -147,6 +147,14 @@ def history_toolset(
     """max_chars：一次交给模型的上限（runtime.tool_output_max_chars），activity_overview 超出时在整行处停下。"""
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
+    async def agent_ids_of(ctx: RunContext[RunScope], agent: str | None) -> list[str] | None:
+        """工具参数 agent：不给是自己，`all` 是全部（None），否则按名字找。"""
+        if agent is None:
+            return [ctx.deps.agent_id]
+        if agent == ALL_AGENTS:
+            return None
+        return [(await agents.find_by_name(agent)).id]
+
     @ts.tool
     async def history_append(ctx: RunContext[RunScope], entries: list[HistoryItem]) -> str:
         """Append entries to your own work history: one entry per piece of work. Entries can never be changed or
@@ -170,7 +178,7 @@ def history_toolset(
         until: date | None = None,
         agent: str | None = None,
         min_importance: int = 1,
-        limit: int = 20,
+        limit: int = DEFAULT_LIMIT,
     ) -> list[HistoryFound]:
         """Search the work history (what was done, when, with which issues/commits). Returns a JSON array of
         entries, each with `id`, `day` (YYYY-MM-DD), `agent`, `title`, `summary`, `refs` and `importance`.
@@ -186,14 +194,8 @@ def history_toolset(
             min_importance: Only entries at least this important (1-3).
             limit: Maximum number of entries (1-200).
         """
-        if agent is None:
-            agent_ids: list[str] | None = [ctx.deps.agent_id]
-        elif agent == ALL_AGENTS:
-            agent_ids = None
-        else:
-            agent_ids = [(await agents.find_by_name(agent)).id]
         found = await history.search(
-            agent_ids=agent_ids,
+            agent_ids=await agent_ids_of(ctx, agent),
             query=query,
             since=since,
             until=until,
@@ -236,12 +238,7 @@ def history_toolset(
         """
         if offset < 1:
             raise InvalidInput(f"offset must be 1 or more, got {offset}")
-        if agent is None:
-            agent_ids: list[str] | None = [ctx.deps.agent_id]
-        elif agent == ALL_AGENTS:
-            agent_ids = None
-        else:
-            agent_ids = [(await agents.find_by_name(agent)).id]
+        agent_ids = await agent_ids_of(ctx, agent)
         names = await agents.names()
         day = history.today() if day is None else day
         start, end = history.day_bounds(day)
