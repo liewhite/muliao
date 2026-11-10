@@ -23,8 +23,6 @@ from tests.test_triggers import ECHO_SERVER
 _ADMIN_TOOLS = {
     "create_agent",
     "delete_agent",
-    # 只有管钱包的 agent 用（#423）
-    "eth_sign",
 }
 
 

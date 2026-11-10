@@ -4,7 +4,7 @@
 description = "…"
 ciphertext = "gAAAA…"   # Fernet 密文（agents.secrets.Vault 加密），不能手写
 allow_shell = false     # 可省略，缺省 true：false 时 agent 自写的命令（run_shell、precheck、stream）不能注入它，
-                        # 只有 skill 里的脚本（skill_run）、MCP 配置与进程内工具能用（#528）
+                        # 只有 skill 里的脚本（skill_run）与 MCP 配置能用（#528）
 ```
 
 key 语法也用于 `${vault:KEY}` 引用（VAULT_REF）。

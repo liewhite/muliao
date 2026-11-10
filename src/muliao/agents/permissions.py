@@ -44,7 +44,7 @@ class Action(StrEnum):
 @dataclass(frozen=True)
 class Tool:
     access: Access
-    # 管理类工具（建、删 agent，以及只有少数 agent 用的 eth_sign（#423））：base 没有，只经 admin
+    # 管理类工具（建、删 agent）：base 没有，只经 admin
     # 角色或显式规则给出
     admin: bool = False
 
@@ -98,8 +98,6 @@ TOOLS: dict[str, Tool] = {
     "notify_user": W,
     # vault：agent 自己存用户给的 token（加密写进它的资源目录）；看与删就是 ls、rm 那个文件
     "vault_set": W,
-    # 用 vault 里的以太坊私钥在进程内签名（#423）：只有管钱包的 agent 用，经角色或 allow 给
-    "eth_sign": ADMIN_W,
     # trigger
     "trigger_kinds": R,
     "trigger_list": R,

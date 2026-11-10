@@ -3,7 +3,7 @@
 
 这里管加解密、存取，以及 ${vault:KEY} 引用的解析。对外只有不含值的 SecretInfo，与按使用者解析出的明文（resolve_many）。
 每个 secret 带 allow_shell（#528，防误操作）：false 的不让 agent 自己写的命令（run_shell、触发器的 precheck 与 stream）拿到，只给
-skill 里封装好的脚本（skill_run）、MCP 配置与进程内的工具（eth_sign）。哪些入口算 shell 由调用方在 resolve_many 的 shell 参数里说。
+skill 里封装好的脚本（skill_run）与 MCP 配置。哪些入口算 shell 由调用方在 resolve_many 的 shell 参数里说。
 引用按使用者能用的 secret 解析（agents.access 的 Grants.can：自己的与分发给它的）：agent 运行的命令与它连接的 MCP server
 都用该 agent；用户（USER，如界面上新增 MCP 时的探测）能用全部。
 """
