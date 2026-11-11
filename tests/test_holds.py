@@ -27,16 +27,16 @@ async def _holds(container, session_id: str) -> list[SessionHold]:
 async def test_an_answered_ask_is_not_executed_again_and_its_hold_stays_as_the_record(
     container, make_agent, models, monkeypatch
 ):
-    from muliao.sessions.threads import Threads
+    from muliao.sessions.delegation import Delegations
 
     dispatched: list[str] = []
-    original = Threads.dispatch
+    original = Delegations.dispatch
 
     async def counting(self, s, **kwargs):  # noqa: ANN001, ANN003, ANN202
         dispatched.append(kwargs["call_id"])
         return await original(self, s, **kwargs)
 
-    monkeypatch.setattr(Threads, "dispatch", counting)
+    monkeypatch.setattr(Delegations, "dispatch", counting)
     parent, seen = await _asking(container, make_agent, models, echo("checked"))
     await drain(container)
 
@@ -142,7 +142,7 @@ async def test_a_thread_hands_its_outcome_back_in_the_transaction_that_settles_i
     parent = await start(container, lead, "go")
     await drain(container)
     async with container.db.transaction() as s:
-        child = await container.threads.dispatch(
+        child = await container.delegations.dispatch(
             s,
             parent_id=parent.id,
             agent=reviewer,
@@ -239,7 +239,7 @@ async def test_reconcile_settles_delegations_whose_failure_hook_failed(
     parent = await start(container, lead, "go")
     await drain(container)
     async with container.db.transaction() as s:
-        await container.threads.dispatch(
+        await container.delegations.dispatch(
             s,
             parent_id=parent.id,
             agent=reviewer,
@@ -293,7 +293,7 @@ async def test_stopping_a_thread_hands_back_at_once_and_deleting_its_agent_later
     parent = await start(container, lead, "go")
     await drain(container)
     async with container.db.transaction() as s:
-        await container.threads.dispatch(
+        await container.delegations.dispatch(
             s,
             parent_id=parent.id,
             agent=reviewer,
@@ -331,7 +331,7 @@ async def test_a_thread_run_failing_before_its_first_step_with_a_failing_hook_is
     parent = await start(container, lead, "go")
     await drain(container)
     async with container.db.transaction() as s:
-        child = await container.threads.dispatch(
+        child = await container.delegations.dispatch(
             s,
             parent_id=parent.id,
             agent=reviewer,
@@ -381,7 +381,7 @@ async def test_reconciliation_leaves_delegation_mail_that_arrived_after_the_fail
 
     async def dispatch(key: str):  # noqa: ANN202
         async with container.db.transaction() as s:
-            return await container.threads.dispatch(
+            return await container.delegations.dispatch(
                 s,
                 parent_id=parent.id,
                 agent=reviewer,
@@ -431,7 +431,7 @@ async def test_a_thread_settling_a_delegation_its_existing_asker_has_no_hold_for
     parent = await start(container, lead, "go")
     await drain(container)
     async with container.db.transaction() as s:
-        child = await container.threads.dispatch(
+        child = await container.delegations.dispatch(
             s,
             parent_id=parent.id,
             agent=reviewer,
@@ -462,7 +462,7 @@ async def test_deleting_a_stopped_asker_drops_its_threads_outcome(container, mak
     parent = await start(container, lead, "go")
     await drain(container)
     async with container.db.transaction() as s:
-        child = await container.threads.dispatch(
+        child = await container.delegations.dispatch(
             s,
             parent_id=parent.id,
             agent=reviewer,

@@ -2,7 +2,7 @@
 
 分两段，因为中间隔着别的领域：
 1. SessionPorts.build：先于消费者构造、别的领域要用的端口——会话忙不忙（SessionActivity）、停止会话（SessionStopper，
-   由正在进行的运行的登记与 SessionHalt 组成）、委派（Threads、ThreadChecks）、到点唤醒（WakeUps）、后台任务的占用
+   由正在进行的运行的登记与 SessionHalt 组成）、委派（Threads、Delegations、ThreadChecks）、到点唤醒（WakeUps）、后台任务的占用
    （SessionWork）、热历史（SessionRecall）；以及委派、到点唤醒与读会话的工具组（工具箱要先于消费者组好）。
 2. SessionDomain.build：有了运行时与工具箱之后，会话门面、压缩、消费者、信箱对账，与会话领域的任务处理器。
    subscribe 一处登记会话领域的全部订阅与命令处理（后台任务与委派的结局、Receive、删除 agent 的会话清理）。
@@ -28,7 +28,7 @@ from muliao.sessions.activity import SessionActivity
 from muliao.sessions.compaction import CompactionHandler, Compactor
 from muliao.sessions.consumer import Consumer, RunHandler
 from muliao.sessions.content import ContentBuilder
-from muliao.sessions.delegation import ThreadChecks
+from muliao.sessions.delegation import Delegations, ThreadChecks
 from muliao.sessions.delegation_tools import delegation_toolset
 from muliao.sessions.deletion import AgentSessionsCleanup
 from muliao.sessions.finish import RunFinisher
@@ -56,6 +56,7 @@ class SessionPorts:
     halt: SessionHalt
     stopper: SessionStopper
     threads: Threads
+    delegations: Delegations
     thread_checks: ThreadChecks
     wakeups: WakeUps
     work: SessionWork
@@ -69,12 +70,14 @@ class SessionPorts:
         runs: StoppableRuns[Commit] = StoppableRuns(db.exclusive)
         halt = SessionHalt(db, queue, messaging)
         stopper = SessionStopper(runs, halt)
+        threads = Threads(queue)
         return cls(
             activity=SessionActivity(queue),
             runs=runs,
             halt=halt,
             stopper=stopper,
-            threads=Threads(queue),
+            threads=threads,
+            delegations=Delegations(queue, threads),
             thread_checks=ThreadChecks(db, queue),
             wakeups=WakeUps(db, queue, tz),
             work=SessionWork(db),
@@ -84,7 +87,7 @@ class SessionPorts:
         )
 
     def delegation_toolset(self, agents: AgentService) -> FunctionToolset[RunScope]:
-        return delegation_toolset(self._db, agents, self.threads, self.stopper)
+        return delegation_toolset(self._db, agents, self.threads, self.delegations, self.stopper)
 
     def wakeup_toolset(self) -> FunctionToolset[RunScope]:
         return wakeup_toolset(self._db, self._tz)

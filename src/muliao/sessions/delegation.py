@@ -1,7 +1,7 @@
 """委派：会话交给另一个 agent、要交回结局的工作（ask_agent，delegate_task(report_back)）。整个生命周期在会话领域里，
 由两个对称的事务完成（docs/architecture.md 第 8 节）：
 
-- 发出（Threads.dispatch）：一个事务里在发起方登记占用（holder 由工具调用 id 确定性派生，带 call_id 与「用户是否在等
+- 发出（Delegations.dispatch）：一个事务里在发起方登记占用（holder 由工具调用 id 确定性派生，带 call_id 与「用户是否在等
   发起方」），往 thread 投一封以 holder 为关联 id 的信件。
 - 交回（hand_back_in，由 thread 结清关联时调用：运行做完、最终失败、被停止、被删除）：同一个事务里经 deliver_in 把
   结局交给发起方并释放占用——发起方还停在那次 ask_agent 调用上时作为调用的结果，否则作为事件；发起方已被停止
@@ -30,10 +30,20 @@ from muliao.platform.tasks import Clock, TaskQueue, TaskView
 from muliao.sessions.activity import WorkState, work_states_in
 from muliao.sessions.answers import AgentAnswer, AgentAnswered
 from muliao.sessions.directory import among_in
+from muliao.sessions.holds import get_in as get_hold_in
+from muliao.sessions.holds import hold_in
+from muliao.sessions.inbound import Inbound, receive
+from muliao.sessions.origins import Origin
 from muliao.sessions.runs import latest_runs_among
 from muliao.sessions.sources import thread_source
 from muliao.sessions.tables import Session
-from muliao.sessions.thread_calls import DelegationRecord, active_reporting_in, delegations_among
+from muliao.sessions.thread_calls import (
+    DelegationRecord,
+    active_reporting_in,
+    delegations_among,
+    record_call_in,
+)
+from muliao.sessions.threads import Threads, thread_name
 from muliao.sessions.work import CheckBeats, deliver_in, post_check_in
 
 log = logging.getLogger(__name__)
@@ -53,10 +63,67 @@ def delegation_holder(parent_id: str, key: str) -> str:
     return f"delegation:{parent_id}:{key}"
 
 
-def thread_name(child: Session) -> str:
-    if child.thread is None:
-        raise RuntimeError(f"session {child.id} is a child session without a thread name")
-    return child.thread
+class Delegations:
+    """委派的发出（交回是 hand_back_in）。"""
+
+    def __init__(self, queue: TaskQueue, threads: Threads):
+        self._queue = queue
+        self._threads = threads
+
+    async def dispatch(
+        self,
+        s: AsyncSession,
+        *,
+        parent_id: str,
+        agent: AgentInfo,
+        thread: str,
+        prompt: str,
+        call_id: str,
+        suspends: bool,
+        awaited: bool,
+        check_seconds: float | None = None,
+    ) -> Session:
+        """在调用方的一个事务里：打开或找到 thread，在发起方登记占用（suspends 时这次调用从此算作已交出），往 thread
+        投一封以占用者为关联 id 的信件（委派的全部状态，结局的交回见 hand_back_in），并记下这次调用开出或续写了这个
+        thread、是哪项委派（sessions.thread_calls）。thread 名不合法时抛 InvalidInput，什么都没写。call_id：发出它的
+        工具调用，按它幂等：续跑重新执行这次调用时只返回已经投递到的 thread。suspends：这次调用挂起、等结局作为它的
+        结果（ask_agent），占用带上 call_id。awaited：用户是否在等发起方的回答。check_seconds：并发等待时的运行中
+        检查间隔（阻塞等待的为 None，不设超时）。"""
+        holder = delegation_holder(parent_id, call_id)
+        if await get_hold_in(s, parent_id, holder) is not None:
+            record = (await delegations_among(s, [holder])).get(holder)
+            if record is None:
+                raise RuntimeError(f"delegation {holder} is held but its thread is gone")
+            child = await s.get(Session, record.thread_id)
+            if child is None:
+                raise RuntimeError(f"delegation {holder} points to a missing thread {record.thread_id}")
+            return child
+        child = await self._threads.open(s, parent_id=parent_id, agent=agent, thread=thread)
+        await hold_in(s, parent_id, holder, call_id=call_id if suspends else None, awaited=awaited)
+        await record_call_in(s, parent_id, call_id, child.id, holder=holder, check_seconds=check_seconds)
+        await receive(
+            s,
+            self._queue,
+            Inbound(
+                origin=Origin.DELEGATION,
+                origin_ref=parent_id,
+                content=prompt,
+                session=child.id,
+                # 没有人等 thread 的回答：结局交回发起方，由它处理
+                awaited=False,
+                correlation=holder,
+            ),
+        )
+        log.info(
+            "delegation dispatched",
+            extra={
+                "session_id": parent_id,
+                "thread_session_id": child.id,
+                "holder": holder,
+                "call_id": call_id,
+            },
+        )
+        return child
 
 
 def _result_text(thread: str, agent: str, ending: Ending, text: str) -> str:
@@ -95,7 +162,7 @@ async def hand_back_in(
     name = thread_name(child)
     parent_id = child.parent_session_id
     if parent_id is None:
-        # 发起方的唯一来源是 thread 的父会话（Threads.dispatch 总在发起方下开 thread）；holder 对这里是不透明的键。
+        # 发起方的唯一来源是 thread 的父会话（dispatch 总在发起方下开 thread）；holder 对这里是不透明的键。
         # 父会话置空说明发起方已被删除，结局没有收件人
         log.info(
             "delegation outcomes of a thread whose asker is gone dropped", extra={"holders": list(holders)}
@@ -126,12 +193,6 @@ async def hand_back_in(
                 "delivered_as": delivered,
             },
         )
-
-
-async def threads_of_holds_in(s: AsyncSession, holders: Sequence[str]) -> dict[str, str]:
-    """委派占用者 → 做这项委派的 thread（委派的记录，sessions.thread_calls）。不是委派的占用（后台任务）与 thread 已被
-    删除的委派不在结果里。"""
-    return {holder: record.thread_id for holder, record in (await delegations_among(s, holders)).items()}
 
 
 class ThreadChecks:

@@ -58,7 +58,7 @@ async def record_call_in(
     holder: str | None = None,
     check_seconds: float | None = None,
 ) -> None:
-    """记下这次调用开出或续写了这个 thread；holder 非空时它是一项委派（Threads.dispatch），带上心跳间隔。续跑重新
+    """记下这次调用开出或续写了这个 thread；holder 非空时它是一项委派（Delegations.dispatch），带上心跳间隔。续跑重新
     执行同一次调用时已经记过，不再记；同一次调用记成别的样子是 bug。"""
     existing = await s.scalar(
         select(ThreadCall).where(ThreadCall.parent_session_id == parent_id, ThreadCall.call_id == call_id)

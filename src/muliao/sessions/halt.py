@@ -24,7 +24,6 @@ from muliao.platform.db import Database
 from muliao.platform.messaging import Messaging
 from muliao.platform.tasks import Commit, TaskQueue
 from muliao.sessions.conventions import is_stopped
-from muliao.sessions.delegation import threads_of_holds_in
 from muliao.sessions.events import SessionStopped, StopThread
 from muliao.sessions.history import (
     append_in,
@@ -42,6 +41,7 @@ from muliao.sessions.runs import latest_run
 from muliao.sessions.settlement import settle_stopped_in
 from muliao.sessions.stopping import StoppableRuns
 from muliao.sessions.tables import Session
+from muliao.sessions.thread_calls import delegations_among
 
 log = logging.getLogger(__name__)
 
@@ -107,7 +107,7 @@ class SessionHalt:
                 s, self._queue, session, await latest_answer(s, session_id)
             )
             # 被清掉的委派：做这些工作的 thread 一起停下（逐层，由它们自己的停止继续）
-            threads = list(dict.fromkeys((await threads_of_holds_in(s, cleared)).values()))
+            threads = list(dict.fromkeys(r.thread_id for r in (await delegations_among(s, cleared)).values()))
             for thread_id in threads:
                 self._messaging.send_in(s, StopThread(session_id=thread_id))
             self._messaging.publish_in(s, SessionStopped(session_id=session_id, cleared=cleared))

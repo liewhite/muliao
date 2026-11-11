@@ -101,7 +101,7 @@ async def test_listing_threads_gives_each_its_own_answer_and_failure(container, 
     for name, model in (("good", "ok"), ("bad", "b")):
         agent = await make_agent(name, model=model)
         async with container.db.transaction() as s:
-            await container.threads.dispatch(
+            await container.delegations.dispatch(
                 s,
                 parent_id=parent.id,
                 agent=agent,
@@ -129,7 +129,7 @@ async def test_open_reported_threads_get_check_events_without_piling_up(containe
     # 子 thread 的信件排着、还没交给模型
     target = await container.agents.get(reviewer)
     async with container.db.transaction() as s:
-        received = await container.threads.dispatch(
+        received = await container.delegations.dispatch(
             s,
             parent_id=parent.id,
             agent=target,
@@ -167,7 +167,7 @@ async def test_each_reported_delegation_is_checked_at_its_own_interval(container
     await drain(container)
     async with container.db.transaction() as s:
         for thread, interval in (("fast", 0.001), ("slow", 3600.0)):
-            await container.threads.dispatch(
+            await container.delegations.dispatch(
                 s,
                 parent_id=parent.id,
                 agent=reviewer,
@@ -202,7 +202,7 @@ async def test_an_ask_has_no_check_in_and_no_timeout(container, make_agent, mode
     parent = await start(container, lead, "go")
     await drain(container)
     async with container.db.transaction() as s:
-        await container.threads.dispatch(
+        await container.delegations.dispatch(
             s,
             parent_id=parent.id,
             agent=helper,
@@ -280,7 +280,7 @@ async def test_nothing_is_reported_once_the_parent_session_is_gone(container, ma
     await drain(container)
     target = await container.agents.get(reviewer)
     async with container.db.transaction() as s:
-        await container.threads.dispatch(
+        await container.delegations.dispatch(
             s,
             parent_id=parent.id,
             agent=target,
@@ -503,7 +503,7 @@ async def test_stopping_a_queued_thread_reports_that_it_was_stopped(container, m
     await drain(container)
     target = await container.agents.get(reviewer)
     async with container.db.transaction() as s:
-        await container.threads.dispatch(
+        await container.delegations.dispatch(
             s,
             parent_id=parent.id,
             agent=target,
@@ -547,7 +547,7 @@ async def test_a_delegation_arriving_during_a_failing_run_is_still_handled_and_r
 
     async def send(prompt: str) -> None:
         async with container.db.transaction() as s:
-            await container.threads.dispatch(
+            await container.delegations.dispatch(
                 s,
                 parent_id=parent.id,
                 agent=target,
@@ -741,7 +741,7 @@ async def test_a_reported_thread_is_deleted_only_after_stopping_and_the_delegato
     await drain(container)
     target = await container.agents.get(reviewer)
     async with container.db.transaction() as s:
-        received = await container.threads.dispatch(
+        received = await container.delegations.dispatch(
             s,
             parent_id=parent.id,
             agent=target,
@@ -766,11 +766,12 @@ async def test_a_reported_thread_is_deleted_only_after_stopping_and_the_delegato
     assert "was stopped" in event.content
     assert await container.thread_checks.check() == 0
     # 委派记录随 thread 删除；之后推不出这个 thread
-    from muliao.sessions.delegation import delegation_holder, threads_of_holds_in
+    from muliao.sessions.delegation import delegation_holder
+    from muliao.sessions.thread_calls import delegations_among
 
     holder = delegation_holder(parent.id, "call-5")
     async with container.db.transaction() as s:
-        assert await threads_of_holds_in(s, [holder]) == {}
+        assert await delegations_among(s, [holder]) == {}
 
 
 async def test_no_check_ins_while_the_delegator_waits_on_the_ask(container, make_agent, models):
@@ -797,10 +798,10 @@ async def test_an_ask_whose_delegation_never_committed_is_executed_again_on_retr
     container, make_agent, models, monkeypatch
 ):
     """回复（含 ask_agent）已保存、投递还没提交时失败：这次调用不算在等回信（没有占用），重试时重新执行它，只委派一次。"""
-    from muliao.sessions.threads import Threads as ThreadsClass
+    from muliao.sessions.delegation import Delegations
 
     parent, seen = await _asking(container, make_agent, models, echo("checked"))
-    original = ThreadsClass.dispatch
+    original = Delegations.dispatch
     failures = {"n": 0}
 
     async def flaky(self, s, **kwargs):  # noqa: ANN001, ANN003, ANN202
@@ -809,7 +810,7 @@ async def test_an_ask_whose_delegation_never_committed_is_executed_again_on_retr
             raise RuntimeError("database went away")
         return await original(self, s, **kwargs)
 
-    monkeypatch.setattr(ThreadsClass, "dispatch", flaky)
+    monkeypatch.setattr(Delegations, "dispatch", flaky)
     await drain(container)
     [failed] = [t for t in await tasks_of(container, RUN_TASK) if t.session_id == parent.id]
     assert failed.status == TaskStatus.FAILED
@@ -1101,7 +1102,7 @@ async def test_stopping_the_asker_stops_its_threads_level_by_level(container, ma
 
     async def dispatch(parent_id: str, agent, thread: str):  # noqa: ANN001, ANN202
         async with container.db.transaction() as s:
-            return await container.threads.dispatch(
+            return await container.delegations.dispatch(
                 s,
                 parent_id=parent_id,
                 agent=agent,

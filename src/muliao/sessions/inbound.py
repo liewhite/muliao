@@ -76,7 +76,7 @@ class NewChat:
 @dataclass(frozen=True)
 class Inbound:
     """一封来信的内部形式：用户消息、cron 到点、外部事件、agent 委派，都是「把 content 投进某个会话的信箱」（sessions.mailbox）。
-    会话领域之外只用三种入口各自的类型：别的领域的 SenderMail、界面的 UserMessage；委派由 Threads 在领域内部构造。
+    会话领域之外只用三种入口各自的类型：别的领域的 SenderMail、界面的 UserMessage；委派由 Threads.send 与 Delegations.dispatch 在领域内部构造。
 
     session 就是各入口自己的目标：已有会话的 id 时在其中继续；NewConversation（别的领域）、NewChat（用户）时新建会话；
     SessionKey 时按发送方定位（没有就新建）。origin_ref 标识具体的发送方：触发器 id、issue id、委派方（父）会话 id；用户为 None。
@@ -94,7 +94,7 @@ class Inbound:
     answers: Mapping[str, Sequence[QuestionAnswer]] = field(default_factory=dict)
     # 对这个会话里等批准的调用的决定：tool_call_id -> 批准、拒绝或始终允许（sessions.approvals）；只有用户会带
     approvals: Mapping[str, Choice] = field(default_factory=dict)
-    # 委派来的信件：关联 id（发起方的占用者），结局按它交回；只有 Threads.dispatch 会带
+    # 委派来的信件：关联 id（发起方的占用者），结局按它交回；只有 Delegations.dispatch 会带
     correlation: str | None = None
 
 

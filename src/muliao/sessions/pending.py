@@ -117,7 +117,7 @@ async def handed_out_in(s: AsyncSession, session_id: str) -> HandedOut:
 def pending_calls(history: Sequence[ModelMessage], handed: HandedOut) -> dict[str, ToolCallPart]:
     """还在等回信的调用，按出现顺序：没有结果的挂起工具调用（参数被拒绝、交还模型重试的有结果，不算）；要占用的
     （ask_agent，DeferredKind.needs_hold）只算已经交出去的。没有占用的 ask_agent 不是在等回信：工具还没执行完
-    （回复保存后、投递提交前失败），它是待执行的调用，续跑时再执行（Threads.dispatch 按调用 id 幂等；这一步里
+    （回复保存后、投递提交前失败），它是待执行的调用，续跑时再执行（Delegations.dispatch 按调用 id 幂等；这一步里
     还有别的没出结果的调用时整步都不重放，见 sessions.consumer.interrupted_calls）。其他工具的调用记过等批准的（
     HandedOut.approvals）在等批准；没记过的是执行到一半被打断的。"""
     return {c.tool_call_id: c for c in unanswered_calls(history) if _is_pending(c, handed)}

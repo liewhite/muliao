@@ -1,9 +1,9 @@
-"""thread：父会话内对子会话的具名引用，同名即续聊（docs/architecture.md 第 7 节「thread 与结果路由」）。
+"""thread：父会话内对子会话的具名引用，同名即续聊（docs/architecture.md 第 7 节「thread 与结果路由」）。这里只管 thread
+目录：打开、查找、列出、投不交回结局的信（delegate_task）。
 
-委派都是往 thread 的信箱投信，thread 由自己的消费者处理，用户能看到、能插话：delegate_task 投信后不等；
-ask_agent 的发问方停在这次调用上，结局作为它的结果交回（sessions.delegation）。同一个 thread 用哪个工具续聊都行。"""
+要交回结局的委派（ask_agent、delegate_task(report_back)）的发出与交回都在 sessions.delegation。同一个 thread 用哪个
+工具续聊都行。"""
 
-import logging
 from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,21 +12,21 @@ from muliao.agents.api import AgentInfo
 from muliao.errors import InvalidInput
 from muliao.platform.tasks import TaskQueue
 from muliao.sessions.activity import WorkState, work_states_in
-from muliao.sessions.delegation import delegation_holder, thread_name, threads_of_holds_in
 from muliao.sessions.directory import thread_in, threads_named_in, threads_of
 from muliao.sessions.history import latest_answers_among
-from muliao.sessions.holds import get_in as get_hold_in
-from muliao.sessions.holds import hold_in
 from muliao.sessions.inbound import Inbound, NewSession, Received, create_session, receive
 from muliao.sessions.origins import Origin
 from muliao.sessions.runs import latest_runs_among, recorded_failure
 from muliao.sessions.tables import Session
 from muliao.sessions.thread_calls import record_call_in
 
-log = logging.getLogger(__name__)
-
-
 THREAD_MAX = 100
+
+
+def thread_name(child: Session) -> str:
+    if child.thread is None:
+        raise RuntimeError(f"session {child.id} is a child session without a thread name")
+    return child.thread
 
 
 def validate_thread(name: str) -> str:
@@ -98,61 +98,6 @@ class Threads:
             origin=Origin.DELEGATION, origin_ref=parent_id, content=prompt, session=child.id, awaited=True
         )
         return await receive(s, self._queue, inbound)
-
-    async def dispatch(
-        self,
-        s: AsyncSession,
-        *,
-        parent_id: str,
-        agent: AgentInfo,
-        thread: str,
-        prompt: str,
-        call_id: str,
-        suspends: bool,
-        awaited: bool,
-        check_seconds: float | None = None,
-    ) -> Session:
-        """要交回结局的委派（ask_agent、delegate_task(report_back)），在调用方的一个事务里：打开或找到 thread，在发起方
-        登记占用（suspends 时这次调用从此算作已交出），往 thread 投一封以占用者为关联 id 的信件（委派的全部状态，结局的
-        交回见 sessions.delegation），并记下这次调用开出或续写了这个 thread、是哪项委派（sessions.thread_calls）。thread 名不合法时抛
-        InvalidInput，什么都没写。call_id：发出它的工具调用，按它幂等：续跑重新执行这次调用时只返回已经投递到的
-        thread。suspends：这次调用挂起、等结局作为它的结果（ask_agent），占用带上 call_id。awaited：用户是否在等发起方
-        的回答。check_seconds：并发等待时的运行中检查间隔（阻塞等待的为 None，不设超时）。"""
-        holder = delegation_holder(parent_id, call_id)
-        if await get_hold_in(s, parent_id, holder) is not None:
-            existing = (await threads_of_holds_in(s, [holder])).get(holder)
-            if existing is None:
-                raise RuntimeError(f"delegation {holder} is held but its thread is gone")
-            child = await s.get(Session, existing)
-            if child is None:
-                raise RuntimeError(f"delegation {holder} points to a missing thread {existing}")
-            return child
-        child = await self.open(s, parent_id=parent_id, agent=agent, thread=thread)
-        await hold_in(s, parent_id, holder, call_id=call_id if suspends else None, awaited=awaited)
-        await record_call_in(s, parent_id, call_id, child.id, holder=holder, check_seconds=check_seconds)
-        await receive(
-            s,
-            self._queue,
-            Inbound(
-                origin=Origin.DELEGATION,
-                origin_ref=parent_id,
-                content=prompt,
-                session=child.id,
-                # 没有人等 thread 的回答：结局交回发起方，由它处理
-                awaited=False,
-                correlation=holder,
-            ),
-        )
-        log.info(
-            "delegation dispatched",
-            extra={
-                "session_id": parent_id,
-                "thread_session_id": child.id,
-                "holder": holder,
-                "call_id": call_id,
-            },
-        )
-        return child
 
     async def list_in(self, s: AsyncSession, parent_id: str) -> list[ThreadView]:
         """父会话开出的 thread，按创建顺序，带各自的状态。"""

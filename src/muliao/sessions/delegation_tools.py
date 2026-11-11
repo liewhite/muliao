@@ -11,6 +11,7 @@ from muliao.platform.db import Database
 from muliao.platform.text_edit import truncate
 from muliao.platform.tooling import TOOL_MAX_RETRIES, Access, RunScope, declared
 from muliao.sessions.activity import WorkState
+from muliao.sessions.delegation import Delegations
 from muliao.sessions.halt import Halted, StopSession
 from muliao.sessions.pending import ASK_AGENT_KIND
 from muliao.sessions.threads import Threads, validate_thread
@@ -34,6 +35,7 @@ def delegation_toolset(
     db: Database,
     agents: AgentService,
     threads: Threads,
+    delegations: Delegations,
     stop_session: StopSession,
 ) -> FunctionToolset[RunScope]:
     """委派：thread 是这个会话开出的、以（agent, 名字）区分的子会话，同名即续聊（保留对方上下文），用 delegate_task
@@ -86,7 +88,7 @@ def delegation_toolset(
         async with db.transaction() as s:
             if report_back:
                 # 续跑重新执行这次调用时按调用 id 去重
-                await threads.dispatch(
+                await delegations.dispatch(
                     s,
                     parent_id=parent_id,
                     agent=target,
@@ -135,8 +137,8 @@ def delegation_toolset(
         if ctx.tool_call_id is None:
             raise RuntimeError("ask_agent was called without a tool call id")
         async with db.transaction() as s:
-            # 续跑时重新执行这次调用：已经投过就只再挂起（Threads.dispatch 按调用 id 幂等）
-            await threads.dispatch(
+            # 续跑时重新执行这次调用：已经投过就只再挂起（Delegations.dispatch 按调用 id 幂等）
+            await delegations.dispatch(
                 s,
                 parent_id=parent_id,
                 agent=target,

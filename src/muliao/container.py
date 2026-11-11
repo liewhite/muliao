@@ -54,7 +54,7 @@ from muliao.sessions.api import OWN_NOTES, Origin, OriginNotes, SessionDomain, S
 from muliao.sessions.ask_user import ask_user_toolset
 from muliao.sessions.compaction import Compactor
 from muliao.sessions.consumer import Consumer
-from muliao.sessions.delegation import ThreadChecks
+from muliao.sessions.delegation import Delegations, ThreadChecks
 from muliao.sessions.halt import SessionStopper
 from muliao.sessions.live import LiveSegments
 from muliao.sessions.reconcile import MailReconciler
@@ -159,6 +159,7 @@ class Assembly:
     worker: Worker
     messaging: Messaging
     threads: Threads
+    delegations: Delegations
     mail: MailReconciler
     jobs: JobRunner
     script_grants: ScriptGrants
@@ -479,6 +480,7 @@ def assemble(
         worker=worker,
         messaging=messaging,
         threads=ports.threads,
+        delegations=ports.delegations,
         mail=session_domain.mail,
         jobs=jobs,
         script_grants=script_grants,
