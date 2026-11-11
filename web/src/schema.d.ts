@@ -1867,6 +1867,16 @@ export interface components {
             created_at: string;
         };
         /**
+         * ContextOut
+         * @description 发给模型的上下文有多大、到多大会压缩（sessions.compaction）。
+         */
+        ContextOut: {
+            /** Tokens */
+            tokens: number | null;
+            /** Threshold Tokens */
+            threshold_tokens: number;
+        };
+        /**
          * Decision
          * @description 用户对一次等批准的调用的决定。always：批准时还要求以后同样的调用不再问（#531 之前的信件没有这一项）。pin：用户批准的
          *     是哪一份——请求批准时工具定下、记在 approval_requests 的 pin，提交决定时记进来，批准时交回给工具比对（没记下、#570
@@ -3040,6 +3050,8 @@ export interface components {
             state: components["schemas"]["WorkState"];
             /** Waits */
             waits: (components["schemas"]["JobWaitOut"] | components["schemas"]["DelegationWait"] | components["schemas"]["WakeWait"] | components["schemas"]["AskWait"] | components["schemas"]["ApprovalWait"])[];
+            context: components["schemas"]["ContextOut"];
+            usage: components["schemas"]["UsageCounts"];
         };
         /**
          * SessionListItem
@@ -3534,25 +3546,13 @@ export interface components {
             count: number;
         };
         /**
-         * UsageGroup
-         * @description 汇总时的分组维度，可以任意组合；没有选中的维度在结果里为 None。
-         * @enum {string}
-         */
-        UsageGroup: "agent" | "model" | "day";
-        /**
-         * UsageOut
-         * @description 一个分组的汇总。没有参与分组的维度为 null。
+         * UsageCounts
+         * @description 用量的各项计数（usage.UsageTotals）。
          *
          *     input_tokens 是输入总数，**已包含** cache_read_tokens 与 cache_write_tokens（pydantic-ai 的口径），
          *     展示时是总数与其中两部分的关系，不要相加。
          */
-        UsageOut: {
-            /** Agent Id */
-            agent_id: string | null;
-            /** Model */
-            model: string | null;
-            /** Day */
-            day: string | null;
+        UsageCounts: {
             /** Requests */
             requests: number;
             /** Input Tokens */
@@ -3563,6 +3563,34 @@ export interface components {
             cache_read_tokens: number;
             /** Cache Write Tokens */
             cache_write_tokens: number;
+        };
+        /**
+         * UsageGroup
+         * @description 汇总时的分组维度，可以任意组合；没有选中的维度在结果里为 None。
+         * @enum {string}
+         */
+        UsageGroup: "agent" | "model" | "day";
+        /**
+         * UsageOut
+         * @description 一个分组的汇总。没有参与分组的维度为 null。
+         */
+        UsageOut: {
+            /** Requests */
+            requests: number;
+            /** Input Tokens */
+            input_tokens: number;
+            /** Output Tokens */
+            output_tokens: number;
+            /** Cache Read Tokens */
+            cache_read_tokens: number;
+            /** Cache Write Tokens */
+            cache_write_tokens: number;
+            /** Agent Id */
+            agent_id: string | null;
+            /** Model */
+            model: string | null;
+            /** Day */
+            day: string | null;
         };
         /**
          * UserAnswered

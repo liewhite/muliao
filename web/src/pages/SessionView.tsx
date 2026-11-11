@@ -31,6 +31,7 @@ import {
   type Mail,
   type Task,
   type Session,
+  type SessionDetail,
   type Wait,
   sessionRoute,
 } from '../api'
@@ -61,6 +62,7 @@ import { isSendShortcut, SEND_HINT } from '../sendKey'
 import { isTaskOf, liveItems, mergeLive, useRefetch, useServerEvents, withoutCovered, type RunEvent } from '../events'
 import { STATUS_LABEL, issueIdOf, issueRoute } from '../issues'
 import { useReturnState, useRouteParam } from '../nav'
+import { cacheHitPercent, contextText, formatTokens } from '../usage'
 import { StatusDot } from './Issues'
 import { CODE_BLOCK, ErrorAlert, Loading, Markdown, Page, agentLabel, formatTime, useAction, useAgents, useConfirm, useLoad } from '../ui'
 
@@ -820,6 +822,25 @@ function useFollowBottom() {
   return { scrollRef, contentEndRef, atBottom, pin }
 }
 
+/**
+ * 输入框上方的一行小字（不随内容滚动：会话从底部看起，运行中也看得到）：发给模型的上下文现在多大、到多大会压缩，
+ * 以及这个会话累计花掉的 token（输入已含缓存读写）。上下文随每一步保存更新；累计在每次运行结束时才记上，运行中
+ * 不含正在进行的这一次
+ */
+function UsageLine({ context, usage }: Pick<SessionDetail, 'context' | 'usage'>) {
+  return (
+    <div className="flex flex-wrap items-center gap-x-2 px-1 text-xs text-muted">
+      <span title="发给模型的上下文：现在的大小 / 压缩阈值（超过就压缩）">
+        上下文 {contextText(context.tokens, context.threshold_tokens)}
+      </span>
+      <span title="这个会话累计花掉的 token（对话与压缩；正在进行的运行结束时才记上）">
+        累计 输入 {formatTokens(usage.input_tokens)} · 输出 {formatTokens(usage.output_tokens)} · 缓存命中{' '}
+        {cacheHitPercent(usage.input_tokens, usage.cache_read_tokens)}% · {usage.requests} 次请求
+      </span>
+    </div>
+  )
+}
+
 /** 用户看过了这个会话：指向它的通知标为已读（会话的未读由通知派生），标记本身幂等 */
 function markSessionRead(id: string) {
   void api.markRead(id).catch((e) => console.error('marking session read failed', e))
@@ -950,6 +971,7 @@ export default function SessionView() {
               </Button>
             )}
             <ErrorAlert error={action.error ?? voice.error} />
+            {detail.data && <UsageLine context={detail.data.context} usage={detail.data.usage} />}
             <Composer
               draft={draft}
               setDraft={setDraft}

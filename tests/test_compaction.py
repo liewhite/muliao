@@ -174,21 +174,21 @@ async def test_a_session_with_its_own_threshold_uses_it_instead_of_the_default(c
     own = Session(id="s", compaction_threshold_tokens=default * 3)
     assert compactor.threshold_of(_S) == default
     assert compactor.threshold_of(own) == default * 3
-    assert compactor.over_threshold(_S, _response(default + 1))
-    assert not compactor.over_threshold(own, _response(default + 1))
-    assert compactor.over_threshold(own, _response(default * 3 + 1))
+    assert compactor.over_threshold(_S, _response(default + 1), None)
+    assert not compactor.over_threshold(own, _response(default + 1), None)
+    assert compactor.over_threshold(own, _response(default * 3 + 1), None)
 
 
 async def test_threshold_is_the_size_of_the_last_request(container):
     compactor = container.compactor
     threshold = container.settings.runtime.compaction_threshold_tokens
-    assert not compactor.over_threshold(_S, [])
-    assert not compactor.over_threshold(_S, _response(threshold))
-    assert compactor.over_threshold(_S, _response(threshold + 1))
+    assert not compactor.over_threshold(_S, [], None)
+    assert not compactor.over_threshold(_S, _response(threshold), None)
+    assert compactor.over_threshold(_S, _response(threshold + 1), None)
 
 
 async def test_zero_usage_warns_instead_of_silently_never_compacting(container, caplog):
-    assert not container.compactor.over_threshold(_S, _response(0))
+    assert not container.compactor.over_threshold(_S, _response(0), None)
     assert "no input token usage" in caplog.text
 
 
@@ -201,10 +201,10 @@ async def test_a_stopped_placeholder_reply_is_not_taken_as_the_context_size(cont
     """停止占位回复没有用量：取它之前那条真实回复的大小，不误报 no input token usage、也不因此跳过压缩。"""
     threshold = container.settings.runtime.compaction_threshold_tokens
     history = [*_response(threshold + 1), ModelRequest(parts=[UserPromptPart("go")]), _stopped_placeholder()]
-    assert context_tokens(history) == threshold + 1
-    assert container.compactor.over_threshold(_S, history)
+    assert context_tokens(history, None) == threshold + 1
+    assert container.compactor.over_threshold(_S, history, None)
     assert "no input token usage" not in caplog.text
-    assert context_tokens([_stopped_placeholder()]) is None
+    assert context_tokens([_stopped_placeholder()], None) is None
 
 
 async def test_a_stopped_placeholder_right_after_compacting_does_not_count_as_the_first_new_reply(container):
@@ -218,7 +218,40 @@ async def test_a_stopped_placeholder_right_after_compacting_does_not_count_as_th
 async def test_a_cut_off_reply_that_got_its_usage_is_a_measurement(container):
     """被截断的回复已收到用量（Anthropic 流式在开头就报输入 token）：它就是最新的上下文大小。"""
     cut_off = ModelResponse(parts=[TextPart("x")], usage=RequestUsage(input_tokens=777), state="interrupted")
-    assert context_tokens([*_response(5), ModelRequest(parts=[UserPromptPart("go")]), cut_off]) == 777
+    assert context_tokens([*_response(5), ModelRequest(parts=[UserPromptPart("go")]), cut_off], None) == 777
+
+
+async def test_replies_from_before_the_last_compaction_do_not_measure_the_context(container):
+    """压缩之前的回复报告的是压缩前的大小：压缩后还没有新回复时上下文大小未知，有了就取新的那条。"""
+    old = _response(900)
+    assert context_tokens(old, stale_responses=1) is None
+    assert context_tokens([*old, *_response(40)], stale_responses=1) == 40
+    assert context_tokens(old, stale_responses=None) == 900
+
+
+async def test_the_session_page_gets_the_context_size_the_compaction_rule_looks_at(
+    container, make_agent, models
+):
+    """会话详情的上下文大小与压缩判断同一个数：最后一条回复的输入 token；刚压缩过、还没有新回复时没有；阈值是会话生效的那个。"""
+    alpha = (await make_agent("alpha", model="m")).id
+    keep = container.settings.runtime.compaction_keep_steps
+    session, _ = await _session_with_exchanges(container, models, alpha, keep // 2 + 2)
+
+    async def last_reply_input_tokens() -> int:
+        history = await history_of(container, session.id)
+        return [m for m in history if isinstance(m, ModelResponse)][-1].usage.input_tokens
+
+    view = await container.sessions.detail(session.id)
+    assert view.context_tokens == await last_reply_input_tokens() > 0
+    assert view.compaction_threshold_tokens == container.settings.runtime.compaction_threshold_tokens
+
+    await _enqueue_compaction(container, session)
+    await drain(container)
+    assert (await container.sessions.detail(session.id)).context_tokens is None
+
+    await reply(container, session.id, "after compaction")
+    await drain(container)
+    assert (await container.sessions.detail(session.id)).context_tokens == await last_reply_input_tokens()
 
 
 async def test_stale_replies_counted_when_loading_the_context_leave_out_stopped_placeholders(
@@ -442,10 +475,15 @@ async def test_after_a_manual_compaction_a_long_run_still_compacts_mid_way(
     """手动压缩只写摘要、不产生新回复：之后那次运行开头不能拿压缩前的 token 数判断，更不能因此整次运行不再压缩。"""
     import muliao.sessions.compaction as compaction
 
-    # 回复的上下文大小由脚本标在回复上（流式的 function model 自己估算 usage）：标了 big 的算超阈值
-    def tokens(history):  # noqa: ANN001, ANN202
-        last = next((m for m in reversed(history) if isinstance(m, ModelResponse)), None)
-        return None if last is None else 5000 if "big" in str(last.parts) else 100
+    measured = compaction.context_tokens
+
+    # 回复的上下文大小由脚本标在回复上（流式的 function model 自己估算 usage）：标了 big 的算超阈值。哪条回复算数
+    # （压缩之前的不算）仍由真实的规则定，这里只换数值
+    def tokens(history, stale_responses):  # noqa: ANN001, ANN202
+        if measured(history, stale_responses) is None:
+            return None
+        last = next(m for m in reversed(history) if isinstance(m, ModelResponse))
+        return 5000 if "big" in str(last.parts) else 100
 
     monkeypatch.setattr(compaction, "context_tokens", tokens)
     monkeypatch.setattr(container.compactor, "_default_threshold", 1000)

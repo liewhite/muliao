@@ -55,7 +55,7 @@ muliao/
   sessions/        会话（子域：会话、运行、交互、外部工作、委派、到点唤醒、展示，见下表）：信箱、历史、运行、挂起的调用、占用、结清、委派与 thread、到点唤醒、压缩、停止、删除、会话的消息约定
   workspace/       工作区：文件工具（read/write/edit_file、share_file）与 edit_file 的编辑规则、run_shell（前台与后台）、后台任务（jobs 表）、skill 脚本的始终允许（grants.py）、界面对工作目录与 skill 目录的只读浏览（browse.py）与 agent 自定义页面（sites.py，第 15 节）
   agents/          agent 目录、AI 资源（资源目录树 agents/assets.py 与快照 agents/source.py；skill、MCP、secret、记忆；secret 的加解密与 ${vault:KEY} 引用解析在 agents/secrets.py）、工具权限与角色
-  usage/           模型用量：每次运行记一条，按时间范围汇总
+  usage/           模型用量：每次运行记一条，按时间范围汇总，或取一个会话的累计
   issues/          issue 看板：人与 agent 协作的事项，动态按状态与指派投进 agent 的 issue 会话
   speech/          语音输入：把界面录下的语音转成文字（可选，配置 [transcription] 才有）
   web/             网页搜索与抓取：配置的服务（WebProvider）与 web 工具组（可选，配置 [web] 才有）
@@ -462,6 +462,7 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
 - **触发**：发给模型的上下文（上一次模型请求的输入 token，pydantic-ai 已计入缓存 token）超过会话的压缩阈值时（用户新建会话时可以给这个会话单独设，存 `sessions.compaction_threshold_tokens`；没设为 NULL，用全局默认 `runtime.compaction_threshold_tokens`，取值规则只在 `Compactor.threshold_of`，#372），由消费者在步与步之间压缩：运行开始时（确认有要交给模型的之后、交出信件与批准之前：没事可做的运行不花一次总结，压缩失败重试时批准不会被当成已经交过），以及每次请求模型之前（这次请求照常保存为一步，然后停下驱动、压缩、从库里重新加载上下文续跑，pydantic-ai 重发末尾那条请求）。两处压缩后重载上下文、对上运行状态都走同一个 `Steps.compact`（#581），续跑是否重发末尾请求由调用方定。「该不该压缩」只有一条规则（`Compactor.verdict`）：只认最近一次压缩之后的回复报告的 token 数（之前的反映的是压缩前的上下文，按压缩记录的 `at_message_id` 推导）；「回复」只算报告了用量的（`conventions.measured_responses`）：被截断的回复（`state='interrupted'`）收到了输入用量才算，停止时保存的占位回复没有用量，取它之前那条（#293，否则读到 0 会误报下面的 warn 并跳过这次判断）；压缩后的第一次回复就超阈值，说明保留窗口本身就超了，这次运行不再压缩，上下文继续变大直到超出模型的上限时运行失败可见，重试时重新判断。模型不返回 usage（部分 OpenAI 兼容服务流式时如此）时记 warn 日志，自动压缩对该模型失效。也可在会话页手动触发：同一个会话 lane 上的一个 `compaction` task，处理器只调用同一个压缩方法。
 - **执行**：把最近 `runtime.compaction_keep_steps` 步之前的消息连同上一份摘要交给该 agent 的模型总结，写入 `compactions` 表（`through_message_id` + `summary`）。切点在步与步之间、之前的消息里没有悬空调用的地方（`compaction.steps_of`）：工具调用与其结果、挂起的调用与之后的回答不会被拆开；一次运行中途也有切点（每一批工具结果之后），长任务在运行中也能压缩。单次只取总长不超过上限的最早若干步，不截断内容，剩下的接着压缩，直到保留窗口之外没有可压缩的。
 - **使用**：发给模型的上下文 = 最新摘要（放进 instructions）+ 切点之后的原始消息（`sessions.history.load_context`；切点之后的第一条是回复时，前面补一条说明「接着之前的工作」的请求）。原始消息不删除，UI 显示完整原文并标出压缩点。
+- **给人看的大小**：会话页输入框上方显示「上下文 现在 / 阈值」（`SessionDetail.context`，#600）。现在的大小就是压缩判断看的那个数（`compaction.context_tokens`：上一次模型请求的输入 token，只认最近一次压缩之后的回复；还没有回复、或刚压缩过还没有新回复时未知，显示「—」），阈值取 `Compactor.threshold_of`。会话页手里是完整原始历史，发给模型的那一段由 `history.context_of` 从最近一次压缩与历史推导，和运行加载上下文（`load_context`）同一条规则。平台不知道模型标称的上下文窗口，所以上限显示的是压缩阈值：超过它就会压缩，是这个会话实际能到的大小。
 
 ## 12. 数据库迁移
 
@@ -633,7 +634,7 @@ agent 在任何一次运行里都可以在自己的资源目录里建 `skills/<�
 
 ## 19. 用量
 
-**职责**：记下每次模型运行花掉的 token，按时间范围汇总给界面看（`usage/`，表 `model_usage`）。
+**职责**：记下每次模型运行花掉的 token，按时间范围汇总、或按会话累计给界面看（`usage/`，表 `model_usage`）。
 
 - **唯一的写入方是 `agent_runtime`**（它是唯一调用模型的地方）：两个模型调用入口各对应一种运行类型——会话的运行（`run_steps`）、上下文压缩（`summarize`）。已删除的强制反思（`reflection`）与临时 agent（`temp_agent`，#183）只出现在历史账目行里。入口与类型一一对应，不靠参数分发。
 - **怎么拿到用量**：每个入口在调用 pydantic-ai 之前建一个 `RunUsage` 并交给它，pydantic-ai 把每次请求的用量累加进这个对象，所以运行成功、失败还是被取消，收尾时拿到的都是**已经花掉的那部分**。两种运行（会话的逐步运行、压缩）共用一个上下文管理器 `AgentRuntime._billed`：记开始日志、交出 `RunUsage`，退出时在 `finally` 里记账（`_bill`）。
@@ -642,6 +643,7 @@ agent 在任何一次运行里都可以在自己的资源目录里建 `skills/<�
 - **token 的口径**沿用 pydantic-ai 的归一化约定：`input_tokens` 是输入总数，**已经包含** `cache_read_tokens` 与 `cache_write_tokens`（Anthropic 原始响应把它们分开报，pydantic-ai 统一过），所以展示时是「总数与其中两部分」，不相加。
 - **重试会重复计数，这是对的**：失败的运行重试一次就真的再花一次 token，每次尝试各记一条。
 - **汇总**：`GET /api/usage?since=&until=&group_by=agent|model|day`（可多选，左闭右开；时刻必须带时区，不带的在边界上 422）。取出区间内的行后在内存里按选中的维度相加（`usage.service._summarize`，纯函数，分组规则只有这一份）；「天」按配置的 `timezone` 划分日历日，和人看日历的方式对齐。个人规模下一次取几千行可接受，换来分组规则与时区处理都只写一遍。
+- **一个会话的累计**：`UsageLog.session_totals(session_id)` 把这个会话名下的行（对话与压缩）各项相加，随会话详情给出（`SessionDetail.usage`，#600），会话页输入框上方显示输入、输出、缓存命中比例与请求数。一次运行的用量在它结束（或中途停下压缩）时才记上，所以运行中这个数不含正在进行的这一次。会话页每保存一步就重新拉取，`session_id` 上有索引。
 - **只增不改、不参与删除清理**：删掉 agent 或会话不等于这笔钱没花过，所以 `agent_id` / `session_id` 可能指向已经不存在的东西，界面上显示为 id 或「未知」。这个领域没有事件、没有任务，也不订阅别人的删除。
 - **界面**：设置 → Token 用量（`web/src/pages/Usage.tsx`）：近 7 / 30 天，合计与缓存命中比例、按 agent、按模型，以及按天的输入 token 条形图（深色部分是缓存命中）。
 

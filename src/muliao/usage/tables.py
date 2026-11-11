@@ -49,5 +49,9 @@ class ModelUsage(Base):
     cache_read_tokens: Mapped[int]
     cache_write_tokens: Mapped[int]
 
-    # 汇总一律按时间范围取行，再在范围内分组
-    __table_args__ = (Index("ix_model_usage_created_at", "created_at"), {"sqlite_autoincrement": True})
+    # 汇总按时间范围取行，再在范围内分组；会话页取一个会话的累计（每保存一步取一次）
+    __table_args__ = (
+        Index("ix_model_usage_created_at", "created_at"),
+        Index("ix_model_usage_session_id", "session_id"),
+        {"sqlite_autoincrement": True},
+    )

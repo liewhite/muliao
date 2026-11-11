@@ -1,4 +1,4 @@
-"""用量：记下每次模型运行花掉的 token，按时间范围汇总。
+"""用量：记下每次模型运行花掉的 token，按时间范围汇总，或取一个会话的累计。
 
 写入方只有 agent_runtime（它是唯一调用模型的地方）；读取方只有界面。两件事都很简单，所以这个领域没有事件、
 没有任务、也不参与别的领域的清理：行只增不改，一直留着。
@@ -11,7 +11,7 @@ from datetime import date, datetime
 from enum import StrEnum
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from muliao.platform.db import Database
 from muliao.usage.tables import ModelUsage, RunKind
@@ -138,3 +138,15 @@ class UsageLog:
             )
             rows = [_Row(*r[:3], UsageTotals(*r[3:])) for r in result.all()]
         return _summarize(rows, group_by, self._tz)
+
+    async def session_totals(self, session_id: str) -> UsageTotals:
+        """这个会话名下全部运行（对话与压缩）的用量之和；还没有记过时各项为 0。"""
+        async with self._db.transaction() as s:
+            row = (
+                await s.execute(
+                    select(*(func.coalesce(func.sum(getattr(ModelUsage, f)), 0) for f in COUNTS)).where(
+                        ModelUsage.session_id == session_id
+                    )
+                )
+            ).one()
+        return UsageTotals(*row)

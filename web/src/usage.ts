@@ -24,3 +24,8 @@ export function formatTokens(n: number): string {
 export function cacheHitPercent(inputTokens: number, cacheReadTokens: number): number {
   return inputTokens === 0 ? 0 : Math.round((cacheReadTokens / inputTokens) * 100)
 }
+
+/** 会话的上下文大小「现在 / 压缩阈值」；还没有模型回复（或刚压缩过还没有新回复）时现在的大小未知，显示「—」 */
+export function contextText(tokens: number | null, thresholdTokens: number): string {
+  return `${tokens === null ? '—' : formatTokens(tokens)} / ${formatTokens(thresholdTokens)}`
+}

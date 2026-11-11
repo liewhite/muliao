@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cacheHitPercent, formatTokens, windowOf } from './usage'
+import { cacheHitPercent, contextText, formatTokens, windowOf } from './usage'
 
 describe('windowOf', () => {
   it('starts at local midnight so the first day is a whole day', () => {
@@ -36,5 +36,15 @@ describe('cacheHitPercent', () => {
     expect(cacheHitPercent(100, 80)).toBe(80)
     // 没有输入时不除零
     expect(cacheHitPercent(0, 0)).toBe(0)
+  })
+})
+
+describe('contextText', () => {
+  it('shows the current size against the compaction threshold', () => {
+    expect(contextText(123_456, 700_000)).toBe('123K / 700K')
+  })
+
+  it('shows a dash while the size is not known yet', () => {
+    expect(contextText(null, 700_000)).toBe('— / 700K')
   })
 })

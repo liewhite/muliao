@@ -5148,6 +5148,32 @@
         ],
         "title": "CompactionOut"
       },
+      "ContextOut": {
+        "properties": {
+          "tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tokens"
+          },
+          "threshold_tokens": {
+            "type": "integer",
+            "title": "Threshold Tokens"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tokens",
+          "threshold_tokens"
+        ],
+        "title": "ContextOut",
+        "description": "发给模型的上下文有多大、到多大会压缩（sessions.compaction）。"
+      },
       "Decision": {
         "properties": {
           "approved": {
@@ -8497,6 +8523,12 @@
             },
             "type": "array",
             "title": "Waits"
+          },
+          "context": {
+            "$ref": "#/components/schemas/ContextOut"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/UsageCounts"
           }
         },
         "type": "object",
@@ -8509,7 +8541,9 @@
           "threads",
           "live",
           "state",
-          "waits"
+          "waits",
+          "context",
+          "usage"
         ],
         "title": "SessionDetail"
       },
@@ -9892,6 +9926,40 @@
         ],
         "title": "UnreadOut"
       },
+      "UsageCounts": {
+        "properties": {
+          "requests": {
+            "type": "integer",
+            "title": "Requests"
+          },
+          "input_tokens": {
+            "type": "integer",
+            "title": "Input Tokens"
+          },
+          "output_tokens": {
+            "type": "integer",
+            "title": "Output Tokens"
+          },
+          "cache_read_tokens": {
+            "type": "integer",
+            "title": "Cache Read Tokens"
+          },
+          "cache_write_tokens": {
+            "type": "integer",
+            "title": "Cache Write Tokens"
+          }
+        },
+        "type": "object",
+        "required": [
+          "requests",
+          "input_tokens",
+          "output_tokens",
+          "cache_read_tokens",
+          "cache_write_tokens"
+        ],
+        "title": "UsageCounts",
+        "description": "用量的各项计数（usage.UsageTotals）。\n\ninput_tokens 是输入总数，**已包含** cache_read_tokens 与 cache_write_tokens（pydantic-ai 的口径），\n展示时是总数与其中两部分的关系，不要相加。"
+      },
       "UsageGroup": {
         "type": "string",
         "enum": [
@@ -9904,6 +9972,26 @@
       },
       "UsageOut": {
         "properties": {
+          "requests": {
+            "type": "integer",
+            "title": "Requests"
+          },
+          "input_tokens": {
+            "type": "integer",
+            "title": "Input Tokens"
+          },
+          "output_tokens": {
+            "type": "integer",
+            "title": "Output Tokens"
+          },
+          "cache_read_tokens": {
+            "type": "integer",
+            "title": "Cache Read Tokens"
+          },
+          "cache_write_tokens": {
+            "type": "integer",
+            "title": "Cache Write Tokens"
+          },
           "agent_id": {
             "anyOf": [
               {
@@ -9937,41 +10025,21 @@
               }
             ],
             "title": "Day"
-          },
-          "requests": {
-            "type": "integer",
-            "title": "Requests"
-          },
-          "input_tokens": {
-            "type": "integer",
-            "title": "Input Tokens"
-          },
-          "output_tokens": {
-            "type": "integer",
-            "title": "Output Tokens"
-          },
-          "cache_read_tokens": {
-            "type": "integer",
-            "title": "Cache Read Tokens"
-          },
-          "cache_write_tokens": {
-            "type": "integer",
-            "title": "Cache Write Tokens"
           }
         },
         "type": "object",
         "required": [
-          "agent_id",
-          "model",
-          "day",
           "requests",
           "input_tokens",
           "output_tokens",
           "cache_read_tokens",
-          "cache_write_tokens"
+          "cache_write_tokens",
+          "agent_id",
+          "model",
+          "day"
         ],
         "title": "UsageOut",
-        "description": "一个分组的汇总。没有参与分组的维度为 null。\n\ninput_tokens 是输入总数，**已包含** cache_read_tokens 与 cache_write_tokens（pydantic-ai 的口径），\n展示时是总数与其中两部分的关系，不要相加。"
+        "description": "一个分组的汇总。没有参与分组的维度为 null。"
       },
       "UserAnswered": {
         "properties": {

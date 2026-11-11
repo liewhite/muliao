@@ -252,23 +252,29 @@ CONTINUATION = (
 )
 
 
-async def load_context(s: AsyncSession, session_id: str) -> SessionContext:
-    compaction = await latest_compaction(s, session_id)
-    rows = await rows_after(s, session_id, compaction.through_message_id if compaction else 0)
-    messages = load_messages(r.payload for r in rows)
+def context_of(compaction: Compaction | None, saved: Sequence[tuple[int, ModelMessage]]) -> SessionContext:
+    """发给模型的上下文，由最近一次压缩与原始历史（消息 id 与消息，按顺序；切点之前的可有可无）推导，唯一规则：运行加载
+    上下文（load_context）与会话页算上下文大小（sessions.service）都经这里。"""
+    after = compaction.through_message_id if compaction else 0
+    kept = [(i, m) for i, m in saved if i > after]
+    messages = [m for _, m in kept]
     stale = (
         None
         if compaction is None
-        else len(
-            measured_responses(
-                [m for r, m in zip(rows, messages, strict=True) if r.id <= compaction.at_message_id]
-            )
-        )
+        else len(measured_responses([m for i, m in kept if i <= compaction.at_message_id]))
     )
     if messages and isinstance(messages[0], ModelResponse):
         messages.insert(0, ModelRequest(parts=[UserPromptPart(CONTINUATION)]))
     return SessionContext(
         summary=compaction.summary if compaction else None, messages=messages, stale_responses=stale
+    )
+
+
+async def load_context(s: AsyncSession, session_id: str) -> SessionContext:
+    compaction = await latest_compaction(s, session_id)
+    rows = await rows_after(s, session_id, compaction.through_message_id if compaction else 0)
+    return context_of(
+        compaction, list(zip((r.id for r in rows), load_messages(r.payload for r in rows), strict=True))
     )
 
 

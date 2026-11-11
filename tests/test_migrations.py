@@ -1930,3 +1930,32 @@ def test_trigger_errors_become_one_faults_list_and_downgrade_restores_them(tmp_p
         "@route issue:9: gone\n@route agent:nobody: invalid route 'agent:nobody': no agent",
     )
     assert back["s"][:2] == (None, None) and json.loads(back["s"][2])["error"] == "exited with 3"
+
+
+def test_model_usage_gets_a_session_index_and_downgrade_drops_only_the_index(tmp_path):
+    """#600：会话页按会话取累计用量，session_id 加索引；降级只删索引，账目行与自增序号都在。"""
+    from alembic import command
+
+    from muliao.platform.db import _migration_engine
+
+    def indexes(conn: sqlite3.Connection) -> set[str]:
+        return {r[1] for r in conn.execute("pragma index_list(model_usage)")}
+
+    path = tmp_path / "m.db"
+    migrate(path)
+    with sqlite3.connect(path) as conn:
+        assert "ix_model_usage_session_id" in indexes(conn)
+        conn.execute(
+            "insert into model_usage (created_at, agent_id, session_id, kind, model, requests, input_tokens, "
+            "output_tokens, cache_read_tokens, cache_write_tokens) "
+            "values ('2026-11-11 00:00:00', 'a', 's', 'run', 'm', 1, 10, 2, 5, 0)"
+        )
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "b5e2c8d47a16")
+    with sqlite3.connect(path) as conn:
+        assert indexes(conn) == {"ix_model_usage_created_at"}
+        assert conn.execute("select session_id, input_tokens from model_usage").fetchall() == [("s", 10)]
+        assert conn.execute("select seq from sqlite_sequence where name = 'model_usage'").fetchone() == (1,)
+    migrate(path)
+    with sqlite3.connect(path) as conn:
+        assert "ix_model_usage_session_id" in indexes(conn)

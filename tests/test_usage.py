@@ -155,6 +155,53 @@ async def test_a_failure_to_record_usage_does_not_fail_the_run(container, make_a
     assert [i.text for i in detail.items if i.type == "assistant"] == ["still answered"]
 
 
+# ---- 一个会话的累计 ----
+
+
+async def test_session_detail_reports_the_sessions_own_running_total(client, container, make_agent, models):
+    """会话详情的累计 = model_usage 里这个会话各行之和（对话与压缩都算），不含别的会话；阈值是会话自己的。"""
+    await login(client)
+    alpha = await make_agent("alpha", model="m")
+    models.models["m"] = answering()
+    created = await client.post(
+        "/api/sessions", json={"agent_id": alpha.id, "prompt": "hi", "compaction_threshold_tokens": 5000}
+    )
+    session_id = created.json()["id"]
+
+    # 还没有模型回复：上下文大小未知，累计各项为 0
+    fresh = (await client.get(f"/api/sessions/{session_id}")).json()
+    assert fresh["context"] == {"tokens": None, "threshold_tokens": 5000}
+    assert fresh["usage"] == {
+        "requests": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+    }
+
+    await drain(container)
+    await client.post(f"/api/sessions/{session_id}/messages", json={"prompt": "again"})
+    await drain(container)
+    # 压缩记在同一个会话名下；别的会话的不算进来
+    totals = UsageTotals(
+        requests=1, input_tokens=100, output_tokens=5, cache_read_tokens=80, cache_write_tokens=10
+    )
+    await container.usage.record(UsageEntry(alpha.id, session_id, RunKind.COMPACTION, "m", totals))
+    await container.usage.record(UsageEntry(alpha.id, "another-session", RunKind.RUN, "m", totals))
+
+    detail = (await client.get(f"/api/sessions/{session_id}")).json()
+    mine = [r for r in await usage_rows(container) if r.session_id == session_id]
+    assert [r.kind for r in mine] == [RunKind.RUN, RunKind.RUN, RunKind.COMPACTION]
+    assert detail["usage"] == {
+        "requests": 3,
+        "input_tokens": sum(r.input_tokens for r in mine),
+        "output_tokens": sum(r.output_tokens for r in mine),
+        "cache_read_tokens": 80,
+        "cache_write_tokens": 10,
+    }
+    assert detail["context"]["tokens"] > 0
+
+
 # ---- 汇总 ----
 
 

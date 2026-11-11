@@ -7,26 +7,35 @@ from fastapi import APIRouter, Query
 from pydantic import AwareDatetime, BaseModel
 
 from muliao.api.deps import C
-from muliao.usage.api import UsageBucket, UsageGroup
+from muliao.usage.api import UsageBucket, UsageGroup, UsageTotals
 
 router = APIRouter()
 
 
-class UsageOut(BaseModel):
-    """一个分组的汇总。没有参与分组的维度为 null。
+class UsageCounts(BaseModel):
+    """用量的各项计数（usage.UsageTotals）。
 
     input_tokens 是输入总数，**已包含** cache_read_tokens 与 cache_write_tokens（pydantic-ai 的口径），
     展示时是总数与其中两部分的关系，不要相加。
     """
 
-    agent_id: str | None
-    model: str | None
-    day: date | None
     requests: int
     input_tokens: int
     output_tokens: int
     cache_read_tokens: int
     cache_write_tokens: int
+
+    @classmethod
+    def of_totals(cls, totals: UsageTotals) -> "UsageCounts":
+        return cls(**asdict(totals))
+
+
+class UsageOut(UsageCounts):
+    """一个分组的汇总。没有参与分组的维度为 null。"""
+
+    agent_id: str | None
+    model: str | None
+    day: date | None
 
     @classmethod
     def of(cls, b: UsageBucket) -> "UsageOut":

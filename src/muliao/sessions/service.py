@@ -16,12 +16,12 @@ from muliao.platform.tasks import Commit, TaskQueue, TaskView, no_commit
 from muliao.platform.tool_views import ToolRenders
 from muliao.sessions.activity import WorkState, waiting_among, work_states_in
 from muliao.sessions.codec import load_messages
-from muliao.sessions.compaction import Compactor
+from muliao.sessions.compaction import Compactor, context_tokens
 from muliao.sessions.deletion import delete_sessions
 from muliao.sessions.directory import Listing, listed_ids_in, listed_page_in, threads_of
 from muliao.sessions.events import Receive, SessionRead, StopThread
 from muliao.sessions.halt import Halted, StopSession
-from muliao.sessions.history import compactions_in, transcript_rows_in
+from muliao.sessions.history import compactions_in, context_of, transcript_rows_in
 from muliao.sessions.inbound import (
     Received,
     UserMessage,
@@ -69,6 +69,11 @@ class SessionView:
     state: WorkState
     # 在等的东西（sessions.waits，与 state 同一事务、同一条规则）：非空且没有在运行时 state 就是 waiting
     waits: list[Wait]
+    # 发给模型的上下文现在的大小（token，sessions.compaction.context_tokens：压缩判断看的同一个数）；还没有模型回复、
+    # 或刚压缩过还没有新回复时为 None
+    context_tokens: int | None
+    # 这个会话的压缩阈值（Compactor.threshold_of）：上下文超过它就压缩
+    compaction_threshold_tokens: int
 
 
 def _with_threads(live: LiveSegment, call_threads: Mapping[str, str]) -> LiveSegment:
@@ -128,9 +133,11 @@ class SessionService:
             call_threads = await call_threads_in(s, session_id)
             state = (await work_states_in(s, self._queue, [session_id]))[session_id]
             waits = await waits_of_in(s, (await waiting_among(s, [session_id]))[session_id])
+        saved = list(zip((i for i, *_ in rows), load_messages(p for _, p, *_ in rows), strict=True))
+        context = context_of(compactions[-1] if compactions else None, saved)
         shown = [
-            (message_id, payload, created_at)
-            for message_id, payload, created_at, _ in rows
+            (message_id, message, created_at)
+            for (message_id, _, created_at, _), (_, message) in zip(rows, saved, strict=True)
             if live is None or live.after_message_id is None or message_id <= live.after_message_id
         ]
         items = annotate_approvals(
@@ -139,9 +146,7 @@ class SessionService:
                     checked_times(
                         [
                             item.model_copy(update={"message_id": message_id})
-                            for (message_id, _, created_at), message in zip(
-                                shown, load_messages(p for _, p, _ in shown), strict=True
-                            )
+                            for message_id, message, created_at in shown
                             for item in to_items([message], self._renders, saved_at=created_at)
                         ]
                     ),
@@ -163,6 +168,8 @@ class SessionService:
             live=None if live is None else _with_threads(live, call_threads),
             state=state,
             waits=waits,
+            context_tokens=context_tokens(context.messages, context.stale_responses),
+            compaction_threshold_tokens=self._compactor.threshold_of(session),
         )
 
     async def receive(self, message: UserMessage) -> Received:
