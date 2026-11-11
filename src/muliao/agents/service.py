@@ -1,4 +1,4 @@
-"""agent 目录（子域）：agent 的身份与配置及其工作目录。身份（id、名字）、归档、默认 agent、删除标记在 agents 表（AgentInfo），
+"""agent 目录：agent 的身份与配置及其工作目录。身份（id、名字）、归档、默认 agent、删除标记在 agents 表（AgentInfo），
 名字也是它资源目录的目录名；描述、模型、思考档位、分组只在 `<名>/agent.toml`（读快照的 Snapshot.loaded_agent）。
 新建与修改都写文件（agent.toml、access.toml 里它的规则、空的私有记忆）再写表；改名就是挪目录。删除与归档的流程在
 agents.lifecycle，它对 agents 表的写入用这里的 `*_in`。"""

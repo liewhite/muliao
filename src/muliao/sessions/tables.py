@@ -199,7 +199,7 @@ class SessionHold(Base):
 
 
 class WakeUp(Base):
-    """会话自己约的一次到点唤醒（wake_me，到点唤醒子域 sessions.wakeups）：到点时向会话投一封事件信件，它接着做。还在不在
+    """会话自己约的一次到点唤醒（wake_me，sessions.wakeups）：到点时向会话投一封事件信件，它接着做。还在不在
     等看会话上同 holder 的占用（active）；改期、取消、会话被停止都让占用不再 active。行永久保留，随会话删除。"""
 
     __tablename__ = "wakeups"

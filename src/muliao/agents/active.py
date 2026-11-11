@@ -1,9 +1,9 @@
-"""agent 目录子域对 agents 表的查询（agents 表只经目录读写）。单独成模块是因为资源目录（agents.source）也要按 id 读名称，
+"""agent 目录对 agents 表的查询（agents 表只经目录读写）。单独成模块是因为资源目录（agents.source）也要按 id 读名称，
 而目录的服务（agents.service）又依赖资源目录；这里在两者之下。
 
 - 正在删除的按不存在处理（docs/architecture.md 第 10 节「删除 agent」）：这条规则只在 LIVE 一处，按 id 取行
   （active_row_in）、按名称找（named_row_in）、列出（listed_in）都用它；归档的另外不能运行（runnable_row_in）。行只给目录
-  子域自己用，别的领域用 agents.service 的 `*_agent_in`。
+  自己用，别的领域用 agents.service 的 `*_agent_in`。
 - 名称：agent_names_in（含正在删除的）。
 
 agent 只会从可用变为正在删除、再变为不存在。为某个 agent 写数据（包括它的资产与记忆）之前，在写入的同一事务里

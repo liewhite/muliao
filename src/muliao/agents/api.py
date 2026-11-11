@@ -1,5 +1,5 @@
 """agent 领域的公开接口：别的领域只经这里（与 agents.events）使用 agent 领域（docs/architecture.md 2.3）。领域内分目录、分发、
-资源三个子域（docs/architecture.md 2.1）；AI 资源都是资源目录里的文件（agents.assets），AssetSource 给出当前快照。
+资源三部分；AI 资源都是资源目录里的文件（agents.assets），AssetSource 给出当前快照。
 
 - 查询：AgentService 的 get / get_active / find_by_name / list，事务内的 agent_in / active_agent_in / runnable_agent_in（归档的报
   AgentArchived），返回 AgentInfo（身份）；要按情况分别处理、不想接异常的投递方用 availability_in（Availability）；

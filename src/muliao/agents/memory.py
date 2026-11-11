@@ -1,5 +1,5 @@
 """记忆：AI 资源的一种，一块有长度上限的 markdown 文件。agent 能用（use）的每一块，每次运行全文放进 instructions；能改
-（write）的才能改。谁能用、能改是分发子域的规则（agents.access）。
+（write）的才能改。谁能用、能改是分发规则（agents.access）。
 
 三类记忆，只是放的位置与分发不同（agents.assets）：
 - 全局记忆（GLOBAL_MEMORY = global，`platform/memory/global.md`）：归平台，base 固定收录（use）；admin 靠 `write:*` 能改。

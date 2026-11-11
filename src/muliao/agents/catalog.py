@@ -1,6 +1,6 @@
 """AI 资源池（AssetCatalog）：跨种类看资源——全部资源与收录它们的角色（界面的资源页）——与各种类通用的写：删除、转移
 owner（把文件或目录挪到新 owner 的目录下）。各种类自己的内容与写入在各 store（skills、mcp、secrets、memory）；能用、能改的
-规则是分发子域的（agents.access）。"""
+规则在分发（agents.access）。"""
 
 from __future__ import annotations
 

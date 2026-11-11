@@ -1,4 +1,4 @@
-"""删除 agent（docs/architecture.md 第 10 节）：agent 领域发起、各领域清理自己的数据的流程。这里只编排 agent 领域各子域的
+"""删除 agent（docs/architecture.md 第 10 节）：agent 领域发起、各领域清理自己的数据的流程。这里只编排 agent 领域各部分的
 接口（目录 agents.service、资源目录 agents.assets、分发 agents.access），不直接碰它们的表。
 
 1. delete：它的会话有忙的，就拒绝（与删除会话同一条规则）；否则把 agent 标为正在删除

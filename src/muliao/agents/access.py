@@ -1,4 +1,4 @@
-"""分发子域的规则，只在这里写一次：
+"""分发的规则，只在这里写一次：
 
 能做某个动作（Grants.can，动作是 use 或 write，agents.permissions.Action）：agent 是资源的 owner（隐含的专属角色，use 与
 write 都有），或它的规则（base + 角色 + 自己的 allow / deny）放行这个权限（Rules.allows；私有记忆没有规则里的名字，只有

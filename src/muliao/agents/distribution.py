@@ -1,4 +1,4 @@
-"""分发子域的门面（Distribution）：角色的增删改与查看，agent 的规则与它最终能用的（reach），配置的预览。
+"""分发的门面（Distribution）：角色的增删改与查看，agent 的规则与它最终能用的（reach），配置的预览。
 
 角色定义与各 agent 的角色、allow / deny 都在 access.toml（agents.access_file 读写，写之前的校验只有 access_file.vet，
 写与预览都经 access_file.plan）；能用 / 能改与由此派生的在 agents.access。读到的坏规则读树时就跳过并报出，这里不再有
