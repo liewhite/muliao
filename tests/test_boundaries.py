@@ -261,6 +261,34 @@ def test_only_its_module_changes_a_state_of_a_trigger(owner, state):
     assert not problems, "\n".join(problems)
 
 
+def test_issue_fields_change_only_inside_the_change_unit():
+    """issue 改动的后果只由变更单元负责（docs/architecture.md 2.4 第 10 行）：Issue 的字段只在 issues/change.py 里赋值、
+    新建的 Issue 也只在那里构造，别处改了字段就绕过了记动态、投递与放行下游。issue_activities 的行同理只在那里构造。"""
+    from muliao.issues.tables import Issue
+
+    fields = set(Issue.__table__.columns.keys())
+    problems = []
+    for path in sorted(SRC.rglob("*.py")):
+        if (
+            path.relative_to(SRC).as_posix() in ("issues/change.py", "issues/tables.py")
+            or "migrations" in path.parts
+        ):
+            continue
+        for node in ast.walk(ast.parse(path.read_text())):
+            targets = []
+            if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            problems += [
+                f"{path.relative_to(SRC)}:{node.lineno} sets .{t.attr}"
+                for t in targets
+                if isinstance(t, ast.Attribute) and t.attr in fields and path.parts[-2] == "issues"
+            ]
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                if node.func.id in ("Issue", "IssueActivity"):
+                    problems.append(f"{path.relative_to(SRC)}:{node.lineno} constructs {node.func.id}")
+    assert not problems, "\n".join(problems)
+
+
 def test_sessions_read_tasks_through_the_queue():
     """会话领域经 TaskQueue 的只读查询（TaskView）看运行，不查任务表、不按 TaskStatus 分支；Task 只出现在任务处理器的
     签名里（队列交给处理器的就是它）。"""

@@ -2,28 +2,31 @@
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import assert_never
 from zoneinfo import ZoneInfo
 
 from muliao.agents.api import AgentNames
+from muliao.issues.activity import (
+    Activity,
+    AssigneeChanged,
+    Commented,
+    Created,
+    DependencyFinished,
+    DependsOnChanged,
+    DescriptionEdited,
+    EventPosted,
+    OwnerChanged,
+    PriorityChanged,
+    RunFailure,
+    StatusChanged,
+    Stopped,
+    TitleChanged,
+    Unsettled,
+)
 from muliao.issues.graph import Dependency, Links, waiting_on
 from muliao.issues.rules import actor_name, assignee_name
-from muliao.issues.tables import ActivityKind, Issue, IssueActivity
+from muliao.issues.tables import Issue
 from muliao.platform.values import local_time
-
-
-@dataclass(frozen=True)
-class ActivityView:
-    """渲染给模型看的一条时间线。actor 是展示名（用户、系统或 agent 名，见 rules.actor_name）。"""
-
-    at: str
-    actor: str
-    kind: ActivityKind
-    body: str | None
-    before: str | None
-    after: str | None
-    # DEPENDENCY 动态：完成的那个上游
-    upstream: int | None = None
 
 
 @dataclass(frozen=True)
@@ -39,47 +42,64 @@ class IssueView:
     # 它依赖的上游、依赖它的下游
     depends_on: Sequence[Dependency]
     blocks: Sequence[Dependency]
-    activities: Sequence[ActivityView]
+    # 时间线，每条已渲染成一行（render_activity）
+    activities: Sequence[str]
 
 
-def _assignee(value: Any, names: AgentNames) -> str:
+def _assignee(value: str | None, names: AgentNames) -> str:
     return "unassigned" if value is None else assignee_name(value, names)
 
 
-def activity_views(
-    activities: Sequence[IssueActivity], names: AgentNames, tz: ZoneInfo
-) -> list[ActivityView]:
-    """时间线换成展示名与本地时间。"""
+def _issues(found: list[int]) -> str:
+    return ", ".join(f"#{i}" for i in found) or "none"
 
-    def issues(found: list[int]) -> str:
-        return ", ".join(f"#{i}" for i in found) or "none"
 
-    views = []
-    for a in activities:
-        before = after = None
-        if a.change is not None:
-            if a.kind in (ActivityKind.ASSIGNEE, ActivityKind.OWNER, ActivityKind.STOPPED):
-                before, after = _assignee(a.change["from"], names), _assignee(a.change["to"], names)
-            elif a.kind == ActivityKind.DEPENDS_ON:
-                before, after = issues(a.change["from"]), issues(a.change["to"])
-            else:
-                before, after = str(a.change["from"]), str(a.change["to"])
-        views.append(
-            ActivityView(
-                at=local_time(a.created_at, tz),
-                actor=actor_name(a.actor, names),
-                kind=a.kind,
-                body=a.body,
-                before=before,
-                after=after,
-                upstream=a.change["issue"] if a.kind == ActivityKind.DEPENDENCY else None,
+def _indented(body: str) -> str:
+    return "\n  " + body.replace("\n", "\n  ")
+
+
+def render_activity(a: Activity, names: AgentNames, tz: ZoneInfo) -> str:
+    """时间线上的一条给模型看的文本：本地时间、展示名（用户、系统或 agent 名，见 rules.actor_name）。"""
+    head = f"- [{local_time(a.created_at, tz)}]"
+    actor = actor_name(a.actor, names)
+    match a.what:
+        case Created():
+            return f"{head} {actor} created the issue"
+        case Commented(body=body):
+            return f"{head} {actor} commented:" + _indented(body)
+        case DescriptionEdited():
+            return f"{head} {actor} edited the description"
+        case (
+            TitleChanged(kind=kind, change=c)
+            | StatusChanged(kind=kind, change=c)
+            | PriorityChanged(kind=kind, change=c)
+        ):
+            return f"{head} {actor} changed {kind}: {c.before} -> {c.to}"
+        case AssigneeChanged(kind=kind, change=c) | OwnerChanged(kind=kind, change=c):
+            return f"{head} {actor} changed {kind}: {_assignee(c.before, names)} -> {_assignee(c.to, names)}"
+        case DependsOnChanged(kind=kind, change=c):
+            return f"{head} {actor} changed {kind}: {_issues(c.before)} -> {_issues(c.to)}"
+        case DependencyFinished(change=c):
+            return f"{head} {actor} changed status of dependency #{c.issue}: {c.before} -> {c.to}"
+        case RunFailure(body=body):
+            return f"{head} {actor}'s run in its issue session failed: {body}"
+        case EventPosted(body=body, change=c):
+            return f"{head} event from {c.to} ({actor}):" + _indented(body)
+        case Stopped(change=c):
+            return f"{head} {actor} stopped {_assignee(c.to, names)}'s conversation on this issue"
+        case Unsettled():
+            # 怎么表态的指引在 SESSION_NOTE（缓存前缀）；这里只多一句「只写评论不算」作提醒
+            return (
+                f"{head} {actor}'s run in its issue session ended with the issue still `in_progress` and nothing "
+                "pending to wake it up: settle it now as the note on this conversation says (a comment alone does "
+                "not settle it; you are asked again every time you stop like this)"
             )
-        )
-    return views
+        case other:
+            assert_never(other)
 
 
 def issue_view(
-    issue: Issue, activities: Sequence[IssueActivity], links: Links, names: AgentNames, tz: ZoneInfo
+    issue: Issue, activities: Sequence[Activity], links: Links, names: AgentNames, tz: ZoneInfo
 ) -> IssueView:
     """issue 连同给出的时间线（完整的，或只是这次的动态）换成展示名与本地时间。"""
     return IssueView(
@@ -93,33 +113,8 @@ def issue_view(
         creator=actor_name(issue.creator, names),
         depends_on=links.depends_on,
         blocks=links.blocks,
-        activities=activity_views(activities, names, tz),
+        activities=[render_activity(a, names, tz) for a in activities],
     )
-
-
-def render_activity(a: ActivityView) -> str:
-    if a.kind == ActivityKind.COMMENT:
-        return f"- [{a.at}] {a.actor} commented:\n  " + (a.body or "").replace("\n", "\n  ")
-    if a.kind == ActivityKind.CREATED:
-        return f"- [{a.at}] {a.actor} created the issue"
-    if a.kind == ActivityKind.DESCRIPTION:
-        return f"- [{a.at}] {a.actor} edited the description"
-    if a.kind == ActivityKind.DEPENDENCY:
-        return f"- [{a.at}] {a.actor} changed status of dependency #{a.upstream}: {a.before} -> {a.after}"
-    if a.kind == ActivityKind.RUN_FAILED:
-        return f"- [{a.at}] {a.actor}'s run in its issue session failed: {a.body}"
-    if a.kind == ActivityKind.EVENT:
-        return f"- [{a.at}] event from {a.after} ({a.actor}):\n  " + (a.body or "").replace("\n", "\n  ")
-    if a.kind == ActivityKind.STOPPED:
-        return f"- [{a.at}] {a.actor} stopped {a.after}'s conversation on this issue"
-    if a.kind == ActivityKind.UNSETTLED:
-        # 怎么表态的指引在 SESSION_NOTE（缓存前缀）；这里只多一句「只写评论不算」作提醒
-        return (
-            f"- [{a.at}] {a.actor}'s run in its issue session ended with the issue still `in_progress` and nothing "
-            "pending to wake it up: settle it now as the note on this conversation says (a comment alone does "
-            "not settle it; you are asked again every time you stop like this)"
-        )
-    return f"- [{a.at}] {a.actor} changed {a.kind}: {a.before} -> {a.after}"
 
 
 def _dependencies(found: Sequence[Dependency]) -> str:
@@ -145,7 +140,7 @@ def render_issue(issue: IssueView) -> str:
         "",
         "## Activity",
     ]
-    lines.extend(render_activity(a) for a in issue.activities)
+    lines.extend(issue.activities)
     return "\n".join(lines)
 
 
@@ -156,7 +151,7 @@ def delivery_message(issue: IssueView) -> str:
     summary = [f"#{issue.id}: {issue.title}", f"status: {issue.status}", f"assignee: {issue.assignee}"]
     if issue.depends_on:
         summary.append(f"depends on: {_dependencies(issue.depends_on)}")
-    happened = "\n".join(render_activity(a) for a in issue.activities)
+    happened = "\n".join(issue.activities)
     return (
         f"New activity on issue {' | '.join(summary)}\n{happened}\n\n"
         f"Full issue (description, dependencies, whole timeline): `issue_show({issue.id})`."

@@ -83,7 +83,7 @@ async def _running_issue(container, make_agent, models):
 
 
 async def _kinds(container, issue_id: int) -> list[ActivityKind]:
-    return [a.kind for a in (await container.issues.get(issue_id)).activities]
+    return [a.what.kind for a in (await container.issues.get(issue_id)).activities]
 
 
 async def test_stopping_a_running_issue_conversation_then_delivers_the_message(container, make_agent, models):
@@ -96,12 +96,12 @@ async def test_stopping_a_running_issue_conversation_then_delivers_the_message(c
     assert result.stopped and result.agent == alpha and result.issue.status == BACKLOG
     # 时间线：一条停止、一条状态变更，消息记成评论
     activities = (await container.issues.get(issue.id)).activities
-    assert [a.kind for a in activities][-3:] == [
+    assert [a.what.kind for a in activities][-3:] == [
         ActivityKind.STOPPED,
         ActivityKind.STATUS,
         ActivityKind.COMMENT,
     ]
-    assert activities[-3].actor == boss and activities[-3].change == {"from": None, "to": alpha}
+    assert activities[-3].actor == boss and activities[-3].what.change.to == alpha
     # 慢命令被停下（同用户停止），之后消息投进同一个会话跑了一轮，虽然 issue 已是 backlog
     history = await history_of(container, session.id)
     assert any(getattr(p, "content", None) == STOPPED_TOOL_RESULT for m in history for p in m.parts)

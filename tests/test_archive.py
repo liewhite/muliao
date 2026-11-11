@@ -171,7 +171,7 @@ async def test_issues_cannot_go_to_an_archived_agent_and_its_old_ones_stay_quiet
     async with container.db.transaction() as s:
         assert (await s.scalars(select(Session).where(Session.origin == Origin.ISSUE))).all() == []
     activities = (await container.issues.get(issue.id)).activities
-    assert any(a.body == "still there?" for a in activities)
+    assert any(getattr(a.what, "body", None) == "still there?" for a in activities)
     notices = await container.notifications.list(10)
     assert notices and all(n.issue_id == issue.id and "已归档" in n.title for n in notices)
 

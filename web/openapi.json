@@ -3269,53 +3269,65 @@
                 "schema": {
                   "oneOf": [
                     {
-                      "$ref": "#/components/schemas/PlainActivityOut"
+                      "$ref": "#/components/schemas/CreatedActivity"
                     },
                     {
-                      "$ref": "#/components/schemas/TextActivityOut"
+                      "$ref": "#/components/schemas/CommentedActivity"
                     },
                     {
-                      "$ref": "#/components/schemas/EventActivityOut"
+                      "$ref": "#/components/schemas/DescriptionEditedActivity"
                     },
                     {
-                      "$ref": "#/components/schemas/StoppedActivityOut"
+                      "$ref": "#/components/schemas/TitleChangedActivity"
                     },
                     {
-                      "$ref": "#/components/schemas/StatusActivityOut"
+                      "$ref": "#/components/schemas/StatusChangedActivity"
                     },
                     {
-                      "$ref": "#/components/schemas/DependencyActivityOut"
+                      "$ref": "#/components/schemas/PriorityChangedActivity"
                     },
                     {
-                      "$ref": "#/components/schemas/PriorityActivityOut"
+                      "$ref": "#/components/schemas/AssigneeChangedActivity"
                     },
                     {
-                      "$ref": "#/components/schemas/PersonActivityOut"
+                      "$ref": "#/components/schemas/OwnerChangedActivity"
                     },
                     {
-                      "$ref": "#/components/schemas/TitleActivityOut"
+                      "$ref": "#/components/schemas/DependsOnChangedActivity"
                     },
                     {
-                      "$ref": "#/components/schemas/DependsOnActivityOut"
+                      "$ref": "#/components/schemas/DependencyFinishedActivity"
+                    },
+                    {
+                      "$ref": "#/components/schemas/RunFailureActivity"
+                    },
+                    {
+                      "$ref": "#/components/schemas/UnsettledActivity"
+                    },
+                    {
+                      "$ref": "#/components/schemas/StoppedActivity"
+                    },
+                    {
+                      "$ref": "#/components/schemas/EventPostedActivity"
                     }
                   ],
                   "discriminator": {
                     "propertyName": "kind",
                     "mapping": {
-                      "created": "#/components/schemas/PlainActivityOut",
-                      "description": "#/components/schemas/PlainActivityOut",
-                      "unsettled": "#/components/schemas/PlainActivityOut",
-                      "comment": "#/components/schemas/TextActivityOut",
-                      "run_failed": "#/components/schemas/TextActivityOut",
-                      "event": "#/components/schemas/EventActivityOut",
-                      "stopped": "#/components/schemas/StoppedActivityOut",
-                      "status": "#/components/schemas/StatusActivityOut",
-                      "dependency": "#/components/schemas/DependencyActivityOut",
-                      "priority": "#/components/schemas/PriorityActivityOut",
-                      "assignee": "#/components/schemas/PersonActivityOut",
-                      "owner": "#/components/schemas/PersonActivityOut",
-                      "title": "#/components/schemas/TitleActivityOut",
-                      "depends_on": "#/components/schemas/DependsOnActivityOut"
+                      "created": "#/components/schemas/CreatedActivity",
+                      "comment": "#/components/schemas/CommentedActivity",
+                      "description": "#/components/schemas/DescriptionEditedActivity",
+                      "title": "#/components/schemas/TitleChangedActivity",
+                      "status": "#/components/schemas/StatusChangedActivity",
+                      "priority": "#/components/schemas/PriorityChangedActivity",
+                      "assignee": "#/components/schemas/AssigneeChangedActivity",
+                      "owner": "#/components/schemas/OwnerChangedActivity",
+                      "depends_on": "#/components/schemas/DependsOnChangedActivity",
+                      "dependency": "#/components/schemas/DependencyFinishedActivity",
+                      "run_failed": "#/components/schemas/RunFailureActivity",
+                      "unsettled": "#/components/schemas/UnsettledActivity",
+                      "stopped": "#/components/schemas/StoppedActivity",
+                      "event": "#/components/schemas/EventPostedActivity"
                     }
                   },
                   "title": "Response Comment Issue Api Issues  Issue Id  Comments Post"
@@ -4365,6 +4377,7 @@
             "title": "To"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
           "from",
@@ -4549,6 +4562,54 @@
         ],
         "title": "AssetSourceOut",
         "description": "为什么能用：它名下的、放行它的角色（含 base）、它自己的 allow 规则（至少一项）。"
+      },
+      "AssigneeChangedActivity": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "actor": {
+            "type": "string",
+            "title": "Actor"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "kind": {
+            "type": "string",
+            "const": "assignee",
+            "title": "Kind",
+            "default": "assignee"
+          },
+          "change": {
+            "$ref": "#/components/schemas/Change_Union_str__NoneType__"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "created_at",
+          "actor",
+          "session_id",
+          "kind",
+          "change"
+        ],
+        "title": "AssigneeChangedActivity"
       },
       "Attachment": {
         "properties": {
@@ -4960,6 +5021,7 @@
             "$ref": "#/components/schemas/IssuePriority"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
           "from",
@@ -4992,6 +5054,7 @@
             "title": "To"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
           "from",
@@ -5016,6 +5079,7 @@
             "title": "To"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
           "from",
@@ -5034,6 +5098,7 @@
             "title": "To"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
           "from",
@@ -5125,6 +5190,55 @@
         ],
         "title": "CommentIn"
       },
+      "CommentedActivity": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "actor": {
+            "type": "string",
+            "title": "Actor"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "kind": {
+            "type": "string",
+            "const": "comment",
+            "title": "Kind",
+            "default": "comment"
+          },
+          "body": {
+            "type": "string",
+            "title": "Body"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "created_at",
+          "actor",
+          "session_id",
+          "kind",
+          "body"
+        ],
+        "title": "CommentedActivity"
+      },
       "CompactOut": {
         "properties": {
           "queued": {
@@ -5187,6 +5301,50 @@
         ],
         "title": "ContextOut",
         "description": "发给模型的上下文有多大、到多大会压缩（sessions.compaction）。"
+      },
+      "CreatedActivity": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "actor": {
+            "type": "string",
+            "title": "Actor"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "kind": {
+            "type": "string",
+            "const": "created",
+            "title": "Kind",
+            "default": "created"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "created_at",
+          "actor",
+          "session_id",
+          "kind"
+        ],
+        "title": "CreatedActivity"
       },
       "Decision": {
         "properties": {
@@ -5273,7 +5431,31 @@
         "title": "DelegationWait",
         "description": "在等委派出去的工作交回结局（ask_agent，或 delegate_task 带 report_back）。"
       },
-      "DependencyActivityOut": {
+      "DependencyChange": {
+        "properties": {
+          "from": {
+            "type": "string",
+            "title": "From"
+          },
+          "to": {
+            "type": "string",
+            "title": "To"
+          },
+          "issue": {
+            "type": "integer",
+            "title": "Issue"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "from",
+          "to",
+          "issue"
+        ],
+        "title": "DependencyChange"
+      },
+      "DependencyFinishedActivity": {
         "properties": {
           "id": {
             "type": "integer",
@@ -5302,12 +5484,14 @@
           "kind": {
             "type": "string",
             "const": "dependency",
-            "title": "Kind"
+            "title": "Kind",
+            "default": "dependency"
           },
           "change": {
             "$ref": "#/components/schemas/DependencyChange"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
           "id",
@@ -5317,32 +5501,10 @@
           "kind",
           "change"
         ],
-        "title": "DependencyActivityOut"
+        "title": "DependencyFinishedActivity",
+        "description": "一个上游完成（done / cancelled）：它的状态变化，状态的取值同 StatusChanged。"
       },
-      "DependencyChange": {
-        "properties": {
-          "from": {
-            "type": "string",
-            "title": "From"
-          },
-          "to": {
-            "type": "string",
-            "title": "To"
-          },
-          "issue": {
-            "type": "integer",
-            "title": "Issue"
-          }
-        },
-        "type": "object",
-        "required": [
-          "from",
-          "to",
-          "issue"
-        ],
-        "title": "DependencyChange"
-      },
-      "DependsOnActivityOut": {
+      "DependsOnChangedActivity": {
         "properties": {
           "id": {
             "type": "integer",
@@ -5371,12 +5533,14 @@
           "kind": {
             "type": "string",
             "const": "depends_on",
-            "title": "Kind"
+            "title": "Kind",
+            "default": "depends_on"
           },
           "change": {
             "$ref": "#/components/schemas/Change_list_int__"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
           "id",
@@ -5386,7 +5550,51 @@
           "kind",
           "change"
         ],
-        "title": "DependsOnActivityOut"
+        "title": "DependsOnChangedActivity"
+      },
+      "DescriptionEditedActivity": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "actor": {
+            "type": "string",
+            "title": "Actor"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "kind": {
+            "type": "string",
+            "const": "description",
+            "title": "Kind",
+            "default": "description"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "created_at",
+          "actor",
+          "session_id",
+          "kind"
+        ],
+        "title": "DescriptionEditedActivity"
       },
       "DiffBlock": {
         "properties": {
@@ -5474,57 +5682,6 @@
         ],
         "title": "EntryOut"
       },
-      "EventActivityOut": {
-        "properties": {
-          "id": {
-            "type": "integer",
-            "title": "Id"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Created At"
-          },
-          "actor": {
-            "type": "string",
-            "title": "Actor"
-          },
-          "session_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Session Id"
-          },
-          "kind": {
-            "type": "string",
-            "const": "event",
-            "title": "Kind"
-          },
-          "body": {
-            "type": "string",
-            "title": "Body"
-          },
-          "change": {
-            "$ref": "#/components/schemas/Arrival"
-          }
-        },
-        "type": "object",
-        "required": [
-          "id",
-          "created_at",
-          "actor",
-          "session_id",
-          "kind",
-          "body",
-          "change"
-        ],
-        "title": "EventActivityOut"
-      },
       "EventMailOut": {
         "properties": {
           "id": {
@@ -5594,6 +5751,60 @@
           "check_in"
         ],
         "title": "EventMailOut"
+      },
+      "EventPostedActivity": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "actor": {
+            "type": "string",
+            "title": "Actor"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "kind": {
+            "type": "string",
+            "const": "event",
+            "title": "Kind",
+            "default": "event"
+          },
+          "body": {
+            "type": "string",
+            "title": "Body"
+          },
+          "change": {
+            "$ref": "#/components/schemas/Arrival"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "created_at",
+          "actor",
+          "session_id",
+          "kind",
+          "body",
+          "change"
+        ],
+        "title": "EventPostedActivity",
+        "description": "投到这个 issue 的一个事件（触发器的投递目标 issue:N）：actor 是事件来源所属的 agent。"
       },
       "FaultSource": {
         "type": "string",
@@ -5895,53 +6106,65 @@
             "items": {
               "oneOf": [
                 {
-                  "$ref": "#/components/schemas/PlainActivityOut"
+                  "$ref": "#/components/schemas/CreatedActivity"
                 },
                 {
-                  "$ref": "#/components/schemas/TextActivityOut"
+                  "$ref": "#/components/schemas/CommentedActivity"
                 },
                 {
-                  "$ref": "#/components/schemas/EventActivityOut"
+                  "$ref": "#/components/schemas/DescriptionEditedActivity"
                 },
                 {
-                  "$ref": "#/components/schemas/StoppedActivityOut"
+                  "$ref": "#/components/schemas/TitleChangedActivity"
                 },
                 {
-                  "$ref": "#/components/schemas/StatusActivityOut"
+                  "$ref": "#/components/schemas/StatusChangedActivity"
                 },
                 {
-                  "$ref": "#/components/schemas/DependencyActivityOut"
+                  "$ref": "#/components/schemas/PriorityChangedActivity"
                 },
                 {
-                  "$ref": "#/components/schemas/PriorityActivityOut"
+                  "$ref": "#/components/schemas/AssigneeChangedActivity"
                 },
                 {
-                  "$ref": "#/components/schemas/PersonActivityOut"
+                  "$ref": "#/components/schemas/OwnerChangedActivity"
                 },
                 {
-                  "$ref": "#/components/schemas/TitleActivityOut"
+                  "$ref": "#/components/schemas/DependsOnChangedActivity"
                 },
                 {
-                  "$ref": "#/components/schemas/DependsOnActivityOut"
+                  "$ref": "#/components/schemas/DependencyFinishedActivity"
+                },
+                {
+                  "$ref": "#/components/schemas/RunFailureActivity"
+                },
+                {
+                  "$ref": "#/components/schemas/UnsettledActivity"
+                },
+                {
+                  "$ref": "#/components/schemas/StoppedActivity"
+                },
+                {
+                  "$ref": "#/components/schemas/EventPostedActivity"
                 }
               ],
               "discriminator": {
                 "propertyName": "kind",
                 "mapping": {
-                  "assignee": "#/components/schemas/PersonActivityOut",
-                  "comment": "#/components/schemas/TextActivityOut",
-                  "created": "#/components/schemas/PlainActivityOut",
-                  "dependency": "#/components/schemas/DependencyActivityOut",
-                  "depends_on": "#/components/schemas/DependsOnActivityOut",
-                  "description": "#/components/schemas/PlainActivityOut",
-                  "event": "#/components/schemas/EventActivityOut",
-                  "owner": "#/components/schemas/PersonActivityOut",
-                  "priority": "#/components/schemas/PriorityActivityOut",
-                  "run_failed": "#/components/schemas/TextActivityOut",
-                  "status": "#/components/schemas/StatusActivityOut",
-                  "stopped": "#/components/schemas/StoppedActivityOut",
-                  "title": "#/components/schemas/TitleActivityOut",
-                  "unsettled": "#/components/schemas/PlainActivityOut"
+                  "assignee": "#/components/schemas/AssigneeChangedActivity",
+                  "comment": "#/components/schemas/CommentedActivity",
+                  "created": "#/components/schemas/CreatedActivity",
+                  "dependency": "#/components/schemas/DependencyFinishedActivity",
+                  "depends_on": "#/components/schemas/DependsOnChangedActivity",
+                  "description": "#/components/schemas/DescriptionEditedActivity",
+                  "event": "#/components/schemas/EventPostedActivity",
+                  "owner": "#/components/schemas/OwnerChangedActivity",
+                  "priority": "#/components/schemas/PriorityChangedActivity",
+                  "run_failed": "#/components/schemas/RunFailureActivity",
+                  "status": "#/components/schemas/StatusChangedActivity",
+                  "stopped": "#/components/schemas/StoppedActivity",
+                  "title": "#/components/schemas/TitleChangedActivity",
+                  "unsettled": "#/components/schemas/UnsettledActivity"
                 }
               }
             },
@@ -7388,6 +7611,54 @@
         ],
         "title": "OtherSource"
       },
+      "OwnerChangedActivity": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "actor": {
+            "type": "string",
+            "title": "Actor"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "kind": {
+            "type": "string",
+            "const": "owner",
+            "title": "Kind",
+            "default": "owner"
+          },
+          "change": {
+            "$ref": "#/components/schemas/Change_Union_str__NoneType__"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "created_at",
+          "actor",
+          "session_id",
+          "kind",
+          "change"
+        ],
+        "title": "OwnerChangedActivity"
+      },
       "OwnerIn": {
         "properties": {
           "owner": {
@@ -7407,101 +7678,6 @@
           "owner"
         ],
         "title": "OwnerIn"
-      },
-      "PersonActivityOut": {
-        "properties": {
-          "id": {
-            "type": "integer",
-            "title": "Id"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Created At"
-          },
-          "actor": {
-            "type": "string",
-            "title": "Actor"
-          },
-          "session_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Session Id"
-          },
-          "kind": {
-            "type": "string",
-            "enum": [
-              "assignee",
-              "owner"
-            ],
-            "title": "Kind"
-          },
-          "change": {
-            "$ref": "#/components/schemas/Change_Union_str__NoneType__"
-          }
-        },
-        "type": "object",
-        "required": [
-          "id",
-          "created_at",
-          "actor",
-          "session_id",
-          "kind",
-          "change"
-        ],
-        "title": "PersonActivityOut"
-      },
-      "PlainActivityOut": {
-        "properties": {
-          "id": {
-            "type": "integer",
-            "title": "Id"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Created At"
-          },
-          "actor": {
-            "type": "string",
-            "title": "Actor"
-          },
-          "session_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Session Id"
-          },
-          "kind": {
-            "type": "string",
-            "enum": [
-              "created",
-              "description",
-              "unsettled"
-            ],
-            "title": "Kind"
-          }
-        },
-        "type": "object",
-        "required": [
-          "id",
-          "created_at",
-          "actor",
-          "session_id",
-          "kind"
-        ],
-        "title": "PlainActivityOut"
       },
       "Precheck": {
         "properties": {
@@ -7539,7 +7715,7 @@
         ],
         "title": "Precheck"
       },
-      "PriorityActivityOut": {
+      "PriorityChangedActivity": {
         "properties": {
           "id": {
             "type": "integer",
@@ -7568,12 +7744,14 @@
           "kind": {
             "type": "string",
             "const": "priority",
-            "title": "Kind"
+            "title": "Kind",
+            "default": "priority"
           },
           "change": {
             "$ref": "#/components/schemas/Change_IssuePriority_"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
           "id",
@@ -7583,7 +7761,7 @@
           "kind",
           "change"
         ],
-        "title": "PriorityActivityOut"
+        "title": "PriorityChangedActivity"
       },
       "PushKeys": {
         "properties": {
@@ -8013,6 +8191,56 @@
         ],
         "title": "RunDeltaEvent",
         "description": "流式文字：接在同类的最后一条后面（或开始新的一条）。"
+      },
+      "RunFailureActivity": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "actor": {
+            "type": "string",
+            "title": "Actor"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "kind": {
+            "type": "string",
+            "const": "run_failed",
+            "title": "Kind",
+            "default": "run_failed"
+          },
+          "body": {
+            "type": "string",
+            "title": "Body"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "created_at",
+          "actor",
+          "session_id",
+          "kind",
+          "body"
+        ],
+        "title": "RunFailureActivity",
+        "description": "某个 agent 在它这个 issue 的会话里的运行最终失败了：actor 是该 agent。"
       },
       "RunItemEvent": {
         "properties": {
@@ -9051,7 +9279,7 @@
         ],
         "title": "StartIn"
       },
-      "StatusActivityOut": {
+      "StatusChangedActivity": {
         "properties": {
           "id": {
             "type": "integer",
@@ -9080,12 +9308,14 @@
           "kind": {
             "type": "string",
             "const": "status",
-            "title": "Kind"
+            "title": "Kind",
+            "default": "status"
           },
           "change": {
             "$ref": "#/components/schemas/Change_str_"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
           "id",
@@ -9095,9 +9325,9 @@
           "kind",
           "change"
         ],
-        "title": "StatusActivityOut"
+        "title": "StatusChangedActivity"
       },
-      "StoppedActivityOut": {
+      "StoppedActivity": {
         "properties": {
           "id": {
             "type": "integer",
@@ -9126,12 +9356,14 @@
           "kind": {
             "type": "string",
             "const": "stopped",
-            "title": "Kind"
+            "title": "Kind",
+            "default": "stopped"
           },
           "change": {
             "$ref": "#/components/schemas/Arrival"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
           "id",
@@ -9141,7 +9373,8 @@
           "kind",
           "change"
         ],
-        "title": "StoppedActivityOut"
+        "title": "StoppedActivity",
+        "description": "actor 用 issue_stop 停掉了被指派 agent 在这个 issue 上的会话。"
       },
       "StoredKind": {
         "type": "string",
@@ -9694,56 +9927,6 @@
         "title": "TerminalBlock",
         "description": "终端：`$ command` 提示行、输出、状态行（如退出码、超时、后台任务）。界面把相邻的终端块（调用的命令与结果的\n输出）画在同一个终端框里。"
       },
-      "TextActivityOut": {
-        "properties": {
-          "id": {
-            "type": "integer",
-            "title": "Id"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Created At"
-          },
-          "actor": {
-            "type": "string",
-            "title": "Actor"
-          },
-          "session_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Session Id"
-          },
-          "kind": {
-            "type": "string",
-            "enum": [
-              "comment",
-              "run_failed"
-            ],
-            "title": "Kind"
-          },
-          "body": {
-            "type": "string",
-            "title": "Body"
-          }
-        },
-        "type": "object",
-        "required": [
-          "id",
-          "created_at",
-          "actor",
-          "session_id",
-          "kind",
-          "body"
-        ],
-        "title": "TextActivityOut"
-      },
       "ThreadSource": {
         "properties": {
           "kind": {
@@ -9768,7 +9951,7 @@
         ],
         "title": "ThreadSource"
       },
-      "TitleActivityOut": {
+      "TitleChangedActivity": {
         "properties": {
           "id": {
             "type": "integer",
@@ -9797,12 +9980,14 @@
           "kind": {
             "type": "string",
             "const": "title",
-            "title": "Kind"
+            "title": "Kind",
+            "default": "title"
           },
           "change": {
             "$ref": "#/components/schemas/Change_str_"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
           "id",
@@ -9812,7 +9997,7 @@
           "kind",
           "change"
         ],
-        "title": "TitleActivityOut"
+        "title": "TitleChangedActivity"
       },
       "TokenOut": {
         "properties": {
@@ -10017,6 +10202,51 @@
           "count"
         ],
         "title": "UnreadOut"
+      },
+      "UnsettledActivity": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "actor": {
+            "type": "string",
+            "title": "Actor"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "kind": {
+            "type": "string",
+            "const": "unsettled",
+            "title": "Kind",
+            "default": "unsettled"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "created_at",
+          "actor",
+          "session_id",
+          "kind"
+        ],
+        "title": "UnsettledActivity",
+        "description": "运行结束了，issue 却还是 in_progress、没人在做（rules.stalled）：请它表态。actor 是该 agent。"
       },
       "UsageCounts": {
         "properties": {

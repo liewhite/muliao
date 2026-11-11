@@ -181,9 +181,9 @@ async def test_issue_route_records_an_event_and_delivers_it_like_a_user_comment(
     assert len(await _mail(container, owner_session.id)) == 1
 
     detail = await container.issues.get(issue.id)
-    events = [a for a in detail.activities if a.kind == ActivityKind.EVENT]
-    assert [(a.actor, a.change) for a in events] == [(alpha.id, {"from": None, "to": "trigger feed"})] * 2
-    assert "<event>\nagain\n</event>" in (events[1].body or "")
+    events = [a for a in detail.activities if a.what.kind == ActivityKind.EVENT]
+    assert [(a.actor, a.what.change.to) for a in events] == [(alpha.id, "trigger feed")] * 2
+    assert "<event>\nagain\n</event>" in events[1].what.body
 
 
 async def test_a_bad_route_rejects_a_firing_someone_waits_for_and_drops_just_its_part_when_activated(

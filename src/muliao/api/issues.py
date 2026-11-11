@@ -1,15 +1,15 @@
 """issue 看板接口：界面上的操作都以用户的身份（actor 为 USER）进行。"""
 
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Union
 
 from fastapi import APIRouter, Query
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import BaseModel, Field, create_model
 
 from muliao.agents.api import USER
 from muliao.api.deps import C
-from muliao.issues.api import ActivityKind, IssuePriority, IssueStatus, IssueWork, NewIssue, WorkState
-from muliao.issues.tables import Issue, IssueActivity
+from muliao.issues.api import HAPPENINGS, Activity, IssuePriority, IssueStatus, IssueWork, NewIssue, WorkState
+from muliao.issues.tables import Issue
 from muliao.platform.values import KEEP, Keep
 
 router = APIRouter()
@@ -71,27 +71,8 @@ class IssueOut(BaseModel):
         )
 
 
-class Change[T](BaseModel):
-    """属性从什么改成什么（时间线存的 {"from": ..., "to": ...}）。"""
-
-    before: T = Field(alias="from")
-    to: T
-
-
-class Arrival(BaseModel):
-    """不是属性变化、只有一个值的记法（存为 {"from": null, "to": 值}）。"""
-
-    before: None = Field(alias="from")
-    to: str
-
-
-class DependencyChange(Change[str]):
-    # 完成的那个上游
-    issue: int
-
-
 class _ActivityBase(BaseModel):
-    """时间线上的一条，按 kind 区分，各种类的内容与变化见 issues.tables.ActivityKind。"""
+    """时间线上的一条。按 kind 区分的内容与变化由领域的动态类型定义（issues/activity.py），这里只接上共同的字段。"""
 
     id: int
     created_at: datetime
@@ -101,90 +82,17 @@ class _ActivityBase(BaseModel):
     session_id: str | None
 
 
-class PlainActivityOut(_ActivityBase):
-    kind: Literal[ActivityKind.CREATED, ActivityKind.DESCRIPTION, ActivityKind.UNSETTLED]
+# 每种动态一个响应类型：领域类型的字段加上共同字段
+_OUT: dict[type[BaseModel], type[BaseModel]] = {
+    what: create_model(f"{what.__name__}Activity", __base__=(what, _ActivityBase), __doc__=what.__doc__)
+    for what in HAPPENINGS
+}
+ActivityOut = Annotated[Union[tuple(_OUT.values())], Field(discriminator="kind")]  # noqa: UP007
 
 
-class TextActivityOut(_ActivityBase):
-    # 评论内容；运行失败的错误摘要
-    kind: Literal[ActivityKind.COMMENT, ActivityKind.RUN_FAILED]
-    body: str
-
-
-class EventActivityOut(_ActivityBase):
-    kind: Literal[ActivityKind.EVENT]
-    # 投递的内容；change.to 是来源的描述（如 "trigger slack-live"）
-    body: str
-    change: Arrival
-
-
-class StoppedActivityOut(_ActivityBase):
-    # change.to 是被停掉会话的 agent id
-    kind: Literal[ActivityKind.STOPPED]
-    change: Arrival
-
-
-class StatusActivityOut(_ActivityBase):
-    kind: Literal[ActivityKind.STATUS]
-    # 状态是 str 不是 IssueStatus：#258 之前的历史里有已去掉的 todo、waiting，时间线只增不改
-    change: Change[str]
-
-
-class DependencyActivityOut(_ActivityBase):
-    # 一个上游完成：它的状态变化，状态的取值同 StatusActivityOut
-    kind: Literal[ActivityKind.DEPENDENCY]
-    change: DependencyChange
-
-
-class PriorityActivityOut(_ActivityBase):
-    kind: Literal[ActivityKind.PRIORITY]
-    change: Change[IssuePriority]
-
-
-class PersonActivityOut(_ActivityBase):
-    # 取值同 IssueOut.assignee / owner；null 是未指派、没有负责项目
-    kind: Literal[ActivityKind.ASSIGNEE, ActivityKind.OWNER]
-    change: Change[str | None]
-
-
-class TitleActivityOut(_ActivityBase):
-    kind: Literal[ActivityKind.TITLE]
-    change: Change[str]
-
-
-class DependsOnActivityOut(_ActivityBase):
-    kind: Literal[ActivityKind.DEPENDS_ON]
-    change: Change[list[int]]
-
-
-ActivityOut = Annotated[
-    PlainActivityOut
-    | TextActivityOut
-    | EventActivityOut
-    | StoppedActivityOut
-    | StatusActivityOut
-    | DependencyActivityOut
-    | PriorityActivityOut
-    | PersonActivityOut
-    | TitleActivityOut
-    | DependsOnActivityOut,
-    Field(discriminator="kind"),
-]
-_ACTIVITY_OUT: TypeAdapter[ActivityOut] = TypeAdapter(ActivityOut)
-
-
-def _activity_out(a: IssueActivity) -> ActivityOut:
-    """存下的一条按种类解析；存的形状不符（种类缺了内容或变化）当场报错，不交给界面去猜。"""
-    return _ACTIVITY_OUT.validate_python(
-        dict(
-            id=a.id,
-            created_at=a.created_at,
-            actor=a.actor,
-            session_id=a.session_id,
-            kind=a.kind,
-            body=a.body,
-            change=a.change,
-        )
+def _activity_out(a: Activity) -> BaseModel:
+    return _OUT[type(a.what)](
+        id=a.id, created_at=a.created_at, actor=a.actor, session_id=a.session_id, **dict(a.what)
     )
 
 

@@ -11,10 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.api import USER, agent_names_in
 from muliao.issues import conversation
+from muliao.issues.activity import Activity
 from muliao.issues.graph import links_in, snapshot
 from muliao.issues.render import delivery_message, issue_view
 from muliao.issues.rules import agent_actor, from_outside, handed_to_user, recipient
-from muliao.issues.tables import Issue, IssueActivity
+from muliao.issues.tables import Issue
 from muliao.notifications.events import Notify
 from muliao.platform.messaging import Messaging
 from muliao.sessions.api import Accepted, Refusal, Refused, receive_command_in
@@ -33,14 +34,15 @@ class IssueDelivery:
         issue: Issue,
         actor: str,
         session_id: str | None,
-        happened: Sequence[IssueActivity],
+        happened: Sequence[Activity],
         *,
         to: str | None = None,
     ) -> None:
-        """在调用方的事务里发出这次动态带出的消息：agent 把 issue 交给用户时推送通知；把动态投给该收到的 agent
+        """只由变更单元（issues.change）结算时调用。在调用方的事务里发出这次动态带出的消息：agent 把 issue 交给用户时推送通知；把动态投给该收到的 agent
         （rules.recipient），进它在这个 issue 上唯一的会话。to：直接投给这个 agent，不按 rules.recipient 判定
         （issue_stop 的收尾消息投给被停下的 agent，不论 issue 的新状态）。"""
-        if (agent := handed_to_user(actor, issue.assignee, happened)) is not None:
+        what = [a.what for a in happened]
+        if (agent := handed_to_user(actor, issue.assignee, what)) is not None:
             # 推送通知，点开是 issue（在那里通过或打回）；也带上它交出 issue 的那个会话（打开会话即已读，会话删除时
             # 通知随之删除）
             self._messaging.send_in(
@@ -57,7 +59,7 @@ class IssueDelivery:
         if to is None:
             to = recipient(
                 snapshot(issue, links),
-                from_outside=from_outside(actor, happened),
+                from_outside=from_outside(actor, what),
                 from_its_session=await _from_its_session_in(s, issue, actor, session_id),
             )
         if to is None:

@@ -1655,6 +1655,26 @@ export interface components {
             /** Allow */
             allow: boolean;
         };
+        /** AssigneeChangedActivity */
+        AssigneeChangedActivity: {
+            /** Id */
+            id: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Actor */
+            actor: string;
+            /** Session Id */
+            session_id: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "assignee";
+            change: components["schemas"]["Change_Union_str__NoneType__"];
+        };
         /** Attachment */
         Attachment: {
             /** Url */
@@ -1883,6 +1903,27 @@ export interface components {
             /** Body */
             body: string;
         };
+        /** CommentedActivity */
+        CommentedActivity: {
+            /** Id */
+            id: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Actor */
+            actor: string;
+            /** Session Id */
+            session_id: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "comment";
+            /** Body */
+            body: string;
+        };
         /** CompactOut */
         CompactOut: {
             /** Queued */
@@ -1909,6 +1950,25 @@ export interface components {
             tokens: number | null;
             /** Threshold Tokens */
             threshold_tokens: number;
+        };
+        /** CreatedActivity */
+        CreatedActivity: {
+            /** Id */
+            id: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Actor */
+            actor: string;
+            /** Session Id */
+            session_id: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "created";
         };
         /**
          * Decision
@@ -1958,8 +2018,20 @@ export interface components {
              */
             since: string;
         };
-        /** DependencyActivityOut */
-        DependencyActivityOut: {
+        /** DependencyChange */
+        DependencyChange: {
+            /** From */
+            from: string;
+            /** To */
+            to: string;
+            /** Issue */
+            issue: number;
+        };
+        /**
+         * DependencyFinishedActivity
+         * @description 一个上游完成（done / cancelled）：它的状态变化，状态的取值同 StatusChanged。
+         */
+        DependencyFinishedActivity: {
             /** Id */
             id: number;
             /**
@@ -1978,17 +2050,8 @@ export interface components {
             kind: "dependency";
             change: components["schemas"]["DependencyChange"];
         };
-        /** DependencyChange */
-        DependencyChange: {
-            /** From */
-            from: string;
-            /** To */
-            to: string;
-            /** Issue */
-            issue: number;
-        };
-        /** DependsOnActivityOut */
-        DependsOnActivityOut: {
+        /** DependsOnChangedActivity */
+        DependsOnChangedActivity: {
             /** Id */
             id: number;
             /**
@@ -2006,6 +2069,25 @@ export interface components {
              */
             kind: "depends_on";
             change: components["schemas"]["Change_list_int__"];
+        };
+        /** DescriptionEditedActivity */
+        DescriptionEditedActivity: {
+            /** Id */
+            id: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Actor */
+            actor: string;
+            /** Session Id */
+            session_id: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "description";
         };
         /**
          * DiffBlock
@@ -2043,28 +2125,6 @@ export interface components {
             /** Inline */
             inline: boolean;
         };
-        /** EventActivityOut */
-        EventActivityOut: {
-            /** Id */
-            id: number;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Actor */
-            actor: string;
-            /** Session Id */
-            session_id: string | null;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "event";
-            /** Body */
-            body: string;
-            change: components["schemas"]["Arrival"];
-        };
         /** EventMailOut */
         EventMailOut: {
             /** Id */
@@ -2088,6 +2148,31 @@ export interface components {
             source: components["schemas"]["ThreadSource"] | components["schemas"]["JobSource"] | components["schemas"]["OtherSource"];
             /** Check In */
             check_in: boolean;
+        };
+        /**
+         * EventPostedActivity
+         * @description 投到这个 issue 的一个事件（触发器的投递目标 issue:N）：actor 是事件来源所属的 agent。
+         */
+        EventPostedActivity: {
+            /** Id */
+            id: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Actor */
+            actor: string;
+            /** Session Id */
+            session_id: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "event";
+            /** Body */
+            body: string;
+            change: components["schemas"]["Arrival"];
         };
         /**
          * FaultSource
@@ -2216,7 +2301,7 @@ export interface components {
         IssueDetailOut: {
             issue: components["schemas"]["IssueOut"];
             /** Activities */
-            activities: (components["schemas"]["PlainActivityOut"] | components["schemas"]["TextActivityOut"] | components["schemas"]["EventActivityOut"] | components["schemas"]["StoppedActivityOut"] | components["schemas"]["StatusActivityOut"] | components["schemas"]["DependencyActivityOut"] | components["schemas"]["PriorityActivityOut"] | components["schemas"]["PersonActivityOut"] | components["schemas"]["TitleActivityOut"] | components["schemas"]["DependsOnActivityOut"])[];
+            activities: (components["schemas"]["CreatedActivity"] | components["schemas"]["CommentedActivity"] | components["schemas"]["DescriptionEditedActivity"] | components["schemas"]["TitleChangedActivity"] | components["schemas"]["StatusChangedActivity"] | components["schemas"]["PriorityChangedActivity"] | components["schemas"]["AssigneeChangedActivity"] | components["schemas"]["OwnerChangedActivity"] | components["schemas"]["DependsOnChangedActivity"] | components["schemas"]["DependencyFinishedActivity"] | components["schemas"]["RunFailureActivity"] | components["schemas"]["UnsettledActivity"] | components["schemas"]["StoppedActivity"] | components["schemas"]["EventPostedActivity"])[];
         };
         /** IssueOrigin */
         IssueOrigin: {
@@ -2688,49 +2773,30 @@ export interface components {
             /** Raw */
             raw: string;
         };
+        /** OwnerChangedActivity */
+        OwnerChangedActivity: {
+            /** Id */
+            id: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Actor */
+            actor: string;
+            /** Session Id */
+            session_id: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "owner";
+            change: components["schemas"]["Change_Union_str__NoneType__"];
+        };
         /** OwnerIn */
         OwnerIn: {
             /** Owner */
             owner: string | null;
-        };
-        /** PersonActivityOut */
-        PersonActivityOut: {
-            /** Id */
-            id: number;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Actor */
-            actor: string;
-            /** Session Id */
-            session_id: string | null;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "assignee" | "owner";
-            change: components["schemas"]["Change_Union_str__NoneType__"];
-        };
-        /** PlainActivityOut */
-        PlainActivityOut: {
-            /** Id */
-            id: number;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Actor */
-            actor: string;
-            /** Session Id */
-            session_id: string | null;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "created" | "description" | "unsettled";
         };
         /** Precheck */
         Precheck: {
@@ -2753,8 +2819,8 @@ export interface components {
              */
             fire_when: "output" | "changed";
         };
-        /** PriorityActivityOut */
-        PriorityActivityOut: {
+        /** PriorityChangedActivity */
+        PriorityChangedActivity: {
             /** Id */
             id: number;
             /**
@@ -2933,6 +2999,30 @@ export interface components {
             item_type: "assistant" | "thinking";
             /** Text */
             text: string;
+        };
+        /**
+         * RunFailureActivity
+         * @description 某个 agent 在它这个 issue 的会话里的运行最终失败了：actor 是该 agent。
+         */
+        RunFailureActivity: {
+            /** Id */
+            id: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Actor */
+            actor: string;
+            /** Session Id */
+            session_id: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "run_failed";
+            /** Body */
+            body: string;
         };
         /**
          * RunItemEvent
@@ -3265,8 +3355,8 @@ export interface components {
             /** Compaction Threshold Tokens */
             compaction_threshold_tokens?: number | null;
         };
-        /** StatusActivityOut */
-        StatusActivityOut: {
+        /** StatusChangedActivity */
+        StatusChangedActivity: {
             /** Id */
             id: number;
             /**
@@ -3285,8 +3375,11 @@ export interface components {
             kind: "status";
             change: components["schemas"]["Change_str_"];
         };
-        /** StoppedActivityOut */
-        StoppedActivityOut: {
+        /**
+         * StoppedActivity
+         * @description actor 用 issue_stop 停掉了被指派 agent 在这个 issue 上的会话。
+         */
+        StoppedActivity: {
             /** Id */
             id: number;
             /**
@@ -3487,27 +3580,6 @@ export interface components {
             /** Failed */
             failed: boolean;
         };
-        /** TextActivityOut */
-        TextActivityOut: {
-            /** Id */
-            id: number;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Actor */
-            actor: string;
-            /** Session Id */
-            session_id: string | null;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "comment" | "run_failed";
-            /** Body */
-            body: string;
-        };
         /** ThreadSource */
         ThreadSource: {
             /**
@@ -3520,8 +3592,8 @@ export interface components {
             /** Session Id */
             session_id: string;
         };
-        /** TitleActivityOut */
-        TitleActivityOut: {
+        /** TitleChangedActivity */
+        TitleChangedActivity: {
             /** Id */
             id: number;
             /**
@@ -3617,6 +3689,28 @@ export interface components {
         UnreadOut: {
             /** Count */
             count: number;
+        };
+        /**
+         * UnsettledActivity
+         * @description 运行结束了，issue 却还是 in_progress、没人在做（rules.stalled）：请它表态。actor 是该 agent。
+         */
+        UnsettledActivity: {
+            /** Id */
+            id: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Actor */
+            actor: string;
+            /** Session Id */
+            session_id: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "unsettled";
         };
         /**
          * UsageCounts
@@ -6143,7 +6237,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PlainActivityOut"] | components["schemas"]["TextActivityOut"] | components["schemas"]["EventActivityOut"] | components["schemas"]["StoppedActivityOut"] | components["schemas"]["StatusActivityOut"] | components["schemas"]["DependencyActivityOut"] | components["schemas"]["PriorityActivityOut"] | components["schemas"]["PersonActivityOut"] | components["schemas"]["TitleActivityOut"] | components["schemas"]["DependsOnActivityOut"];
+                    "application/json": components["schemas"]["CreatedActivity"] | components["schemas"]["CommentedActivity"] | components["schemas"]["DescriptionEditedActivity"] | components["schemas"]["TitleChangedActivity"] | components["schemas"]["StatusChangedActivity"] | components["schemas"]["PriorityChangedActivity"] | components["schemas"]["AssigneeChangedActivity"] | components["schemas"]["OwnerChangedActivity"] | components["schemas"]["DependsOnChangedActivity"] | components["schemas"]["DependencyFinishedActivity"] | components["schemas"]["RunFailureActivity"] | components["schemas"]["UnsettledActivity"] | components["schemas"]["StoppedActivity"] | components["schemas"]["EventPostedActivity"];
                 };
             };
             /** @description Validation Error */

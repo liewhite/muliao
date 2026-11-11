@@ -11,6 +11,18 @@ from muliao.agent_runtime.instructions import build_instructions
 from muliao.agents.api import USER
 from muliao.agents.events import AgentDeleting
 from muliao.errors import Conflict, InvalidInput, NotFound
+from muliao.issues.activity import (
+    Arrival,
+    AssigneeChanged,
+    Change,
+    Commented,
+    Created,
+    DependencyChange,
+    DependsOnChanged,
+    EventPosted,
+    OwnerChanged,
+    StatusChanged,
+)
 from muliao.issues.api import SESSION_NOTE, ActivityKind, IssuePriority, IssueStatus, WorkState
 from muliao.issues.graph import cycle_through
 from muliao.issues.rules import (
@@ -27,7 +39,6 @@ from muliao.issues.rules import (
     recipient,
     stalled,
 )
-from muliao.issues.tables import IssueActivity
 from muliao.platform.messaging import Delivery
 from muliao.sessions.api import IssueOrigin, Origin, OriginNotes
 from muliao.sessions.tables import Mail, Session
@@ -272,9 +283,9 @@ async def test_handing_over_delivers_to_the_new_assignee_and_records_the_timelin
     assert "alpha changed assignee: alpha -> beta" in (await _mail(container, session.id))[0]
 
     detail = await container.issues.get(issue.id)
-    kinds = [a.kind for a in detail.activities]
+    kinds = [a.what.kind for a in detail.activities]
     assert kinds == [ActivityKind.CREATED, ActivityKind.STATUS, ActivityKind.ASSIGNEE]
-    assert detail.activities[2].change == {"from": alpha, "to": beta}
+    assert detail.activities[2].what == AssigneeChanged(change=Change(before=alpha, to=beta))
 
 
 async def test_an_agent_handing_an_issue_to_the_user_notifies_them(container, make_agent):
@@ -303,27 +314,26 @@ def test_the_agent_that_handed_an_issue_to_the_user_is_the_last_assigner():
 
 
 def test_what_a_change_brings_is_read_from_its_activities():
-    def act(kind: ActivityKind, change: tuple | None = None) -> IssueActivity:
-        recorded = None if change is None else {"from": change[0], "to": change[1]}
-        return IssueActivity(kind=kind, change=recorded)
+    def status(before: IssueStatus, to: IssueStatus) -> StatusChanged:
+        return StatusChanged(change=Change(before=before, to=to))
 
-    to_user = act(ActivityKind.ASSIGNEE, ("a", USER))
+    to_user = AssigneeChanged(change=Change(before="a", to=USER))
     # agent 把指派人改成用户、或建时就指派给用户：以它的名义通知；用户、系统自己改的不通知
     assert handed_to_user("a", USER, [to_user]) == "a"
-    assert handed_to_user("a", USER, [act(ActivityKind.CREATED)]) == "a"
-    assert handed_to_user("a", "b", [act(ActivityKind.CREATED)]) is None
+    assert handed_to_user("a", USER, [Created()]) == "a"
+    assert handed_to_user("a", "b", [Created()]) is None
     assert handed_to_user(USER, USER, [to_user]) is None
     assert handed_to_user(SYSTEM_ACTOR, USER, [to_user]) is None
-    assert handed_to_user("a", "b", [act(ActivityKind.ASSIGNEE, (USER, "b"))]) is None
+    assert handed_to_user("a", "b", [AssigneeChanged(change=Change(before=USER, to="b"))]) is None
     # 从未结束进入 done / cancelled 才放行下游，返回进入前的状态
-    assert finishing([act(ActivityKind.STATUS, (PROGRESS, DONE))]) == PROGRESS
-    assert finishing([act(ActivityKind.STATUS, (DONE, IssueStatus.CANCELLED))]) is None
-    assert finishing([act(ActivityKind.STATUS, (BACKLOG, PROGRESS))]) is None
-    assert finishing([act(ActivityKind.COMMENT)]) is None
+    assert finishing([status(PROGRESS, DONE)]) == PROGRESS
+    assert finishing([status(DONE, IssueStatus.CANCELLED)]) is None
+    assert finishing([status(BACKLOG, PROGRESS)]) is None
+    assert finishing([Commented(body="x")]) is None
     # 外来的输入：用户的评论、事件；agent 的评论不算
-    assert from_outside(USER, [act(ActivityKind.COMMENT)])
-    assert from_outside("a", [act(ActivityKind.EVENT)])
-    assert not from_outside("a", [act(ActivityKind.COMMENT)])
+    assert from_outside(USER, [Commented(body="x")])
+    assert from_outside("a", [EventPosted(body="x", change=Arrival(to="trigger t"))])
+    assert not from_outside("a", [Commented(body="x")])
 
 
 def test_refusals_say_why():
@@ -356,8 +366,8 @@ async def test_stopping_into_cancelled_releases_the_downstream(container, make_a
     down = await container.issues.create(USER, owner=alpha, title="down", depends_on=[up.id])
     await container.issues.stop(USER, up.id, session_id=None, status=IssueStatus.CANCELLED, message=None)
     last = (await container.issues.get(down.id)).activities[-1]
-    assert last.kind == ActivityKind.DEPENDENCY
-    assert last.change == {"issue": up.id, "from": BACKLOG, "to": IssueStatus.CANCELLED}
+    assert last.what.kind == ActivityKind.DEPENDENCY
+    assert last.what.change == DependencyChange(issue=up.id, before=BACKLOG, to=IssueStatus.CANCELLED)
     assert (await container.issues.get(down.id)).issue.updated_at == last.created_at
 
 
@@ -386,14 +396,10 @@ async def test_approving_an_issue_handed_to_the_user_finishes_it_and_unblocks_do
     assert (approved.status, approved.assignee) == (DONE, USER)
     last = (await container.issues.get(issue.id)).activities[-1]
     # 以用户的身份记在时间线上
-    assert (last.actor, last.kind, last.change) == (
-        USER,
-        ActivityKind.STATUS,
-        {"from": REVIEW, "to": DONE},
-    )
+    assert (last.actor, last.what) == (USER, StatusChanged(change=Change(before=REVIEW, to=DONE)))
     # 下游等的上游都完成了：记一条上游完成，投给下游（它一直是 in_progress，状态不动）
     down = await container.issues.get(downstream.id)
-    assert [(a.actor, a.kind) for a in down.activities[-1:]] == [(USER, ActivityKind.DEPENDENCY)]
+    assert [(a.actor, a.what.kind) for a in down.activities[-1:]] == [(USER, ActivityKind.DEPENDENCY)]
     assert down.issue.status == PROGRESS
     await deliver(container)
     assert str(downstream.id) in {s.origin_ref for s in await _issue_sessions(container)}
@@ -419,12 +425,12 @@ async def test_sending_an_issue_back_comments_and_returns_it_to_the_agent_that_h
 
     assert (rejected.status, rejected.assignee) == (PROGRESS, alpha)
     activities = (await container.issues.get(issue.id)).activities[-3:]
-    assert [(a.actor, a.kind) for a in activities] == [
+    assert [(a.actor, a.what.kind) for a in activities] == [
         (USER, ActivityKind.COMMENT),
         (USER, ActivityKind.STATUS),
         (USER, ActivityKind.ASSIGNEE),
     ]
-    assert activities[0].body == "the button is misaligned"
+    assert activities[0].what.body == "the button is misaligned"
     # 三条动态一封信，投进 agent 原来的 issue 会话
     mails = await _mail(container, session.id)
     assert len(mails) == before + 1
@@ -458,7 +464,7 @@ async def test_starting_a_backlog_issue_assigns_it_to_the_owner_and_delivers(con
 
     assert (started.status, started.assignee) == (PROGRESS, alpha)
     activities = (await container.issues.get(issue.id)).activities[-2:]
-    assert [(a.actor, a.kind, a.session_id) for a in activities] == [
+    assert [(a.actor, a.what.kind, a.session_id) for a in activities] == [
         (USER, ActivityKind.STATUS, None),
         (USER, ActivityKind.ASSIGNEE, None),
     ]
@@ -491,7 +497,7 @@ async def test_the_timeline_records_the_session_each_change_came_from(container,
     await container.issues.comment(alpha, issue.id, "found it", session_id=chat.id)
     await container.issues.update(alpha, issue.id, session_id=chat.id, priority=IssuePriority.HIGH)
     await container.issues.comment(USER, issue.id, "thanks")
-    assert [(a.kind, a.session_id) for a in (await container.issues.get(issue.id)).activities] == [
+    assert [(a.what.kind, a.session_id) for a in (await container.issues.get(issue.id)).activities] == [
         (ActivityKind.CREATED, chat.id),
         (ActivityKind.COMMENT, chat.id),
         (ActivityKind.PRIORITY, chat.id),
@@ -502,7 +508,7 @@ async def test_the_timeline_records_the_session_each_change_came_from(container,
     await container.sessions.delete(chat.id)
     await deliver(container)
     activities = (await container.issues.get(issue.id)).activities
-    assert [(a.kind, a.session_id) for a in activities] == [
+    assert [(a.what.kind, a.session_id) for a in activities] == [
         (ActivityKind.CREATED, None),
         (ActivityKind.COMMENT, None),
         (ActivityKind.PRIORITY, None),
@@ -555,7 +561,10 @@ async def test_deleting_an_agent_unassigns_its_issues(container, make_agent):
         await commit(s)
     detail = await container.issues.get(issue.id)
     assert detail.issue.assignee is None
-    assert detail.activities[-1].change == {"from": alpha, "to": None}
+    assert [a.what for a in detail.activities[-2:]] == [
+        AssigneeChanged(change=Change(before=alpha, to=None)),
+        OwnerChanged(change=Change(before=alpha, to=None)),
+    ]
     # 清理是系统做的，不是用户
     assert detail.activities[-1].actor == SYSTEM_ACTOR
     assert detail.issue.updated_at > before
@@ -664,13 +673,13 @@ async def test_a_run_that_leaves_its_issue_in_progress_is_asked_until_it_settles
         await deliver(container)
         await run_only(container)
         await deliver(container)
-        return [a.kind for a in (await container.issues.get(issue.id)).activities]
+        return [a.what.kind for a in (await container.issues.get(issue.id)).activities]
 
     # 运行结束时还是 in_progress：记一条 UNSETTLED 投进它的 issue 会话。运行结束事件在运行完成时马上处理，它的处理里
     # 发出的投递也马上执行：只跑运行、不另外投递，信已在会话里
     await deliver(container)
     await run_only(container)
-    kinds = [a.kind for a in (await container.issues.get(issue.id)).activities]
+    kinds = [a.what.kind for a in (await container.issues.get(issue.id)).activities]
     assert kinds == [ActivityKind.CREATED, ActivityKind.UNSETTLED]
     [session] = await _issue_sessions(container)
     assert (await container.issues.get(issue.id)).activities[-1].session_id == session.id
@@ -690,7 +699,7 @@ async def test_a_run_that_leaves_its_session_waiting_is_not_asked(container, mak
     issue = await container.issues.create(USER, owner=alpha, title="t", status=PROGRESS, assignee=alpha)
     await drain(container)
     activities = (await container.issues.get(issue.id)).activities
-    assert [a.kind for a in activities] == [ActivityKind.CREATED]
+    assert [a.what.kind for a in activities] == [ActivityKind.CREATED]
     work = (await container.issues.work([issue]))[issue.id]
     assert (work.assignee_state, work.stalled) == (WorkState.WAITING, False)
 
@@ -705,7 +714,7 @@ async def test_deleting_the_last_unfinished_dependency_delivers(container, make_
     await deliver(container)
     detail = await container.issues.get(down.id)
     assert detail.issue.status == PROGRESS
-    assert [(a.actor, a.kind) for a in detail.activities[-1:]] == [(USER, ActivityKind.DEPENDS_ON)]
+    assert [(a.actor, a.what.kind) for a in detail.activities[-1:]] == [(USER, ActivityKind.DEPENDS_ON)]
     [session] = await _issue_sessions(container)
     [mail] = await _mail(container, session.id)
     assert f"user changed depends_on: #{up.id} -> none" in mail
@@ -721,7 +730,7 @@ async def test_the_owner_stays_when_the_issue_is_reassigned_and_filters_a_projec
 
     await container.issues.update(USER, issue.id, owner=beta)
     detail = await container.issues.get(issue.id)
-    assert detail.activities[-1].kind == ActivityKind.OWNER
+    assert detail.activities[-1].what.kind == ActivityKind.OWNER
     assert "user changed owner: alpha -> beta" in await container.issues.render(issue.id)
 
     with pytest.raises(NotFound):
@@ -736,7 +745,7 @@ async def test_deleting_the_owner_agent_clears_ownership(container, make_agent):
         await commit(s)
     detail = await container.issues.get(issue.id)
     assert detail.issue.owner_agent_id is None
-    assert (detail.activities[-1].kind, detail.activities[-1].actor) == (
+    assert (detail.activities[-1].what.kind, detail.activities[-1].actor) == (
         ActivityKind.OWNER,
         SYSTEM_ACTOR,
     )
@@ -801,8 +810,10 @@ async def test_a_downstream_issue_is_delivered_when_its_last_upstream_finishes(c
     await deliver(container)
     assert {s.origin_ref for s in await _issue_sessions(container)} == {str(up1.id)}
     detail = await container.issues.get(down.id)
-    assert detail.activities[-1].kind == ActivityKind.DEPENDENCY
-    assert detail.activities[-1].change == {"issue": up1.id, "from": "in_progress", "to": "done"}
+    assert detail.activities[-1].what.kind == ActivityKind.DEPENDENCY
+    assert detail.activities[-1].what.change == DependencyChange(
+        issue=up1.id, before="in_progress", to="done"
+    )
     # 随上游那次动作：来自上游的 issue 会话
     assert detail.activities[-1].session_id == up1_session.id
 
@@ -841,8 +852,8 @@ async def test_dependencies_must_exist_and_not_form_a_cycle(container, make_agen
     await container.issues.update(USER, c.id, depends_on=[a.id, b.id])
     await container.issues.update(USER, c.id, depends_on=[b.id, a.id])
     detail = await container.issues.get(c.id)
-    assert [x.kind for x in detail.activities] == [ActivityKind.CREATED, ActivityKind.DEPENDS_ON]
-    assert detail.activities[-1].change == {"from": [b.id], "to": [a.id, b.id]}
+    assert [x.what.kind for x in detail.activities] == [ActivityKind.CREATED, ActivityKind.DEPENDS_ON]
+    assert detail.activities[-1].what == DependsOnChanged(change=Change(before=[b.id], to=[a.id, b.id]))
     assert f"user changed depends_on: #{b.id} -> #{a.id}, #{b.id}" in await container.issues.render(c.id)
 
 
@@ -1060,7 +1071,7 @@ async def test_waiting_is_derived_from_the_current_upstream_state(container, mak
     await container.issues.delete(other.id)  # 还在等 up
     await deliver(container)
     assert [s.origin_ref for s in await _issue_sessions(container)] == [str(ready.id)]
-    assert (await container.issues.get(down.id)).activities[-1].kind == ActivityKind.DEPENDS_ON
+    assert (await container.issues.get(down.id)).activities[-1].what.kind == ActivityKind.DEPENDS_ON
 
     await container.issues.update(USER, up.id, status=DONE)
     await container.issues.update(USER, up.id, status=PROGRESS)  # 重新打开：下游回到等待
@@ -1141,9 +1152,9 @@ async def test_a_failed_issue_run_is_recorded_on_the_timeline_and_notified(conta
 
     detail = await container.issues.get(issue.id)
     failed = detail.activities[-1]
-    assert failed.kind == ActivityKind.RUN_FAILED and failed.actor == alpha
-    assert failed.body.startswith("ModelHTTPError") and "400" in failed.body
-    kept, cut = failed.body.split("…[truncated: ")
+    assert failed.what.kind == ActivityKind.RUN_FAILED and failed.actor == alpha
+    assert failed.what.body.startswith("ModelHTTPError") and "400" in failed.what.body
+    kept, cut = failed.what.body.split("…[truncated: ")
     assert len(kept) == RUN_FAILED_BODY_MAX and cut.endswith("more chars]")
     # 状态不变、不自动重试：失败的动态不投进会话
     assert detail.issue.status == PROGRESS
@@ -1153,7 +1164,7 @@ async def test_a_failed_issue_run_is_recorded_on_the_timeline_and_notified(conta
     # 通知由通知领域做（所有列出的会话一样），只有一条
     [note] = await _notifications(container)
     assert note.title == f"alpha · {session.title} 运行失败" and note.session_id == session.id
-    assert note.body == failed.body and note.issue_id is None
+    assert note.body == failed.what.body and note.issue_id is None
     assert "alpha's run in its issue session failed: ModelHTTPError" in await container.issues.render(
         issue.id
     )
@@ -1161,7 +1172,7 @@ async def test_a_failed_issue_run_is_recorded_on_the_timeline_and_notified(conta
     # 之后的动态照常投递、唤醒 agent
     await container.issues.comment(USER, issue.id, "try again")
     await drain(container)
-    assert (await container.issues.get(issue.id)).activities[-1].kind == ActivityKind.COMMENT
+    assert (await container.issues.get(issue.id)).activities[-1].what.kind == ActivityKind.COMMENT
     assert len(await _mail(container, session.id)) == 2
     assert len(await _notifications(container)) == 1
 
@@ -1180,7 +1191,7 @@ async def test_failed_runs_outside_issue_sessions_and_retried_ones_are_not_recor
     issue = await container.issues.create(USER, owner=alpha, title="t", status=PROGRESS, assignee=alpha)
     await drain(container)
 
-    assert [a.kind for a in (await container.issues.get(issue.id)).activities] == [ActivityKind.CREATED]
+    assert [a.what.kind for a in (await container.issues.get(issue.id)).activities] == [ActivityKind.CREATED]
     assert [n.session_id for n in await _notifications(container)] == [triggered.id]
 
 
@@ -1226,7 +1237,7 @@ async def test_a_run_failure_retried_after_its_session_was_deleted_does_not_poin
     async with container.db.transaction() as s:
         await commit(s)
     failed = (await container.issues.get(issue.id)).activities[-1]
-    assert (failed.kind, failed.session_id) == (ActivityKind.RUN_FAILED, None)
+    assert (failed.what.kind, failed.session_id) == (ActivityKind.RUN_FAILED, None)
 
 
 async def test_a_transient_failure_is_recorded_once_its_retries_are_used_up(container, make_agent, models):
@@ -1236,7 +1247,7 @@ async def test_a_transient_failure_is_recorded_once_its_retries_are_used_up(cont
     await drain(container)
 
     failed = [
-        a for a in (await container.issues.get(issue.id)).activities if a.kind == ActivityKind.RUN_FAILED
+        a for a in (await container.issues.get(issue.id)).activities if a.what.kind == ActivityKind.RUN_FAILED
     ]
-    assert len(failed) == 1 and "503" in failed[0].body
+    assert len(failed) == 1 and "503" in failed[0].what.body
     assert len(await _notifications(container)) == 1

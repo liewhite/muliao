@@ -5,7 +5,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from muliao.agents.api import USER, AgentNames
-from muliao.issues.tables import ActivityKind, IssueActivity, IssueStatus
+from muliao.issues.activity import AssigneeChanged, Commented, Created, EventPosted, Happening, StatusChanged
+from muliao.issues.tables import IssueStatus
 from muliao.sessions.api import WorkState
 
 # 指派人的取值：agent id，或 USER（定义在 agents/naming.py、经 agents.api 导出，全系统指代用户的那个值）；None 为未指派。agent id 是 12 位十六进制，
@@ -116,32 +117,30 @@ def cannot_stop_into(status: IssueStatus, with_message: bool) -> str | None:
     return None
 
 
-def from_outside(actor: str, happened: Sequence[IssueActivity]) -> bool:
+def from_outside(actor: str, happened: Sequence[Happening]) -> bool:
     """这次的动态里有外来的输入（用户的评论、投到 issue 的事件）：没有 agent 接手时也唤起 owner（见 recipient）。"""
-    return any(
-        a.kind == ActivityKind.EVENT or (actor == USER and a.kind == ActivityKind.COMMENT) for a in happened
-    )
+    return any(isinstance(a, EventPosted) or (actor == USER and isinstance(a, Commented)) for a in happened)
 
 
-def handed_to_user(actor: str, issue_assignee: str | None, happened: Sequence[IssueActivity]) -> str | None:
+def handed_to_user(actor: str, issue_assignee: str | None, happened: Sequence[Happening]) -> str | None:
     """这次是 agent 把 issue 交给了用户（建时就指派给用户，或把指派人改成用户）：返回这个 agent（以它的名义通知用户），
     否则 None。用户、系统自己改的不通知。"""
     agent = agent_actor(actor)
     if agent is None:
         return None
     for a in happened:
-        if a.kind == ActivityKind.CREATED and issue_assignee == USER:
+        if isinstance(a, Created) and issue_assignee == USER:
             return agent
-        if a.kind == ActivityKind.ASSIGNEE and a.change["to"] == USER:
+        if isinstance(a, AssigneeChanged) and a.change.to == USER:
             return agent
     return None
 
 
-def finishing(happened: Sequence[IssueActivity]) -> IssueStatus | None:
+def finishing(happened: Sequence[Happening]) -> IssueStatus | None:
     """这次的状态变更让 issue 进入 done / cancelled（下游因此少等一个上游）：返回进入前的状态，否则 None。"""
     for a in happened:
-        if a.kind == ActivityKind.STATUS:
-            was, now = IssueStatus(a.change["from"]), IssueStatus(a.change["to"])
+        if isinstance(a, StatusChanged):
+            was, now = IssueStatus(a.change.before), IssueStatus(a.change.to)
             if not finished(was) and finished(now):
                 return was
     return None
