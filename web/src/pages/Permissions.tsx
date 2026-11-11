@@ -19,7 +19,6 @@ import { KIND_LABEL, ruleCandidates, splitRule } from '../rules'
 import {
   ActionButton,
   CollapsibleForm,
-  DraftConflicts,
   EmptyHint,
   ErrorAlert,
   Loading,
@@ -312,22 +311,18 @@ function RoleCreateForm({ onCreated }: { onCreated: () => void }) {
   )
 }
 
-const ROLE_FIELD_LABELS: Record<keyof RoleInput, string> = { description: '描述', allow: '收录（允许）', deny: '禁止' }
-
-/** 编辑：只提交改过的字段，编辑期间 agent 改了 access.toml 里别的字段不会被旧值盖掉；没动过的字段跟着刷新，同一字段两边
- * 都改了提示冲突（drafts.useDraft） */
+/** 编辑：只提交改过的字段，编辑期间 agent 改了 access.toml 里别的字段不会被旧值盖掉；没改过时跟着刷新（drafts.useDraft） */
 function RoleEditForm({ role, onDone }: { role: Role; onDone: () => void }) {
   const form = useDraft<RoleInput>({ description: role.description, allow: role.allow, deny: role.deny })
   const action = useAction()
   return (
     <div className="flex flex-col gap-3">
       <RoleFields name={role.name} value={form.draft} set={form.set} />
-      <DraftConflicts draft={form} labels={ROLE_FIELD_LABELS} />
       <ErrorAlert error={action.error} />
       <ActionButton
-        isDisabled={Object.keys(form.changes).length === 0 || form.conflicts.length > 0}
+        isDisabled={Object.keys(form.changes).length === 0}
         isPending={action.busy}
-        onPress={() => void action.run(() => api.updateRole(role.name, form.patch)).then((ok) => ok && onDone())}
+        onPress={() => void action.run(() => api.updateRole(role.name, form.changes)).then((ok) => ok && onDone())}
       >
         保存
       </ActionButton>

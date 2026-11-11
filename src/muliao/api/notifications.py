@@ -3,7 +3,7 @@ from datetime import datetime
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
-from muliao.api.deps import C, reads
+from muliao.api.deps import C
 from muliao.notifications.tables import Notification
 
 router = APIRouter(prefix="/notifications")
@@ -44,12 +44,12 @@ class MarkReadIn(BaseModel):
     through_id: int
 
 
-@router.get("", openapi_extra=reads("notifications"))
+@router.get("")
 async def list_notifications(c: C, limit: int = Query(100, ge=1, le=500)) -> list[NotificationOut]:
     return [NotificationOut.of(n) for n in await c.notifications.list(limit)]
 
 
-@router.get("/unread", openapi_extra=reads("notifications"))
+@router.get("/unread")
 async def unread(c: C) -> UnreadOut:
     return UnreadOut(count=await c.notifications.unread_count())
 

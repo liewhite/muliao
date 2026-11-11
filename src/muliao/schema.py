@@ -1,5 +1,5 @@
 """全部领域的表：Alembic 与迁移测试从这里拿到完整的 metadata（各领域的表定义在各自的 tables 模块里）；表属于哪个
-领域也由这里推导（表定义所在的包），据此查一个事务只写一个领域、给前端发「哪个领域的数据变了」。"""
+领域也由这里推导（表定义所在的包），据此查一个事务只写一个领域。"""
 
 from functools import cache
 from typing import Literal
@@ -27,36 +27,12 @@ def _domains() -> dict[str, str]:
     return {m.local_table.name: m.class_.__module__.split(".")[1] for m in Base.registry.mappers}
 
 
-# 有表的领域（平台的任务表除外：任务状态另有 TaskEvent）。写成字面量是为了进 OpenAPI、前端按它类型化；与表推导出的
-# 领域一致由测试守住
-Domain = Literal[
-    "agents", "files", "history", "issues", "notifications", "sessions", "triggers", "usage", "workspace"
-]
-
-
-# 数据的类别：GET 接口声明自己读哪些（api.deps.reads），写了就发 changed，前端据此重新拉取。各领域，加上任务（平台的
-# 任务表：任务列表、会话与 issue 上的工作状态读它）
-Resource = Domain | Literal["tasks"]
-
-
-def resource_of(table: str) -> Resource:
-    """一张表属于哪类数据：所属领域，平台的任务表是 tasks。"""
-    domain = _domains()[table]
-    return "tasks" if domain == _SHARED else domain  # type: ignore[return-value]
-
-
 class ChangedEvent(BaseModel):
-    """一类数据变了（推给前端 SSE，读它的接口所在的页面重新拉取）：写过表的事务提交后按类别发（platform.db 的
-    after_commit）；资源文件（不在库里）有改动时以 agents 发（agents.source 的 watch）。不管是谁改的：页面自己、agent、
-    触发器、推送通知上的操作都一样。"""
+    """服务端数据变了（推给前端 SSE，正在显示的页面重新拉取，#646 起不分类别）：写过表的事务提交后发（platform.db 的
+    after_commit）；资源文件（不在库里）有改动时也发（agents.source 的 watch）。不管是谁改的：页面自己、agent、触发器、
+    推送通知上的操作都一样。"""
 
     type: Literal["changed"] = "changed"
-    resource: Resource
-
-
-def changes_of(tables: frozenset[str]) -> list[ChangedEvent]:
-    """写了这些表，哪些类别的数据变了。"""
-    return [ChangedEvent(resource=r) for r in sorted({resource_of(t) for t in tables})]
 
 
 def single_domain_writes(tables: frozenset[str]) -> None:

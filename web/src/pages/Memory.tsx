@@ -8,7 +8,6 @@ import { AssetAccess } from './assetParts'
 import {
   ActionButton,
   CollapsibleForm,
-  DraftConflicts,
   EmptyHint,
   ErrorAlert,
   Loading,
@@ -23,14 +22,12 @@ import { useLoad } from '../load'
 /** 一块记忆是哪一块：平台的按名字（owner 为 null），agent 的私有记忆按它所属的 agent（name 只是显示用的 agent 名） */
 type MemoryRef = { name: string; owner: AgentId | null }
 
-/** 一块记忆：编辑正文、保存（写的是它的文件）。agent 随时会改它：随 changed 重新拉取，保存带打开时的版本 */
+/** 一块记忆：编辑正文、保存（写的是它的文件）。agent 随时会改它：随 changed 重新拉取，保存带打开编辑时的版本 */
 export function MemoryEditor({ memory: ref, hint }: { memory: MemoryRef; hint: string }) {
   const { name, owner } = ref
   const memory = useLoad(() => (owner === null ? api.memory(name) : api.agentMemory(owner)), [name, owner])
   return <Loading state={memory}>{(m) => <MemoryDraft latest={m} hint={hint} />}</Loading>
 }
-
-const MEMORY_FIELD_LABELS = { content: '正文' }
 
 function saveMemory(m: Memory, content: string): Promise<Memory> {
   const body = { content, version: m.version }
@@ -38,9 +35,11 @@ function saveMemory(m: Memory, content: string): Promise<Memory> {
 }
 
 function MemoryDraft({ latest, hint }: { latest: Memory; hint: string }) {
-  const doc = useDraft({ content: latest.content })
+  // 版本在草稿里：改过之后不再跟服务端，交回的就是开始编辑时的版本；期间被别处改过就 409（assets.check_version）
+  const doc = useDraft(latest)
   const action = useAction()
   const { content } = doc.draft
+  const edited = Object.keys(doc.changes).length > 0
   return (
     <div className="flex flex-col gap-3">
       <TextAreaInput
@@ -51,23 +50,28 @@ function MemoryDraft({ latest, hint }: { latest: Memory; hint: string }) {
         rows={14}
         mono
       />
-      <DraftConflicts draft={doc} labels={MEMORY_FIELD_LABELS} />
       <ErrorAlert error={action.error} />
-      <ActionButton
-        isDisabled={Object.keys(doc.changes).length === 0 || doc.conflicts.length > 0}
-        isPending={action.busy}
-        onPress={() =>
-          void action.run(async () => {
-            // 整份保存带版本：没有冲突时草稿的基线就是 latest（drafts.useDraft）
-            const saved = await saveMemory(latest, content)
-            toast.success('记忆已保存')
-            // 存下的是规整过空白的：以它为新的起点，随 changed 重新拉取到这个版本时就对上了
-            doc.saved({ content: saved.content })
-          })
-        }
-      >
-        保存记忆
-      </ActionButton>
+      <div className="flex gap-2">
+        <ActionButton
+          isDisabled={!edited}
+          isPending={action.busy}
+          onPress={() =>
+            void action.run(async () => {
+              const saved = await saveMemory(doc.draft, content)
+              toast.success('记忆已保存')
+              // 存下的是规整过空白的：以它为新的起点，随 changed 重新拉取到这个版本时就对上了
+              doc.saved(saved)
+            })
+          }
+        >
+          保存记忆
+        </ActionButton>
+        {edited && (
+          <Button variant="ghost" onPress={doc.discard}>
+            放弃修改
+          </Button>
+        )}
+      </div>
       <div className="font-mono text-xs break-all text-muted">{latest.path}</div>
     </div>
   )

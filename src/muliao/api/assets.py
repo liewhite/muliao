@@ -29,7 +29,7 @@ from muliao.agents.api import (
     ToolSpec,
     mcp_config,
 )
-from muliao.api.deps import C, reads
+from muliao.api.deps import C
 from muliao.api.workspace import EntryOut, file_response
 from muliao.workspace.api import file_in, list_dir
 
@@ -147,7 +147,7 @@ def _asset_out(
             return CatalogMemoryOut(kind="memory", **stored)
 
 
-@router.get("/assets", openapi_extra=reads("agents"))
+@router.get("/assets")
 async def list_assets(c: C) -> list[CatalogAssetOut]:
     """全部资源：内置工具（当前配置下注册的，按注册顺序）在前，存成文件的按种类、名称；每种带自己的
     详情（工具的读写与管理类、MCP 的配置与启停）。"""
@@ -208,7 +208,7 @@ def _memory_out(c: C, m: MemoryInfo) -> MemoryOut:
     )
 
 
-@router.get("/assets/memory/{name}", openapi_extra=reads("agents"))
+@router.get("/assets/memory/{name}")
 async def get_memory(c: C, name: str) -> MemoryOut:
     """平台的一块记忆（全局或共享）。"""
     return _memory_out(c, await c.memory.read(name))
@@ -220,7 +220,7 @@ async def put_memory(c: C, name: str, body: MemoryIn) -> MemoryOut:
     return _memory_out(c, await c.memory.put(name, body.content, version=body.version))
 
 
-@router.get("/agents/{agent_id}/memory", openapi_extra=reads("agents"))
+@router.get("/agents/{agent_id}/memory")
 async def get_private_memory(c: C, agent_id: str) -> MemoryOut:
     """agent 的私有记忆（正在删除的按不存在处理）。"""
     await c.agents.get_active(agent_id)
@@ -262,7 +262,7 @@ class SkillIn(BaseModel):
     version: str | None
 
 
-@router.get("/assets/skill/{name}", openapi_extra=reads("agents"))
+@router.get("/assets/skill/{name}")
 async def get_skill(c: C, name: str) -> SkillDetail:
     skill = await c.skills.read(name)
     meta = skill.meta
@@ -278,14 +278,14 @@ async def put_skill(c: C, name: str, body: SkillIn) -> SkillOut:
     return SkillOut.of(meta)
 
 
-@router.get("/assets/skill/{name}/files", openapi_extra=reads("agents"))
+@router.get("/assets/skill/{name}/files")
 async def list_skill_files(c: C, name: str, path: str = "") -> list[EntryOut]:
     """skill 目录里 path（相对 skill 目录，空为根）这一层，同工作目录浏览：目录在前，各自按名称排序。"""
     root = await c.skills.directory(name)
     return [EntryOut.of(e) for e in await anyio.to_thread.run_sync(list_dir, root, path)]
 
 
-@router.get("/assets/skill/{name}/file", openapi_extra=reads("agents"))
+@router.get("/assets/skill/{name}/file")
 async def read_skill_file(c: C, name: str, path: str) -> FileResponse:
     """skill 目录里一个文件的内容（同工作目录浏览：图片 inline，其余作为附件）。"""
     root = await c.skills.directory(name)
@@ -324,7 +324,7 @@ class EnabledIn(BaseModel):
     enabled: bool
 
 
-@router.get("/assets/mcp/{name}", openapi_extra=reads("agents"))
+@router.get("/assets/mcp/{name}")
 async def get_mcp(c: C, name: str) -> McpOut:
     return McpOut.of(await c.mcp.get(name))
 
@@ -375,7 +375,7 @@ class SecretIn(BaseModel):
     allow_shell: bool | None = None
 
 
-@router.get("/assets/secret/{name}", openapi_extra=reads("agents"))
+@router.get("/assets/secret/{name}")
 async def get_secret(c: C, name: str) -> SecretOut:
     """不含值。"""
     s = await c.vault.get(name)

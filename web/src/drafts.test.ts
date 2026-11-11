@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { adopted, conflictingFields, draftState, editedFields, followed } from './drafts'
-import { coalesced } from './events'
+import { draftState, editedFields, followed, replacedBy } from './drafts'
+import { coalesced, debounced } from './events'
 
 describe('drafts', () => {
   const opened = { name: 'a', description: 'd', roles: ['x'] }
@@ -10,38 +10,34 @@ describe('drafts', () => {
     expect(editedFields(opened, { ...opened, roles: ['x'] })).toEqual([])
   })
 
-  it('follows the server on untouched fields and keeps the edited ones', () => {
-    const draft = { ...opened, description: 'mine' }
+  it('follows the server until the user edits, then keeps the draft and its base', () => {
     const latest = { name: 'renamed by agent', description: 'theirs', roles: ['y'] }
-    const next = followed({ ...draftState(opened), draft }, latest)
-    expect(next.draft).toEqual({ name: 'renamed by agent', description: 'mine', roles: ['y'] })
-    // 改过的字段基线不动：服务端的新值与基线不同，就是冲突
-    expect(next.base).toEqual({ name: 'renamed by agent', description: 'd', roles: ['y'] })
-    expect(conflictingFields(next.base, next.draft, latest)).toEqual(['description'])
+    const clean = followed(draftState(opened), latest)
+    expect([clean.base, clean.draft, clean.replaced]).toEqual([latest, latest, { name: 1, description: 1, roles: 1 }])
+    const edited = { ...draftState(opened), draft: { ...opened, description: 'mine' } }
+    expect(followed(edited, latest)).toBe(edited)
   })
 
-  it('takes a server value equal to the draft as the new base, not a conflict', () => {
-    // 多半是自己刚保存的：改过的字段等于服务端的新值
-    const draft = { ...opened, description: 'mine' }
-    const latest = { ...opened, description: 'mine' }
-    expect(conflictingFields(opened, draft, latest)).toEqual([])
-    const next = followed({ ...draftState(opened), draft }, latest)
-    expect([next.base, next.draft, next.replaced]).toEqual([latest, latest, {}])
-  })
-
-  it('takes theirs or keeps mine on a conflicting field', () => {
-    const latest = { ...opened, description: 'theirs' }
+  it('starts over from what was saved', () => {
     const s = { ...draftState(opened), draft: { ...opened, description: 'mine' } }
-    const theirs = adopted(s, ['description'], latest, false)
-    expect([theirs.draft, theirs.base, theirs.replaced]).toEqual([latest, latest, { description: 1 }])
-    // 覆盖：基线换成对方的，草稿留着；提交时以对方的值为原值
-    const mine = adopted(s, ['description'], latest, true)
-    expect([mine.draft.description, mine.base.description, mine.replaced]).toEqual(['mine', 'theirs', {}])
-    expect(conflictingFields(mine.base, mine.draft, latest)).toEqual([])
+    const saved = { ...opened, description: 'mine' }
+    const next = replacedBy(s, saved)
+    expect([next.base, next.draft, next.replaced]).toEqual([saved, saved, {}])
   })
+})
 
-  it('has no conflict while the server still holds the base', () => {
-    expect(conflictingFields(opened, { ...opened, description: 'mine' }, opened)).toEqual([])
+describe('debounced', () => {
+  it('runs once after the wait for all calls in it, and not after cancel', async () => {
+    let calls = 0
+    const d = debounced(() => calls++, 5)
+    d.run()
+    d.run()
+    await new Promise((r) => setTimeout(r, 20))
+    expect(calls).toBe(1)
+    d.run()
+    d.cancel()
+    await new Promise((r) => setTimeout(r, 20))
+    expect(calls).toBe(1)
   })
 })
 

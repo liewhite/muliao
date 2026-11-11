@@ -10,7 +10,7 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from muliao.api.deps import C, reads
+from muliao.api.deps import C
 from muliao.errors import InvalidInput, NotFound
 from muliao.files.api import FILES_PATH, UNTRUSTED_CONTENT_HEADERS, FileMeta
 
@@ -58,7 +58,7 @@ async def upload(c: C, request: Request, name: str = Query(min_length=1)) -> Fil
     return FileOut.of(await c.files.put(name, media_type, request.stream()))
 
 
-@router.get(_PREFIX + "/{file_id}/{name}", openapi_extra=reads("files"))
+@router.get(_PREFIX + "/{file_id}/{name}")
 async def download(c: C, file_id: str, name: str) -> FileResponse:
     meta = await c.files.get(file_id)
     # 每个文件只有一个规范地址

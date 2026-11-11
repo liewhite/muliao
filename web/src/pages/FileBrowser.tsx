@@ -8,7 +8,7 @@ import { ChevronRight, Download, File, Folder, RefreshCw } from 'lucide-react'
 import { Button as AriaButton, Tree, TreeItem, TreeItemContent, type Key } from 'react-aria-components'
 import { api, type WorkspaceEntry } from '../api'
 import { CODE_BLOCK, EmptyHint, ErrorAlert, Loading, Markdown, formatTime } from '../ui'
-import { errorMessage, useLoad } from '../load'
+import { errorMessage, never, useLoad } from '../load'
 import {
   MAX_HIGHLIGHT_BYTES,
   MAX_PREVIEW_BYTES,
@@ -163,6 +163,7 @@ function FilePreview({ url, path, entry }: { url: string; path: string; entry: W
   const kind = previewKind(entry)
   const text = useLoad(async () => (kind === 'markdown' || kind === 'text' ? (await api.fileBlob(url)).text() : ''),
     [url, kind],
+    never,
   )
 
   return (
@@ -208,7 +209,7 @@ function Highlighted({ text, language }: { text: string; language: string | null
     const hljs = (await import('highlight.js/lib/common')).default
     if (!hljs.getLanguage(language)) return null
     return hljs.highlight(text, { language, ignoreIllegals: true }).value
-  }, [text, language])
+  }, [text, language], never)
   if (html.data) return <pre className={`${CODE} hljs`} dangerouslySetInnerHTML={{ __html: html.data }} />
   return <pre className={CODE}>{text}</pre>
 }

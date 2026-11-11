@@ -4,11 +4,10 @@ from datetime import datetime
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Query
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, Field, TypeAdapter
 
 from muliao.agents.api import AgentNames
-from muliao.api.deps import C, reads
-from muliao.api.fieldlock import check_base
+from muliao.api.deps import C
 from muliao.platform.values import KEEP
 from muliao.triggers.api import (
     Fired,
@@ -69,23 +68,14 @@ TriggerCreate = Annotated[
 ]
 
 
-class TriggerFields(BaseModel):
-    """触发器能改的字段（局部修改与它的 base 共用）。precheck 给出 null 表示去掉前置检查，不出现表示不变。"""
-
-    model_config = ConfigDict(extra="forbid")
+class TriggerPatch(BaseModel):
+    """只修改给出的字段。precheck 给出 null 表示去掉前置检查，不出现表示不变。"""
 
     prompt: str | None = None
     # 修改请求不带 kind：按已存的 kind 校验，格式同新建时这种方式的 config
     config: dict[str, Any] | None = None
     enabled: bool | None = None
     precheck: Precheck | None = None
-
-
-class TriggerPatch(TriggerFields):
-    """只修改给出的字段。"""
-
-    # 改动字段开始编辑时的值（TriggerOut 的形状）；此刻已不同就 409（api.fieldlock）
-    base: TriggerFields | None = None
 
 
 class _TriggerOutBase(BaseModel):
@@ -168,12 +158,12 @@ def _out_of(view: TriggerView, names: AgentNames) -> TriggerOut:
     )
 
 
-@router.get("/trigger-kinds", openapi_extra=reads())
+@router.get("/trigger-kinds")
 async def trigger_kinds(c: C) -> list[TriggerKindOut]:
     return [TriggerKindOut.of(k) for k in c.triggers.kinds.values()]
 
 
-@router.get("/triggers", openapi_extra=reads("agents", "sessions", "tasks", "triggers"))
+@router.get("/triggers")
 async def list_triggers(
     c: C, finished: bool = Query(False, description="列已结束的（跑完的一次性触发器）而不是还会触发的")
 ) -> list[TriggerOut]:
@@ -197,9 +187,6 @@ async def create_trigger(c: C, body: TriggerCreate) -> TriggerOut:
 
 @router.patch("/triggers/{trigger_id}")
 async def update_trigger(c: C, trigger_id: int, body: TriggerPatch) -> TriggerOut:
-    if body.base is not None:
-        current = await _out(c, await c.triggers.get(trigger_id))
-        check_base(f"trigger {current.name!r}", current.model_dump(mode="json"), body.base)
     trigger = await c.triggers.update(
         trigger_id,
         prompt=body.prompt,

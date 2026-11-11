@@ -450,10 +450,6 @@ class TriggerService:
         log.info("trigger updated", extra={"trigger": trigger.name, "enabled": trigger.enabled})
         return trigger
 
-    async def get(self, trigger_id: int) -> Trigger:
-        async with self._db.transaction() as s:
-            return await trigger_in(s, trigger_id)
-
     async def disable(self, trigger_id: int, reason: str) -> bool:
         """系统停用触发器（如按到期触发失败），原因记在 disabled_reason 给用户看；用户重新启用时清除。
         触发器已被删除时返回 False。"""

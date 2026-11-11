@@ -17,7 +17,6 @@ import {
   ActionButton,
   copyText,
   EmptyHint,
-  DraftConflicts,
   ErrorAlert,
   LinkButton,
   Loading,
@@ -30,7 +29,7 @@ import {
   useAgents,
   useConfirm,
 } from '../ui'
-import { useLoad } from '../load'
+import { never, useLoad } from '../load'
 import { PermissionsInput } from './Permissions'
 import { AgentMemories } from './Memory'
 import { AgentAssetsView } from './AgentAssets'
@@ -170,8 +169,8 @@ function ModelInput({
   const sep = value.indexOf(':')
   const provider = sep > 0 ? value.slice(0, sep) : null
   const model = sep > 0 ? value.slice(sep + 1) : ''
-  const providers = useLoad(() => api.providers(), [])
-  const models = useLoad(() => (provider ? api.providerModels(provider) : Promise.resolve([])), [provider])
+  const providers = useLoad(() => api.providers(), [], never)
+  const models = useLoad(() => (provider ? api.providerModels(provider) : Promise.resolve([])), [provider], never)
   const listed = models.data ?? []
   return (
     <div className="flex flex-col gap-2">
@@ -282,33 +281,21 @@ function AgentCreateForm({ defaults, onSaved }: { defaults: AgentInput; onSaved:
   )
 }
 
-const AGENT_FIELD_LABELS: Record<keyof AgentInput, string> = {
-  name: '名称',
-  description: '职责描述',
-  model: '模型',
-  roles: '角色',
-  allow: '额外允许',
-  deny: '禁止',
-  thinking: '思考',
-  group: '分组',
-}
-
-/** 编辑：只提交改过的字段，编辑期间 agent 自己改了别的字段（改它的 agent.toml）不会被旧值盖掉；没动过的字段跟着刷新，
- * 同一字段两边都改了提示冲突（drafts.useDraft） */
+/** 编辑：只提交改过的字段，编辑期间 agent 自己改了别的字段（改它的 agent.toml）不会被旧值盖掉；没改过时跟着刷新
+ * （drafts.useDraft） */
 function AgentEditForm({ agent, current }: { agent: AgentId; current: AgentInput }) {
   const form = useDraft(current)
   const action = useAction()
   return (
     <div className="flex flex-col gap-4">
       <AgentFields agentId={agent} input={form.draft} set={form.set} />
-      <DraftConflicts draft={form} labels={AGENT_FIELD_LABELS} />
       <ErrorAlert error={action.error} />
       <ActionButton
-        isDisabled={Object.keys(form.changes).length === 0 || form.conflicts.length > 0}
+        isDisabled={Object.keys(form.changes).length === 0}
         isPending={action.busy}
         onPress={() =>
           void action.run(async () => {
-            const saved = await api.updateAgent(agent, form.patch)
+            const saved = await api.updateAgent(agent, form.changes)
             if (saved.config !== null) form.saved(currentInput(saved, saved.config))
             toast.success('已保存')
           })
@@ -322,7 +309,7 @@ function AgentEditForm({ agent, current }: { agent: AgentId; current: AgentInput
 
 export function AgentCreate() {
   const navigate = useNavigate()
-  const defaults = useLoad(() => api.agentDefaults(), [])
+  const defaults = useLoad(() => api.agentDefaults(), [], never)
   return (
     <Page title="新建 agent" back="/agents">
       <Card>

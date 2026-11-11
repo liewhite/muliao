@@ -1383,28 +1383,6 @@ export interface components {
             /** Group */
             group: string | null;
         };
-        /**
-         * AgentFields
-         * @description agent 能改的字段（局部修改与它的 base 共用；缺省或 null 是不变）。
-         */
-        AgentFields: {
-            /** Name */
-            name?: string | null;
-            /** Description */
-            description?: string | null;
-            /** Model */
-            model?: string | null;
-            /** Roles */
-            roles?: string[] | null;
-            /** Allow */
-            allow?: string[] | null;
-            /** Deny */
-            deny?: string[] | null;
-            /** Thinking */
-            thinking?: ("default" | "off" | "low" | "medium" | "high" | "xhigh") | null;
-            /** Group */
-            group?: string | null;
-        };
         /** AgentOut */
         AgentOut: {
             /** Id */
@@ -1441,7 +1419,7 @@ export interface components {
         };
         /**
          * AgentUpdate
-         * @description 只改给出的字段：界面只提交用户改过的，编辑期间 agent 自己改了另一个字段不会被旧值盖掉。
+         * @description 只改给出的字段（缺省或 null 是不变）：界面只提交用户改过的，编辑期间 agent 自己改了另一个字段不会被旧值盖掉。
          */
         AgentUpdate: {
             /** Name */
@@ -1460,7 +1438,6 @@ export interface components {
             thinking?: ("default" | "off" | "low" | "medium" | "high" | "xhigh") | null;
             /** Group */
             group?: string | null;
-            base?: components["schemas"]["AgentFields"] | null;
         };
         /** AnswerMailOut */
         AnswerMailOut: {
@@ -1818,9 +1795,9 @@ export interface components {
         };
         /**
          * ChangedEvent
-         * @description 一类数据变了（推给前端 SSE，读它的接口所在的页面重新拉取）：写过表的事务提交后按类别发（platform.db 的
-         *     after_commit）；资源文件（不在库里）有改动时以 agents 发（agents.source 的 watch）。不管是谁改的：页面自己、agent、
-         *     触发器、推送通知上的操作都一样。
+         * @description 服务端数据变了（推给前端 SSE，正在显示的页面重新拉取，#646 起不分类别）：写过表的事务提交后发（platform.db 的
+         *     after_commit）；资源文件（不在库里）有改动时也发（agents.source 的 watch）。不管是谁改的：页面自己、agent、触发器、
+         *     推送通知上的操作都一样。
          */
         ChangedEvent: {
             /**
@@ -1829,8 +1806,6 @@ export interface components {
              * @constant
              */
             type: "changed";
-            /** Resource */
-            resource: ("agents" | "files" | "history" | "issues" | "notifications" | "sessions" | "triggers" | "usage" | "workspace") | "tasks";
         };
         /**
          * CodeBlock
@@ -2223,24 +2198,6 @@ export interface components {
             /** Activities */
             activities: (components["schemas"]["CreatedActivity"] | components["schemas"]["CommentedActivity"] | components["schemas"]["DescriptionEditedActivity"] | components["schemas"]["TitleChangedActivity"] | components["schemas"]["StatusChangedActivity"] | components["schemas"]["PriorityChangedActivity"] | components["schemas"]["AssigneeChangedActivity"] | components["schemas"]["OwnerChangedActivity"] | components["schemas"]["DependsOnChangedActivity"] | components["schemas"]["DependencyFinishedActivity"] | components["schemas"]["RunFailureActivity"] | components["schemas"]["UnsettledActivity"] | components["schemas"]["StoppedActivity"])[];
         };
-        /**
-         * IssueFields
-         * @description issue 能改的字段（局部修改与它的 base 共用）。assignee 给出 null 表示取消指派，不出现表示不变。
-         */
-        IssueFields: {
-            /** Owner */
-            owner?: string | null;
-            /** Title */
-            title?: string | null;
-            /** Description */
-            description?: string | null;
-            status?: components["schemas"]["IssueStatus"] | null;
-            priority?: components["schemas"]["IssuePriority"] | null;
-            /** Assignee */
-            assignee?: string | null;
-            /** Depends On */
-            depends_on?: number[] | null;
-        };
         /** IssueOrigin */
         IssueOrigin: {
             /**
@@ -2299,7 +2256,7 @@ export interface components {
         };
         /**
          * IssuePatch
-         * @description 只修改给出的字段。
+         * @description 只修改给出的字段。assignee 给出 null 表示取消指派，不出现表示不变。
          */
         IssuePatch: {
             /** Owner */
@@ -2314,7 +2271,6 @@ export interface components {
             assignee?: string | null;
             /** Depends On */
             depends_on?: number[] | null;
-            base?: components["schemas"]["IssueFields"] | null;
         };
         /**
          * IssuePriority
@@ -2846,18 +2802,6 @@ export interface components {
                 [key: string]: "approve" | "deny" | "always";
             };
         };
-        /**
-         * RoleFields
-         * @description 角色能改的字段（局部修改与它的 base 共用；缺省或 null 是不变）。
-         */
-        RoleFields: {
-            /** Description */
-            description?: string | null;
-            /** Allow */
-            allow?: string[] | null;
-            /** Deny */
-            deny?: string[] | null;
-        };
         /** RoleIn */
         RoleIn: {
             /** Description */
@@ -2898,7 +2842,7 @@ export interface components {
         };
         /**
          * RoleUpdate
-         * @description 只改给出的字段：界面只提交用户改过的，编辑期间 agent 改了别的字段不会被旧值盖掉。
+         * @description 只改给出的字段（缺省或 null 是不变）：界面只提交用户改过的，编辑期间 agent 改了别的字段不会被旧值盖掉。
          */
         RoleUpdate: {
             /** Description */
@@ -2907,7 +2851,6 @@ export interface components {
             allow?: string[] | null;
             /** Deny */
             deny?: string[] | null;
-            base?: components["schemas"]["RoleFields"] | null;
         };
         /**
          * RunDeltaEvent
@@ -3555,21 +3498,6 @@ export interface components {
             /** Error */
             error: string;
         };
-        /**
-         * TriggerFields
-         * @description 触发器能改的字段（局部修改与它的 base 共用）。precheck 给出 null 表示去掉前置检查，不出现表示不变。
-         */
-        TriggerFields: {
-            /** Prompt */
-            prompt?: string | null;
-            /** Config */
-            config?: {
-                [key: string]: unknown;
-            } | null;
-            /** Enabled */
-            enabled?: boolean | null;
-            precheck?: components["schemas"]["Precheck"] | null;
-        };
         /** TriggerKindOut */
         TriggerKindOut: {
             /**
@@ -3592,7 +3520,7 @@ export interface components {
         };
         /**
          * TriggerPatch
-         * @description 只修改给出的字段。
+         * @description 只修改给出的字段。precheck 给出 null 表示去掉前置检查，不出现表示不变。
          */
         TriggerPatch: {
             /** Prompt */
@@ -3604,7 +3532,6 @@ export interface components {
             /** Enabled */
             enabled?: boolean | null;
             precheck?: components["schemas"]["Precheck"] | null;
-            base?: components["schemas"]["TriggerFields"] | null;
         };
         /** UnreadOut */
         UnreadOut: {

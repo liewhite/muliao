@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 
 from muliao.api.auth import Auth
-from muliao.api.deps import C, reads
+from muliao.api.deps import C
 
 router = APIRouter()
 public_router = APIRouter()
@@ -52,7 +52,7 @@ def _site_url(auth: Auth, agent_id: str, page: str) -> str:
     return f"{SITES_PATH}/{agent_id}/{quote(page, safe='')}/{auth.sign_site(agent_id, page)}/"
 
 
-@router.get("/pages", openapi_extra=reads("agents"))
+@router.get("/pages")
 async def list_pages(request: Request, c: C) -> list[SitePageOut]:
     """全部 agent 的页面：按 agent 列表的顺序，各自按页面名排序。"""
     auth: Auth = request.app.state.auth

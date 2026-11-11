@@ -7,7 +7,6 @@ import { FileBrowser } from './FileBrowser'
 import { AssetAccess, OwnerSelect } from './assetParts'
 import { useDraft } from '../drafts'
 import { ActionButton,
-  DraftConflicts,
   EmptyHint,
   ErrorAlert,
   LinkButton,
@@ -79,8 +78,6 @@ function SkillFields({ value, set }: { value: SkillText; set: (patch: Partial<Sk
 
 type SkillText = Pick<Skill, 'description' | 'body'>
 
-const SKILL_FIELD_LABELS: Record<keyof SkillText, string> = { description: '描述', body: '正文' }
-
 export function SkillEditor() {
   const [params] = useSearchParams()
   const existing = params.get('name')
@@ -137,13 +134,13 @@ function SkillDraft({ latest }: { latest: Skill }) {
   const confirm = useConfirm()
   const { name, owner } = latest
   const agents = useAgents()
-  const doc = useDraft<SkillText>({ description: latest.description, body: latest.body })
+  // 版本在草稿里：改过之后不再跟服务端，交回的就是开始编辑时的版本；期间被别处改过就 409（assets.check_version）
+  const doc = useDraft({ description: latest.description, body: latest.body, version: latest.version })
   const action = useAction()
 
   async function save() {
     const ok = await action.run(async () => {
-      // 整份保存带版本：没有冲突时草稿的基线就是 latest（drafts.useDraft）
-      await api.saveSkill(name, { owner, ...doc.draft, version: latest.version })
+      await api.saveSkill(name, { owner, ...doc.draft })
       toast.success('skill 已保存')
     })
     if (ok) navigate(SKILLS)
@@ -160,12 +157,16 @@ function SkillDraft({ latest }: { latest: Skill }) {
         <Card.Content className="flex flex-col gap-4">
           <div className="text-sm text-muted">归属：{owner === null ? '平台' : agentLabel(agents.data, owner)}</div>
           <SkillFields value={doc.draft} set={doc.set} />
-          <DraftConflicts draft={doc} labels={SKILL_FIELD_LABELS} />
           <ErrorAlert error={action.error} />
           <div className="flex gap-2">
-            <ActionButton isPending={action.busy} isDisabled={doc.conflicts.length > 0} onPress={() => void save()}>
+            <ActionButton isPending={action.busy} onPress={() => void save()}>
               保存
             </ActionButton>
+            {Object.keys(doc.changes).length > 0 && (
+              <Button variant="ghost" isDisabled={action.busy} onPress={doc.discard}>
+                放弃修改
+              </Button>
+            )}
             <Button variant="danger-soft" isDisabled={action.busy} onPress={() => void remove()}>
               <Trash2 className="size-4" />
               删除

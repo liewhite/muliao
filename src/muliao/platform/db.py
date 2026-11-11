@@ -197,7 +197,7 @@ class Database:
     ):
         """check_writes：提交前拿到这个事务写过的表名（开发期断言，见 schema.single_domain_writes）。after_commit：
         写过表的事务提交前拿到它写过的表名、给出提交成功后要做的事（组合根据此给前端发数据变了的事件，
-        schema.changes_of）：算错了在提交前报错、回滚，提交之后只做不会失败的事。"""
+        schema.ChangedEvent）：算错了在提交前报错、回滚，提交之后只做不会失败的事。"""
         self.engine = engine
         self._check_writes = check_writes
         self._after_commit = after_commit

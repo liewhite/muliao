@@ -47,7 +47,7 @@ from muliao.platform.tables import EVENT_TASK
 from muliao.platform.tasks import Retries, RetryPolicy, TaskAdmin, TaskQueue
 from muliao.platform.wiring import Loop, Parts, Toolsets
 from muliao.platform.worker import RunNow, Worker, register_handlers
-from muliao.schema import ChangedEvent, changes_of
+from muliao.schema import ChangedEvent
 from muliao.sessions.api import OWN_NOTES, OriginNotes, SessionDomain, SessionPorts, SessionService
 from muliao.sessions.compaction import Compactor
 from muliao.sessions.consumer import Consumer
@@ -290,14 +290,9 @@ def assemble(
     tz = ZoneInfo(settings.timezone)
     bus = EventBus()
 
-    def publish_changes(tables: frozenset[str]) -> Callable[[], None]:
-        events = changes_of(tables)
-
-        def publish() -> None:
-            for e in events:
-                bus.publish(e)
-
-        return publish
+    def publish_changes(_tables: frozenset[str]) -> Callable[[], None]:
+        # 写过表的事务提交后：前端正在显示的页面重新拉取（不分哪类数据，#646）
+        return lambda: bus.publish(ChangedEvent())
 
     db = Database(create_engine(settings.db_path), check_writes=check_writes, after_commit=publish_changes)
     live = LiveSegments(bus)
@@ -314,7 +309,7 @@ def assemble(
         settings.assets_dir,
         settings.runtime.memory_max_chars,
         check_model,
-        changed=lambda: bus.publish(ChangedEvent(resource="agents")),
+        changed=lambda: bus.publish(ChangedEvent()),
         tools=tool_table,
     )
     vault = Vault(assets, settings.vault.key.get_secret_value())
@@ -399,7 +394,7 @@ def assemble(
         files=files,
         usage=usage,
     )
-    # 各领域交给组合根的部件（platform.wiring.Parts，docs/architecture.md 2.4 第 19 行）：下面每种部件遍历一次这个列表。
+    # 各领域交给组合根的部件（platform.wiring.Parts，docs/architecture.md 2.4 第 17 行）：下面每种部件遍历一次这个列表。
     # 会话领域的第二段（消费者）要用组好的工具箱，所以最后加入；它的工具集在第一段（SessionPorts）
     domains: list[Parts] = [
         ports,

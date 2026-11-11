@@ -6,7 +6,7 @@ from datetime import date
 from fastapi import APIRouter, Query
 from pydantic import AwareDatetime, BaseModel
 
-from muliao.api.deps import C, reads
+from muliao.api.deps import C
 from muliao.usage.api import UsageBucket, UsageGroup, UsageTotals
 
 router = APIRouter()
@@ -47,7 +47,7 @@ class UsageOut(UsageCounts):
         )
 
 
-@router.get("/usage", openapi_extra=reads("usage"))
+@router.get("/usage")
 async def usage_summary(
     c: C,
     since: AwareDatetime,

@@ -63,8 +63,7 @@
               }
             }
           }
-        },
-        "x-reads": []
+        }
       }
     },
     "/api/agent-preview": {
@@ -126,10 +125,7 @@
               }
             }
           }
-        },
-        "x-reads": [
-          "agents"
-        ]
+        }
       }
     },
     "/api/role-preview": {
@@ -318,10 +314,7 @@
               }
             }
           }
-        },
-        "x-reads": [
-          "agents"
-        ]
+        }
       },
       "post": {
         "summary": "Create Agent",
@@ -396,10 +389,7 @@
               }
             }
           }
-        },
-        "x-reads": [
-          "agents"
-        ]
+        }
       },
       "patch": {
         "summary": "Update Agent",
@@ -516,10 +506,7 @@
               }
             }
           }
-        },
-        "x-reads": [
-          "agents"
-        ]
+        }
       }
     },
     "/api/agents/{agent_id}/default": {
@@ -698,8 +685,7 @@
               }
             }
           }
-        },
-        "x-reads": []
+        }
       }
     },
     "/api/providers/{name}/models": {
@@ -743,8 +729,7 @@
               }
             }
           }
-        },
-        "x-reads": []
+        }
       }
     },
     "/api/sessions": {
@@ -874,12 +859,7 @@
               }
             }
           }
-        },
-        "x-reads": [
-          "notifications",
-          "sessions",
-          "tasks"
-        ]
+        }
       },
       "post": {
         "summary": "Start Session",
@@ -954,14 +934,7 @@
               }
             }
           }
-        },
-        "x-reads": [
-          "files",
-          "notifications",
-          "sessions",
-          "tasks",
-          "usage"
-        ]
+        }
       },
       "delete": {
         "summary": "Delete Session",
@@ -1230,10 +1203,7 @@
               }
             }
           }
-        },
-        "x-reads": [
-          "tasks"
-        ]
+        }
       }
     },
     "/api/tasks/{task_id}/retry": {
@@ -1368,10 +1338,7 @@
               }
             }
           }
-        },
-        "x-reads": [
-          "agents"
-        ]
+        }
       }
     },
     "/api/agents/{agent_id}/workspace/file": {
@@ -1418,10 +1385,7 @@
               }
             }
           }
-        },
-        "x-reads": [
-          "agents"
-        ]
+        }
       }
     },
     "/api/script-grants": {
@@ -1444,10 +1408,7 @@
               }
             }
           }
-        },
-        "x-reads": [
-          "workspace"
-        ]
+        }
       }
     },
     "/api/script-grants/{grant_id}": {
@@ -1529,10 +1490,7 @@
               }
             }
           }
-        },
-        "x-reads": [
-          "agents"
-        ]
+        }
       }
     },
     "/api/assets/{kind}/{name}": {
@@ -1664,10 +1622,7 @@
               }
             }
           }
-        },
-        "x-reads": [
-          "agents"
-        ]
+        }
       },
       "put": {
         "summary": "Put Memory",
@@ -1755,10 +1710,7 @@
               }
             }
           }
-        },
-        "x-reads": [
-          "agents"
-        ]
+        }
       },
       "put": {
         "summary": "Put Private Memory",
@@ -1845,10 +1797,7 @@
               }
             }
           }
-        },
-        "x-reads": [
-          "agents"
-        ]
+        }
       },
       "put": {
         "summary": "Put Skill",
@@ -1950,10 +1899,7 @@
               }
             }
           }
-        },
-        "x-reads": [
-          "agents"
-        ]
+        }
       }
     },
     "/api/assets/skill/{name}/file": {
@@ -2000,10 +1946,7 @@
               }
             }
           }
-        },
-        "x-reads": [
-          "agents"
-        ]
+        }
       }
     },
     "/api/assets/mcp/{name}": {
@@ -2042,10 +1985,7 @@
               }
             }
           }
-        },
-        "x-reads": [
-          "agents"
-        ]
+        }
       },
       "put": {
         "summary": "Add Mcp",
@@ -2226,10 +2166,7 @@
               }
             }
           }
-        },
-        "x-reads": [
-          "agents"
-        ]
+        }
       },
       "put": {
         "summary": "Set Secret",
@@ -2288,8 +2225,7 @@
               }
             }
           }
-        },
-        "x-reads": []
+        }
       }
     },
     "/api/push/subscriptions": {
@@ -2353,8 +2289,7 @@
               }
             }
           }
-        },
-        "x-reads": []
+        }
       }
     },
     "/api/triggers": {
@@ -2418,13 +2353,7 @@
               }
             }
           }
-        },
-        "x-reads": [
-          "agents",
-          "sessions",
-          "tasks",
-          "triggers"
-        ]
+        }
       },
       "post": {
         "summary": "Create Trigger",
@@ -2723,10 +2652,7 @@
               }
             }
           }
-        },
-        "x-reads": [
-          "files"
-        ]
+        }
       }
     },
     "/api/notifications": {
@@ -2772,10 +2698,7 @@
               }
             }
           }
-        },
-        "x-reads": [
-          "notifications"
-        ]
+        }
       }
     },
     "/api/notifications/unread": {
@@ -2793,10 +2716,7 @@
               }
             }
           }
-        },
-        "x-reads": [
-          "notifications"
-        ]
+        }
       }
     },
     "/api/notifications/read": {
@@ -2934,10 +2854,7 @@
               }
             }
           }
-        },
-        "x-reads": [
-          "usage"
-        ]
+        }
       }
     },
     "/api/issues": {
@@ -3022,12 +2939,7 @@
               }
             }
           }
-        },
-        "x-reads": [
-          "issues",
-          "sessions",
-          "tasks"
-        ]
+        }
       },
       "post": {
         "summary": "Create Issue",
@@ -3102,12 +3014,7 @@
               }
             }
           }
-        },
-        "x-reads": [
-          "issues",
-          "sessions",
-          "tasks"
-        ]
+        }
       },
       "patch": {
         "summary": "Update Issue",
@@ -3536,11 +3443,7 @@
               }
             }
           }
-        },
-        "x-reads": [
-          "agents",
-          "history"
-        ]
+        }
       }
     },
     "/api/transcriptions": {
@@ -3578,8 +3481,7 @@
               }
             }
           }
-        },
-        "x-reads": []
+        }
       }
     },
     "/api/pages": {
@@ -3602,10 +3504,7 @@
               }
             }
           }
-        },
-        "x-reads": [
-          "agents"
-        ]
+        }
       }
     },
     "/api/auth/me": {
@@ -3616,8 +3515,7 @@
           "204": {
             "description": "Successful Response"
           }
-        },
-        "x-reads": []
+        }
       }
     },
     "/api/events": {
@@ -3657,8 +3555,7 @@
               }
             }
           }
-        },
-        "x-reads": []
+        }
       }
     }
   },
@@ -3945,119 +3842,6 @@
         "title": "AgentDefaults",
         "description": "新建 agent 时表单预填的值。"
       },
-      "AgentFields": {
-        "properties": {
-          "name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Name"
-          },
-          "description": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Description"
-          },
-          "model": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Model"
-          },
-          "roles": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Roles"
-          },
-          "allow": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Allow"
-          },
-          "deny": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Deny"
-          },
-          "thinking": {
-            "anyOf": [
-              {
-                "type": "string",
-                "enum": [
-                  "default",
-                  "off",
-                  "low",
-                  "medium",
-                  "high",
-                  "xhigh"
-                ]
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Thinking"
-          },
-          "group": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Group"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "title": "AgentFields",
-        "description": "agent 能改的字段（局部修改与它的 base 共用；缺省或 null 是不变）。"
-      },
       "AgentOut": {
         "properties": {
           "id": {
@@ -4285,22 +4069,11 @@
               }
             ],
             "title": "Group"
-          },
-          "base": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/AgentFields"
-              },
-              {
-                "type": "null"
-              }
-            ]
           }
         },
-        "additionalProperties": false,
         "type": "object",
         "title": "AgentUpdate",
-        "description": "只改给出的字段：界面只提交用户改过的，编辑期间 agent 自己改了另一个字段不会被旧值盖掉。"
+        "description": "只改给出的字段（缺省或 null 是不变）：界面只提交用户改过的，编辑期间 agent 自己改了另一个字段不会被旧值盖掉。"
       },
       "AnswerMailOut": {
         "properties": {
@@ -5194,37 +4967,11 @@
             "const": "changed",
             "title": "Type",
             "default": "changed"
-          },
-          "resource": {
-            "anyOf": [
-              {
-                "type": "string",
-                "enum": [
-                  "agents",
-                  "files",
-                  "history",
-                  "issues",
-                  "notifications",
-                  "sessions",
-                  "triggers",
-                  "usage",
-                  "workspace"
-                ]
-              },
-              {
-                "type": "string",
-                "const": "tasks"
-              }
-            ],
-            "title": "Resource"
           }
         },
         "type": "object",
-        "required": [
-          "resource"
-        ],
         "title": "ChangedEvent",
-        "description": "一类数据变了（推给前端 SSE，读它的接口所在的页面重新拉取）：写过表的事务提交后按类别发（platform.db 的\nafter_commit）；资源文件（不在库里）有改动时以 agents 发（agents.source 的 watch）。不管是谁改的：页面自己、agent、\n触发器、推送通知上的操作都一样。"
+        "description": "服务端数据变了（推给前端 SSE，正在显示的页面重新拉取，#646 起不分类别）：写过表的事务提交后发（platform.db 的\nafter_commit）；资源文件（不在库里）有改动时也发（agents.source 的 watch）。不管是谁改的：页面自己、agent、触发器、\n推送通知上的操作都一样。"
       },
       "CodeBlock": {
         "properties": {
@@ -6191,92 +5938,6 @@
         ],
         "title": "IssueDetailOut"
       },
-      "IssueFields": {
-        "properties": {
-          "owner": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Owner"
-          },
-          "title": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Title"
-          },
-          "description": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Description"
-          },
-          "status": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/IssueStatus"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "priority": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/IssuePriority"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "assignee": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Assignee"
-          },
-          "depends_on": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "integer"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Depends On"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "title": "IssueFields",
-        "description": "issue 能改的字段（局部修改与它的 base 共用）。assignee 给出 null 表示取消指派，不出现表示不变。"
-      },
       "IssueOrigin": {
         "properties": {
           "kind": {
@@ -6512,22 +6173,11 @@
               }
             ],
             "title": "Depends On"
-          },
-          "base": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/IssueFields"
-              },
-              {
-                "type": "null"
-              }
-            ]
           }
         },
-        "additionalProperties": false,
         "type": "object",
         "title": "IssuePatch",
-        "description": "只修改给出的字段。"
+        "description": "只修改给出的字段。assignee 给出 null 表示取消指派，不出现表示不变。"
       },
       "IssuePriority": {
         "type": "string",
@@ -8031,53 +7681,6 @@
         ],
         "title": "ReplyIn"
       },
-      "RoleFields": {
-        "properties": {
-          "description": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Description"
-          },
-          "allow": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Allow"
-          },
-          "deny": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Deny"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "title": "RoleFields",
-        "description": "角色能改的字段（局部修改与它的 base 共用；缺省或 null 是不变）。"
-      },
       "RoleIn": {
         "properties": {
           "description": {
@@ -8247,22 +7850,11 @@
               }
             ],
             "title": "Deny"
-          },
-          "base": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/RoleFields"
-              },
-              {
-                "type": "null"
-              }
-            ]
           }
         },
-        "additionalProperties": false,
         "type": "object",
         "title": "RoleUpdate",
-        "description": "只改给出的字段：界面只提交用户改过的，编辑期间 agent 改了别的字段不会被旧值盖掉。"
+        "description": "只改给出的字段（缺省或 null 是不变）：界面只提交用户改过的，编辑期间 agent 改了别的字段不会被旧值盖掉。"
       },
       "RunDeltaEvent": {
         "properties": {
@@ -10081,58 +9673,6 @@
         "title": "TriggerFault",
         "description": "一条出错：来源、原因。"
       },
-      "TriggerFields": {
-        "properties": {
-          "prompt": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Prompt"
-          },
-          "config": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Config"
-          },
-          "enabled": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Enabled"
-          },
-          "precheck": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Precheck"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "title": "TriggerFields",
-        "description": "触发器能改的字段（局部修改与它的 base 共用）。precheck 给出 null 表示去掉前置检查，不出现表示不变。"
-      },
       "TriggerKindOut": {
         "properties": {
           "name": {
@@ -10222,22 +9762,11 @@
                 "type": "null"
               }
             ]
-          },
-          "base": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/TriggerFields"
-              },
-              {
-                "type": "null"
-              }
-            ]
           }
         },
-        "additionalProperties": false,
         "type": "object",
         "title": "TriggerPatch",
-        "description": "只修改给出的字段。"
+        "description": "只修改给出的字段。precheck 给出 null 表示去掉前置检查，不出现表示不变。"
       },
       "UnreadOut": {
         "properties": {

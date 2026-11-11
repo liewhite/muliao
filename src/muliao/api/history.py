@@ -5,7 +5,7 @@ from datetime import date, datetime
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from muliao.api.deps import C, reads
+from muliao.api.deps import C
 from muliao.history.api import DEFAULT_LIMIT, MIN_IMPORTANCE, HistoryRecord
 
 router = APIRouter()
@@ -35,7 +35,7 @@ class HistoryOut(BaseModel):
         )
 
 
-@router.get("/agents/{agent_id}/history", openapi_extra=reads("agents", "history"))
+@router.get("/agents/{agent_id}/history")
 async def agent_history(
     c: C,
     agent_id: str,

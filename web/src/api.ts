@@ -1,7 +1,6 @@
 // 接口类型取自 schema.d.ts（由后端的 OpenAPI 描述生成，见 scripts/gen-api.mjs），这里只起名字、补上品牌类型
 
 import type { components, paths } from './schema'
-import { READS } from './reads'
 
 export type Schemas = components['schemas']
 
@@ -242,43 +241,7 @@ export function call<P extends Path, M extends MethodOf<P>>(
   })
   // 只有接口描述里有 JSON 请求体的调用才发请求体
   const body = given.body === undefined ? undefined : { type: 'application/json', data: JSON.stringify(given.body) }
-  if (method === 'get') {
-    for (const into of starting ? [starting] : collecting) READS_OF[path as GetPath].forEach((r) => into.add(r))
-  }
   return send(method.toUpperCase(), url, given.query, body)
-}
-
-// ---- 一份数据读了哪些类别：由接口声明（后端路由上的 x-reads，生成在 reads.ts），前端不手写 ----
-
-/** 数据的类别（schema.Resource：后端的领域与任务）：任何一方改了它，服务端都发 changed，读它的数据重新拉取（load.ts） */
-export type Resource = Schemas['ChangedEvent']['resource']
-
-type GetPath = { [P in Path]: 'get' extends MethodOf<P> ? P : never }[Path]
-// 每个 GET 接口都声明了读什么：生成的 READS 少了哪个接口、写了不认识的类别，这里编译失败
-const READS_OF: { readonly [P in GetPath]: readonly Resource[] } = READS
-
-// 正在加载的各份数据的读集（collectReads），与此刻正在同步开始的那一份
-const collecting = new Set<Set<Resource>>()
-let starting: Set<Resource> | null = null
-
-/**
- * 执行 load，把它发出的 GET 请求读的类别记进 into（加载开始就能看到已发出的那些）。load 同步开始时发出的请求（`() => api.x()`、
- * Promise.all 里的）只记进它自己；await 之后才发的分不清是谁发的，记进此刻在加载的每一份：多记只会多拉一次，不会漏。
- */
-export async function collectReads<T>(load: () => Promise<T>, into: Set<Resource>): Promise<T> {
-  collecting.add(into)
-  try {
-    let loading: Promise<T>
-    starting = into
-    try {
-      loading = load()
-    } finally {
-      starting = null
-    }
-    return await loading
-  } finally {
-    collecting.delete(into)
-  }
 }
 
 /** 把 AgentId 换回接口里的 string：品牌类型去掉品牌后必须就是接口推出的类型 */

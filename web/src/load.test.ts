@@ -10,11 +10,13 @@ vi.mock('./events', async (original) => ({
     return () => listeners.delete(l)
   },
 }))
-const { Loader, byReads, refreshShown } = await import('./load')
+const { Loader, REFETCH_DELAY_MS, anyChange, never, refreshShown } = await import('./load')
 const { api } = await import('./api')
 
 const emit = (e: PageEvent) => listeners.forEach((l) => l(e))
 const settle = () => new Promise((r) => setTimeout(r, 0))
+// 收到事件后等合并的时间过去、请求落下
+const refetched = () => new Promise((r) => setTimeout(r, REFETCH_DELAY_MS + 30))
 
 // 每个接口请求了几次（按路径）；都回空列表或空对象
 let requests: string[] = []
@@ -34,72 +36,64 @@ afterEach(() => {
 })
 const count = (path: string) => requests.filter((r) => r === path).length
 
-describe('byReads', () => {
-  it('refetches after connecting or when a resource it read changed, whoever changed it', () => {
-    const reads = new Set(['sessions'] as const)
-    expect(byReads({ type: 'connected' }, reads)).toBe(true)
-    expect(byReads({ type: 'changed', resource: 'sessions' }, reads)).toBe(true)
-    expect(byReads({ type: 'changed', resource: 'agents' }, reads)).toBe(false)
-  })
-
-  it('does not derive anything itself: task changes come as changed tasks from the server', () => {
+describe('anyChange', () => {
+  it('refetches after connecting or when any data changed, whoever changed it', () => {
+    expect(anyChange({ type: 'connected' })).toBe(true)
+    expect(anyChange({ type: 'changed' })).toBe(true)
     const task = { type: 'task', task_id: 1, kind: 'run', status: 'done', session_id: 's', agent: 'a', error: null } as const
-    expect(byReads(task, new Set(['tasks']))).toBe(false)
+    expect(anyChange(task)).toBe(false)
   })
 })
 
 describe('Loader', () => {
-  it('subscribes to what the endpoints it requested declare, not a hand-written category', async () => {
-    // /api/issues 声明读 issues、sessions、tasks（后端 x-reads）
+  it('refetches once for a burst of changes', async () => {
     const loader = new Loader(() => api.issues())
     const stop = loader.subscribe(() => {})
     await settle()
     expect(count('/api/issues')).toBe(1)
-    emit({ type: 'changed', resource: 'agents' })
+    emit({ type: 'changed' })
+    emit({ type: 'changed' })
+    emit({ type: 'connected' })
     await settle()
     expect(count('/api/issues')).toBe(1)
-    emit({ type: 'changed', resource: 'sessions' })
-    await settle()
+    await refetched()
     expect(count('/api/issues')).toBe(2)
     stop()
     expect(listeners.size).toBe(0)
   })
 
-  it('collects the reads of every request, also those after an await', async () => {
-    const loader = new Loader(async () => {
-      await api.tasks()
-      return api.scriptGrants()
-    })
+  it('does not refetch after it is no longer shown', async () => {
+    const loader = new Loader(() => api.issues())
     const stop = loader.subscribe(() => {})
     await settle()
-    emit({ type: 'changed', resource: 'workspace' })
-    await settle()
-    expect(count('/api/script-grants')).toBe(2)
+    emit({ type: 'changed' })
     stop()
+    await refetched()
+    expect(count('/api/issues')).toBe(1)
   })
 
-  it('does not refetch data that does not change with the server', async () => {
-    const loader = new Loader(() => api.features())
+  it('does not refetch data marked never', async () => {
+    const loader = new Loader(() => api.features(), never)
     const stop = loader.subscribe(() => {})
     await settle()
-    emit({ type: 'changed', resource: 'agents' })
+    emit({ type: 'changed' })
     emit({ type: 'connected' })
-    await settle()
+    await refetched()
     expect(count('/api/features')).toBe(1)
     expect(loader.live()).toBe(false)
     stop()
   })
 
-  it('refetches on its own events when given them, instead of by reads', async () => {
+  it('refetches on its own events when given them', async () => {
     const loader = new Loader(() => api.issues(), (e) => e.type === 'saved' && e.session_id === 's1')
     const stop = loader.subscribe(() => {})
     await settle()
-    emit({ type: 'changed', resource: 'issues' })
+    emit({ type: 'changed' })
     emit({ type: 'saved', session_id: 's2' })
-    await settle()
+    await refetched()
     expect(count('/api/issues')).toBe(1)
     emit({ type: 'saved', session_id: 's1' })
-    await settle()
+    await refetched()
     expect(count('/api/issues')).toBe(2)
     stop()
   })
@@ -120,7 +114,7 @@ describe('Loader', () => {
     expect(loader.snapshot().error).toBe('network down')
     fail = false
     emit({ type: 'connected' })
-    await settle()
+    await refetched()
     expect(loader.snapshot()).toEqual({ data: [], error: null, loading: false })
     stop()
   })
@@ -166,7 +160,7 @@ describe('Loader', () => {
   it('refreshes what is shown after a user action, not hidden or static data', async () => {
     const shown = new Loader(() => api.issues())
     const hidden = new Loader(() => api.tasks())
-    const static_ = new Loader(() => api.features())
+    const static_ = new Loader(() => api.features(), never)
     const stopShown = shown.subscribe(() => {})
     const stopStatic = static_.subscribe(() => {})
     hidden.subscribe(() => {})()

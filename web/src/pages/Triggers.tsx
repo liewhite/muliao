@@ -25,7 +25,6 @@ import {
   EmptyHint,
   ErrorAlert,
   GroupSection,
-  DraftConflicts,
   Loading,
   Page,
   SelectInput,
@@ -39,7 +38,7 @@ import {
   useAgents,
   useConfirm,
 } from '../ui'
-import { useLoad } from '../load'
+import { never, useLoad } from '../load'
 
 /** kind 与它的配置成对出现，形状同新建请求（有服务端默认值的配置项可省，读到的配置也合这个形状），编辑器按 kind 收窄 */
 type KindConfig = { [K in TriggerKindName]: Pick<Extract<TriggerCreate, { kind: K }>, 'kind' | 'config'> }[TriggerKindName]
@@ -540,10 +539,7 @@ function TriggerItem({ trigger }: { trigger: Trigger }) {
   )
 }
 
-const TRIGGER_FIELD_LABELS = { prompt: '处理说明', config: '配置', precheck: '前置检查' }
-
-/** 字段草稿（drafts.useDraft）：只提交改过的，没动的字段别人可能改过，同一字段两边都改了提示冲突；前置检查改了还会重置
- * changed 模式的基线 */
+/** 字段草稿（drafts.useDraft）：只提交改过的，没动的字段别人可能改过；前置检查改了还会重置 changed 模式的基线 */
 function TriggerEditor({ trigger, facts, onDone }: { trigger: Trigger; facts: ReactNode; onDone: () => void }) {
   // 配置不合法时为 null
   const form = useDraft<{ prompt: string; config: KindConfig['config'] | null; precheck: Precheck | null }>({
@@ -555,14 +551,14 @@ function TriggerEditor({ trigger, facts, onDone }: { trigger: Trigger; facts: Re
   const { draft } = form
   const save = () =>
     action.run(async () => {
-      const { config, base, ...rest } = form.patch
+      const { config, ...rest } = form.changes
       if (config === null) throw new Error('配置不合法')
-      const patch = { ...rest, ...(config && { config }), base }
+      const patch = { ...rest, ...(config && { config }) }
       if (Object.keys(form.changes).length > 0) await api.updateTrigger(trigger.id, patch)
       onDone()
     })
   // 配置与前置检查的编辑器自己保存编辑中的内容、只在挂载时读初值（这两个是例外，不由草稿受控）：草稿被外部换掉（跟上
-  // 服务端、用对方的）就按 key 重新挂载，从换上的草稿开始（被换上的总是合法的，null 只出现在用户输入中，那时不重新挂载）
+  // 服务端、保存后）就按 key 重新挂载，从换上的草稿开始（被换上的总是合法的，null 只出现在用户输入中，那时不重新挂载）
   const config = { kind: trigger.kind, config: draft.config ?? form.base.config } as KindConfig
   return (
     <>
@@ -579,7 +575,6 @@ function TriggerEditor({ trigger, facts, onDone }: { trigger: Trigger; facts: Re
           onChange={(precheck) => form.set({ precheck })}
         />
         <TextAreaInput label="处理说明" value={draft.prompt} onChange={(prompt) => form.set({ prompt })} rows={5} />
-        <DraftConflicts draft={form} labels={TRIGGER_FIELD_LABELS} />
         <ErrorAlert error={action.error} />
       </Modal.Body>
       <Modal.Footer className="flex flex-wrap justify-start gap-2">
@@ -587,8 +582,7 @@ function TriggerEditor({ trigger, facts, onDone }: { trigger: Trigger; facts: Re
           size="sm"
           isDisabled={
             draft.config === null ||
-            (draft.precheck !== null && !draft.precheck.command.trim()) ||
-            form.conflicts.length > 0
+            (draft.precheck !== null && !draft.precheck.command.trim())
           }
           isPending={action.busy}
           onPress={() => void save()}
@@ -824,7 +818,7 @@ function FinishedTriggers() {
 /** 自动发起会话的入口：定时、一次性、流式，方式的差异只在各自的配置。按 agent 分组的卡片网格，点卡片看详情 */
 export default function Triggers() {
   const triggers = useLoad(() => api.triggers(), [])
-  const kinds = useLoad(() => api.triggerKinds(), [])
+  const kinds = useLoad(() => api.triggerKinds(), [], never)
   const agents = useAgents()
   // 详情跟着列表走：重新加载后显示最新内容，删掉后自动关闭
   const [openId, setOpenId] = useState<number | null>(null)

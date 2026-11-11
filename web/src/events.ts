@@ -246,6 +246,26 @@ export function coalesced(reload: () => Promise<void>): () => void {
   return run
 }
 
+/**
+ * 第一次调用后等 waitMs 再执行一次 run，期间的调用都并进这一次；不因新的调用往后推（事件一直来也按 waitMs 一次执行）。
+ * cancel 撤掉还没执行的那次。
+ */
+export function debounced(run: () => void, waitMs: number): { run: () => void; cancel: () => void } {
+  let timer: ReturnType<typeof setTimeout> | null = null
+  return {
+    run: () => {
+      timer ??= setTimeout(() => {
+        timer = null
+        run()
+      }, waitMs)
+    },
+    cancel: () => {
+      if (timer !== null) clearTimeout(timer)
+      timer = null
+    },
+  }
+}
+
 /** 服务端已经换了前端版本，这个页面该刷新了（不自动刷新：会丢掉正在输入的草稿） */
 export function useUiOutdated(): boolean {
   return useSyncExternalStore(
