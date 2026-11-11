@@ -37,7 +37,12 @@ def _keeping_mail_sequence(conn: sa.Connection) -> Iterator[None]:
     """batch 重建 mail 时 sqlite_sequence 会退回到现存最大 id：重建后写回原值，删掉的末尾 id 不被复用。"""
     seq = conn.execute(sa.text("SELECT seq FROM sqlite_sequence WHERE name = 'mail'")).scalar()
     yield
-    if seq is not None:
+    if seq is None:
+        return
+    if conn.execute(sa.text("SELECT 1 FROM sqlite_sequence WHERE name = 'mail'")).first() is None:
+        # 表是空的：重建后序号记录也没了
+        conn.execute(sa.text("INSERT INTO sqlite_sequence (name, seq) VALUES ('mail', :seq)"), {"seq": seq})
+    else:
         conn.execute(
             sa.text("UPDATE sqlite_sequence SET seq = max(seq, :seq) WHERE name = 'mail'"), {"seq": seq}
         )
