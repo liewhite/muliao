@@ -3,6 +3,7 @@ import { Card, Chip, SearchField, Spinner } from '@heroui/react'
 import { ChevronDown, ChevronRight, Hourglass } from 'lucide-react'
 import { Link, useMatch } from 'react-router-dom'
 import { api, type AgentId, type SessionListItem, sessionRoute } from '../api'
+import { agentModel } from '../agentGroups'
 import { useRefetch } from '../events'
 import { parseStringList, useStoredState } from '../storedState'
 import { FILTERS, ORIGIN_LABEL, groupByAgent, parseFilter, splitActive, type Filter } from '../sessionGroups'
@@ -24,14 +25,14 @@ const FILTER_KEY = 'muliao.sessions.filter'
 const COLLAPSED_KEY = 'muliao.sessions.collapsed'
 
 // 在运行的会话：卡片左侧描强调色边、标题前转圈、带「运行中」标签；在等待的（后台任务、委派、用户回答）：
-// 浅色边、沙漏、「等待中」。置顶区里不在 agent 分组下，带上 agent 名
+// 浅色边、沙漏、「等待中」。置顶区里不在 agent 分组下，带上 agent 名和它现在配置的模型
 const STATE_CARD: Record<SessionListItem['state'], string> = {
   running: 'border-l-4 border-accent bg-accent/5',
   waiting: 'border-l-4 border-accent/40',
   idle: '',
 }
 
-function SessionCard({ s, agentName }: { s: SessionListItem; agentName?: string }) {
+function SessionCard({ s, agentName, model }: { s: SessionListItem; agentName?: string; model?: string }) {
   // 宽屏分屏时右侧正打开的会话
   const open = useMatch(sessionRoute(s.id)) !== null
   return (
@@ -50,10 +51,15 @@ function SessionCard({ s, agentName }: { s: SessionListItem; agentName?: string 
               )}
               <span className="truncate">{s.title}</span>
             </div>
-            <div className="mt-1 flex gap-1.5">
+            <div className="mt-1 flex flex-wrap gap-1.5">
               {agentName !== undefined && (
                 <Chip size="sm" variant="secondary">
                   {agentName}
+                </Chip>
+              )}
+              {model !== undefined && (
+                <Chip size="sm" variant="secondary">
+                  {model}
                 </Chip>
               )}
               <Chip size="sm" variant="secondary">
@@ -136,13 +142,19 @@ export default function Sessions() {
                     <span className="font-normal">{active.length}</span>
                   </div>
                   {active.map((s) => (
-                    <SessionCard key={s.id} s={s} agentName={agentLabel(agents.data, s.agent_id)} />
+                    <SessionCard
+                      key={s.id}
+                      s={s}
+                      agentName={agentLabel(agents.data, s.agent_id)}
+                      model={agentModel(agents.data, s.agent_id)}
+                    />
                   ))}
                 </section>
               )}
               {groupByAgent(rest).map((g) => {
                 // 搜索时一律展开：命中的会话不被折叠藏起来
                 const open = keyword !== '' || !collapsed.has(g.agentId)
+                const model = agentModel(agents.data, g.agentId)
                 return (
                   <section key={g.agentId} className="flex flex-col gap-2">
                     <button
@@ -152,9 +164,10 @@ export default function Sessions() {
                       disabled={keyword !== ''}
                       onClick={() => toggle(g.agentId)}
                     >
-                      {open ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
-                      <span>{agentLabel(agents.data, g.agentId)}</span>
+                      {open ? <ChevronDown className="size-4 shrink-0" /> : <ChevronRight className="size-4 shrink-0" />}
+                      <span className="shrink-0">{agentLabel(agents.data, g.agentId)}</span>
                       <span className="font-normal">{g.sessions.length}</span>
+                      {model !== undefined && <span className="min-w-0 truncate text-xs font-normal">{model}</span>}
                       {g.unread > 0 && (
                         <Chip size="sm" color="accent" variant="soft">
                           {g.unread} 未读

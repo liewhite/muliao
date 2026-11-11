@@ -1,4 +1,4 @@
-import type { Agent } from './api'
+import type { Agent, AgentId } from './api'
 
 export interface AgentGroups {
   /** 没有分组、没归档的 */
@@ -44,4 +44,9 @@ export function searchAgents(agents: Agent[], query: string): Agent[] {
 /** 可以选来派活（新会话、指派、负责、触发器）的 agent：不含归档的；keep 是当前已选的值，归档了也留着以便显示 */
 export function selectableAgents(agents: Agent[] | undefined, keep?: string | null): Agent[] {
   return (agents ?? []).filter((a) => a.archived_at === null || a.id === keep)
+}
+
+/** agent 现在配置的模型（`<provider>:<model>`）；agent 列表尚未加载完、没有这个 agent 或它的配置没加载时没有 */
+export function agentModel(agents: Agent[] | undefined, id: AgentId): string | undefined {
+  return agents?.find((a) => a.id === id)?.config?.model
 }

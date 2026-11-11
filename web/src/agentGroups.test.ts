@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { groupAgents, searchAgents, selectableAgents } from './agentGroups'
+import { agentModel, groupAgents, searchAgents, selectableAgents } from './agentGroups'
 import { asAgentId, type Agent } from './api'
 
 function agent(name: string, group: string | null = null, archived = false, description = ''): Agent {
@@ -57,5 +57,15 @@ describe('selectableAgents', () => {
     expect(selectableAgents(list).map((a) => a.name)).toEqual(['a'])
     expect(selectableAgents(list, 'b').map((a) => a.name)).toEqual(['a', 'b'])
     expect(selectableAgents(undefined)).toEqual([])
+  })
+})
+
+describe('agentModel', () => {
+  it('gives the configured model, or nothing when the list, the agent or its config is missing', () => {
+    const list = [agent('a'), { ...agent('b'), config: null }]
+    expect(agentModel(list, asAgentId('a'))).toBe('p:m')
+    expect(agentModel(list, asAgentId('b'))).toBeUndefined()
+    expect(agentModel(list, asAgentId('zzz'))).toBeUndefined()
+    expect(agentModel(undefined, asAgentId('a'))).toBeUndefined()
   })
 })
