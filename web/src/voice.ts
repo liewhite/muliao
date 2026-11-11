@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api'
 import { loadFeatures } from './features'
-import { errorMessage as apiErrorMessage } from './ui'
+import { errorMessage as apiErrorMessage } from './load'
 
 // 录音的容器格式：Chrome/Firefox 录 webm/ogg（opus），iOS/Safari 只能录 mp4（aac）；服务端都认
 const RECORDING_TYPES = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4']

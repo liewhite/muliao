@@ -1514,6 +1514,30 @@ export interface components {
             /** Group */
             group?: string | null;
         };
+        /** AnswerMailOut */
+        AnswerMailOut: {
+            /** Id */
+            id: number;
+            /** Content */
+            content: string;
+            /** Attachments */
+            attachments: components["schemas"]["FileOut"][];
+            state: components["schemas"]["MailState"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "answer";
+            /** Answers */
+            answers: {
+                [key: string]: components["schemas"]["UserAnswered"] | components["schemas"]["AgentAnswered"] | components["schemas"]["ApprovalAnswered"];
+            };
+        };
         /** AnsweredQuestion */
         AnsweredQuestion: {
             /** Question */
@@ -1825,9 +1849,9 @@ export interface components {
         };
         /**
          * ChangedEvent
-         * @description 一个领域的数据变了（推给前端 SSE，展示它的页面从接口重新拉取）：写过它的表的事务提交后发（platform.db 的
-         *     after_commit），平台自己改 AI 资源文件后也以 agents 发（agents.source）。不管是谁改的：页面自己、agent、触发器、
-         *     推送通知上的操作都一样。
+         * @description 一类数据变了（推给前端 SSE，展示它的页面从接口重新拉取）：写过一个领域的表的事务提交后发（platform.db 的
+         *     after_commit），平台自己改 AI 资源文件后也以 agents 发（agents.source）；接口输出里由别的数据派生的部分，SSE 接口
+         *     补发受影响的类别（api.events.derived_changes）。不管是谁改的：页面自己、agent、触发器、推送通知上的操作都一样。
          */
         ChangedEvent: {
             /**
@@ -1836,11 +1860,8 @@ export interface components {
              * @constant
              */
             type: "changed";
-            /**
-             * Resource
-             * @enum {string}
-             */
-            resource: "agents" | "files" | "history" | "issues" | "notifications" | "sessions" | "triggers" | "usage" | "workspace";
+            /** Resource */
+            resource: ("agents" | "files" | "history" | "issues" | "notifications" | "sessions" | "triggers" | "usage" | "workspace") | "tasks";
         };
         /**
          * CodeBlock
@@ -1905,6 +1926,17 @@ export interface components {
             always: boolean;
             /** Pin */
             pin?: string | null;
+        };
+        /**
+         * DelegationOrigin
+         * @description 发起方是父会话：见 SessionOut.parent_session_id 与 thread。
+         */
+        DelegationOrigin: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "delegation";
         };
         /**
          * DelegationWait
@@ -2032,6 +2064,30 @@ export interface components {
             /** Body */
             body: string;
             change: components["schemas"]["Arrival"];
+        };
+        /** EventMailOut */
+        EventMailOut: {
+            /** Id */
+            id: number;
+            /** Content */
+            content: string;
+            /** Attachments */
+            attachments: components["schemas"]["FileOut"][];
+            state: components["schemas"]["MailState"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "event";
+            /** Source */
+            source: components["schemas"]["ThreadSource"] | components["schemas"]["JobSource"] | components["schemas"]["OtherSource"];
+            /** Check In */
+            check_in: boolean;
         };
         /**
          * FaultSource
@@ -2161,6 +2217,16 @@ export interface components {
             issue: components["schemas"]["IssueOut"];
             /** Activities */
             activities: (components["schemas"]["PlainActivityOut"] | components["schemas"]["TextActivityOut"] | components["schemas"]["EventActivityOut"] | components["schemas"]["StoppedActivityOut"] | components["schemas"]["StatusActivityOut"] | components["schemas"]["DependencyActivityOut"] | components["schemas"]["PriorityActivityOut"] | components["schemas"]["PersonActivityOut"] | components["schemas"]["TitleActivityOut"] | components["schemas"]["DependsOnActivityOut"])[];
+        };
+        /** IssueOrigin */
+        IssueOrigin: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "issue";
+            /** Issue Id */
+            issue_id: number;
         };
         /** IssueOut */
         IssueOut: {
@@ -2344,39 +2410,6 @@ export interface components {
             password: string;
         };
         /**
-         * MailKind
-         * @description 信箱里的信件（sessions.mailbox）。
-         * @enum {string}
-         */
-        MailKind: "message" | "answer" | "event";
-        /**
-         * MailOut
-         * @description 会话信箱里的一封信件（sessions.mailbox）。
-         */
-        MailOut: {
-            /** Id */
-            id: number;
-            kind: components["schemas"]["MailKind"];
-            /** Source */
-            source: (components["schemas"]["ThreadSource"] | components["schemas"]["JobSource"] | components["schemas"]["OtherSource"]) | null;
-            /** Check In */
-            check_in: boolean;
-            /** Content */
-            content: string;
-            /** Attachments */
-            attachments: components["schemas"]["FileOut"][];
-            /** Answers */
-            answers: {
-                [key: string]: components["schemas"]["UserAnswered"] | components["schemas"]["AgentAnswered"] | components["schemas"]["ApprovalAnswered"];
-            };
-            state: components["schemas"]["MailState"];
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-        };
-        /**
          * MailState
          * @enum {string}
          */
@@ -2497,6 +2530,26 @@ export interface components {
             max_chars: number;
             /** Version */
             version: string;
+        };
+        /** MessageMailOut */
+        MessageMailOut: {
+            /** Id */
+            id: number;
+            /** Content */
+            content: string;
+            /** Attachments */
+            attachments: components["schemas"]["FileOut"][];
+            state: components["schemas"]["MailState"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "message";
         };
         /**
          * NotificationEvent
@@ -3055,7 +3108,7 @@ export interface components {
             /** Compactions */
             compactions: components["schemas"]["CompactionOut"][];
             /** Mail */
-            mail: components["schemas"]["MailOut"][];
+            mail: (components["schemas"]["MessageMailOut"] | components["schemas"]["EventMailOut"] | components["schemas"]["AnswerMailOut"])[];
             run: components["schemas"]["TaskOut"] | null;
             /** Threads */
             threads: components["schemas"]["SessionOut"][];
@@ -3078,9 +3131,8 @@ export interface components {
             agent_id: string;
             /** Title */
             title: string;
-            origin: components["schemas"]["Origin"];
-            /** Origin Ref */
-            origin_ref: string | null;
+            /** Origin */
+            origin: components["schemas"]["UserOrigin"] | components["schemas"]["DelegationOrigin"] | components["schemas"]["TriggerOrigin"] | components["schemas"]["IssueOrigin"];
             /** Parent Session Id */
             parent_session_id: string | null;
             /** Thread */
@@ -3109,9 +3161,8 @@ export interface components {
             agent_id: string;
             /** Title */
             title: string;
-            origin: components["schemas"]["Origin"];
-            /** Origin Ref */
-            origin_ref: string | null;
+            /** Origin */
+            origin: components["schemas"]["UserOrigin"] | components["schemas"]["DelegationOrigin"] | components["schemas"]["TriggerOrigin"] | components["schemas"]["IssueOrigin"];
             /** Parent Session Id */
             parent_session_id: string | null;
             /** Thread */
@@ -3536,6 +3587,16 @@ export interface components {
             /** Description */
             description: string;
         };
+        /** TriggerOrigin */
+        TriggerOrigin: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "trigger";
+            /** Trigger Id */
+            trigger_id: number;
+        };
         /**
          * TriggerPatch
          * @description 只修改给出的字段。precheck 给出 null 表示去掉前置检查，不出现表示不变；route 给 `new` 回到默认。
@@ -3616,6 +3677,14 @@ export interface components {
              */
             tool: "ask_user";
             result: components["schemas"]["AskResult"];
+        };
+        /** UserOrigin */
+        UserOrigin: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "user";
         };
         /** ValidationError */
         ValidationError: {
@@ -4385,8 +4454,8 @@ export interface operations {
             query?: {
                 agent_id?: string | null;
                 origin?: components["schemas"]["Origin"][] | null;
-                /** @description 发起方在它那个 origin 里的身份，如触发器的 id */
-                origin_ref?: string | null;
+                /** @description 只列这个触发器发起的会话（不能再给 origin） */
+                trigger_id?: number | null;
                 /** @description 关键字：只列标题或消息含有它的会话（不区分 ASCII 大小写） */
                 q?: string | null;
                 limit?: number;
@@ -4532,7 +4601,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MailOut"][];
+                    "application/json": (components["schemas"]["MessageMailOut"] | components["schemas"]["EventMailOut"] | components["schemas"]["AnswerMailOut"])[];
                 };
             };
             /** @description Validation Error */

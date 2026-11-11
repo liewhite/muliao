@@ -21,11 +21,10 @@ import { Link, useNavigate } from 'react-router-dom'
 import {
   agentRoute,
   api,
-  type Agent,
   type ApprovalChoice,
   type Attachment,
   type CompactionInfo,
-  type EventSource,
+  type ItemSource,
   type Item,
   type QuestionAnswer,
   type Mail,
@@ -59,22 +58,21 @@ import { AttachButton, AttachmentList, PendingUploads, useUploads, type Uploads 
 import { appendTranscript, useVoiceInput, type VoiceInput } from '../voice'
 import { VoiceButton } from '../VoiceButton'
 import { isSendShortcut, SEND_HINT } from '../sendKey'
-import { isTaskOf, liveItems, mergeLive, useRefetch, useServerEvents, withoutCovered, type RunEvent } from '../events'
-import { STATUS_LABEL, issueIdOf, issueRoute } from '../issues'
+import { isTaskOf, liveItems, mergeLive, useServerEvents, withoutCovered, type RunEvent } from '../events'
+import { STATUS_LABEL, issueRoute } from '../issues'
 import { useReturnState, useRouteParam } from '../nav'
 import { cacheHitPercent, contextText, formatTokens } from '../usage'
 import { StatusDot } from './Issues'
-import { CODE_BLOCK, ErrorAlert, Loading, Markdown, Page, agentLabel, formatTime, useAction, useAgents, useConfirm, useLoad } from '../ui'
+import { AgentName, CODE_BLOCK, ErrorAlert, Loading, Markdown, Page, formatTime, useAction, useConfirm } from '../ui'
+import { useLoad } from '../load'
 
 /**
  * issue 会话的页头标题：指回它的 issue，显示编号、标题、当前状态（随 issue 变化刷新）；在 issue 页返回回到这个会话。
  * 取不到 issue（如已删除，会话保留）时显示会话自己的标题和原因
  */
-function IssueTitle({ session }: { session: Session }) {
-  const issueId = issueIdOf(session)
+function IssueTitle({ issueId, fallback }: { issueId: number; fallback: string }) {
   const from = useReturnState()
-  const detail = useLoad(() => api.issue(issueId), [issueId])
-  useRefetch('issues', detail.reload)
+  const detail = useLoad('issues', () => api.issue(issueId), [issueId])
   const issue = detail.data?.issue
   return (
     <Link
@@ -83,7 +81,7 @@ function IssueTitle({ session }: { session: Session }) {
       className="flex min-w-0 items-center gap-1.5 hover:text-accent"
     >
       {issue && <StatusDot status={issue.status} />}
-      <span className="min-w-0 truncate">{issue ? `#${issueId} ${issue.title}` : session.title}</span>
+      <span className="min-w-0 truncate">{issue ? `#${issueId} ${issue.title}` : fallback}</span>
       {issue && <span className="shrink-0 text-xs font-normal text-muted">{STATUS_LABEL[issue.status]}</span>}
       {detail.error && <span className="shrink-0 text-xs font-normal text-danger">{detail.error}</span>}
     </Link>
@@ -239,7 +237,6 @@ interface SessionContext {
   /** 批准、拒绝或始终允许一次等批准的工具调用 */
   approve: (callId: string, choice: ApprovalChoice) => Promise<unknown>
   threads: Map<string, Session>
-  agents: Agent[] | undefined
   /**
    * 条目来自哪里：
    * - history：数据库里的历史，与会话的 thread 列表来自同一个响应，引用的 thread 缺失就是已被删除；
@@ -309,7 +306,7 @@ function ApprovalBlock({ block, ctx }: { block: ApprovalBlockData; ctx: SessionC
 }
 
 /** 事件来源的可读名称：thread 显示名字与 agent（可点开），后台任务显示编号 */
-function SourceLabel({ source, ctx }: { source: EventSource; ctx: SessionContext }) {
+function SourceLabel({ source, ctx }: { source: ItemSource; ctx: SessionContext }) {
   switch (source.kind) {
     case 'job':
       return <span className="shrink-0 text-foreground">后台任务 #{source.job_id}</span>
@@ -322,7 +319,7 @@ function SourceLabel({ source, ctx }: { source: EventSource; ctx: SessionContext
         <Link to={sessionRoute(source.session_id)} className="flex min-w-0 shrink items-center gap-1 text-accent hover:underline">
           <GitBranch className="size-3.5 shrink-0" />
           <span className="truncate">
-            {thread ? `${thread.thread}（${agentLabel(ctx.agents, thread.agent_id)}）` : 'thread'}
+            {thread ? <ThreadName thread={thread} /> : 'thread'}
           </span>
         </Link>
       )
@@ -348,7 +345,7 @@ function EventNote({ lead, text }: { lead: ReactNode; text: string }) {
 }
 
 /** 同一来源连续的运行中检查（blocks.foldCheckIns）：一行汇总，展开看每次检查 */
-function CheckInsNote({ source, checks, ctx }: { source: EventSource; checks: CheckIn[]; ctx: SessionContext }) {
+function CheckInsNote({ source, checks, ctx }: { source: ItemSource; checks: CheckIn[]; ctx: SessionContext }) {
   const last = checks[checks.length - 1].at
   return (
     <Collapsible
@@ -442,12 +439,6 @@ function History({ items, compactions, ctx }: { items: Item[]; compactions: Comp
   return <>{parts}</>
 }
 
-/** 事件信件的来源：后端保证事件都有来源（sessions.mailbox 校验），没有就是契约被破坏 */
-function sourceOf(mail: Mail): EventSource {
-  if (mail.source === null) throw new Error(`event mail ${mail.id} has no source`)
-  return mail.source
-}
-
 /** 显示在历史之后的信件：排队中的显示为待处理，最近一次停止丢弃的划掉 */
 function MailNote({ mail, ctx }: { mail: Mail; ctx: SessionContext }) {
   const discarded = mail.state === 'discarded'
@@ -455,9 +446,9 @@ function MailNote({ mail, ctx }: { mail: Mail; ctx: SessionContext }) {
     <div className={`flex flex-col gap-1.5 ${discarded ? 'line-through opacity-50' : ''}`}>
       {mail.kind === 'event' ? (
         mail.check_in ? (
-          <CheckInsNote source={sourceOf(mail)} checks={[{ text: mail.content, at: mail.created_at }]} ctx={ctx} />
+          <CheckInsNote source={mail.source} checks={[{ text: mail.content, at: mail.created_at }]} ctx={ctx} />
         ) : (
-          <EventNote lead={<SourceLabel source={sourceOf(mail)} ctx={ctx} />} text={mail.content} />
+          <EventNote lead={<SourceLabel source={mail.source} ctx={ctx} />} text={mail.content} />
         )
       ) : mail.kind === 'answer' ? (
         Object.values(mail.answers).map((result, i) =>
@@ -510,12 +501,23 @@ function RunStatus({ run, onRetry }: { run: Task; onRetry: (id: number) => void 
   )
 }
 
-function ThreadRow({ thread, agents }: { thread: Session; agents: Agent[] | undefined }) {
+/** thread 名与做它的 agent */
+function ThreadName({ thread }: { thread: Session }) {
+  return (
+    <>
+      {thread.thread}（<AgentName id={thread.agent_id} />）
+    </>
+  )
+}
+
+function ThreadRow({ thread }: { thread: Session }) {
   return (
     <Link to={sessionRoute(thread.id)} className="flex items-center gap-2 rounded-lg px-2 py-1 hover:bg-surface-hover">
       <GitBranch className="size-3.5 shrink-0 text-muted" />
       <span className="truncate font-medium">{thread.thread}</span>
-      <span className="truncate text-muted">{agentLabel(agents, thread.agent_id)}</span>
+      <span className="truncate text-muted">
+        <AgentName id={thread.agent_id} />
+      </span>
       {thread.unread && <span className="size-2 shrink-0 rounded-full bg-accent" aria-label="未读" />}
       <span className="ml-auto shrink-0 text-xs text-muted">{formatTime(thread.updated_at)}</span>
     </Link>
@@ -531,20 +533,20 @@ function ThreadLinks({ ids, ctx }: { ids: string[]; ctx: SessionContext }) {
         const thread = ctx.threads.get(id)
         // 调用条目上的 thread 与 thread 列表在同一次读取里给出，关联随 thread 删除：拿不到是前后端不一致
         if (!thread) throw new Error(`thread ${id} linked to a call is not among the session's threads`)
-        return <ThreadRow key={id} thread={thread} agents={ctx.agents} />
+        return <ThreadRow key={id} thread={thread} />
       })}
     </div>
   )
 }
 
 /** 没有被任何条目引用的 thread（见 blocks.unlinkedThreads）：只能统一列在这里 */
-function UnlinkedThreads({ threads, agents }: { threads: Session[]; agents: Agent[] | undefined }) {
+function UnlinkedThreads({ threads }: { threads: Session[] }) {
   if (threads.length === 0) return null
   return (
     <div className="flex flex-col gap-1.5 rounded-xl border border-separator p-3 text-sm">
       <div className="text-muted">未关联到调用的 thread</div>
       {threads.map((t) => (
-        <ThreadRow key={t.id} thread={t} agents={agents} />
+        <ThreadRow key={t.id} thread={t} />
       ))}
     </div>
   )
@@ -604,7 +606,7 @@ function WaitRow({ wait, now, ctx, actions }: { wait: Wait; now: number; ctx: Se
         <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
           <GitBranch className="size-3.5 shrink-0 text-muted" />
           <Link to={sessionRoute(id)} className="max-w-full truncate text-accent hover:underline">
-            {thread ? `${thread.thread}（${agentLabel(ctx.agents, thread.agent_id)}）` : 'thread'}
+            {thread ? <ThreadName thread={thread} /> : 'thread'}
           </Link>
           {detail}
           <Button
@@ -850,8 +852,8 @@ export default function SessionView() {
   const id = useRouteParam('id')
   const navigate = useNavigate()
   const confirm = useConfirm()
-  const detail = useLoad(() => api.session(id), [id])
-  const agents = useAgents()
+  // 整份会话（含全部历史，大的有几 MB）不随任何会话的 changed 重新拉取：按这个会话自己的事件（下面）刷新
+  const detail = useLoad(null, () => api.session(id), [id])
   const [live, setLive] = useState<RunEvent[]>([])
   const [draft, setDraft] = useState('')
   const uploads = useUploads()
@@ -935,7 +937,11 @@ export default function SessionView() {
       scrollRef={bottom.scrollRef}
       back={parentRoute}
       title={
-        session?.origin === 'issue' ? <IssueTitle session={session} /> : (session?.title ?? '会话')
+        session?.origin.kind === 'issue' ? (
+          <IssueTitle issueId={session.origin.issue_id} fallback={session.title} />
+        ) : (
+          (session?.title ?? '会话')
+        )
       }
       actions={
         <>
@@ -994,7 +1000,6 @@ export default function SessionView() {
             answer: (callId, answers) => api.answer(id, callId, answers).then(() => detail.reload()),
             approve: (callId, choice) => api.approve(id, callId, choice).then(() => detail.reload()),
             threads: new Map(d.threads.map((t) => [t.id, t])),
-            agents: agents.data,
             view: 'history',
           }
           return (
@@ -1002,7 +1007,7 @@ export default function SessionView() {
               <div className="flex items-center justify-center gap-2">
                 <Link to={agentRoute(d.session.agent_id)}>
                   <Chip size="sm" color="accent" variant="soft">
-                    {agentLabel(agents.data, d.session.agent_id)}
+                    <AgentName id={d.session.agent_id} />
                   </Chip>
                 </Link>
                 <span className="text-xs text-muted">{formatTime(d.session.created_at)}</span>
@@ -1033,7 +1038,7 @@ export default function SessionView() {
                   run: (fn) => void action.run(() => fn().then(() => detail.reload())),
                 }}
               />
-              <UnlinkedThreads threads={unlinkedThreads([...d.items, ...liveItems(shownLive)], d.threads)} agents={agents.data} />
+              <UnlinkedThreads threads={unlinkedThreads([...d.items, ...liveItems(shownLive)], d.threads)} />
               <div ref={bottom.contentEndRef} aria-hidden />
             </div>
           )

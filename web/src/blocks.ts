@@ -1,6 +1,6 @@
 // 会话条目（历史与运行中的事件流共用 Item）到展示块的整理，纯函数，与渲染分开。
 
-import { type AskView, type Attachment, type EventSource, type Item, type ViewBlock } from './api'
+import { type AskView, type Attachment, type ItemSource, type Item, type ViewBlock } from './api'
 
 export interface ToolView {
   name: string
@@ -38,7 +38,7 @@ export interface ApprovalBlock {
 export type Block =
   | { kind: 'user'; text: string; attachments: Attachment[] }
   /** checkIn：运行中检查（工作还在进行，后端显式标记）；at：交给 agent 的时间 */
-  | { kind: 'event'; source: EventSource; text: string; checkIn: boolean; at: string | null }
+  | { kind: 'event'; source: ItemSource; text: string; checkIn: boolean; at: string | null }
   | { kind: 'assistant'; text: string }
   | { kind: 'thinking'; text: string }
   | { kind: 'tool'; tool: ToolView }
@@ -56,7 +56,7 @@ export interface CheckIn {
 export type View =
   | Exclude<Block, Step>
   | { kind: 'process'; steps: Step[] }
-  | { kind: 'checks'; source: EventSource; checks: CheckIn[] }
+  | { kind: 'checks'; source: ItemSource; checks: CheckIn[] }
 
 /** 把扁平条目整理成展示块：工具调用与其结果（按 tool_call_id）合并为一块。 */
 export function toBlocks(items: Item[]): Block[] {

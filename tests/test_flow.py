@@ -34,6 +34,7 @@ from muliao.sessions.conventions import run_context_index
 from muliao.sessions.events import NewConversation
 from muliao.sessions.inbound import Inbound, receive
 from muliao.sessions.lanes import RUN_TASK
+from muliao.sessions.origins import RULES
 from muliao.sessions.tables import Mail, Message
 from muliao.sessions.transcript import to_items
 from tests.scripted import scripted
@@ -141,10 +142,11 @@ def call_then_answer(tool: str, args: dict, answer: str) -> FunctionModel:
 
 
 async def start(container, agent: str, prompt: str, origin: Origin = Origin.USER):
-    """以 origin 的身份新建会话并投信。走会话领域内部的 receive（不经各入口的类型），测试可以任选来源。"""
+    """以 origin 的身份新建会话并投信。走会话领域内部的 receive（不经各入口的类型），测试可以任选来源；有自己身份的
+    来源（触发器、issue）以编号 1 发送。"""
     inbound = Inbound(
         origin=origin,
-        origin_ref=None,
+        origin_ref="1" if RULES[origin].identified else None,
         content=prompt,
         session=NewConversation(id=new_id(), agent_id=agent, title=prompt[:20]),
         awaited=origin == Origin.USER,

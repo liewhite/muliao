@@ -1,6 +1,6 @@
-// 全局 SSE 连接。事件只用于实时展示；收到 task 状态变化或重连时，页面应从 API 重新拉取（数据库是唯一事实源）。
+// 全局 SSE 连接。事件只用于实时展示；收到 changed 或重连时，页面从 API 重新拉取（数据库是唯一事实源，见 load.ts）。
 
-import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useSyncExternalStore } from 'react'
 import { api, type Item, type LiveSegment, type Schemas } from './api'
 
 /** 一条完整的会话条目（工具调用、工具结果），与历史同一个投影（后端 transcript）；文字可能截断过 */
@@ -82,8 +82,8 @@ export interface ConnectedEvent {
 }
 
 /**
- * 数据的类别：后端的领域（schema.Domain）。任何一方（这个页面、别的页面、agent、触发器、推送通知上的操作）改了它，
- * 服务端都发 changed（schema.ChangedEvent），展示它的页面据此重新拉取
+ * 数据的类别（schema.Resource：后端的领域与任务）。任何一方（这个页面、别的页面、agent、触发器、推送通知上的操作）改了它，
+ * 服务端都发 changed（schema.ChangedEvent；由别的数据派生的类别也由后端发），展示它的页面据此重新拉取（load.useLoad）
  */
 export type Resource = Schemas['ChangedEvent']['resource']
 
@@ -102,17 +102,6 @@ export type TaskKind = Schemas['TaskOut']['kind']
 /** 这是不是这几种任务之一的状态变化 */
 export const isTaskOf = (e: PageEvent, ...kinds: TaskKind[]): e is Schemas['TaskEvent'] =>
   e.type === 'task' && (kinds as string[]).includes(e.kind)
-
-/** 展示时还用到别的类别的：会话的未读由通知派生 */
-const DERIVED_FROM: Partial<Record<Resource, Resource[]>> = { sessions: ['notifications'] }
-
-/** 展示 resource 的列表/详情页是否要从 API 重新拉取：连上了（之前可能丢了事件）、它（或它派生自的类别）变了，或某次运行
- * 的状态变了：运行状态在任务表（平台的，不发 changed），会话、issue 上显示的忙闲由它派生；AI 资源是文件，agent 在运行里
- * 直接改（文件工具、shell）服务端看不到，运行结束时也重新拉取 */
-export const shouldRefetch = (e: PageEvent, resource: Resource) =>
-  e.type === 'connected' ||
-  isTaskOf(e, 'run') ||
-  (e.type === 'changed' && (e.resource === resource || (DERIVED_FROM[resource] ?? []).includes(e.resource)))
 
 /** 这个页面跑的前端是否已经不是服务端当前的版本：页面加载后第一次心跳给出的版本，之后变了就是升级过 */
 export function isOutdated(loadedVersion: string | null, serverVersion: string | null): boolean {
@@ -253,14 +242,6 @@ export function coalesced(reload: () => Promise<void>): () => void {
       })
   }
   return run
-}
-
-/** 展示 resource 的页面：shouldRefetch 时重新拉取（合并密集的事件，见 coalesced） */
-export function useRefetch(resource: Resource, reload: () => Promise<void>) {
-  const refetch = useMemo(() => coalesced(reload), [reload])
-  useServerEvents((e) => {
-    if (shouldRefetch(e, resource)) refetch()
-  })
 }
 
 /** 服务端已经换了前端版本，这个页面该刷新了（不自动刷新：会丢掉正在输入的草稿） */

@@ -4,7 +4,7 @@ import { Menu } from 'lucide-react'
 import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { api, unauthorizedEvent } from './api'
 import { closeServerEvents, useUiOutdated } from './events'
-import { useUnreadCount, useUnreadSync } from './unread'
+import { useUnreadCount } from './unread'
 import { AgentCreate, AgentDetail, AgentList } from './pages/Agents'
 import { Login, Settings, Tasks } from './pages/Admin'
 import { Roles } from './pages/Permissions'
@@ -21,7 +21,8 @@ import { SkillEditor } from './pages/Skills'
 import UsagePage from './pages/Usage'
 import { syncPushSubscription } from './push'
 import { handleNavigation } from './swNavigate'
-import { ErrorAlert, errorMessage } from './ui'
+import { ErrorAlert } from './ui'
+import { errorMessage } from './load'
 import { AdminDrawer, AdminNav } from './AdminMenu'
 import { ErrorBoundary } from './ErrorBoundary'
 import { ListDetail } from './ListDetail'
@@ -165,7 +166,6 @@ function TabLink({
  * 会话、Agents 在 xl 起列表与详情分屏（见 ListDetail）。
  */
 function Shell() {
-  useUnreadSync()
   const unread = useUnreadCount()
   const outdated = useUiOutdated()
   const { pathname } = useLocation()

@@ -2,7 +2,7 @@ import { useCallback, useRef, useState, type ClipboardEvent } from 'react'
 import { Button, Spinner } from '@heroui/react'
 import { FileText, Paperclip, X } from 'lucide-react'
 import { api, type Attachment, type FileInfo } from './api'
-import { errorMessage } from './ui'
+import { errorMessage } from './load'
 
 /** 消息里的附件：图片显示缩略图（点开看原图），其他文件是下载链接 */
 export function AttachmentList({ files, align = 'start' }: { files: Attachment[]; align?: 'start' | 'end' }) {

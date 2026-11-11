@@ -18,8 +18,8 @@ import {
   TextInput,
   useAction,
   useAgents,
-  useLoad,
 } from '../ui'
+import { useLoad } from '../load'
 
 /** 压缩阈值输入框的值：留空为 null（用全局默认），不是不小于下限的整数时为 'invalid' */
 function parseThreshold(text: string, min: number): number | null | 'invalid' {
@@ -37,7 +37,7 @@ export default function NewSession() {
   const agent = chosen ?? agents.data?.find((a) => a.is_default)?.id ?? null
   const [prompt, setPrompt] = useState('')
   const [thresholdText, setThresholdText] = useState('')
-  const features = useLoad(loadFeatures, [])
+  const features = useLoad(null, loadFeatures, [])
   // 默认值与下限没取到时输入框禁用、只能留空（用默认）
   const threshold = features.data ? parseThreshold(thresholdText, features.data.min_compaction_threshold_tokens) : null
   const uploads = useUploads()

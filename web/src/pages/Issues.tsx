@@ -1,10 +1,19 @@
 import { useMemo, useRef, useState, type ComponentProps, type CSSProperties } from 'react'
 import { Card, Chip } from '@heroui/react'
-import { DndContext, KeyboardSensor, MouseSensor, TouchSensor, useDraggable, useDroppable, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
+import {
+  DndContext,
+  KeyboardSensor,
+  MouseSensor,
+  TouchSensor,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core'
 import { Link, useNavigate } from 'react-router-dom'
 import { selectableAgents } from '../agentGroups'
-import { api, type Agent, type Issue, type IssuePriority, type IssueStatus } from '../api'
-import { useRefetch } from '../events'
+import { api, type Issue, type IssuePriority, type IssueStatus } from '../api'
 import {
   PRIORITIES,
   PRIORITY_LABEL,
@@ -41,12 +50,11 @@ import {
   SelectInput,
   TextAreaInput,
   TextInput,
-  errorMessage,
   relativeTime,
   useAction,
   useAgents,
-  useLoad,
 } from '../ui'
+import { errorMessage, useLoad } from '../load'
 
 type View = 'board' | 'list' | 'graph'
 // 「所有项目」选项的 id；查询时映射为不过滤
@@ -64,7 +72,8 @@ function ownerStyle(hue: number | null): CSSProperties | undefined {
 }
 
 /** 负责项目的色点；不着色时是灰点 */
-export function OwnerDot({ agents, owner }: { agents: Agent[] | undefined; owner: string | null }) {
+export function OwnerDot({ owner }: { owner: string | null }) {
+  const agents = useAgents().data
   const hue = ownerHue(agents, owner)
   return (
     <span
@@ -76,7 +85,8 @@ export function OwnerDot({ agents, owner }: { agents: Agent[] | undefined; owner
 }
 
 /** 负责项目的胶囊：浅色底 + owner 色文字 */
-function OwnerChip({ agents, owner }: { agents: Agent[] | undefined; owner: string }) {
+function OwnerChip({ owner }: { owner: string }) {
+  const agents = useAgents().data
   const hue = ownerHue(agents, owner)
   return (
     <span
@@ -85,7 +95,7 @@ function OwnerChip({ agents, owner }: { agents: Agent[] | undefined; owner: stri
       }`}
       style={ownerStyle(hue)}
     >
-      <OwnerDot agents={agents} owner={owner} />
+      <OwnerDot owner={owner} />
       {ownerLabel(agents, owner)}
     </span>
   )
@@ -94,25 +104,25 @@ function OwnerChip({ agents, owner }: { agents: Agent[] | undefined; owner: stri
 /** 选负责项目的下拉框：每个 agent 前带它的色点；leading 是排在 agent 前面的额外选项（如「所有项目」）。
  * assignable：是在给 issue 定 owner（不是筛选），归档的 agent 不列，当前值除外 */
 export function OwnerSelect({
-  agents,
   leading = [],
   assignable = false,
   ...props
 }: Omit<ComponentProps<typeof SelectInput>, 'options'> & {
-  agents: Agent[] | undefined
   leading?: Option[]
   assignable?: boolean
 }) {
+  const agents = useAgents().data
   const listed = assignable ? selectableAgents(agents, props.value) : (agents ?? [])
   const options = listed.map((a) => ({
     id: a.id as string,
     label: a.name,
-    prefix: <OwnerDot agents={agents} owner={a.id} />,
+    prefix: <OwnerDot owner={a.id} />,
   }))
   return <SelectInput {...props} options={[...leading, ...options]} />
 }
 
-function IssueCard({ issue, agents }: { issue: Issue; agents: Agent[] | undefined }) {
+function IssueCard({ issue }: { issue: Issue }) {
+  const agents = useAgents().data
   const hue = ownerHue(agents, issue.owner)
   // 左侧色条用 owner 色：扫一眼列就能按项目分组
   return (
@@ -135,7 +145,7 @@ function IssueCard({ issue, agents }: { issue: Issue; agents: Agent[] | undefine
               </Chip>
             )}
             {issue.owner !== null && (
-              <OwnerChip agents={agents} owner={issue.owner} />
+              <OwnerChip owner={issue.owner} />
             )}
             <Chip size="sm" variant="soft">
               → {assigneeLabel(agents, issue.assignee)}
@@ -162,7 +172,7 @@ function IssueCard({ issue, agents }: { issue: Issue; agents: Agent[] | undefine
   )
 }
 
-function DraggableCard({ issue, agents, onOpen }: { issue: Issue; agents: Agent[] | undefined; onOpen: (id: number) => void }) {
+function DraggableCard({ issue, onOpen }: { issue: Issue; onOpen: (id: number) => void }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: issue.id })
   const style = transform ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` } : undefined
   return (
@@ -180,7 +190,7 @@ function DraggableCard({ issue, agents, onOpen }: { issue: Issue; agents: Agent[
         if (e.key === 'Enter') onOpen(issue.id)
       }}
     >
-      <IssueCard issue={issue} agents={agents} />
+      <IssueCard issue={issue} />
     </div>
   )
 }
@@ -198,12 +208,10 @@ function FoldToggle({ total, expanded, onToggle }: { total: number; expanded: bo
 function Column({
   status,
   issues,
-  agents,
   onOpen,
 }: {
   status: IssueStatus
   issues: Issue[]
-  agents: Agent[] | undefined
   onOpen: (id: number) => void
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: status })
@@ -219,14 +227,14 @@ function Column({
         <span className="font-normal text-muted">{issues.length}</span>
       </h2>
       {foldIssues(issues, expanded).map((i) => (
-        <DraggableCard key={i.id} issue={i} agents={agents} onOpen={onOpen} />
+        <DraggableCard key={i.id} issue={i} onOpen={onOpen} />
       ))}
       <FoldToggle total={issues.length} expanded={expanded} onToggle={() => setExpanded(!expanded)} />
     </section>
   )
 }
 
-function Board({ issues, agents, onMove }: { issues: Issue[]; agents: Agent[] | undefined; onMove: (id: number, s: IssueStatus) => void }) {
+function Board({ issues, onMove }: { issues: Issue[]; onMove: (id: number, s: IssueStatus) => void }) {
   // 鼠标拖动一小段才算拖拽，点一下是打开；触屏长按才拖，滑动仍是滚动。不用 PointerSensor：触屏上它与浏览器的滚动
   // 抢同一串指针事件，滑动一开始就被 pointercancel 打断，拖不起来
   const sensors = useSensors(
@@ -266,27 +274,28 @@ function Board({ issues, agents, onMove }: { issues: Issue[]; agents: Agent[] | 
     >
       <div className="flex min-h-full gap-3 overflow-x-auto px-4 py-3">
         {STATUSES.map((s) => (
-          <Column key={s} status={s} issues={groups[s]} agents={agents} onOpen={onOpen} />
+          <Column key={s} status={s} issues={groups[s]} onOpen={onOpen} />
         ))}
       </div>
     </DndContext>
   )
 }
 
-function List({ issues, agents }: { issues: Issue[]; agents: Agent[] | undefined }) {
+function List({ issues }: { issues: Issue[] }) {
   const groups = groupByStatus(issues)
   const nonEmpty = STATUSES.filter((s) => groups[s].length > 0)
   if (nonEmpty.length === 0) return <EmptyHint>还没有 issue</EmptyHint>
   return (
     <div className="flex flex-col gap-4">
       {nonEmpty.map((s) => (
-        <ListSection key={s} status={s} issues={groups[s]} agents={agents} />
+        <ListSection key={s} status={s} issues={groups[s]} />
       ))}
     </div>
   )
 }
 
-function ListSection({ status, issues, agents }: { status: IssueStatus; issues: Issue[]; agents: Agent[] | undefined }) {
+function ListSection({ status, issues }: { status: IssueStatus; issues: Issue[] }) {
+  const agents = useAgents().data
   const [expanded, setExpanded] = useState(false)
   return (
     <section className="flex flex-col">
@@ -303,7 +312,7 @@ function ListSection({ status, issues, agents }: { status: IssueStatus; issues: 
         >
           <span className="w-10 shrink-0 text-xs text-muted">#{i.id}</span>
           <StatusDot status={i.status} />
-          <OwnerDot agents={agents} owner={i.owner} />
+          <OwnerDot owner={i.owner} />
           <span className="min-w-0 flex-1 truncate">{i.title}</span>
           {i.priority !== 'none' && <span className="shrink-0 text-xs text-muted">{PRIORITY_LABEL[i.priority]}</span>}
           <span className="w-20 shrink-0 truncate text-right text-xs text-muted">{assigneeLabel(agents, i.assignee)}</span>
@@ -322,7 +331,8 @@ const EDGE_COLOR = {
 } as const
 
 /** 依赖图：依赖在左、依赖它的在右；卡片按状态打点、owner 色条，边在依赖未完成时是实线（还挡着下游），完成/取消后为虚线 */
-function DependencyGraph({ issues, agents, scope }: { issues: Issue[]; agents: Agent[] | undefined; scope: GraphScope }) {
+function DependencyGraph({ issues, scope }: { issues: Issue[]; scope: GraphScope }) {
+  const agents = useAgents().data
   // 悬停的卡片：高亮与它直接相连的边
   const [hover, setHover] = useState<number | null>(null)
   // 悬停只改边的样式，不重新布局
@@ -390,7 +400,8 @@ function DependencyGraph({ issues, agents, scope }: { issues: Issue[]; agents: A
   )
 }
 
-function NewIssueForm({ agents, onCreated }: { agents: Agent[] | undefined; onCreated: () => void }) {
+function NewIssueForm() {
+  const agents = useAgents().data
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [status, setStatus] = useState<IssueStatus>('in_progress')
@@ -417,7 +428,6 @@ function NewIssueForm({ agents, onCreated }: { agents: Agent[] | undefined; onCr
       setTitle('')
       setDescription('')
       setDependsOn('')
-      onCreated()
     })
   return (
     <CollapsibleForm title="新建 issue">
@@ -425,7 +435,6 @@ function NewIssueForm({ agents, onCreated }: { agents: Agent[] | undefined; onCr
       <TextAreaInput label="描述（Markdown）" value={description} onChange={setDescription} rows={4} />
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <OwnerSelect
-          agents={agents}
           assignable
           label="负责项目（owner）"
           hint="转派给别人做也不变"
@@ -464,17 +473,14 @@ function NewIssueForm({ agents, onCreated }: { agents: Agent[] | undefined; onCr
 
 export default function Issues() {
   const [view, changeView] = useStoredState(VIEW_KEY, oneOf<View>(['board', 'list', 'graph'], 'board'))
-  const agents = useAgents()
   // 按负责项目筛选：看一个项目的全部 issue（含已完成、已取消）
   const [owner, setOwner] = useState(ALL_OWNERS)
-  const loaded = useLoad(() => api.issues(owner === ALL_OWNERS ? undefined : owner), [owner])
+  const loaded = useLoad('issues', () => api.issues(owner === ALL_OWNERS ? undefined : owner), [owner])
   // 拖拽后先在本地挪动，接口返回、重新拉取之后以服务端为准；连着拖几张时每张各占一项
   const [moving, setMoving] = useState<ReadonlyMap<number, PendingMove>>(new Map())
   const issues = loaded.data && moveIssues(loaded.data, moving)
   // 拖拽失败的错误：留到下一轮拖拽（之前的都已结束）开始时才清掉，不被同时进行的另一次冲掉
   const [moveError, setMoveError] = useState<string | null>(null)
-  // agent 的运行里可能改了 issue：运行结束、或重连后重新拉取
-  useRefetch('issues', loaded.reload)
   const [graphScope, changeGraphScope] = useStoredState(GRAPH_SCOPE_KEY, oneOf<GraphScope>(['open', 'all'], 'open'))
   const onMove = (id: number, status: IssueStatus) => {
     const pending: PendingMove = { status, at: new Date().toISOString() }
@@ -486,6 +492,7 @@ export default function Issues() {
       } catch (e) {
         setMoveError(errorMessage(e))
       } finally {
+        // 本地挪动要留到看得到服务端的结果：changed 带来的重新拉取可能还没到，这里直接取一次
         await loaded.reload()
         // 同一张又被拖了一次：那一次还在提交，留着它的
         setMoving((prev) => {
@@ -521,13 +528,12 @@ export default function Issues() {
         />
       )}
       <OwnerSelect
-        agents={agents.data}
         label="负责项目"
         value={owner}
         onChange={setOwner}
         leading={[{ id: ALL_OWNERS, label: '所有项目' }]}
       />
-      <NewIssueForm agents={agents.data} onCreated={() => void loaded.reload()} />
+      <NewIssueForm />
       <ErrorAlert error={moveError} />
     </div>
   )
@@ -539,9 +545,9 @@ export default function Issues() {
           <Loading state={{ ...loaded, data: issues }}>
             {(list) =>
               view === 'board' ? (
-                <Board issues={list} agents={agents.data} onMove={onMove} />
+                <Board issues={list} onMove={onMove} />
               ) : (
-                <DependencyGraph issues={list} agents={agents.data} scope={graphScope} />
+                <DependencyGraph issues={list} scope={graphScope} />
               )
             }
           </Loading>
@@ -549,7 +555,7 @@ export default function Issues() {
       ) : (
         <>
           {toolbar}
-          <Loading state={{ ...loaded, data: issues }}>{(list) => <List issues={list} agents={agents.data} />}</Loading>
+          <Loading state={{ ...loaded, data: issues }}>{(list) => <List issues={list} />}</Loading>
         </>
       )}
     </Page>

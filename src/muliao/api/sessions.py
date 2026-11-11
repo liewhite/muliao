@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Query, Response
 from pydantic import BaseModel, Field
@@ -9,6 +9,8 @@ from muliao.api.files import FileOut
 from muliao.api.tasks import TaskOut
 from muliao.api.usage import UsageCounts
 from muliao.container import Container
+from muliao.errors import CorruptState, InvalidInput
+from muliao.issues.api import issue_of
 from muliao.sessions.api import (
     ApprovalChoice,
     ApprovalWait,
@@ -31,18 +33,56 @@ from muliao.sessions.api import (
     parse_source,
 )
 from muliao.sessions.tables import Compaction, Mail, MailKind, MailState, Session
+from muliao.triggers.api import sender_ref, trigger_of
 from muliao.workspace.api import JobInfo
 from muliao.workspace.tables import JobStatus
 
 router = APIRouter()
 
 
+class UserOrigin(BaseModel):
+    kind: Literal[Origin.USER]
+
+
+class DelegationOrigin(BaseModel):
+    """发起方是父会话：见 SessionOut.parent_session_id 与 thread。"""
+
+    kind: Literal[Origin.DELEGATION]
+
+
+class TriggerOrigin(BaseModel):
+    kind: Literal[Origin.TRIGGER]
+    trigger_id: int
+
+
+class IssueOrigin(BaseModel):
+    kind: Literal[Origin.ISSUE]
+    issue_id: int
+
+
+# 会话的来源与发起方：存储里的 origin_ref 由各发送方领域解成结构化的 id，前端不认识它的格式
+SessionOrigin = Annotated[
+    UserOrigin | DelegationOrigin | TriggerOrigin | IssueOrigin, Field(discriminator="kind")
+]
+
+
+def origin_of(s: Session) -> SessionOrigin:
+    match s.origin:
+        case Origin.USER:
+            return UserOrigin(kind=Origin.USER)
+        case Origin.DELEGATION:
+            return DelegationOrigin(kind=Origin.DELEGATION)
+        case Origin.TRIGGER:
+            return TriggerOrigin(kind=Origin.TRIGGER, trigger_id=trigger_of(s.id, s.origin_ref))
+        case Origin.ISSUE:
+            return IssueOrigin(kind=Origin.ISSUE, issue_id=issue_of(s.id, s.origin_ref))
+
+
 class SessionOut(BaseModel):
     id: str
     agent_id: str
     title: str
-    origin: Origin
-    origin_ref: str | None
+    origin: SessionOrigin
     # 委派产生的子会话：父会话与 thread 名
     parent_session_id: str | None
     thread: str | None
@@ -59,8 +99,7 @@ class SessionOut(BaseModel):
             id=s.id,
             agent_id=s.agent_id,
             title=s.title,
-            origin=s.origin,
-            origin_ref=s.origin_ref,
+            origin=origin_of(s),
             parent_session_id=s.parent_session_id,
             thread=s.thread,
             compaction_threshold_tokens=s.compaction_threshold_tokens,
@@ -83,41 +122,64 @@ async def session_outs(c: Container, sessions: list[Session]) -> list[SessionOut
     return [SessionOut.of(s, s.id in unread) for s in sessions]
 
 
-class MailOut(BaseModel):
-    """会话信箱里的一封信件（sessions.mailbox）。"""
+class _MailOut(BaseModel):
+    """会话信箱里的一封信件（sessions.mailbox），按种类（kind）区分的联合见 MailOut。"""
 
     id: int
-    kind: MailKind
-    # 事件的来源（sessions.sources）；用户消息与回答为 null
-    source: EventSource | None
-    # 事件是运行中检查（工作还在进行）
-    check_in: bool
     content: str
     attachments: list[FileOut]
-    # 回答信件：tool_call_id -> 那次挂起调用的结果（用户的回答，或被问 agent 的结局）
-    answers: dict[str, CallResult]
     state: MailState
     created_at: datetime
+
+
+class MessageMailOut(_MailOut):
+    kind: Literal[MailKind.MESSAGE]
+
+
+class EventMailOut(_MailOut):
+    kind: Literal[MailKind.EVENT]
+    # 事件的来源（sessions.sources）
+    source: EventSource
+    # 事件是运行中检查（工作还在进行）
+    check_in: bool
+
+
+class AnswerMailOut(_MailOut):
+    kind: Literal[MailKind.ANSWER]
+    # tool_call_id -> 那次挂起调用的结果（用户的回答，或被问 agent 的结局）
+    answers: dict[str, CallResult]
+
+
+MailOut = Annotated[MessageMailOut | EventMailOut | AnswerMailOut, Field(discriminator="kind")]
+
+
+def _mail_out(m: Mail, files: dict[str, FileOut]) -> MailOut:
+    common = {
+        "id": m.id,
+        "content": m.content,
+        "attachments": [files[i] for i in m.attachments],
+        "state": m.state,
+        "created_at": m.created_at,
+    }
+    match m.kind:
+        case MailKind.MESSAGE:
+            return MessageMailOut(kind=MailKind.MESSAGE, **common)
+        case MailKind.EVENT:
+            if m.source is None:
+                raise CorruptState(f"event mail {m.id} has no source")
+            return EventMailOut(
+                kind=MailKind.EVENT, source=parse_source(m.source), check_in=m.check_in, **common
+            )
+        case MailKind.ANSWER:
+            answers = {k: call_result(v) for k, v in m.answers.items()}
+            return AnswerMailOut(kind=MailKind.ANSWER, answers=answers, **common)
 
 
 async def mail_outs(c: Container, mail: list[Mail]) -> list[MailOut]:
     """MailOut 的唯一构造入口：一次取齐这些信件的附件。"""
     ids = list(dict.fromkeys(i for m in mail for i in m.attachments))
     files = {f.id: FileOut.of(f) for f in await c.files.referenced(ids)}
-    return [
-        MailOut(
-            id=m.id,
-            kind=m.kind,
-            source=None if m.source is None else parse_source(m.source),
-            check_in=m.check_in,
-            content=m.content,
-            attachments=[files[i] for i in m.attachments],
-            answers={k: call_result(v) for k, v in m.answers.items()},
-            state=m.state,
-            created_at=m.created_at,
-        )
-        for m in mail
-    ]
+    return [_mail_out(m, files) for m in mail]
 
 
 class CompactionOut(BaseModel):
@@ -231,7 +293,7 @@ async def list_sessions(
     c: C,
     agent_id: str | None = None,
     origin: list[Origin] | None = Query(None),
-    origin_ref: str | None = Query(None, description="发起方在它那个 origin 里的身份，如触发器的 id"),
+    trigger_id: int | None = Query(None, description="只列这个触发器发起的会话（不能再给 origin）"),
     q: str | None = Query(
         None, min_length=1, description="关键字：只列标题或消息含有它的会话（不区分 ASCII 大小写）"
     ),
@@ -239,6 +301,11 @@ async def list_sessions(
     offset: int = Query(0, ge=0),
 ) -> list[SessionListItem]:
     """工作状态不是 idle 的会话（在全部符合筛选的会话里，不只是这一页）置顶，其余按最近更新排序。"""
+    origin_ref = None
+    if trigger_id is not None:
+        if origin is not None:
+            raise InvalidInput("give either trigger_id or origin, not both")
+        origin, origin_ref = [Origin.TRIGGER], sender_ref(trigger_id)
     listed = await c.sessions.list(
         agent_id=agent_id, origins=origin, origin_ref=origin_ref, keyword=q, limit=limit, offset=offset
     )

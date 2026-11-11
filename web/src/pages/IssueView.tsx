@@ -13,7 +13,6 @@ import {
   type IssuePriority,
   type IssueStatus,
 } from '../api'
-import { useRefetch } from '../events'
 import { useReturnState, useRouteParam } from '../nav'
 import {
   PRIORITIES,
@@ -37,13 +36,14 @@ import {
   SelectInput,
   TextAreaInput,
   TextInput,
-  agentLabel,
   formatTime,
   useAction,
   useAgents,
   useConfirm,
-  useLoad,
 } from '../ui'
+import { agentLabel } from '../agentGroups'
+import { useLoad } from '../load'
+import { useFieldDraft } from '../drafts'
 import { OwnerSelect, StatusDot } from './Issues'
 
 function actorName(agents: Agent[] | undefined, actor: string) {
@@ -68,7 +68,8 @@ function SourceSession({ sessionId }: { sessionId: string | null }) {
   )
 }
 
-function Timeline({ detail, agents }: { detail: IssueDetail; agents: Agent[] | undefined }) {
+function Timeline({ detail }: { detail: IssueDetail }) {
+  const agents = useAgents().data
   return (
     <ol className="flex flex-col gap-3">
       {detail.activities.map((a) =>
@@ -109,46 +110,51 @@ function IssueLinks({ ids }: { ids: number[] }) {
   ))
 }
 
-function Editor({ detail, onSaved, onCancel }: { detail: IssueDetail; onSaved: () => void; onCancel: () => void }) {
-  // 打开编辑时的值；编辑期间详情会随 agent 的改动重新拉取，比较改没改要以打开时为准
-  const [opened] = useState(detail.issue)
-  const [title, setTitle] = useState(opened.title)
-  const [description, setDescription] = useState(opened.description)
-  const [dependsOn, setDependsOn] = useState(opened.depends_on.map((i) => `#${i}`).join(', '))
-  const parsed = parseIssueRefs(dependsOn)
+/** 编辑标题、正文与依赖：只提交改过的字段（编辑期间 agent 可能改了另一个），没动过的字段跟着服务端的新值（useFieldDraft） */
+function Editor({ detail, onDone }: { detail: IssueDetail; onDone: () => void }) {
+  const { issue } = detail
+  const form = useFieldDraft({
+    title: issue.title,
+    description: issue.description,
+    depends_on: issue.depends_on.map((i) => `#${i}`).join(', '),
+  })
+  const parsed = parseIssueRefs(form.draft.depends_on)
   const save = useAction()
   return (
     <Card>
       <Card.Content className="flex flex-col gap-3">
-        <TextInput label="标题" value={title} onChange={setTitle} isRequired />
-        <TextAreaInput label="描述（Markdown）" value={description} onChange={setDescription} rows={8} />
+        <TextInput label="标题" value={form.draft.title} onChange={(title) => form.set({ title })} isRequired />
+        <TextAreaInput
+          label="描述（Markdown）"
+          value={form.draft.description}
+          onChange={(description) => form.set({ description })}
+          rows={8}
+        />
         <TextInput
           label="依赖的 issue（编号，逗号分隔；全部完成或取消后才交给被指派的 agent）"
-          value={dependsOn}
-          onChange={setDependsOn}
+          value={form.draft.depends_on}
+          onChange={(depends_on) => form.set({ depends_on })}
         />
         {parsed === null && <p className="text-xs text-danger">只能填 issue 编号，如 #12, #15</p>}
         <ErrorAlert error={save.error} />
         <div className="flex gap-2">
           <ActionButton
             isPending={save.busy}
-            isDisabled={!title.trim() || parsed === null}
+            isDisabled={!form.draft.title.trim() || parsed === null}
             onPress={() =>
               void save.run(async () => {
-                // 只提交改过的字段：编辑期间 agent 可能改了另一个，不能用打开编辑时的旧值盖掉；都没改就不请求
-                const patch = {
-                  ...(title !== opened.title && { title }),
-                  ...(description !== opened.description && { description }),
-                  ...(parsed !== null && parsed.join() !== opened.depends_on.join() && { depends_on: parsed }),
-                }
-                if (Object.keys(patch).length > 0) await api.updateIssue(detail.issue.id, patch)
-                onSaved()
+                // 依赖按解析后的编号比较：只改了空格不算改过
+                const { depends_on: _text, ...text } = form.changes
+                const changedDeps = parsed !== null && parsed.join() !== issue.depends_on.join()
+                const patch = { ...text, ...(changedDeps && { depends_on: parsed }) }
+                if (Object.keys(patch).length > 0) await api.updateIssue(issue.id, patch)
+                onDone()
               })
             }
           >
             保存
           </ActionButton>
-          <Button variant="ghost" onPress={onCancel}>
+          <Button variant="ghost" onPress={onDone}>
             取消
           </Button>
         </div>
@@ -158,7 +164,7 @@ function Editor({ detail, onSaved, onCancel }: { detail: IssueDetail; onSaved: (
 }
 
 // 指派给用户的 issue 在这里审核（推送通知点开就是这一页；Chromium 通知上的「打回」带 ?review=reject 打开，聚焦理由）
-function Review({ issueId, reload }: { issueId: number; reload: () => Promise<void> }) {
+function Review({ issueId }: { issueId: number }) {
   const [params] = useSearchParams()
   const [reason, setReason] = useState('')
   const review = useAction()
@@ -167,7 +173,6 @@ function Review({ issueId, reload }: { issueId: number; reload: () => Promise<vo
     void review.run(async () => {
       await api.rejectIssue(issueId, reason)
       setReason('')
-      await reload()
     })
   }
   return (
@@ -187,10 +192,7 @@ function Review({ issueId, reload }: { issueId: number; reload: () => Promise<vo
           <ActionButton
             isPending={review.busy}
             onPress={() =>
-              void review.run(async () => {
-                await api.approveIssue(issueId)
-                await reload()
-              })
+              void review.run(() => api.approveIssue(issueId))
             }
           >
             通过
@@ -204,7 +206,7 @@ function Review({ issueId, reload }: { issueId: number; reload: () => Promise<vo
   )
 }
 
-function Issue({ detail, reload }: { detail: IssueDetail; reload: () => Promise<void> }) {
+function Issue({ detail }: { detail: IssueDetail }) {
   const agents = useAgents()
   const navigate = useNavigate()
   const from = useReturnState()
@@ -215,10 +217,7 @@ function Issue({ detail, reload }: { detail: IssueDetail; reload: () => Promise<
   const send = useAction()
   const { issue } = detail
   const patch = (body: Parameters<typeof api.updateIssue>[1]) =>
-    void change.run(async () => {
-      await api.updateIssue(issue.id, body)
-      await reload()
-    })
+    void change.run(() => api.updateIssue(issue.id, body))
   const remove = async () => {
     if (!(await confirm({ title: `删除 #${issue.id}？`, body: '评论与时间线一起删除，agent 的会话保留。', danger: true }))) return
     await change.run(async () => {
@@ -232,7 +231,6 @@ function Issue({ detail, reload }: { detail: IssueDetail; reload: () => Promise<
     void send.run(async () => {
       await api.commentIssue(issue.id, comment)
       setComment('')
-      await reload()
     })
   }
   const sessions = Object.entries(issue.sessions)
@@ -256,11 +254,7 @@ function Issue({ detail, reload }: { detail: IssueDetail; reload: () => Promise<
       {editing ? (
         <Editor
           detail={detail}
-          onCancel={() => setEditing(false)}
-          onSaved={() => {
-            setEditing(false)
-            void reload()
-          }}
+          onDone={() => setEditing(false)}
         />
       ) : (
         <h2 className="flex items-center gap-2 text-xl font-semibold">
@@ -271,7 +265,6 @@ function Issue({ detail, reload }: { detail: IssueDetail; reload: () => Promise<
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <OwnerSelect
-          agents={agents.data}
           assignable
           label="负责项目（owner）"
           value={issue.owner}
@@ -307,10 +300,7 @@ function Issue({ detail, reload }: { detail: IssueDetail; reload: () => Promise<
             size="sm"
             isPending={change.busy}
             onPress={() =>
-              void change.run(async () => {
-                await api.startIssue(issue.id)
-                await reload()
-              })
+              void change.run(() => api.startIssue(issue.id))
             }
           >
             <Play className="size-4" />
@@ -358,7 +348,7 @@ function Issue({ detail, reload }: { detail: IssueDetail; reload: () => Promise<
         </div>
       )}
 
-      {issue.reviewable && <Review issueId={issue.id} reload={reload} />}
+      {issue.reviewable && <Review issueId={issue.id} />}
 
       {!editing && (
         <div className="border-t border-separator pt-3">
@@ -367,7 +357,7 @@ function Issue({ detail, reload }: { detail: IssueDetail; reload: () => Promise<
       )}
 
       <h3 className="mt-2 text-sm font-semibold text-muted">动态</h3>
-      <Timeline detail={detail} agents={agents.data} />
+      <Timeline detail={detail} />
 
       <Card>
         <Card.Content className="flex flex-col gap-2">
@@ -385,8 +375,7 @@ function Issue({ detail, reload }: { detail: IssueDetail; reload: () => Promise<
 export default function IssueView() {
   const id = useRouteParam('id')
   const issueId = Number(id)
-  const detail = useLoad(() => api.issue(issueId), [issueId])
-  useRefetch('issues', detail.reload)
+  const detail = useLoad('issues', () => api.issue(issueId), [issueId])
   // 看到了 issue 就看到了请你审核它的通知（与打开会话一样）
   useEffect(() => {
     void api
@@ -394,6 +383,6 @@ export default function IssueView() {
       .catch((e) => console.error('marking issue notifications read failed', e))
   }, [issueId])
   return (
-    <Loading state={detail}>{(d) => <Issue detail={d} reload={detail.reload} />}</Loading>
+    <Loading state={detail}>{(d) => <Issue detail={d} />}</Loading>
   )
 }

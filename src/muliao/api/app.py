@@ -37,7 +37,7 @@ from muliao.api import (
 )
 from muliao.api.auth import COOKIE_NAME, MAX_AGE_SECONDS, Auth, LoginThrottle, require_auth
 from muliao.api.deps import C
-from muliao.api.events import HeartbeatEvent, ServerEvent
+from muliao.api.events import HeartbeatEvent, ServerEvent, derived_changes
 from muliao.config import AuthConfig
 from muliao.container import Container
 from muliao.errors import (
@@ -179,7 +179,12 @@ def _private_routes() -> APIRouter:
                         event = await sub.next()
                 except SubscriptionEnded:
                     return
-                yield heartbeat if waited.cancelled_caught else event
+                if waited.cancelled_caught:
+                    yield heartbeat
+                    continue
+                yield event
+                for derived in derived_changes(event):
+                    yield derived
 
     return router
 

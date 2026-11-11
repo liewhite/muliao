@@ -13,7 +13,8 @@ import {
   type AgentId,
   type AgentInput,
 } from '../api'
-import { ActionButton,
+import {
+  ActionButton,
   copyText,
   EmptyHint,
   ErrorAlert,
@@ -27,15 +28,14 @@ import { ActionButton,
   useAction,
   useAgents,
   useConfirm,
-  useLoad,
 } from '../ui'
+import { useLoad } from '../load'
 import { PermissionsInput } from './Permissions'
 import { AgentMemories } from './Memory'
 import { AgentAssetsView } from './AgentAssets'
 import { HistoryList } from './History'
 import { FileBrowser } from './FileBrowser'
 import { SitePageList } from './SitePages'
-import { useRefetch } from '../events'
 import { useFieldDraft } from '../drafts'
 import { groupAgents } from '../agentGroups'
 
@@ -169,8 +169,8 @@ function ModelInput({
   const sep = value.indexOf(':')
   const provider = sep > 0 ? value.slice(0, sep) : null
   const model = sep > 0 ? value.slice(sep + 1) : ''
-  const providers = useLoad(() => api.providers(), [])
-  const models = useLoad(() => (provider ? api.providerModels(provider) : Promise.resolve([])), [provider])
+  const providers = useLoad(null, () => api.providers(), [])
+  const models = useLoad(null, () => (provider ? api.providerModels(provider) : Promise.resolve([])), [provider])
   const listed = models.data ?? []
   return (
     <div className="flex flex-col gap-2">
@@ -282,7 +282,7 @@ function AgentCreateForm({ defaults, onSaved }: { defaults: AgentInput; onSaved:
 }
 
 /** 编辑：只提交改过的字段，编辑期间 agent 自己改了别的字段（改它的 agent.toml）不会被旧值盖掉；没动过的字段跟着刷新 */
-function AgentEditForm({ agent, current, onSaved }: { agent: AgentId; current: AgentInput; onSaved: () => void }) {
+function AgentEditForm({ agent, current }: { agent: AgentId; current: AgentInput }) {
   const form = useFieldDraft(current)
   const action = useAction()
   return (
@@ -296,7 +296,6 @@ function AgentEditForm({ agent, current, onSaved }: { agent: AgentId; current: A
           void action.run(async () => {
             await api.updateAgent(agent, form.changes)
             toast.success('已保存')
-            onSaved()
           })
         }
       >
@@ -308,7 +307,7 @@ function AgentEditForm({ agent, current, onSaved }: { agent: AgentId; current: A
 
 export function AgentCreate() {
   const navigate = useNavigate()
-  const defaults = useLoad(() => api.agentDefaults(), [])
+  const defaults = useLoad(null, () => api.agentDefaults(), [])
   return (
     <Page title="新建 agent" back="/agents">
       <Card>
@@ -335,8 +334,7 @@ export function AgentDetail() {
   const id = asAgentId(useRouteParam('id'))
   const navigate = useNavigate()
   const confirm = useConfirm()
-  const agent = useLoad(() => api.agent(id), [id])
-  useRefetch('agents', agent.reload)
+  const agent = useLoad('agents', () => api.agent(id), [id])
   const [tab, setTab] = useState<Key>('config')
   const action = useAction()
   const name = agent.data?.name ?? id
@@ -364,14 +362,12 @@ export function AgentDetail() {
     }
     if (await action.run(() => api.setAgentArchived(id, on))) {
       toast.success(on ? '已归档' : '已取消归档')
-      void agent.reload()
     }
   }
 
   async function toggleDefault(on: boolean) {
     if (await action.run(() => api.setDefaultAgent(id, on))) {
       toast.success(on ? '已设为默认 agent' : '已取消默认')
-      void agent.reload()
     }
   }
 
@@ -450,7 +446,7 @@ export function AgentDetail() {
                   {a.config === null ? (
                     <p className="text-sm text-danger">{CONFIG_NOT_LOADED}；修好 {a.name}/agent.toml 后才能在这里改</p>
                   ) : (
-                    <AgentEditForm agent={a.id} current={currentInput(a, a.config)} onSaved={() => void agent.reload()} />
+                    <AgentEditForm agent={a.id} current={currentInput(a, a.config)} />
                   )}
                 </Card.Content>
               </Card>

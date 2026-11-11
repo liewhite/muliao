@@ -189,7 +189,7 @@ async def test_the_api_lists_the_finished_ones_separately_with_the_sessions_they
 
     assert [t["id"] for t in listed] == [still_running.id]
     assert [(t["id"], t["finished_at"] is not None) for t in finished] == [(trigger.id, True)]
-    history = await client.get("/api/sessions", params={"origin": ["trigger"], "origin_ref": str(trigger.id)})
+    history = await client.get("/api/sessions", params={"trigger_id": trigger.id})
     assert [s["id"] for s in history.json()] == [finished[0]["last_session_id"]]
     assert (await client.post(f"/api/triggers/{trigger.id}/run")).status_code == 409
     assert (await client.patch(f"/api/triggers/{trigger.id}", json={"enabled": True})).status_code == 409

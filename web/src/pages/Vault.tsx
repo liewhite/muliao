@@ -15,7 +15,7 @@ import {
   useConfirm,
 } from '../ui'
 
-function SecretForm({ assets, onSaved }: { assets: AssetOf<'secret'>[]; onSaved: () => void }) {
+function SecretForm({ assets }: { assets: AssetOf<'secret'>[] }) {
   const [owner, setOwner] = useState<AgentId | null>(null)
   const [key, setKey] = useState('')
   const [value, setValue] = useState('')
@@ -35,7 +35,6 @@ function SecretForm({ assets, onSaved }: { assets: AssetOf<'secret'>[]; onSaved:
       setValue('')
       setDescription('')
       setAllowShell(null)
-      onSaved()
     }
   }
 
@@ -62,7 +61,7 @@ function SecretForm({ assets, onSaved }: { assets: AssetOf<'secret'>[]; onSaved:
   )
 }
 
-function SecretItem({ item, onChange }: { item: AssetOf<'secret'>; onChange: () => void }) {
+function SecretItem({ item }: { item: AssetOf<'secret'> }) {
   const confirm = useConfirm()
   const action = useAction()
 
@@ -73,7 +72,7 @@ function SecretItem({ item, onChange }: { item: AssetOf<'secret'>; onChange: () 
       confirmLabel: '删除',
       danger: true,
     })
-    if (ok) await action.run(() => api.deleteAsset('secret', item.name).then(onChange))
+    if (ok) await action.run(() => api.deleteAsset('secret', item.name))
   }
 
   return (
@@ -97,7 +96,7 @@ function SecretItem({ item, onChange }: { item: AssetOf<'secret'>; onChange: () 
             <Trash2 className="size-4" />
           </Button>
         </div>
-        <AssetAccess asset={item} onTransferred={onChange} />
+        <AssetAccess asset={item} />
         <ErrorAlert error={action.error} />
       </Card.Content>
     </Card>
@@ -105,7 +104,7 @@ function SecretItem({ item, onChange }: { item: AssetOf<'secret'>; onChange: () 
 }
 
 /** secret 的资产页：值加密保存、不再显示；assets 是资产池里（已筛选的）secret */
-export function SecretTab({ assets, onChange }: { assets: AssetOf<'secret'>[]; onChange: () => void }) {
+export function SecretTab({ assets }: { assets: AssetOf<'secret'>[] }) {
   return (
     <div className="flex flex-col gap-3">
       <p className="text-sm text-muted">
@@ -113,13 +112,13 @@ export function SecretTab({ assets, onChange }: { assets: AssetOf<'secret'>[]; o
         <code className="font-mono">run_shell(secrets=[KEY])</code> 注入同名环境变量；不允许 shell 的只能用{' '}
         <code className="font-mono">skill_run(secrets=[KEY])</code> 经 skill 里的脚本注入。
       </p>
-      <SecretForm assets={assets} onSaved={onChange} />
+      <SecretForm assets={assets} />
       {assets.length === 0 ? (
         <EmptyHint>没有 secret</EmptyHint>
       ) : (
         <div className="flex flex-col gap-2">
           {assets.map((i) => (
-            <SecretItem key={i.name} item={i} onChange={onChange} />
+            <SecretItem key={i.name} item={i} />
           ))}
         </div>
       )}

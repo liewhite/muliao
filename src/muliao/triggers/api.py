@@ -1,13 +1,15 @@
 """触发器领域的公开接口（HTTP 适配层与组合根用）。
 
 各触发方式的配置与状态类型也在这里导出：HTTP 接口按 kind 把它们组成有区分字段的联合类型。事件的投递目标（router、targets）
-是领域内部，对外只有地址格式的说明 ADDRESS_HELP。组合根经 TriggerDomain.build 装配。
+是领域内部，对外只有地址格式的说明 ADDRESS_HELP，以及触发器作为会话发送方的身份怎么拼、怎么解（sender_ref、trigger_of）。
+组合根经 TriggerDomain.build 装配。
 """
 
 from muliao.triggers.assembly import TriggerDomain
 from muliao.triggers.faults import FaultSource, TriggerFault
 from muliao.triggers.once import OnceConfig, OnceStatus
 from muliao.triggers.precheck import Precheck, PrecheckFailed
+from muliao.triggers.router import sender_ref, trigger_of
 from muliao.triggers.schedule import ScheduleConfig, ScheduleStatus
 from muliao.triggers.service import (
     EVENT_MAX_BYTES,
@@ -47,4 +49,6 @@ __all__ = [
     "WebhookStatus",
     "Webhooks",
     "route_address",
+    "sender_ref",
+    "trigger_of",
 ]

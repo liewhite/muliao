@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.api import named_agent_in, runnable_agent_in
-from muliao.errors import DomainError, InvalidInput, NotFound
+from muliao.errors import CorruptState, DomainError, InvalidInput, NotFound
 from muliao.issues.api import check_issue_in
 from muliao.issues.events import PostIssueEvent
 from muliao.platform.ids import new_id
@@ -45,6 +45,23 @@ from muliao.triggers.targets import (
 log = logging.getLogger(__name__)
 
 
+def sender_ref(trigger_id: int) -> str:
+    """触发器在会话领域里的身份（origin_ref）：它的 id。只在这里拼，由 trigger_of 解。"""
+    return str(trigger_id)
+
+
+def trigger_of(session_id: str, origin_ref: str | None) -> int:
+    """触发器发起的会话（origin 是 Origin.TRIGGER）的触发器 id：缺了是存下的数据坏了。"""
+    if origin_ref is None:
+        raise CorruptState(f"trigger session {session_id} has no trigger id (origin_ref)")
+    try:
+        return int(origin_ref)
+    except ValueError:
+        raise CorruptState(
+            f"trigger session {session_id} has a malformed trigger id (origin_ref {origin_ref!r})"
+        ) from None
+
+
 @dataclass(frozen=True)
 class Sender:
     """事件的发送方，一个触发器：会话领域里的身份（origin, origin_ref），它所属的 agent（默认目标、issue 时间线上的
@@ -62,7 +79,7 @@ class Sender:
         """触发器作为发送方；title 是这次新开的会话的标题（续写的会话新建时用触发器名）。"""
         return cls(
             origin=Origin.TRIGGER,
-            origin_ref=str(trigger.id),
+            origin_ref=sender_ref(trigger.id),
             agent_id=trigger.agent_id,
             source=f"trigger {trigger.name}",
             title=title,

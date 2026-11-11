@@ -1,6 +1,6 @@
 // issue 看板的纯逻辑：状态与优先级的展示顺序、按状态分列、时间线文字
 
-import { selectableAgents } from './agentGroups'
+import { agentLabel, selectableAgents } from './agentGroups'
 import { USER, type Agent, type Issue, type IssueActivity, type IssuePriority, type IssueStatus } from './api'
 
 /** 状态的标签；键的顺序就是看板的列顺序（也是列表视图的分组顺序）：受阻排在进行中和待审核之间 */
@@ -41,15 +41,6 @@ export const PRIORITIES = Object.keys(PRIORITY_LABEL) as readonly IssuePriority[
 /** issue 页；通知点开的地址由后端 Notification.url 生成，与它一致（tests/test_frontend_contract.py） */
 export const issueRoute = (id: number) => `/issues/${id}`
 
-/** issue 会话（origin=issue）的 issue 编号：后端契约是 origin_ref 为 issue id，不符合就报错而不是去请求一个不存在的 issue */
-export function issueIdOf(session: { id: string; origin: string; origin_ref: string | null }): number {
-  const id = Number(session.origin_ref)
-  if (session.origin !== 'issue' || session.origin_ref === null || !Number.isInteger(id) || id <= 0) {
-    throw new Error(`会话 ${session.id} 不是 issue 会话或 origin_ref 不是 issue 编号：${session.origin}/${session.origin_ref}`)
-  }
-  return id
-}
-
 /** 指派人下拉框里「未指派」的 id（选项 id 必须非空） */
 export const UNASSIGNED = '@none'
 
@@ -68,7 +59,7 @@ export const assigneeOf = (value: string) => (value === UNASSIGNED ? null : valu
 /** 负责项目的显示名；负责的 agent 被删除后为 null */
 export function ownerLabel(agents: Agent[] | undefined, owner: string | null): string {
   if (owner === null) return '无负责项目'
-  return agents?.find((a) => a.id === owner)?.name ?? owner
+  return agentLabel(agents, owner)
 }
 
 /** 相邻两个 agent 的色相间隔：黄金角，每加一个 agent 都落在已有色相间较大的空隙里（十个以上会出现约 20° 的相近色） */
@@ -89,7 +80,7 @@ export function ownerHue(agents: Agent[] | undefined, owner: string | null): num
 export function assigneeLabel(agents: Agent[] | undefined, assignee: string | null): string {
   if (assignee === null) return '未指派'
   if (assignee === USER) return '我'
-  return agents?.find((a) => a.id === assignee)?.name ?? assignee
+  return agentLabel(agents, assignee)
 }
 
 /** 同一列里：最近更新的在前，刚拖进来的 issue 就排在最上面 */

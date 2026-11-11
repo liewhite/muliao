@@ -34,13 +34,18 @@ Domain = Literal[
 ]
 
 
+# 前端按类别重新拉取的数据：各领域，加上任务（平台的任务表随任何领域的事务写，不按表发，由任务状态事件派生，见
+# api.events.derived_changes）
+Resource = Domain | Literal["tasks"]
+
+
 class ChangedEvent(BaseModel):
-    """一个领域的数据变了（推给前端 SSE，展示它的页面从接口重新拉取）：写过它的表的事务提交后发（platform.db 的
-    after_commit），平台自己改 AI 资源文件后也以 agents 发（agents.source）。不管是谁改的：页面自己、agent、触发器、
-    推送通知上的操作都一样。"""
+    """一类数据变了（推给前端 SSE，展示它的页面从接口重新拉取）：写过一个领域的表的事务提交后发（platform.db 的
+    after_commit），平台自己改 AI 资源文件后也以 agents 发（agents.source）；接口输出里由别的数据派生的部分，SSE 接口
+    补发受影响的类别（api.events.derived_changes）。不管是谁改的：页面自己、agent、触发器、推送通知上的操作都一样。"""
 
     type: Literal["changed"] = "changed"
-    resource: Domain
+    resource: Resource
 
 
 def changes_of(tables: frozenset[str]) -> list[ChangedEvent]:

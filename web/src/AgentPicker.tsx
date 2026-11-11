@@ -3,7 +3,7 @@ import { Dropdown, Label, SearchField } from '@heroui/react'
 import { selectVariants } from '@heroui/styles'
 import { ChevronDown, Folder } from 'lucide-react'
 import { Autocomplete } from 'react-aria-components'
-import { groupAgents, searchAgents, selectableAgents } from './agentGroups'
+import { findAgent, groupAgents, searchAgents, selectableAgents } from './agentGroups'
 import type { Agent } from './api'
 
 /**
@@ -28,7 +28,7 @@ export function AgentPicker({
   const labelId = useId()
   const valueId = useId()
   const [query, setQuery] = useState('')
-  const current = agents.find((a) => a.id === value)
+  const current = value === null ? undefined : findAgent(agents, value)
   const active = selectableAgents(agents)
   const selected = value === null ? [] : [value]
   const searching = query.trim() !== ''

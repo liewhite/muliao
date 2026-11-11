@@ -6,7 +6,6 @@ import {
   useId,
   useRef,
   useState,
-  useSyncExternalStore,
   type ComponentProps,
   type ReactNode,
   type Ref,
@@ -43,65 +42,16 @@ import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import 'katex/dist/katex.min.css'
 import { FILES_PATH, api, type Agent, type AgentId } from './api'
-import { coalesced, listenServerEvents, shouldRefetch } from './events'
+import { agentLabel } from './agentGroups'
+import { Loader, errorMessage, refreshShown, useLoader, type LoadState } from './load'
 import { normalizeMath } from './markdown'
 import { remarkIssueRefs } from './issueRefs'
 import { isSendShortcut, SEND_HINT } from './sendKey'
 
-export function errorMessage(e: unknown): string {
-  return e instanceof Error ? e.message : String(e)
-}
+// ---- 数据操作 ----
 
-// ---- 数据加载与操作 ----
-
-export interface Loaded<T> {
-  data: T | undefined
-  error: string | null
-  loading: boolean
-  reload: () => Promise<void>
-}
-
-/**
- * 加载数据；deps 变化时重新加载。错误原样展示，不吞掉。
- * data 只来自当前 deps 的请求：deps 一变就清空旧数据，晚到的旧请求结果直接丢弃。
- */
-export function useLoad<T>(load: () => Promise<T>, deps: unknown[]): Loaded<T> {
-  const [data, setData] = useState<T>()
-  const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
-  // 每次请求的序号：只有最新一次请求的结果能落到状态里
-  const latest = useRef(0)
-  const run = useCallback(load, deps)
-  const reload = useCallback(async () => {
-    const id = ++latest.current
-    try {
-      const value = await run()
-      if (id !== latest.current) return
-      setData(value)
-      setError(null)
-    } catch (e) {
-      if (id !== latest.current) return
-      setError(errorMessage(e))
-    } finally {
-      if (id === latest.current) setLoading(false)
-    }
-  }, [run])
-  useEffect(() => {
-    setData(undefined)
-    setError(null)
-    setLoading(true)
-    void reload()
-    // 换参数或卸载后，在途请求一律作废
-    return () => {
-      // 这是请求序号计数器而不是 DOM 引用，清理时读最新值正是本意
-      // oxlint-disable-next-line react-hooks/exhaustive-deps
-      latest.current++
-    }
-  }, [reload])
-  return { data, error, loading, reload }
-}
-
-/** 包装一个用户操作：执行中 busy，失败时记录错误（由 ErrorAlert 展示）。返回是否成功。 */
+/** 包装一个用户操作：执行中 busy，失败时记录错误（由 ErrorAlert 展示）；成功后等正在显示的数据重新拉取完（load.refreshShown）
+ * 才结束，按钮不会在旧数据上又变得可点。返回是否成功。 */
 export function useAction() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -110,6 +60,7 @@ export function useAction() {
     setError(null)
     try {
       await action()
+      await refreshShown()
       return true
     } catch (e) {
       setError(errorMessage(e))
@@ -121,56 +72,22 @@ export function useAction() {
   return { busy, error, run, setError }
 }
 
-// agent 列表的共享缓存：选择器、id→名称显示等各处共用一份，不各自请求。有组件在用时订阅服务端事件，
-// shouldRefetch 时重新拉取；没人用了就退订，下次有人用时先显示上次的结果、同时重新拉取
-type AgentsState = Omit<Loaded<Agent[]>, 'reload'>
-let agentsState: AgentsState = { data: undefined, error: null, loading: true }
-let agentsLatest = 0
-let agentsUnlisten: (() => void) | null = null
-const agentsSubscribers = new Set<() => void>()
+// agent 列表：选择器、id→名称显示等各处共用一份，不各自请求、不逐层传递
+const agentList = new Loader('agents', () => api.agents())
 
-async function reloadAgents(): Promise<void> {
-  // 只让最新一次请求的结果落下，晚到的旧响应不能覆盖新值
-  const id = ++agentsLatest
-  let next: AgentsState
-  try {
-    next = { data: await api.agents(), error: null, loading: false }
-  } catch (e) {
-    next = { ...agentsState, error: errorMessage(e), loading: false }
-  }
-  if (id !== agentsLatest) return
-  agentsState = next
-  agentsSubscribers.forEach((s) => s())
+/** agent 列表（各处共用一份，随 agents 的变化重新拉取） */
+export function useAgents(): LoadState<Agent[]> {
+  return useLoader(agentList)
 }
 
-// 事件触发的重新拉取合并密集的事件（同 useRefetch）
-const refetchAgents = coalesced(reloadAgents)
-
-function subscribeAgents(onChange: () => void) {
-  agentsSubscribers.add(onChange)
-  if (agentsUnlisten === null) {
-    agentsUnlisten = listenServerEvents((e) => {
-      if (shouldRefetch(e, 'agents')) refetchAgents()
-    })
-    void reloadAgents()
-  }
-  return () => {
-    agentsSubscribers.delete(onChange)
-    if (agentsSubscribers.size === 0 && agentsUnlisten !== null) {
-      agentsUnlisten()
-      agentsUnlisten = null
-    }
-  }
+/** agent 的显示名（见 agentGroups.agentLabel），不用自己拿 agent 列表 */
+export function useAgentName(id: AgentId): string {
+  return agentLabel(useAgents().data, id)
 }
 
-/** agent 列表（选择器与 id→名称显示共用，见上面的共享缓存）。 */
-export function useAgents(): Loaded<Agent[]> {
-  return { ...useSyncExternalStore(subscribeAgents, () => agentsState), reload: reloadAgents }
-}
-
-/** 按 id 显示 agent 名称；agent 列表尚未加载完时先显示 id。 */
-export function agentLabel(agents: Agent[] | undefined, id: AgentId): string {
-  return agents?.find((a) => a.id === id)?.name ?? id
+/** agent 的显示名，在 JSX 里直接用（列表里逐项、条件分支里也能用，不受 hook 调用位置的限制） */
+export function AgentName({ id }: { id: AgentId }) {
+  return <>{useAgentName(id)}</>
 }
 
 // ---- 布局 ----
@@ -353,7 +270,7 @@ export function ErrorAlert({ error, title = '出错了' }: { error: string | nul
  * 首次加载失败才整页报错；已有数据时重新拉取失败（网络抖动等）照常显示已有内容，只在顶部提示错误，
  * 下次重新拉取成功后提示自动消失。
  */
-export function Loading<T>({ state, children }: { state: Loaded<T>; children: (data: T) => ReactNode }) {
+export function Loading<T>({ state, children }: { state: LoadState<T>; children: (data: T) => ReactNode }) {
   if (state.data !== undefined && state.error) {
     return (
       <>

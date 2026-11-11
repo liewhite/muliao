@@ -5,7 +5,8 @@ import { Link } from 'react-router-dom'
 import { api, type AppNotification } from '../api'
 import { useServerEvents } from '../events'
 import { useReturnState } from '../nav'
-import { EmptyHint, Loading, Page, formatTime, useLoad } from '../ui'
+import { EmptyHint, Loading, Page, formatTime } from '../ui'
+import { useLoad } from '../load'
 
 function NotificationCard({ n }: { n: AppNotification }) {
   return (
@@ -32,8 +33,8 @@ function NotificationCard({ n }: { n: AppNotification }) {
 
 export default function Notifications() {
   const from = useReturnState()
-  const notifications = useLoad(() => api.notifications(), [])
-  // 只在有新通知（或重连）时重新拉取：自己标的已读不重拉，列表里的未读标记留到下次加载
+  const notifications = useLoad(null, () => api.notifications(), [])
+  // 只在有新通知（或重连）时重新拉取，不随 notifications 的每次变化：自己标的已读不重拉，列表里的未读标记留到下次加载
   useServerEvents((e) => {
     if (e.type === 'connected' || e.type === 'notification') void notifications.reload()
   })

@@ -41,7 +41,7 @@ function ToolChips({ tools }: { tools: string[] }) {
   )
 }
 
-function McpForm({ onCreated }: { onCreated: () => void }) {
+function McpForm() {
   const [owner, setOwner] = useState<AgentId | null>(null)
   const [name, setName] = useState('')
   const [transport, setTransport] = useState<'stdio' | 'http'>('stdio')
@@ -53,7 +53,7 @@ function McpForm({ onCreated }: { onCreated: () => void }) {
   const action = useAction()
 
   async function create() {
-    const ok = await action.run(async () => {
+    await action.run(async () => {
       const kv = parsePairs(pairs)
       const input: McpInput = {
         owner,
@@ -75,7 +75,6 @@ function McpForm({ onCreated }: { onCreated: () => void }) {
       setTools(created.tools)
       toast.success(`已连接并保存 ${created.name}`)
     })
-    if (ok) onCreated()
   }
 
   return (
@@ -139,14 +138,14 @@ function McpTarget({ server }: { server: AssetOf<'mcp'> }) {
   )
 }
 
-function McpItem({ server, onChange }: { server: AssetOf<'mcp'>; onChange: () => void }) {
+function McpItem({ server }: { server: AssetOf<'mcp'> }) {
   const confirm = useConfirm()
   const [tools, setTools] = useState<string[] | null>(null)
   const action = useAction()
 
   async function remove() {
     const ok = await confirm({ title: `删除 MCP server「${server.name}」？`, confirmLabel: '删除', danger: true })
-    if (ok) await action.run(() => api.deleteAsset('mcp', server.name).then(onChange))
+    if (ok) await action.run(() => api.deleteAsset('mcp', server.name))
   }
 
   return (
@@ -160,14 +159,14 @@ function McpItem({ server, onChange }: { server: AssetOf<'mcp'>; onChange: () =>
             </Chip>
           </div>
           <div className="mt-1.5">
-            <AssetAccess asset={server} onTransferred={onChange} />
+            <AssetAccess asset={server} />
           </div>
         </div>
         <ToggleSwitch
           label={`启用 MCP server「${server.name}」`}
           isSelected={server.enabled}
           isDisabled={action.busy}
-          onChange={(enabled) => void action.run(() => api.setMcpEnabled(server.name, enabled).then(onChange))}
+          onChange={(enabled) => void action.run(() => api.setMcpEnabled(server.name, enabled))}
         />
       </Card.Header>
       <Card.Content className="flex flex-col gap-2">
@@ -195,16 +194,16 @@ function McpItem({ server, onChange }: { server: AssetOf<'mcp'>; onChange: () =>
 }
 
 /** MCP server 的资产页：assets 是资产池里（已筛选的）MCP server，带各自的配置与启停 */
-export function McpTab({ assets, onChange }: { assets: AssetOf<'mcp'>[]; onChange: () => void }) {
+export function McpTab({ assets }: { assets: AssetOf<'mcp'>[] }) {
   return (
     <div className="flex flex-col gap-3">
-      <McpForm onCreated={onChange} />
+      <McpForm />
       {assets.length === 0 ? (
         <EmptyHint>没有 MCP server</EmptyHint>
       ) : (
         <div className="flex flex-col gap-3">
           {assets.map((server) => (
-            <McpItem key={`${server.name}-${server.enabled}`} server={server} onChange={onChange} />
+            <McpItem key={`${server.name}-${server.enabled}`} server={server} />
           ))}
         </div>
       )}

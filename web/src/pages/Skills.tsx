@@ -2,11 +2,10 @@ import { useRef, useState } from 'react'
 import { Button, Card, toast } from '@heroui/react'
 import { Download, Plus, Trash2, Upload } from 'lucide-react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { api, ApiError, asAgentId, skillFileUrl, type AgentId, type AssetOf, type Schemas, type Skill } from '../api'
+import { api, ApiError, skillFileUrl, type AgentId, type AssetOf, type Schemas, type Skill } from '../api'
 import { FileBrowser } from './FileBrowser'
 import { AssetAccess, OwnerSelect, StaleDraft } from './assetParts'
 import { useVersionedDraft } from '../drafts'
-import { useRefetch } from '../events'
 import { ActionButton,
   CollapsibleForm,
   EmptyHint,
@@ -17,11 +16,11 @@ import { ActionButton,
   TextAreaInput,
   TextInput,
   useAction,
-  agentLabel,
   useAgents,
   useConfirm,
-  useLoad,
 } from '../ui'
+import { agentLabel } from '../agentGroups'
+import { useLoad } from '../load'
 
 const SKILLS = '/ai-assets?kind=skill'
 
@@ -30,7 +29,7 @@ function editorPath(name?: string): string {
 }
 
 /** skill 的资产页：assets 是资产池里（已筛选的）skill，点进编辑 */
-export function SkillTab({ assets, onChange }: { assets: AssetOf<'skill'>[]; onChange: () => void }) {
+export function SkillTab({ assets }: { assets: AssetOf<'skill'>[] }) {
   const [owner, setOwner] = useState<AgentId | null>(null)
   return (
     <div className="flex flex-col gap-3">
@@ -42,7 +41,7 @@ export function SkillTab({ assets, onChange }: { assets: AssetOf<'skill'>[]; onC
       </div>
       <CollapsibleForm title="导入 .skill">
         <OwnerSelect value={owner} onChange={setOwner} />
-        <ImportSkill owner={owner} onImported={onChange} />
+        <ImportSkill owner={owner} />
       </CollapsibleForm>
       {assets.length === 0 ? (
         <EmptyHint>没有 skill</EmptyHint>
@@ -57,7 +56,7 @@ export function SkillTab({ assets, onChange }: { assets: AssetOf<'skill'>[]; onC
                 <Card.Description>{s.description}</Card.Description>
               </Card.Header>
               <Card.Content>
-                <AssetAccess asset={s} onTransferred={onChange} />
+                <AssetAccess asset={s} />
               </Card.Content>
             </Card>
           ))}
@@ -68,7 +67,7 @@ export function SkillTab({ assets, onChange }: { assets: AssetOf<'skill'>[]; onC
 }
 
 /** 导入标准 .skill 文件为 owner 的 skill；同名已存在时问是否覆盖，没有导入的文件列在下面。 */
-function ImportSkill({ owner, onImported }: { owner: AgentId | null; onImported: () => void }) {
+function ImportSkill({ owner }: { owner: AgentId | null }) {
   const input = useRef<HTMLInputElement>(null)
   const confirm = useConfirm()
   const action = useAction()
@@ -93,7 +92,6 @@ function ImportSkill({ owner, onImported }: { owner: AgentId | null; onImported:
       }
       setResult(imported)
       toast.success(`已导入 skill「${imported.skill.name}」`)
-      onImported()
     })
   }
 
@@ -203,8 +201,7 @@ function NewSkill() {
 
 /** 已有的 skill：agent 随时会改它，随 changed 重新拉取，保存带打开时的版本 */
 function ExistingSkill({ name }: { name: string }) {
-  const loaded = useLoad(() => api.skill(name), [name])
-  useRefetch('agents', loaded.reload)
+  const loaded = useLoad('agents', () => api.skill(name), [name])
   return (
     <Page title={name} back={SKILLS}>
       <Loading state={loaded}>{(s) => <SkillDraft latest={s} />}</Loading>
@@ -215,8 +212,8 @@ function ExistingSkill({ name }: { name: string }) {
 function SkillDraft({ latest }: { latest: Skill }) {
   const navigate = useNavigate()
   const confirm = useConfirm()
-  const agents = useAgents()
   const { name, owner } = latest
+  const agents = useAgents()
   const doc = useVersionedDraft(latest, (s): SkillText => ({ description: s.description, body: s.body }))
   const action = useAction()
   // 上一次导出没打进包的文件
@@ -254,7 +251,7 @@ function SkillDraft({ latest }: { latest: Skill }) {
     <div className="flex flex-col gap-4">
       <Card>
         <Card.Content className="flex flex-col gap-4">
-          <div className="text-sm text-muted">归属：{owner === null ? '平台' : agentLabel(agents.data, asAgentId(owner))}</div>
+          <div className="text-sm text-muted">归属：{owner === null ? '平台' : agentLabel(agents.data, owner)}</div>
           <SkillFields value={doc.draft} set={(patch) => doc.setDraft((prev) => ({ ...prev, ...patch }))} />
           {doc.stale && <StaleDraft what="这个 skill" onDiscard={doc.discard} />}
           <ErrorAlert error={action.error} />

@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { Card } from '@heroui/react'
 import { api, type Usage } from '../api'
-import { EmptyHint, Loading, Page, Segmented, agentLabel, useAgents, useLoad } from '../ui'
+import { EmptyHint, Loading, Page, Segmented, useAgents } from '../ui'
+import { agentLabel } from '../agentGroups'
+import { useLoad } from '../load'
 import { cacheHitPercent, formatTokens as tokens, windowOf } from '../usage'
 
 const WINDOWS = {
@@ -104,7 +106,7 @@ function Daily({ days }: { days: Usage[] }) {
 export default function UsagePage() {
   const [window_, setWindow] = useState<WindowKey>('7')
   const agents = useAgents()
-  const usage = useLoad(async () => {
+  const usage = useLoad('usage', async () => {
     const [since, until] = windowOf(WINDOWS[window_].days)
     const [total, byAgent, byModel, byDay] = await Promise.all([
       api.usage(since, until, []),

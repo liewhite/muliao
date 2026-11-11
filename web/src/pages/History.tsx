@@ -1,9 +1,9 @@
 import { useState } from 'react'
-import { useRefetch } from '../events'
 import { Button, Card, Chip } from '@heroui/react'
 import { Search } from 'lucide-react'
 import { api, type AgentId, type HistoryEntry } from '../api'
-import { EmptyHint, Loading, TextInput, useLoad } from '../ui'
+import { EmptyHint, Loading, TextInput } from '../ui'
+import { useLoad } from '../load'
 
 const IMPORTANCE: Record<number, string> = { 2: '重要', 3: '很重要' }
 
@@ -18,8 +18,7 @@ function byDay(entries: HistoryEntry[]): [string, HistoryEntry[]][] {
 export function HistoryList({ agent }: { agent: AgentId }) {
   const [input, setInput] = useState('')
   const [query, setQuery] = useState('')
-  const history = useLoad(() => api.agentHistory(agent, query || undefined), [agent, query])
-  useRefetch('history', history.reload)
+  const history = useLoad('history', () => api.agentHistory(agent, query || undefined), [agent, query])
 
   return (
     <div className="flex flex-col gap-3">

@@ -8,7 +8,9 @@ import { Link } from 'react-router-dom'
 import { api, asAgentId, sitePageRoute, type AgentId, type SitePage } from '../api'
 import { useReturnState, useRouteParam } from '../nav'
 import { groupPagesByAgent } from '../pageGroups'
-import { CardGrid, EmptyHint, ErrorAlert, GroupSection, Loading, Page, agentLabel, relativeTime, useAgents, useLoad } from '../ui'
+import { CardGrid, EmptyHint, ErrorAlert, GroupSection, Loading, Page, relativeTime, useAgents } from '../ui'
+import { agentLabel } from '../agentGroups'
+import { useLoad } from '../load'
 
 // 与服务端页面响应的 CSP sandbox（src/muliao/api/sites.py _PAGE_HEADERS）一致：浏览器取交集，改就两处一起改
 const SANDBOX = 'allow-scripts allow-forms allow-popups allow-modals allow-downloads'
@@ -30,7 +32,7 @@ function PageCard({ page }: { page: SitePage }) {
 /** 页面列表；给了 agent 只列它的（agent 详情页），否则按 agent 分组列全部。都按最近更新排 */
 export function SitePageList({ agent }: { agent?: AgentId }) {
   const agents = useAgents()
-  const pages = useLoad(() => api.pages(), [])
+  const pages = useLoad(null, () => api.pages(), [])
   return (
     <Loading state={pages}>
       {(all) => {
@@ -73,7 +75,7 @@ export function SitePageView() {
   const agent = asAgentId(useRouteParam('agent'))
   const name = useRouteParam('name')
   const agents = useAgents()
-  const pages = useLoad(() => api.pages(), [])
+  const pages = useLoad(null, () => api.pages(), [])
   // 刷新时递增：iframe 换 key 重新加载
   const [version, setVersion] = useState(0)
   const page = pages.data?.find((p) => p.agent_id === agent && p.name === name)

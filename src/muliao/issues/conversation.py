@@ -1,5 +1,5 @@
 """issue 会话的身份：每个 (issue, agent) 唯一的一个会话（#43），不存会话 id，由会话领域按发送方（Origin.ISSUE，origin_ref
-为 issue 号）与 agent 定位（sessions.api.SessionKey）。后端只在这里拼、解这个身份（前端 web/src/issues.ts 的 issueIdOf 另解一份 origin_ref）。"""
+为 issue 号）与 agent 定位（sessions.api.SessionKey）。只在这里拼、解这个身份（会话接口经 issue_of 把它给成结构化的 issue_id）。"""
 
 from collections.abc import Collection
 
@@ -22,7 +22,12 @@ def issue_of(session_id: str, origin_ref: str | None) -> int:
     """issue 会话（origin 是 Origin.ISSUE）的 issue 号：缺了是存下的数据坏了，不当成别的来源静默跳过。"""
     if origin_ref is None:
         raise CorruptState(f"issue session {session_id} has no issue number (origin_ref)")
-    return int(origin_ref)
+    try:
+        return int(origin_ref)
+    except ValueError:
+        raise CorruptState(
+            f"issue session {session_id} has a malformed issue number (origin_ref {origin_ref!r})"
+        ) from None
 
 
 def mail(issue_id: int, agent_id: str, title: str, content: str) -> SenderMail:

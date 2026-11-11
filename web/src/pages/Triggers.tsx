@@ -6,7 +6,6 @@ import { useReturnState } from '../nav'
 import {
   api,
   asAgentId,
-  type Agent,
   type Precheck,
   type Schemas,
   type Trigger,
@@ -15,10 +14,9 @@ import {
   type TriggerKindName,
   sessionRoute,
 } from '../api'
-import { selectableAgents } from '../agentGroups'
+import { selectableAgents, agentLabel } from '../agentGroups'
 import { groupTriggersByAgent } from '../triggerGroups'
-import { useRefetch } from '../events'
-import { changedFields } from '../drafts'
+import { useFieldDraft } from '../drafts'
 import { inAnHour, wallClock } from '../wallClock'
 import {
   ActionButton,
@@ -34,15 +32,14 @@ import {
   TextInput,
   ToggleSwitch,
   CardGrid,
-  agentLabel,
   copyText,
-  errorMessage,
   formatTime,
   useAction,
+  useAgentName,
   useAgents,
   useConfirm,
-  useLoad,
 } from '../ui'
+import { errorMessage, refreshShown, useLoad } from '../load'
 
 /** 某种方式的触发器：收窄后 config 与 status 都是这种方式的类型 */
 type TriggerOf<K extends TriggerKindName> = Extract<Trigger, { kind: K }>
@@ -263,7 +260,7 @@ function PrecheckEditor({ precheck, onChange }: { precheck: Precheck | null; onC
 
 function RouteInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   // 地址格式的说明只在后端一份（与给 agent 的工具说明相同，是英文）
-  const help = useLoad(() => api.routeHelp(), [])
+  const help = useLoad(null, () => api.routeHelp(), [])
   return (
     <TextInput
       label="投递目标"
@@ -290,7 +287,7 @@ function PrecheckSummary({ trigger }: { trigger: Trigger }) {
 }
 
 /** webhook 的 token 只在生成后显示这一次 */
-function WebhookToken({ trigger, onChange }: { trigger: TriggerOf<'webhook'>; onChange: () => void }) {
+function WebhookToken({ trigger }: { trigger: TriggerOf<'webhook'> }) {
   const confirm = useConfirm()
   const action = useAction()
   const [token, setToken] = useState<string | null>(null)
@@ -308,7 +305,6 @@ function WebhookToken({ trigger, onChange }: { trigger: TriggerOf<'webhook'>; on
     }
     await action.run(async () => {
       setToken((await api.generateTriggerToken(trigger.id)).token)
-      onChange()
     })
   }
 
@@ -406,10 +402,7 @@ function TriggerSessions({ trigger }: { trigger: Trigger }) {
 
 function SessionList({ triggerId }: { triggerId: number }) {
   const from = useReturnState()
-  const sessions = useLoad(
-    () => api.sessions({ origin: ['trigger'], origin_ref: String(triggerId), limit: 50 }),
-    [triggerId],
-  )
+  const sessions = useLoad('sessions', () => api.sessions({ trigger_id: triggerId, limit: 50 }), [triggerId])
   return (
     <Loading state={sessions}>
       {(list) =>
@@ -433,13 +426,13 @@ function SessionList({ triggerId }: { triggerId: number }) {
 }
 
 /** 启用开关：卡片和详情里共用；失败用 toast 提示（卡片上没有放错误的位置） */
-function EnableSwitch({ trigger, onChange }: { trigger: Trigger; onChange: () => void }) {
+function EnableSwitch({ trigger }: { trigger: Trigger }) {
   const [busy, setBusy] = useState(false)
   async function toggle(enabled: boolean) {
     setBusy(true)
     try {
       await api.updateTrigger(trigger.id, { enabled })
-      onChange()
+      await refreshShown()
     } catch (e) {
       toast.danger(`${enabled ? '启用' : '停用'}「${trigger.name}」失败：${errorMessage(e)}`)
     } finally {
@@ -515,18 +508,17 @@ function TriggerCard({
   trigger,
   agentName,
   onOpen,
-  onChange,
 }: {
   trigger: Trigger
   /** 不按 agent 分组的列表（已结束）在卡片上标出 agent；分组里组头已经写了 */
   agentName?: string
   onOpen: () => void
-  /** 已结束的触发器不能启停，不传 */
-  onChange?: () => void
 }) {
   const warning = triggerWarning(trigger)
+  // 已结束的触发器不能启停
+  const finished = trigger.finished_at !== null
   return (
-    <Card variant={onChange ? 'default' : 'secondary'} className="relative gap-2 transition-shadow hover:shadow-md">
+    <Card variant={finished ? 'secondary' : 'default'} className="relative gap-2 transition-shadow hover:shadow-md">
       <button
         type="button"
         aria-label={`查看触发器「${trigger.name}」的详情`}
@@ -552,9 +544,9 @@ function TriggerCard({
             )}
           </div>
         </div>
-        {onChange && (
+        {!finished && (
           <div className="pointer-events-auto relative z-10">
-            <EnableSwitch trigger={trigger} onChange={onChange} />
+            <EnableSwitch trigger={trigger} />
           </div>
         )}
       </div>
@@ -608,46 +600,28 @@ function DetailModal({
   )
 }
 
-function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: Agent[] | undefined; onChange: () => void }) {
+function TriggerItem({ trigger }: { trigger: Trigger }) {
   const from = useReturnState()
-  const confirm = useConfirm()
+  const agentName = useAgentName(trigger.agent_id)
   const [editing, setEditing] = useState(false)
-  // 进入编辑时的值：编辑期间列表随 changed 重新拉取（下次触发时间、agent 改了它），编辑器以它为起点、只提交相对它改过的
-  const [opened, setOpened] = useState(trigger)
-  const [prompt, setPrompt] = useState(trigger.prompt)
-  const [draft, setDraft] = useState<KindConfig | null>(trigger)
-  const [precheck, setPrecheck] = useState<Precheck | null>(trigger.precheck)
-  const [route, setRoute] = useState(trigger.route)
-  const action = useAction()
-
-  // 每次进入编辑都从当前的值开始：取消过的草稿不会在下一次保存时被提交
-  function startEditing() {
-    setOpened(trigger)
-    setPrompt(trigger.prompt)
-    setDraft(trigger)
-    setPrecheck(trigger.precheck)
-    setRoute(trigger.route)
-    setEditing(true)
-  }
-
-  const save = () =>
-    action.run(async () => {
-      if (draft === null) throw new Error('配置不合法')
-      // 只提交改过的：没动的字段别人可能改过；前置检查改了还会重置 changed 模式的基线
-      const patch = changedFields(
-        { prompt: opened.prompt, config: opened.config, precheck: opened.precheck, route: opened.route },
-        { prompt, config: draft.config, precheck, route: route.trim() || 'new' },
-      )
-      if (Object.keys(patch).length > 0) await api.updateTrigger(trigger.id, patch)
-      setEditing(false)
-      onChange()
-    })
-
-  async function remove() {
-    const ok = await confirm({ title: `删除触发器「${trigger.name}」？`, confirmLabel: '删除', danger: true })
-    if (ok) await action.run(() => api.deleteTrigger(trigger.id).then(onChange))
-  }
-
+  // 详情正文开头的几行，查看与编辑时都显示
+  const facts = (
+    <>
+      <div className="text-xs text-muted">
+        {trigger.last_fired_at ? <>上次触发 {formatTime(trigger.last_fired_at)}</> : '还没有触发过'}
+        {trigger.last_session_id && (
+          <>
+            {' · '}
+            <Link className="text-accent" to={sessionRoute(trigger.last_session_id)} state={from}>
+              上次会话
+            </Link>
+          </>
+        )}
+      </div>
+      {trigger.disabled_reason && <ErrorAlert title="触发失败，已自动停用" error={trigger.disabled_reason} />}
+      <TriggerFaults trigger={trigger} />
+    </>
+  )
   return (
     <>
       <Modal.Header className="flex flex-row items-start gap-3 pr-8">
@@ -658,96 +632,123 @@ function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: 
               {KIND_LABELS[trigger.kind].label}
             </Chip>
             <Chip size="sm" color="accent" variant="soft">
-              {agentLabel(agents, trigger.agent_id)}
+              {agentName}
             </Chip>
             <KindStatus trigger={trigger} />
           </div>
         </div>
-        <EnableSwitch trigger={trigger} onChange={onChange} />
+        <EnableSwitch trigger={trigger} />
       </Modal.Header>
-      <Modal.Body className="flex flex-col gap-3">
-        <div className="text-xs text-muted">
-          {trigger.last_fired_at ? <>上次触发 {formatTime(trigger.last_fired_at)}</> : '还没有触发过'}
-          {trigger.last_session_id && (
-            <>
-              {' · '}
-              <Link className="text-accent" to={sessionRoute(trigger.last_session_id)} state={from}>
-                上次会话
-              </Link>
-            </>
-          )}
-        </div>
-        {trigger.disabled_reason && <ErrorAlert title="触发失败，已自动停用" error={trigger.disabled_reason} />}
-        <TriggerFaults trigger={trigger} />
-        {editing ? (
-          <>
-            <ConfigEditor value={opened} onChange={setDraft} />
-            <PrecheckEditor precheck={opened.precheck} onChange={setPrecheck} />
-            <RouteInput value={route} onChange={setRoute} />
-            <TextAreaInput label="处理说明" value={prompt} onChange={setPrompt} rows={5} />
-          </>
-        ) : (
-          <>
-            <PrecheckSummary trigger={trigger} />
-            <div className="text-xs text-muted">
-              投递到：<code className="font-mono">{trigger.route}</code>
-            </div>
-            <p className="whitespace-pre-wrap text-sm">{trigger.prompt}</p>
-            <TriggerSessions trigger={trigger} />
-          </>
-        )}
-        <ErrorAlert error={action.error} />
-      </Modal.Body>
-      <Modal.Footer className="flex flex-wrap justify-start gap-2">
-        {editing ? (
-          <>
-            <ActionButton
-              size="sm"
-              isDisabled={draft === null || (precheck !== null && !precheck.command.trim())}
-              isPending={action.busy}
-              onPress={() => void save()}
-            >
-              保存
-            </ActionButton>
-            <Button size="sm" variant="tertiary" onPress={() => setEditing(false)}>
-              取消
-            </Button>
-          </>
-        ) : (
-          <>
-            <Button size="sm" variant="secondary" onPress={startEditing}>
-              <Pencil className="size-4" />
-              编辑
-            </Button>
-            <Button
-              size="sm"
-              variant="secondary"
-              isDisabled={action.busy || !trigger.enabled}
-              onPress={() =>
-                void action.run(async () => {
-                  const { fired } = await api.runTrigger(trigger.id)
-                  toast.success(fired ? '已触发' : '前置检查没有发现要处理的事，未调用 agent')
-                  onChange()
-                })
-              }
-            >
-              <Play className="size-4" />
-              立即运行
-            </Button>
-            {trigger.kind === 'webhook' && <WebhookToken trigger={trigger} onChange={onChange} />}
-            <Button size="sm" variant="danger-soft" isDisabled={action.busy} onPress={() => void remove()}>
-              <Trash2 className="size-4" />
-              删除
-            </Button>
-          </>
-        )}
-      </Modal.Footer>
+      {/* 编辑器只在编辑时挂载：每次进入编辑都从当前的值开始，取消过的草稿不会在下一次保存时被提交 */}
+      {editing ? (
+        <TriggerEditor trigger={trigger} facts={facts} onDone={() => setEditing(false)} />
+      ) : (
+        <TriggerShown trigger={trigger} facts={facts} onEdit={() => setEditing(true)} />
+      )}
       <Modal.CloseTrigger />
     </>
   )
 }
 
-function TriggerForm({ kinds, agents, onCreated }: { kinds: TriggerKind[]; agents: Agent[] | undefined; onCreated: () => void }) {
+/** 字段草稿（drafts.useFieldDraft）：只提交改过的，没动的字段别人可能改过；前置检查改了还会重置 changed 模式的基线 */
+function TriggerEditor({ trigger, facts, onDone }: { trigger: Trigger; facts: ReactNode; onDone: () => void }) {
+  // 配置与前置检查的编辑器自己保存编辑中的内容（以打开时的值为初始值）；配置不合法时为 null
+  const form = useFieldDraft<{ prompt: string; config: KindConfig['config'] | null; precheck: Precheck | null; route: string }>({
+    prompt: trigger.prompt,
+    config: trigger.config,
+    precheck: trigger.precheck,
+    route: trigger.route,
+  })
+  const [opened] = useState(trigger)
+  const action = useAction()
+  const { draft } = form
+  const save = () =>
+    action.run(async () => {
+      const { config, route, ...rest } = form.changes
+      if (config === null) throw new Error('配置不合法')
+      const patch = { ...rest, ...(config && { config }), ...(route !== undefined && { route: route.trim() }) }
+      if (Object.keys(patch).length > 0) await api.updateTrigger(trigger.id, patch)
+      onDone()
+    })
+  return (
+    <>
+      <Modal.Body className="flex flex-col gap-3">
+        {facts}
+        <ConfigEditor value={opened} onChange={(c) => form.set({ config: c?.config ?? null })} />
+        <PrecheckEditor precheck={opened.precheck} onChange={(precheck) => form.set({ precheck })} />
+        <RouteInput value={draft.route} onChange={(route) => form.set({ route })} />
+        <TextAreaInput label="处理说明" value={draft.prompt} onChange={(prompt) => form.set({ prompt })} rows={5} />
+        <ErrorAlert error={action.error} />
+      </Modal.Body>
+      <Modal.Footer className="flex flex-wrap justify-start gap-2">
+        <ActionButton
+          size="sm"
+          // 投递目标必填（回到默认就填说明里的默认地址）；新建时留空才是用默认
+          isDisabled={draft.config === null || !draft.route.trim() || (draft.precheck !== null && !draft.precheck.command.trim())}
+          isPending={action.busy}
+          onPress={() => void save()}
+        >
+          保存
+        </ActionButton>
+        <Button size="sm" variant="tertiary" onPress={onDone}>
+          取消
+        </Button>
+      </Modal.Footer>
+    </>
+  )
+}
+
+function TriggerShown({ trigger, facts, onEdit }: { trigger: Trigger; facts: ReactNode; onEdit: () => void }) {
+  const confirm = useConfirm()
+  const action = useAction()
+
+  async function remove() {
+    const ok = await confirm({ title: `删除触发器「${trigger.name}」？`, confirmLabel: '删除', danger: true })
+    if (ok) await action.run(() => api.deleteTrigger(trigger.id))
+  }
+
+  return (
+    <>
+      <Modal.Body className="flex flex-col gap-3">
+        {facts}
+        <PrecheckSummary trigger={trigger} />
+        <div className="text-xs text-muted">
+          投递到：<code className="font-mono">{trigger.route}</code>
+        </div>
+        <p className="whitespace-pre-wrap text-sm">{trigger.prompt}</p>
+        <TriggerSessions trigger={trigger} />
+        <ErrorAlert error={action.error} />
+      </Modal.Body>
+      <Modal.Footer className="flex flex-wrap justify-start gap-2">
+        <Button size="sm" variant="secondary" onPress={onEdit}>
+          <Pencil className="size-4" />
+          编辑
+        </Button>
+        <Button
+          size="sm"
+          variant="secondary"
+          isDisabled={action.busy || !trigger.enabled}
+          onPress={() =>
+            void action.run(async () => {
+              const { fired } = await api.runTrigger(trigger.id)
+              toast.success(fired ? '已触发' : '前置检查没有发现要处理的事，未调用 agent')
+            })
+          }
+        >
+          <Play className="size-4" />
+          立即运行
+        </Button>
+        {trigger.kind === 'webhook' && <WebhookToken trigger={trigger} />}
+        <Button size="sm" variant="danger-soft" isDisabled={action.busy} onPress={() => void remove()}>
+          <Trash2 className="size-4" />
+          删除
+        </Button>
+      </Modal.Footer>
+    </>
+  )
+}
+
+function TriggerForm({ kinds }: { kinds: TriggerKind[] }) {
   // 建好一条就换一份新的表单：各输入（含配置、前置检查自己的状态）都回到初始值，不带到下一条
   const [created, setCreated] = useState(0)
   return (
@@ -755,17 +756,15 @@ function TriggerForm({ kinds, agents, onCreated }: { kinds: TriggerKind[]; agent
       <TriggerFields
         key={created}
         kinds={kinds}
-        agents={agents}
-        onCreated={() => {
-          setCreated((n) => n + 1)
-          onCreated()
-        }}
+        onCreated={() => setCreated((n) => n + 1)}
       />
     </CollapsibleForm>
   )
 }
 
-function TriggerFields({ kinds, agents, onCreated }: { kinds: TriggerKind[]; agents: Agent[] | undefined; onCreated: () => void }) {
+/** onCreated：建好了（换一份空表单），列表随 changed 更新 */
+function TriggerFields({ kinds, onCreated }: { kinds: TriggerKind[]; onCreated: () => void }) {
+  const agents = useAgents().data
   // 选中方式时的初始配置，也就决定了当前的方式；编辑中的配置在 config 里
   const [initial, setInitial] = useState<KindConfig | null>(kinds[0] ? emptyConfig(kinds[0].name) : null)
   const kind = initial?.kind ?? null
@@ -845,14 +844,15 @@ function TriggerFields({ kinds, agents, onCreated }: { kinds: TriggerKind[]; age
 }
 
 /** 已结束的触发器（跑完的一次性触发器）的详情：只能看结果与删除，不能再改、启用或运行 */
-function FinishedTrigger({ trigger, agents, onChange }: { trigger: Trigger; agents: Agent[] | undefined; onChange: () => void }) {
+function FinishedTrigger({ trigger }: { trigger: Trigger }) {
   const from = useReturnState()
+  const agentName = useAgentName(trigger.agent_id)
   const confirm = useConfirm()
   const action = useAction()
 
   async function remove() {
     const ok = await confirm({ title: `删除「${trigger.name}」的记录？`, body: '它发起的会话不会被删除。', confirmLabel: '删除', danger: true })
-    if (ok) await action.run(() => api.deleteTrigger(trigger.id).then(onChange))
+    if (ok) await action.run(() => api.deleteTrigger(trigger.id))
   }
 
   return (
@@ -864,7 +864,7 @@ function FinishedTrigger({ trigger, agents, onChange }: { trigger: Trigger; agen
             {KIND_LABELS[trigger.kind].label}
           </Chip>
           <Chip size="sm" color="accent" variant="soft">
-            {agentLabel(agents, trigger.agent_id)}
+            {agentName}
           </Chip>
           <KindStatus trigger={trigger} />
           {trigger.finished_at && <span>· 完成 {formatTime(trigger.finished_at)}</span>}
@@ -897,9 +897,9 @@ function FinishedTrigger({ trigger, agents, onChange }: { trigger: Trigger; agen
   )
 }
 
-function FinishedTriggers({ agents }: { agents: Agent[] | undefined }) {
-  const finished = useLoad(() => api.triggers(true), [])
-  useRefetch('triggers', finished.reload)
+function FinishedTriggers() {
+  const finished = useLoad('triggers', () => api.triggers(true), [])
+  const agents = useAgents().data
   const [openId, setOpenId] = useState<number | null>(null)
   return (
     <Loading state={finished}>
@@ -914,7 +914,7 @@ function FinishedTriggers({ agents }: { agents: Agent[] | undefined }) {
               ))}
             </CardGrid>
             <DetailModal trigger={open} onClose={() => setOpenId(null)}>
-              {(t) => <FinishedTrigger key={t.id} trigger={t} agents={agents} onChange={() => void finished.reload()} />}
+              {(t) => <FinishedTrigger key={t.id} trigger={t} />}
             </DetailModal>
           </>
         )
@@ -925,19 +925,17 @@ function FinishedTriggers({ agents }: { agents: Agent[] | undefined }) {
 
 /** 自动发起会话的入口：定时、webhook……方式的差异只在各自的配置与操作。按 agent 分组的卡片网格，点卡片看详情 */
 export default function Triggers() {
-  const triggers = useLoad(() => api.triggers(), [])
-  useRefetch('triggers', triggers.reload)
-  const kinds = useLoad(() => api.triggerKinds(), [])
+  const triggers = useLoad('triggers', () => api.triggers(), [])
+  const kinds = useLoad(null, () => api.triggerKinds(), [])
   const agents = useAgents()
   // 详情跟着列表走：重新加载后显示最新内容，删掉后自动关闭
   const [openId, setOpenId] = useState<number | null>(null)
   // 展开时才取已结束的列表，顺便每次展开都是最新的
   const [showFinished, setShowFinished] = useState(false)
-  const reload = () => void triggers.reload()
   return (
     <Page title="触发器" wide>
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-4 px-4 py-3">
-        <Loading state={kinds}>{(list) => <TriggerForm kinds={list} agents={agents.data} onCreated={reload} />}</Loading>
+        <Loading state={kinds}>{(list) => <TriggerForm kinds={list} />}</Loading>
         <Loading state={triggers}>
           {(list) => {
             if (list.length === 0) return <EmptyHint>没有触发器</EmptyHint>
@@ -948,20 +946,13 @@ export default function Triggers() {
                   <GroupSection key={g.agentId} name={agentLabel(agents.data, g.agentId)} count={g.triggers.length}>
                     <CardGrid>
                       {g.triggers.map((t) => (
-                        <TriggerCard key={t.id} trigger={t} onOpen={() => setOpenId(t.id)} onChange={reload} />
+                        <TriggerCard key={t.id} trigger={t} onOpen={() => setOpenId(t.id)} />
                       ))}
                     </CardGrid>
                   </GroupSection>
                 ))}
                 <DetailModal trigger={open} onClose={() => setOpenId(null)}>
-                  {(t) => (
-                    <TriggerItem
-                      key={t.id}
-                      trigger={t}
-                      agents={agents.data}
-                      onChange={reload}
-                    />
-                  )}
+                  {(t) => <TriggerItem key={t.id} trigger={t} />}
                 </DetailModal>
               </>
             )
@@ -978,7 +969,7 @@ export default function Triggers() {
             </Disclosure.Heading>
             <Disclosure.Content>
               <Disclosure.Body className="flex flex-col gap-3 pt-4">
-                {showFinished && <FinishedTriggers agents={agents.data} />}
+                {showFinished && <FinishedTriggers />}
               </Disclosure.Body>
             </Disclosure.Content>
           </Disclosure>

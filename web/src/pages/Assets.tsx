@@ -1,5 +1,4 @@
 import { Card, Tabs, type Key } from '@heroui/react'
-import { useRefetch } from '../events'
 import { useSearchParams } from 'react-router-dom'
 import { api, asAgentId, type CatalogAsset, type AssetKind, type AssetOf } from '../api'
 import { KIND_LABEL, KINDS, filterAssets, isKind, type OwnerFilter } from '../rules'
@@ -9,7 +8,8 @@ import { MemoryTab } from './Memory'
 import { ToolLine } from './Permissions'
 import { SecretTab } from './Vault'
 import { SkillTab } from './Skills'
-import { EmptyHint, Loading, Page, SelectInput, useAgents, useLoad } from '../ui'
+import { EmptyHint, Loading, Page, SelectInput, useAgents } from '../ui'
+import { useLoad } from '../load'
 
 /** 内置工具：归平台、代码里定义，不能改；只看它被哪些角色收录 */
 function ToolTab({ assets }: { assets: AssetOf<'tool'>[] }) {
@@ -29,28 +29,18 @@ function ToolTab({ assets }: { assets: AssetOf<'tool'>[] }) {
   )
 }
 
-function KindTab({
-  kind,
-  assets,
-  owner,
-  onChange,
-}: {
-  kind: AssetKind
-  assets: CatalogAsset[]
-  owner: OwnerFilter
-  onChange: () => void
-}) {
+function KindTab({ kind, assets, owner }: { kind: AssetKind; assets: CatalogAsset[]; owner: OwnerFilter }) {
   switch (kind) {
     case 'tool':
       return <ToolTab assets={filterAssets(assets, 'tool', owner)} />
     case 'skill':
-      return <SkillTab assets={filterAssets(assets, 'skill', owner)} onChange={onChange} />
+      return <SkillTab assets={filterAssets(assets, 'skill', owner)} />
     case 'mcp':
-      return <McpTab assets={filterAssets(assets, 'mcp', owner)} onChange={onChange} />
+      return <McpTab assets={filterAssets(assets, 'mcp', owner)} />
     case 'secret':
-      return <SecretTab assets={filterAssets(assets, 'secret', owner)} onChange={onChange} />
+      return <SecretTab assets={filterAssets(assets, 'secret', owner)} />
     case 'memory':
-      return <MemoryTab assets={filterAssets(assets, 'memory', owner)} onChange={onChange} />
+      return <MemoryTab assets={filterAssets(assets, 'memory', owner)} />
   }
 }
 
@@ -68,8 +58,7 @@ export default function Assets() {
   const kindParam = params.get('kind')
   const kind: AssetKind = isKind(kindParam) ? kindParam : 'skill'
   const owner = ownerFilterOf(params.get('owner'))
-  const assets = useLoad(() => api.assets(), [])
-  useRefetch('agents', assets.reload)
+  const assets = useLoad('agents', () => api.assets(), [])
   const agents = useAgents()
   const set = (patch: Record<string, string>) => setParams({ kind, owner, ...patch }, { replace: true })
 
@@ -107,7 +96,7 @@ export default function Assets() {
         {KINDS.map((k) => (
           <Tabs.Panel key={k} id={k} className="pt-3">
             <Loading state={assets}>
-              {(all) => <KindTab kind={k} assets={all} owner={owner} onChange={() => void assets.reload()} />}
+              {(all) => <KindTab kind={k} assets={all} owner={owner} />}
             </Loading>
           </Tabs.Panel>
         ))}

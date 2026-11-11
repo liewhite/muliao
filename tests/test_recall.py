@@ -70,7 +70,7 @@ async def test_overview_lists_sessions_what_the_user_typed_failures_and_history(
 
     sessions, typed, on_issues, failed, history = mine.split("\n## ")[1:6]
     assert sessions.startswith("sessions (3, issue 1, trigger 1, user 1)")
-    assert f"{nightly.id[:8]} [trigger] 'nightly job': idle," in sessions
+    assert f"{nightly.id[:8]} [trigger #1] 'nightly job': idle," in sessions
     assert "'explode now': idle, 1 msgs" in sessions and "1 runs, 1 FAILED" in sessions
     assert "别人的事" not in mine
     # 用户说的话只有用户在界面上发的；触发器的来信不算
@@ -103,7 +103,7 @@ async def test_session_read_labels_who_said_what_and_filters(container, make_age
         ],
     )
 
-    assert f"# session {nightly.id} [trigger] 'nightly job', agent worker: 4 entries" in full
+    assert f"# session {nightly.id} [trigger #1] 'nightly job', agent worker: 4 entries" in full
     assert "] TRIGGER\n  nightly job" in full
     assert "] USER\n  不对，要先备份" in full
     assert full.count("] ASSISTANT\n  ok") == 2

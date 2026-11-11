@@ -1,7 +1,17 @@
 import { useState } from 'react'
 import { useFieldDraft } from '../drafts'
-import { useRefetch } from '../events'
-import { Button, Card, Chip, CloseButton, ComboBox, Disclosure, Input, Label, ListBox, Description } from '@heroui/react'
+import {
+  Button,
+  Card,
+  Chip,
+  CloseButton,
+  ComboBox,
+  Disclosure,
+  Input,
+  Label,
+  ListBox,
+  Description,
+} from '@heroui/react'
 import { Pencil, Trash2 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { agentRoute, api, type AgentId, type Reach, type Role, type RoleInput, type ToolPermission } from '../api'
@@ -15,12 +25,12 @@ import {
   Page,
   TextInput,
   ToggleSwitch,
-  agentLabel,
   useAction,
   useAgents,
   useConfirm,
-  useLoad,
 } from '../ui'
+import { agentLabel } from '../agentGroups'
+import { useLoad } from '../load'
 
 const ACCESS: Record<ToolPermission['access'], { label: string; color: 'default' | 'warning' }> = {
   read: { label: '读', color: 'default' },
@@ -165,8 +175,7 @@ export function RulesInput({
 
 /** 规则补全的候选：全部资产（含工具）及每种的 `use:kind:*` */
 function useCandidates(): string[] {
-  const assets = useLoad(() => api.assets(), [])
-  useRefetch('agents', assets.reload)
+  const assets = useLoad('agents', () => api.assets(), [])
   return ruleCandidates(assets.data ?? [])
 }
 
@@ -182,11 +191,10 @@ export function PermissionsInput({
   value: PermissionValue
   onChange: (v: PermissionValue) => void
 }) {
-  const roles = useLoad(() => api.roles(), [])
-  useRefetch('agents', roles.reload)
+  const roles = useLoad('agents', () => api.roles(), [])
   const candidates = useCandidates()
   const key = JSON.stringify(value)
-  const reach = useLoad(() => api.previewAgent({ agent_id: agentId, ...value }), [agentId, key])
+  const reach = useLoad('agents', () => api.previewAgent({ agent_id: agentId, ...value }), [agentId, key])
   return (
     <div className="flex flex-col gap-3">
       <div className="text-sm font-medium">角色与规则</div>
@@ -259,6 +267,7 @@ function RoleFields({
 }) {
   const candidates = useCandidates()
   const reach = useLoad(
+    'agents',
     () => api.previewRole({ name, allow: value.allow, deny: value.deny }),
     [name, JSON.stringify([value.allow, value.deny])],
   )
@@ -284,7 +293,8 @@ function RoleFields({
   )
 }
 
-function RoleCreateForm({ onSaved }: { onSaved: () => void }) {
+/** onCreated：建好了（换一份空表单），列表随 changed 更新 */
+function RoleCreateForm({ onCreated }: { onCreated: () => void }) {
   const [name, setName] = useState('')
   const [value, setValue] = useState<RoleInput>({ description: '', allow: [], deny: [] })
   const action = useAction()
@@ -295,7 +305,7 @@ function RoleCreateForm({ onSaved }: { onSaved: () => void }) {
       <ErrorAlert error={action.error} />
       <ActionButton
         isPending={action.busy}
-        onPress={() => void action.run(() => api.createRole(name, value)).then((ok) => ok && onSaved())}
+        onPress={() => void action.run(() => api.createRole(name, value)).then((ok) => ok && onCreated())}
       >
         保存
       </ActionButton>
@@ -304,7 +314,7 @@ function RoleCreateForm({ onSaved }: { onSaved: () => void }) {
 }
 
 /** 编辑：只提交改过的字段，编辑期间 agent 改了 access.toml 里别的字段不会被旧值盖掉；没动过的字段跟着刷新 */
-function RoleEditForm({ role, onSaved }: { role: Role; onSaved: () => void }) {
+function RoleEditForm({ role, onDone }: { role: Role; onDone: () => void }) {
   const form = useFieldDraft<RoleInput>({ description: role.description, allow: role.allow, deny: role.deny })
   const action = useAction()
   return (
@@ -314,7 +324,7 @@ function RoleEditForm({ role, onSaved }: { role: Role; onSaved: () => void }) {
       <ActionButton
         isDisabled={Object.keys(form.changes).length === 0}
         isPending={action.busy}
-        onPress={() => void action.run(() => api.updateRole(role.name, form.changes)).then((ok) => ok && onSaved())}
+        onPress={() => void action.run(() => api.updateRole(role.name, form.changes)).then((ok) => ok && onDone())}
       >
         保存
       </ActionButton>
@@ -322,7 +332,7 @@ function RoleEditForm({ role, onSaved }: { role: Role; onSaved: () => void }) {
   )
 }
 
-function RoleCard({ role, onChanged }: { role: Role; onChanged: () => void }) {
+function RoleCard({ role }: { role: Role }) {
   const [editing, setEditing] = useState(false)
   const confirm = useConfirm()
   const action = useAction()
@@ -330,7 +340,7 @@ function RoleCard({ role, onChanged }: { role: Role; onChanged: () => void }) {
 
   async function remove() {
     const ok = await confirm({ title: `删除角色「${role.name}」？`, body: '有 agent 用着它时不能删。', confirmLabel: '删除', danger: true })
-    if (ok && (await action.run(() => api.deleteRole(role.name)))) onChanged()
+    if (ok) await action.run(() => api.deleteRole(role.name))
   }
 
   return (
@@ -385,13 +395,7 @@ function RoleCard({ role, onChanged }: { role: Role; onChanged: () => void }) {
         </div>
         <ReachView reach={role.reach} />
         {editing && (
-          <RoleEditForm
-            role={role}
-            onSaved={() => {
-              setEditing(false)
-              onChanged()
-            }}
-          />
+          <RoleEditForm role={role} onDone={() => setEditing(false)} />
         )}
         <ErrorAlert error={action.error} />
       </Card.Content>
@@ -413,8 +417,7 @@ function RoleCard({ role, onChanged }: { role: Role; onChanged: () => void }) {
 
 /** 角色：内置角色（base、admin）的固定规则只读、可编辑部分可改，不能删；自建角色可增删改。每个角色列出收录的资产与分给的 agent */
 export function Roles() {
-  const roles = useLoad(() => api.roles(), [])
-  useRefetch('agents', roles.reload)
+  const roles = useLoad('agents', () => api.roles(), [])
   const [formKey, setFormKey] = useState(0)
   return (
     <Page title="角色">
@@ -425,10 +428,7 @@ export function Roles() {
       <CollapsibleForm title="新建角色">
         <RoleCreateForm
           key={formKey}
-          onSaved={() => {
-            setFormKey((k) => k + 1)
-            void roles.reload()
-          }}
+          onCreated={() => setFormKey((k) => k + 1)}
         />
       </CollapsibleForm>
       <Loading state={roles}>
@@ -438,7 +438,7 @@ export function Roles() {
           ) : (
             <div className="flex flex-col gap-2">
               {list.map((r) => (
-                <RoleCard key={r.name} role={r} onChanged={() => void roles.reload()} />
+                <RoleCard key={r.name} role={r} />
               ))}
             </div>
           )

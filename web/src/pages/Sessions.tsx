@@ -3,20 +3,11 @@ import { Card, Chip, SearchField, Spinner } from '@heroui/react'
 import { ChevronDown, ChevronRight, Hourglass } from 'lucide-react'
 import { Link, useMatch } from 'react-router-dom'
 import { api, type AgentId, type SessionListItem, sessionRoute } from '../api'
-import { agentModel } from '../agentGroups'
-import { useRefetch } from '../events'
+import { agentModel, agentLabel } from '../agentGroups'
 import { parseStringList, useStoredState } from '../storedState'
 import { FILTERS, ORIGIN_LABEL, groupByAgent, parseFilter, splitActive, type Filter } from '../sessionGroups'
-import {
-  EmptyHint,
-  Loading,
-  Page,
-  Segmented,
-  agentLabel,
-  relativeTime,
-  useAgents,
-  useLoad,
-} from '../ui'
+import { EmptyHint, Loading, Page, Segmented, relativeTime, useAgents } from '../ui'
+import { useLoad } from '../load'
 
 // 选中的分类跨刷新、跨页面记住：从会话或 issue 回来时停在原来的分类（不放 URL：宽屏分屏时右侧切会话会换掉 URL）
 const FILTER_KEY = 'muliao.sessions.filter'
@@ -63,7 +54,7 @@ function SessionCard({ s, agentName, model }: { s: SessionListItem; agentName?: 
                 </Chip>
               )}
               <Chip size="sm" variant="secondary">
-                {ORIGIN_LABEL[s.origin]}
+                {ORIGIN_LABEL[s.origin.kind]}
               </Chip>
               {s.state === 'running' && (
                 <Chip size="sm" color="accent" variant="soft">
@@ -99,6 +90,7 @@ export default function Sessions() {
     return () => clearTimeout(timer)
   }, [text])
   const sessions = useLoad(
+    'sessions',
     () =>
       api.sessions({
         origin: FILTERS[filter].origins ?? undefined,
@@ -107,7 +99,6 @@ export default function Sessions() {
       }),
     [filter, keyword],
   )
-  useRefetch('sessions', sessions.reload)
 
   return (
     <Page title="会话">

@@ -2,7 +2,8 @@ import { useState } from 'react'
 import { Alert, Button, Chip } from '@heroui/react'
 import { Link } from 'react-router-dom'
 import { agentRoute, api, asAgentId, type AgentId, type CatalogAsset } from '../api'
-import { ActionButton, ErrorAlert, SelectInput, agentLabel, useAction, useAgents } from '../ui'
+import { ActionButton, ErrorAlert, SelectInput, useAction, useAgents } from '../ui'
+import { agentLabel } from '../agentGroups'
 
 const PLATFORM = 'platform'
 
@@ -37,7 +38,7 @@ export function OwnerSelect({
   )
 }
 
-/** 把资产转给另一个 owner：内容与收录它的角色不变，记一版 */
+/** 把资产转给另一个 owner：内容与收录它的角色不变，记一版（列表随 changed 更新） */
 function TransferOwner({ asset, onDone }: { asset: Exclude<CatalogAsset, { kind: 'tool' }>; onDone: () => void }) {
   const [owner, setOwner] = useState<AgentId | null>(asset.owner)
   const action = useAction()
@@ -59,8 +60,8 @@ function TransferOwner({ asset, onDone }: { asset: Exclude<CatalogAsset, { kind:
   )
 }
 
-/** 资产归谁、被哪些角色收录；没被收录时说明谁能用。给了 onTransferred 的可以转移 owner（内置工具归平台，不能转） */
-export function AssetAccess({ asset, onTransferred }: { asset: CatalogAsset; onTransferred?: () => void }) {
+/** 资产归谁、被哪些角色收录；没被收录时说明谁能用。内置工具以外的可以转移 owner（内置工具归平台，不能转） */
+export function AssetAccess({ asset }: { asset: CatalogAsset }) {
   const agents = useAgents()
   const [transferring, setTransferring] = useState(false)
   return (
@@ -95,21 +96,13 @@ export function AssetAccess({ asset, onTransferred }: { asset: CatalogAsset; onT
           </Chip>
         )}
         {asset.shared && asset.roles.length === 0 && <span className="text-muted">经 agent 自己的 allow 分发</span>}
-        {onTransferred && asset.kind !== 'tool' && (
+        {asset.kind !== 'tool' && (
           <Button size="sm" variant="ghost" className="h-6 px-2 text-xs text-accent" onPress={() => setTransferring(!transferring)}>
             {transferring ? '取消转移' : '转移 owner'}
           </Button>
         )}
       </div>
-      {onTransferred && asset.kind !== 'tool' && transferring && (
-        <TransferOwner
-          asset={asset}
-          onDone={() => {
-            setTransferring(false)
-            onTransferred()
-          }}
-        />
-      )}
+      {asset.kind !== 'tool' && transferring && <TransferOwner asset={asset} onDone={() => setTransferring(false)} />}
     </div>
   )
 }

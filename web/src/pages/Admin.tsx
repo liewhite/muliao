@@ -5,21 +5,21 @@ import { Link, useNavigate } from 'react-router-dom'
 import { api, unauthorizedEvent, type AgentId, type TaskStatus, sessionRoute } from '../api'
 import { useReturnState } from '../nav'
 import { enablePush, pushState, unsubscribePush, type PushState } from '../push'
-import { ActionButton,
+import {
+  ActionButton,
   EmptyHint,
   ErrorAlert,
   Loading,
   Page,
   Segmented,
   TextInput,
-  agentLabel,
   formatTime,
   useAction,
   useAgents,
   useConfirm,
-  useLoad,
-  errorMessage,
 } from '../ui'
+import { agentLabel } from '../agentGroups'
+import { useLoad, errorMessage } from '../load'
 
 const STATUS_FILTERS = {
   failed: { label: '失败', status: 'failed' as TaskStatus },
@@ -39,7 +39,7 @@ const STATUS_COLOR: Record<TaskStatus, 'danger' | 'success' | 'warning' | 'accen
 export function Tasks() {
   const from = useReturnState()
   const [filter, setFilter] = useState<StatusFilter>('failed')
-  const tasks = useLoad(() => api.tasks(STATUS_FILTERS[filter].status), [filter])
+  const tasks = useLoad('tasks', () => api.tasks(STATUS_FILTERS[filter].status), [filter])
   const agents = useAgents()
   const action = useAction()
   return (
@@ -95,7 +95,7 @@ export function Tasks() {
                   )}
                   {t.status === 'failed' && (
                     <Card.Footer>
-                      <Button size="sm" variant="secondary" onPress={() => void action.run(() => api.retryTask(t.id).then(tasks.reload))}>
+                      <Button size="sm" variant="secondary" onPress={() => void action.run(() => api.retryTask(t.id))}>
                         <RotateCcw className="size-4" />
                         重试
                       </Button>
@@ -195,13 +195,13 @@ export function Settings() {
 /** skill 脚本的「始终允许」：在审批处点「始终允许」记下的，逐条可撤销（撤销后同一调用重新要批准） */
 function ScriptGrants() {
   const from = useReturnState()
-  const grants = useLoad(() => api.scriptGrants(), [])
+  const grants = useLoad('workspace', () => api.scriptGrants(), [])
   const agents = useAgents()
   const confirm = useConfirm()
   const action = useAction()
   async function revoke(id: number) {
     if (!(await confirm({ title: '撤销这条始终允许？', confirmLabel: '撤销' }))) return
-    await action.run(() => api.revokeScriptGrant(id).then(grants.reload))
+    await action.run(() => api.revokeScriptGrant(id))
   }
   return (
     <Card>

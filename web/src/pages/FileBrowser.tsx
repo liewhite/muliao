@@ -7,7 +7,8 @@ import { Button, Card } from '@heroui/react'
 import { ChevronRight, Download, File, Folder, RefreshCw } from 'lucide-react'
 import { Button as AriaButton, Tree, TreeItem, TreeItemContent, type Key } from 'react-aria-components'
 import { api, type WorkspaceEntry } from '../api'
-import { CODE_BLOCK, EmptyHint, ErrorAlert, Loading, Markdown, errorMessage, formatTime, useLoad } from '../ui'
+import { CODE_BLOCK, EmptyHint, ErrorAlert, Loading, Markdown, formatTime } from '../ui'
+import { errorMessage, useLoad } from '../load'
 import {
   MAX_HIGHLIGHT_BYTES,
   MAX_PREVIEW_BYTES,
@@ -27,7 +28,7 @@ export type DirSource = {
 }
 
 export function FileBrowser({ source, label, emptyText }: { source: DirSource; label: string; emptyText: string }) {
-  const root = useLoad(() => source.list(''), [source.id])
+  const root = useLoad(null, () => source.list(''), [source.id])
   // 展开过的子目录的内容（键是相对路径）；收起时保留，再展开不重新请求，点刷新才重新读
   const [dirs, setDirs] = useState<Record<string, WorkspaceEntry[]>>({})
   const [expanded, setExpanded] = useState<Set<Key>>(new Set())
@@ -161,6 +162,7 @@ function FilePreview({ url, path, entry }: { url: string; path: string; entry: W
   const size = entry.size ?? 0
   const kind = previewKind(entry)
   const text = useLoad(
+    null,
     async () => (kind === 'markdown' || kind === 'text' ? (await api.fileBlob(url)).text() : ''),
     [url, kind],
   )
@@ -203,7 +205,7 @@ const CODE = `${CODE_BLOCK} max-h-[70vh]!`
 
 /** 代码高亮：highlight.js 按需加载（单独一个 chunk）；认不出语言或太大时按纯文本显示。它的输出已转义，可以直接插入 */
 function Highlighted({ text, language }: { text: string; language: string | null }) {
-  const html = useLoad(async () => {
+  const html = useLoad(null, async () => {
     if (language === null || text.length > MAX_HIGHLIGHT_BYTES) return null
     const hljs = (await import('highlight.js/lib/common')).default
     if (!hljs.getLanguage(language)) return null

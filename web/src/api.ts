@@ -59,11 +59,11 @@ export type QuestionAnswer = Schemas['QuestionAnswer']
 export type AnsweredQuestion = Schemas['AnsweredQuestion']
 export type AskView = Schemas['AskView']
 
-export type MailKind = Schemas['MailKind']
 export type MailState = Schemas['MailState']
-export type Mail = Schemas['MailOut']
-/** 事件的来源：后端解析好的 thread、后台任务或其他（raw 是原文，同一来源按它归在一起） */
-export type EventSource = NonNullable<Item['source']>
+/** 信箱里的一封信：按 kind 区分的联合（用户消息、事件、回答），事件一定带来源 */
+export type Mail = Schemas['SessionDetail']['mail'][number]
+/** 条目或事件的来源：后端解析好的 thread、后台任务或其他（raw 是原文，同一来源按它归在一起） */
+export type ItemSource = NonNullable<Item['source']>
 export type SessionDetail = Omit<Schemas['SessionDetail'], 'session' | 'run' | 'threads'> & {
   session: Session
   run: Task | null
@@ -346,11 +346,11 @@ export const api = {
   importSkill: (owner: string | null, file: Blob, replace: boolean) =>
     send<Schemas['SkillImportOut']>('POST', '/api/assets/skill', { owner, replace }, { type: 'application/zip', data: file }),
 
-  /** origin_ref 是发起方在它那个 origin 里的身份：触发器的 id，用来列出某个触发器发起过的会话；q 是关键字（标题或消息含有它，不能为空串） */
+  /** trigger_id：只列这个触发器发起过的会话（不能再给 origin）；q 是关键字（标题或消息含有它，不能为空串） */
   sessions: (query: {
     agent_id?: AgentId
     origin?: Origin[]
-    origin_ref?: string
+    trigger_id?: number
     q?: string
     limit?: number
     offset?: number

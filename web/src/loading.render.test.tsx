@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { shouldRefetch, type TaskKind } from './events'
-import { Loading, type Loaded } from './ui'
+import { Loading } from './ui'
+import { type Loaded } from './load'
 
 const state = (data: string | undefined, error: string | null): Loaded<string> => ({
   data,
@@ -28,26 +28,5 @@ describe('Loading', () => {
     const out = html(state('new', null))
     expect(out).toContain('content:new')
     expect(out).not.toContain('失败')
-  })
-})
-
-describe('shouldRefetch', () => {
-  const task = (kind: TaskKind) =>
-    ({ type: 'task', task_id: 1, kind, status: 'done', session_id: 's', agent: 'a', error: null }) as const
-
-  it('refetches after connecting or a run status change, not on deliveries', () => {
-    expect(shouldRefetch({ type: 'connected' }, 'sessions')).toBe(true)
-    expect(shouldRefetch(task('run'), 'sessions')).toBe(true)
-    expect(shouldRefetch(task('deliver'), 'sessions')).toBe(false)
-  })
-
-  it('refetches when the server says the same resource changed, whoever changed it', () => {
-    expect(shouldRefetch({ type: 'changed', resource: 'sessions' }, 'sessions')).toBe(true)
-    expect(shouldRefetch({ type: 'changed', resource: 'agents' }, 'sessions')).toBe(false)
-  })
-
-  it('refetches sessions when notifications change: their unread mark comes from notifications', () => {
-    expect(shouldRefetch({ type: 'changed', resource: 'notifications' }, 'sessions')).toBe(true)
-    expect(shouldRefetch({ type: 'changed', resource: 'notifications' }, 'agents')).toBe(false)
   })
 })
