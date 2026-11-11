@@ -41,7 +41,7 @@ class Trigger(Base):
     # fire_when = changed 时最近一次成功检查的输出，用来比较；修改前置检查时清空（重新记录基线）。
     # 最大可到事件上限，默认不随行加载（列表、定时循环都不需要它），用到时显式 undefer
     precheck_output: Mapped[str | None] = mapped_column(Text, deferred=True)
-    # 被自动停用的原因（如定时触发器的数据不合法、触发被拒绝）；重新启用时清除
+    # 被自动停用的原因（如定时触发器存下的数据坏了）；重新启用时清除
     disabled_reason: Mapped[str | None] = mapped_column(Text)
     # 脚本出错（triggers.faults.TriggerFault 的列表：前置检查失败、流式命令反复退出），只在 triggers/faults.py 赋值
     faults: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)

@@ -341,7 +341,7 @@ def receive_lane_of(command: Receive) -> str:
     match mail.session:
         case SessionKey(agent_id=agent_id):
             return keyed_receive_lane(mail.sender.kind, mail.sender.ref, agent_id)
-        case NewConversation(id=session_id) | str(session_id):
+        case NewConversation(id=session_id):
             return receive_lane(session_id)
         case other:
             assert_never(other)
