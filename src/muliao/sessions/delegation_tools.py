@@ -9,7 +9,7 @@ from muliao.agents.api import AgentService
 from muliao.errors import InvalidInput, NotFound
 from muliao.platform.db import Database
 from muliao.platform.text_edit import truncate
-from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
+from muliao.platform.tooling import TOOL_MAX_RETRIES, Access, RunScope, declared
 from muliao.sessions.activity import WorkState
 from muliao.sessions.halt import Halted, StopSession
 from muliao.sessions.pending import ASK_AGENT_KIND
@@ -43,7 +43,7 @@ def delegation_toolset(
     与发起方并发，按 heartbeat_seconds 投运行中检查（sessions.delegation.ThreadChecks）。"""
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
-    @ts.tool
+    @ts.tool(metadata=declared(Access.WRITE))
     async def delegate_task(
         ctx: RunContext[RunScope],
         agent: str,
@@ -103,7 +103,7 @@ def delegation_toolset(
                 )
         return f"delegated to {target.name} in thread {validate_thread(thread)!r}"
 
-    @ts.tool(name=ASK_AGENT_KIND.name)
+    @ts.tool(name=ASK_AGENT_KIND.name, metadata=declared(Access.WRITE))
     async def ask_agent(
         ctx: RunContext[RunScope],
         agent: str,
@@ -149,7 +149,7 @@ def delegation_toolset(
         # 发问方的运行停在这次调用上，不占 worker；对方的结局作为这次调用的结果交回（sessions.pending）
         defer_call()
 
-    @ts.tool
+    @ts.tool(metadata=declared(Access.WRITE))
     async def stop_thread(ctx: RunContext[RunScope], thread: str, agent: str | None = None) -> str:
         """Stop a thread of this conversation, whether it is running or still queued: its current run stops (what it
         already did is kept) and the work queued for it is dropped. Use it when a check-in or `list_threads` shows
@@ -184,7 +184,7 @@ def delegation_toolset(
             return f"{who} was deleted meanwhile; nothing to stop"
         return f"stopped {who}"
 
-    @ts.tool
+    @ts.tool(metadata=declared(Access.READ))
     async def list_threads(ctx: RunContext[RunScope]) -> list[ThreadInfo]:
         """List the threads this conversation has opened (each is one agent + name). Returns a JSON array of \
 threads, each with `thread`, `agent`, `state`, `failure` and `answer`. Use it to look at delegated \

@@ -10,9 +10,21 @@ from pydantic_ai.models.function import AgentInfo
 from muliao.agent_runtime.api import memory_section
 from muliao.agents.api import McpTransport, RoleSpec, Rules, StoredKind, mcp_config
 from muliao.agents.kinds import as_kind
-from muliao.agents.permissions import ADMIN, BASE, FIXED_RULES, TOOLS, Action, Kind, check_patterns
+from muliao.agents.permissions import (
+    ADMIN,
+    BASE,
+    BUILTIN_ROLES,
+    Action,
+    Kind,
+    ToolSpec,
+    ToolTable,
+    check_patterns,
+    fixed_rules,
+    matches_no_tool,
+)
 from muliao.agents.service import AgentPatch, AgentSpec
 from muliao.errors import Conflict, Forbidden, InvalidInput, NotFound
+from muliao.platform.tooling import Access
 from muliao.sessions.api import Origin
 from tests.conftest import login, owned
 from tests.scripted import scripted
@@ -44,7 +56,7 @@ def test_rules_match_action_kind_and_name_and_deny_wins():
         Kind.SKILL, "relay-host"
     )
     # admin 的 write:* 覆盖每一种的写，但不等于能用
-    admin = FIXED_RULES[ADMIN]
+    admin = fixed_rules(ToolTable.of([]))[ADMIN]
     assert admin.allows(Action.WRITE, Kind.MEMORY, "global") and not admin.includes(Kind.MEMORY, "global")
     # 种类不串：skill 规则不放行同名 MCP
     assert not Rules(allow=("use:skill:*",)).includes(Kind.MCP, "x")
@@ -55,6 +67,9 @@ def test_rules_match_action_kind_and_name_and_deny_wins():
 
 
 def test_patterns_need_an_action_and_a_kind_and_tool_patterns_a_tool():
+    tools = ToolTable.of(
+        [ToolSpec("run_shell", Access.WRITE, False), ToolSpec("issue_list", Access.READ, False)]
+    )
     check_patterns(
         ["use:tool:*", "use:tool:issue_*", "use:skill:anything", "use:mcp:x", "use:secret:K_*"]
         + ["write:memory:m", "*:memory:m", "write:*", "*:tool:run_shell"]
@@ -73,20 +88,24 @@ def test_patterns_need_an_action_and_a_kind_and_tool_patterns_a_tool():
             check_patterns([bad])
     with pytest.raises(InvalidInput, match="only be used"):
         check_patterns(["write:tool:run_shell"])
-    with pytest.raises(InvalidInput, match="match no tool"):
-        check_patterns(["use:tool:isue_*"])
     with pytest.raises(InvalidInput, match="distinct"):
         check_patterns(["use:tool:issue_*", "use:tool:issue_*"])
+    # 是否匹配当前注册的工具单独判断（读树记问题、写入只查新加的）
+    assert matches_no_tool("use:tool:isue_*", tools) and not matches_no_tool("use:tool:issue_*", tools)
+    assert not matches_no_tool("use:skill:isue_*", tools)
 
 
-def test_base_has_every_tool_but_admin_ones_and_admin_has_all():
-    every = list(TOOLS)
-    assert list(FIXED_RULES) == [BASE, ADMIN]
-    assert FIXED_RULES[ADMIN].tools(every) == every
-    assert set(every) - set(FIXED_RULES[BASE].tools(every)) == _ADMIN_TOOLS
-    assert {n for n, t in TOOLS.items() if t.admin} == _ADMIN_TOOLS
+async def test_base_has_every_tool_but_admin_ones_and_admin_has_all(container):
+    # 工具表由各工具注册时的声明收集而来（agent_runtime.Toolbox.specs）
+    table = (await container.assets.snapshot()).tools
+    every = list(table.names)
+    fixed = fixed_rules(table)
+    assert tuple(fixed) == BUILTIN_ROLES == (BASE, ADMIN)
+    assert fixed[ADMIN].tools(every) == every
+    assert set(every) - set(fixed[BASE].tools(every)) == _ADMIN_TOOLS
+    assert {t.name for t in table.specs if t.admin} == _ADMIN_TOOLS
     # base 是纯 allow：admin 角色或自己的 allow 能放开管理工具，不被它压住
-    assert not FIXED_RULES[BASE].deny
+    assert not fixed[BASE].deny
 
 
 async def test_new_agents_have_base_implicitly(container):
@@ -97,7 +116,9 @@ async def test_new_agents_have_base_implicitly(container):
     with pytest.raises(InvalidInput, match="implicit"):
         await container.agents.create(AgentSpec(name="b", description="d", roles=[BASE]), actor="user")
     admin = await container.agents.create(AgentSpec(name="c", description="d", roles=[ADMIN]), actor="user")
-    assert (await container.distribution.reach(admin.id)).tool_names == list(container.distribution.tools)
+    assert (await container.distribution.reach(admin.id)).tool_names == list(
+        await container.distribution.tool_names()
+    )
 
 
 async def test_roles_are_created_assigned_updated_and_protected(container):
@@ -107,7 +128,7 @@ async def test_roles_are_created_assigned_updated_and_protected(container):
         await roles.create(RoleSpec("reviewer", "again", ["use:tool:issue_*"], []))
     with pytest.raises(Conflict):
         await roles.create(RoleSpec("admin", "shadow a built-in", ["use:tool:*"], []))
-    with pytest.raises(InvalidInput, match="match no tool"):
+    with pytest.raises(InvalidInput, match="no existing tool"):
         await roles.create(RoleSpec("typo", "d", ["use:tool:isue_*"], []))
     with pytest.raises(InvalidInput, match="no existing"):
         await roles.create(RoleSpec("typo", "d", ["use:skill:nope"], []))

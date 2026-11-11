@@ -134,7 +134,7 @@ class SessionDomain:
             toolbox,
             live,
             content,
-            Steps(db, live, content, compactor, renders),
+            Steps(db, live, content, compactor, renders, toolbox.redaction()),
             RunFinisher(queue, messaging),
             ports.runs,
             ports.halt,

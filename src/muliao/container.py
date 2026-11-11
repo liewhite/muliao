@@ -26,9 +26,9 @@ from muliao.agents.api import (
     MemoryStore,
     SkillStore,
     Thinking,
+    ToolTable,
     Vault,
 )
-from muliao.agents.permissions import available_tools
 from muliao.agents.secret_tools import vault_toolset
 from muliao.agents.service import AgentDefaults
 from muliao.agents.tools import agents_toolset
@@ -307,7 +307,7 @@ def assemble(
         web = build_web_provider(settings.web, http)
     if transcriber is None and settings.transcription is not None:
         transcriber = build_transcriber(settings.transcription, http)
-    # 「配置了哪些可选能力」只在这里判断一次，注册的工具与权限表核对都由它导出
+    # 「配置了哪些可选能力」只在这里判断一次：没配置 [web] 就不注册网页工具，工具表里也就没有它们
     web_tools = [] if web is None else [web_toolset(web, settings.runtime.tool_output_max_chars)]
     tz = ZoneInfo(settings.timezone)
     bus = EventBus()
@@ -329,25 +329,27 @@ def assemble(
     run_now = RunNow()
     messaging = Messaging(queue, run_now)
     check_model = model_checker or models.check
+    # 内置工具表：资源树、分发、资源池要用，而工具集要用它们构造，所以先建、装好工具集后 bind（agents.ToolTable）
+    tool_table = ToolTable()
     assets = AssetSource(
         db,
         settings.assets_dir,
         settings.runtime.memory_max_chars,
         check_model,
         changed=lambda: bus.publish(ChangedEvent(resource="agents")),
+        tools=tool_table,
     )
     vault = Vault(assets, settings.vault.key.get_secret_value())
     files = FileStore(db, settings.files_dir, settings.runtime.upload_max_bytes)
     skills = SkillStore(assets)
     memory = MemoryStore(assets)
-    tools = available_tools(web_configured=bool(web_tools))
     agents = AgentService(
         db,
         assets,
         settings.workspaces_dir,
         AgentDefaults(settings.llm.default_model),
     )
-    distribution = Distribution(assets, tools, agents.get_active)
+    distribution = Distribution(assets, agents.get_active)
     # agent 的命令与文件工具只能写它的可写路径（#416）：当前系统没有写沙箱时在这里拒绝启动
     home = Path.home()
     confiner = Confiner(
@@ -361,7 +363,7 @@ def assemble(
     # stdio server 的进程与 agent 的命令关在同一个写沙箱里（#499）
     mcp_connector = McpConnector(vault, confiner.of)
     mcp = McpRegistry(assets, mcp_connector.probe)
-    catalog = AssetCatalog(assets, tools)
+    catalog = AssetCatalog(assets)
     # 会话领域先于消费者构造的端口（会话忙不忙、停止会话、委派、后台任务的占用），别的领域与工具集要用它们
     ports = SessionPorts.build(db, queue, messaging, tz)
     activity = ports.activity
@@ -422,7 +424,7 @@ def assemble(
     )
     script_grants = ScriptGrants(db)
     limits = ShellLimits(settings.runtime.tool_output_max_chars)
-    # 运行可用的全部静态工具集；每个工具的权限在 agents.permissions 登记，一次运行开放哪些只按 agent 的分发规则算
+    # 运行可用的全部静态工具集；每个工具注册时自己声明读写、是否管理类等（platform.tooling.declared），一次运行开放哪些只按 agent 的分发规则算
     # （Toolbox.profile），不随运行状态变（工具列表稳定才命中缓存）：如 ask_user 在没有用户会回答的运行里照样列出，
     # 调用时被拒绝（sessions.ask_user）
     static_toolsets = [
@@ -444,7 +446,7 @@ def assemble(
         mcp=lambda: mcp_connector.toolset(mcp.index),
         rules_of=distribution.rules,
     )
-    _check_permissions(toolbox.tool_names(), web_configured=bool(web_tools))
+    tool_table.bind(toolbox.specs())
     session_domain = SessionDomain.build(
         ports,
         db=db,
@@ -528,16 +530,3 @@ def assemble(
         http=http,
         transcriber=transcriber,
     )
-
-
-def _check_permissions(registered: list[str], *, web_configured: bool) -> None:
-    """注册的工具与当前配置下的权限表（agents.permissions.available_tools）必须一一对应：没登记的工具谁也
-    拿不到，表里多出的说明工具改了名；界面与 get_agent 算最终工具用的也是这张表，一致才说得准。"""
-    expected = set(available_tools(web_configured=web_configured))
-    duplicated = sorted({n for n in registered if registered.count(n) > 1})
-    if set(registered) != expected or duplicated:
-        raise RuntimeError(
-            "registered tools do not match the permission table: "
-            f"unregistered {sorted(expected - set(registered))}, without permission {sorted(set(registered) - expected)}, "
-            f"duplicated {duplicated}"
-        )

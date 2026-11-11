@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -14,7 +13,7 @@ from muliao.agents import assets
 from muliao.agents.access import sharing_of
 from muliao.agents.kinds import Kind, StoredKind, as_kind, label
 from muliao.agents.mcp import McpServer, server_of
-from muliao.agents.permissions import ToolSpec, spec_of
+from muliao.agents.permissions import ToolSpec
 from muliao.agents.source import AssetSource
 from muliao.errors import Conflict, InvalidInput, NotFound
 
@@ -45,31 +44,25 @@ class CatalogAsset:
 
 
 class AssetCatalog:
-    def __init__(
-        self,
-        source: AssetSource,
-        # 当前配置下注册的工具（permissions.available_tools）
-        tools: Sequence[str],
-    ):
+    def __init__(self, source: AssetSource):
         self._source = source
-        self._tools = tuple(tools)
 
     async def catalog(self) -> list[CatalogAsset]:
-        """全部资源：内置工具（按登记顺序）在前，skill、MCP server、secret、记忆按种类、名称；每项带收录它的角色。"""
+        """全部资源：内置工具（当前配置下注册的，按注册顺序）在前，skill、MCP server、secret、记忆按种类、名称；每项带收录它的角色。"""
         snapshot = await self._source.snapshot()
         sharing = sharing_of(snapshot)
         tools = [
             CatalogAsset(
                 Kind.TOOL,
-                n,
+                t.name,
                 None,
                 "",
                 None,
-                sharing.including(Kind.TOOL, n),
-                sharing.shared(Kind.TOOL, n, None),
-                tool=spec_of(n),
+                sharing.including(Kind.TOOL, t.name),
+                sharing.shared(Kind.TOOL, t.name, None),
+                tool=t,
             )
-            for n in self._tools
+            for t in snapshot.tools.specs
         ]
         return tools + [
             CatalogAsset(

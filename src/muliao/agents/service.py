@@ -26,7 +26,7 @@ from muliao.agents.distribution import check_agent_rules
 from muliao.agents.ids import new_agent_id
 from muliao.agents.kinds import StoredKind
 from muliao.agents.naming import new_agent_name, normalize_agent_name
-from muliao.agents.permissions import AgentRules
+from muliao.agents.permissions import AgentRules, ToolTable
 from muliao.agents.source import AssetSource
 from muliao.agents.tables import Agent
 from muliao.errors import Conflict, NotFound
@@ -310,9 +310,11 @@ class AgentService:
                 await self._check_name_free(s, snapshot, name, None)
             directory = snapshot.root / name
             # 先查 access.toml：不合法时什么都不写（否则写到一半，撤回时改它又失败）
-            await asyncio.to_thread(access_file.check_valid, snapshot.access_path)
+            await asyncio.to_thread(access_file.check_valid, snapshot.access_path, snapshot.tools)
             try:
-                await asyncio.to_thread(_write_new_agent, directory, snapshot.access_path, fields, rules)
+                await asyncio.to_thread(
+                    _write_new_agent, directory, snapshot.access_path, snapshot.tools, fields, rules
+                )
                 async with self._db.transaction() as s:
                     # description / model 是待 #503 删的旧镜像列（NOT NULL），只填空串：配置只在 agent.toml
                     agent = Agent(id=agent_id, name=name, description="", model="")
@@ -321,7 +323,9 @@ class AgentService:
                     self.workspace(agent_id).mkdir(parents=True, exist_ok=True)
                     info = info_of(agent)
             except BaseException:
-                await asyncio.to_thread(_undo_new_agent, directory, snapshot.access_path, name)
+                await asyncio.to_thread(
+                    _undo_new_agent, directory, snapshot.access_path, snapshot.tools, name
+                )
                 raise
         log.info("agent created", extra={"agent": agent_id, "agent_name": name, "actor": actor})
         return info
@@ -344,11 +348,12 @@ class AgentService:
             )
             check_agent_rules(snapshot, rules, before)
             # 与建 agent 同：access.toml 不合法时先拒绝，不动目录
-            await asyncio.to_thread(access_file.check_valid, snapshot.access_path)
+            await asyncio.to_thread(access_file.check_valid, snapshot.access_path, snapshot.tools)
             undo = await asyncio.to_thread(
                 _write_agent_update,
                 directory.path,
                 snapshot.access_path,
+                snapshot.tools,
                 directory.name,
                 fields,
                 rules,
@@ -448,20 +453,22 @@ class AgentService:
                 )
 
 
-def _write_new_agent(directory: Path, access: Path, fields: _AgentFields, rules: AgentRules) -> None:
+def _write_new_agent(
+    directory: Path, access: Path, tools: ToolTable, fields: _AgentFields, rules: AgentRules
+) -> None:
     directory.mkdir(parents=True)
     write_atomic(directory / AGENT_FILE, agent_file.dump(directory / AGENT_FILE, fields.file))
     write_atomic(directory / PRIVATE_MEMORY_FILE, "")
-    access_file.edit(access, lambda doc: access_file.set_agent_rules(doc, fields.name, rules))
+    access_file.edit(access, tools, lambda doc: access_file.set_agent_rules(doc, fields.name, rules))
 
 
-def _undo_new_agent(directory: Path, access: Path, name: str) -> None:
+def _undo_new_agent(directory: Path, access: Path, tools: ToolTable, name: str) -> None:
     assets.remove(directory)
-    access_file.edit(access, lambda doc: access_file.remove_agent(doc, name))
+    access_file.edit(access, tools, lambda doc: access_file.remove_agent(doc, name))
 
 
 def _write_agent_update(
-    directory: Path, access: Path, old_name: str, fields: _AgentFields, rules: AgentRules
+    directory: Path, access: Path, tools: ToolTable, old_name: str, fields: _AgentFields, rules: AgentRules
 ) -> Callable[[], None]:
     """改 agent 的文件，返回把它们改回去的函数。改名先挪目录（挪不了就什么都没改），再改 agent.toml 与 access.toml；后面
     任何一步失败都当场改回去再报错。"""
@@ -489,7 +496,7 @@ def _write_agent_update(
                 access_file.rename_agent(doc, old_name, fields.name)
             access_file.set_agent_rules(doc, fields.name, rules)
 
-        access_file.edit(access, change)
+        access_file.edit(access, tools, change)
     except BaseException:
         undo()
         raise

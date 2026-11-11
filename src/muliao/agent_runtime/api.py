@@ -24,7 +24,7 @@ from muliao.agent_runtime.outcome import (
     is_approved,
     require_approval,
 )
-from muliao.agent_runtime.redaction import redact_messages
+from muliao.agent_runtime.redaction import Redaction
 from muliao.agent_runtime.runner import AgentRuntime, StepHooks
 from muliao.agent_runtime.toolbox import Toolbox
 
@@ -47,7 +47,7 @@ __all__ = [
     "defer_call",
     "is_approved",
     "require_approval",
-    "redact_messages",
+    "Redaction",
     "references",
     "result_images",
     "shared_attachments",

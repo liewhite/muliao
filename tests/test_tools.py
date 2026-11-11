@@ -96,20 +96,33 @@ async def test_get_agent_shows_roles_resulting_tools_and_every_permission(contai
     assert "delete_agent" in detail["all_tools"] and "web_search" not in detail["all_tools"]
 
 
-def test_registered_tools_must_match_the_permission_table_both_ways():
-    from muliao.agents.permissions import TOOLS
-    from muliao.container import _check_permissions
+def test_every_built_in_tool_declares_its_traits_once():
+    """工具的读写、管理类、脱敏参数由工具注册时自己声明（platform.tooling.declared）：没声明的谁也拿不准它是什么，
+    重名的后一个会遮住前一个，装配 Toolbox 时当场报错。"""
+    from pydantic_ai import FunctionToolset
 
-    every = list(TOOLS)
-    _check_permissions(every, web_configured=True)
-    _check_permissions([t for t in every if not t.startswith("web_")], web_configured=False)
-    with pytest.raises(RuntimeError, match=r"unregistered \['web_fetch', 'web_search'\]"):
-        _check_permissions([t for t in every if not t.startswith("web_")], web_configured=True)
-    # 没登记权限的工具谁也拿不到：启动即报
-    with pytest.raises(RuntimeError, match=r"without permission \['new_tool'\]"):
-        _check_permissions([*every, "new_tool"], web_configured=True)
-    with pytest.raises(RuntimeError, match=r"duplicated \['run_shell'\]"):
-        _check_permissions([*every, "run_shell"], web_configured=True)
+    from muliao.agent_runtime.api import Toolbox
+    from muliao.platform.tooling import Access, declared
+
+    def toolset(metadata: dict[str, object] | None) -> FunctionToolset:
+        ts = FunctionToolset()
+
+        @ts.tool_plain(metadata=metadata)
+        def run_shell() -> str:
+            return ""
+
+        return ts
+
+    async def no_rules(_agent_id: str):
+        raise AssertionError("not called")
+
+    with pytest.raises(RuntimeError, match="'run_shell' declares no traits"):
+        Toolbox(toolsets=[toolset(None)], mcp=lambda: None, rules_of=no_rules)  # type: ignore[arg-type]
+    declared_twice = [toolset(declared(Access.WRITE)), toolset(declared(Access.WRITE))]
+    with pytest.raises(RuntimeError, match="'run_shell' is registered more than once"):
+        Toolbox(toolsets=declared_twice, mcp=lambda: None, rules_of=no_rules)  # type: ignore[arg-type]
+    box = Toolbox(toolsets=[toolset(declared(Access.WRITE, admin=True))], mcp=lambda: None, rules_of=no_rules)  # type: ignore[arg-type]
+    assert [(t.name, t.access, t.admin) for t in box.specs()] == [("run_shell", Access.WRITE, True)]
 
 
 async def test_agent_pauses_trigger(container, make_agent, models):

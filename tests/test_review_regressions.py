@@ -300,12 +300,14 @@ async def test_closing_the_bus_ends_subscriptions_after_pending_events():
 def test_unparseable_secret_tool_arguments_are_redacted_wholesale():
     from pydantic_ai.messages import ModelResponse, ToolCallPart
 
-    from muliao.agent_runtime.redaction import redact_messages
+    from muliao.agent_runtime.redaction import Redaction
 
     cut = ModelResponse(
         parts=[ToolCallPart("vault_set", '{"key": "T", "value": "super-sec', tool_call_id="v")]
     )
-    assert "super-sec" not in str(redact_messages([cut])[0].parts[0].args)
+    assert "super-sec" not in str(
+        Redaction({"vault_set": frozenset({"value"})}).messages([cut])[0].parts[0].args
+    )
 
 
 async def test_retrying_a_failed_run_after_the_session_was_stopped_ends_quietly(

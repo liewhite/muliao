@@ -124,7 +124,7 @@ async def agent_defaults(c: C) -> AgentDefaults:
 
 
 class ToolOut(BaseModel):
-    """一个内置工具（agents.permissions.TOOLS 里登记的），在规则里写作 `tool:<name>`。"""
+    """一个内置工具（当前配置下注册的，工具自己声明读写与是否管理类），在规则里写作 `tool:<name>`。"""
 
     name: str
     access: Literal["read", "write"]

@@ -25,7 +25,7 @@ from muliao.agents.active import agent_names_in
 from muliao.agents.agent_file import AGENT_FILE, AgentFile, Thinking
 from muliao.agents.assets import Problem, Snapshot, fingerprint, load_tree
 from muliao.agents.kinds import StoredKind
-from muliao.agents.permissions import GLOBAL_MEMORY
+from muliao.agents.permissions import GLOBAL_MEMORY, ToolTable
 from muliao.errors import InvalidInput
 from muliao.platform.db import Database
 from muliao.platform.fs import write_atomic
@@ -53,12 +53,15 @@ class AssetSource:
         model_checker: Callable[[str, Thinking], None],
         # 平台自己改完资源文件之后调用（组合根给前端发 agents 的数据变了，schema.ChangedEvent）
         changed: Callable[[], None],
+        # 内置工具表（组合根装好工具集后才 bind；快照带着它）
+        tools: ToolTable,
     ):
         self._db = db
         self.root = root
         self.memory_max_chars = memory_max_chars
         self._check_model = model_checker
         self._changed = changed
+        self._tools = tools
         self._key: object = None
         self._snapshot: Snapshot | None = None
         # 读（重新加载）与平台自己的读-改-写共用一把锁：写入期间不会读到写了一半的树
@@ -74,7 +77,9 @@ class AssetSource:
         key = (await asyncio.to_thread(fingerprint, self.root), tuple(sorted(known.items())))
         if key == self._key and self._snapshot is not None:
             return self._snapshot
-        snapshot = await asyncio.to_thread(load_tree, self.root, known, self.memory_max_chars, self._snapshot)
+        snapshot = await asyncio.to_thread(
+            load_tree, self.root, known, self.memory_max_chars, self._snapshot, self._tools
+        )
         snapshot = self._checked(snapshot)
         self._key, self._snapshot = key, snapshot
         if snapshot.problems:

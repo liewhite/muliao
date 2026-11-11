@@ -12,7 +12,7 @@ from muliao.agents.lifecycle import AgentLifecycle
 from muliao.agents.permissions import Role
 from muliao.agents.service import AgentService, AgentSpec, AgentView
 from muliao.errors import InvalidInput, NotFound
-from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
+from muliao.platform.tooling import TOOL_MAX_RETRIES, Access, RunScope, declared
 
 
 class RoleDetail(BaseModel):
@@ -87,7 +87,7 @@ def agents_toolset(
 ) -> FunctionToolset[RunScope]:
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
-    @ts.tool_plain
+    @ts.tool_plain(metadata=declared(Access.READ))
     async def list_agents() -> list[AgentGroup]:
         """List all agents and what each one is for. Returns a JSON array of groups, each with `group` (null = not
         in any group) and `agents` (each with `name` and `description`). Use before delegating. Archived agents
@@ -95,7 +95,7 @@ def agents_toolset(
         cannot be loaded until it is fixed (one whose model cannot run is listed, but its runs fail)."""
         return agent_directory(await agents.list_views())
 
-    @ts.tool_plain
+    @ts.tool_plain(metadata=declared(Access.READ))
     async def get_agent(agent: str) -> AgentDetail:
         """Show an agent's configuration, the built-in tools and the skills/MCP servers/secrets/memories it ends up with,
         every role and every built-in tool. Use your own name to see yours. Returns a JSON object with `name`,
@@ -128,10 +128,10 @@ def agents_toolset(
             tools=reach.tool_names,
             assets=reach.assets,
             available_roles=[RoleDetail.of(r) for r in await distribution.list()],
-            all_tools=list(distribution.tools),
+            all_tools=list(await distribution.tool_names()),
         )
 
-    @ts.tool
+    @ts.tool(metadata=declared(Access.WRITE, admin=True))
     async def create_agent(
         ctx: RunContext[RunScope],
         name: str,
@@ -174,7 +174,7 @@ def agents_toolset(
         created = await agents.create(spec, actor=ctx.deps.agent_id)
         return f"created agent {created.name}"
 
-    @ts.tool
+    @ts.tool(metadata=declared(Access.WRITE, admin=True))
     async def delete_agent(ctx: RunContext[RunScope], agent: str) -> str:
         """Delete another agent with its sessions, memory, the skills, secrets and MCP servers it owns (those
         a role or another agent's allow still hands out pass to the platform instead), triggers and workspace.

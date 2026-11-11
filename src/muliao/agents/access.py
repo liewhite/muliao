@@ -16,7 +16,7 @@ writable / usable。全部按一份资源快照（agents.assets.Snapshot）算�
 
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -32,7 +32,6 @@ from muliao.agents.permissions import (
     ToolSpec,
     pattern_of,
     permission_of,
-    spec_of,
 )
 from muliao.errors import Forbidden
 from muliao.platform.fs import real
@@ -243,7 +242,7 @@ def write_scope(snapshot: Snapshot, agent_id: str) -> WriteScope:
 
 @dataclass(frozen=True)
 class Reach:
-    """一份配置能用的：内置工具（按登记顺序）与资产（`kind:name`，按种类、名称）。"""
+    """一份配置能用的：内置工具（按注册顺序）与资产（`kind:name`，按种类、名称）。"""
 
     tools: list[ToolSpec]
     assets: list[str]
@@ -253,12 +252,12 @@ class Reach:
         return [t.name for t in self.tools]
 
 
-def reach_of(snapshot: Snapshot, available: Collection[str], grants: Grants) -> Reach:
-    """grants 能用的：工具在 available（当前配置下注册的工具）里取，资产在快照里取。界面预览、角色的覆盖范围、get_agent 共用。"""
+def reach_of(snapshot: Snapshot, grants: Grants) -> Reach:
+    """grants 能用的：工具在快照的工具表（当前配置下注册的工具）里取，资产在快照里取。界面预览、角色的覆盖范围、get_agent 共用。"""
     assets = [
         pattern_of(as_kind(k), a.name)
         for k in sorted(StoredKind, key=lambda k: k.value)
         for a in snapshot.of_kind(k)
         if grants.uses(as_kind(k), a.name, a.owner)
     ]
-    return Reach([spec_of(n) for n in grants.rules.tools(available)], assets)
+    return Reach([t for t in snapshot.tools.specs if grants.rules.includes(Kind.TOOL, t.name)], assets)

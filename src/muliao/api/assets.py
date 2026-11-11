@@ -150,7 +150,7 @@ def _asset_out(
 
 @router.get("/assets")
 async def list_assets(c: C) -> list[CatalogAssetOut]:
-    """全部资源：内置工具（按登记顺序，仅当前配置下注册的）在前，存成文件的按种类、名称；每种带自己的
+    """全部资源：内置工具（当前配置下注册的，按注册顺序）在前，存成文件的按种类、名称；每种带自己的
     详情（工具的读写与管理类、MCP 的配置与启停）。"""
     return [_asset_out(e) for e in await c.catalog.catalog()]
 

@@ -10,10 +10,10 @@ import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
-from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse
+from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, RetryPromptPart
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agent_runtime.api import StepHooks, redact_messages, with_notices
+from muliao.agent_runtime.api import Redaction, StepHooks, with_notices
 from muliao.agents.api import AgentDir, AgentInfo
 from muliao.platform.db import Database, utcnow
 from muliao.platform.text_edit import truncate
@@ -82,9 +82,12 @@ class Steps:
         content: ContentBuilder,
         compactor: Compactor,
         renders: ToolRenders,
+        # 消息落库与实时展示之前的脱敏（Toolbox.redaction）
+        redaction: Redaction,
     ):
         self._db = db
         self._renders = renders
+        self._redaction = redaction
         self._live = live
         self._content = content
         self._compactor = compactor
@@ -98,10 +101,19 @@ class Steps:
                 state.session.id, state.session.agent_id, kind, text
             ),
             on_tool_call=lambda part: self._live.publish_item(
-                state.session.id, state.session.agent_id, _preview(call_item(part, utcnow(), self._renders))
+                state.session.id,
+                state.session.agent_id,
+                _preview(call_item(self._redaction.call(part), utcnow(), self._renders)),
             ),
             on_tool_result=lambda part: self._live.publish_item(
-                state.session.id, state.session.agent_id, _preview(result_item(part, self._renders))
+                state.session.id,
+                state.session.agent_id,
+                _preview(
+                    result_item(
+                        self._redaction.retry(part) if isinstance(part, RetryPromptPart) else part,
+                        self._renders,
+                    )
+                ),
             ),
         )
 
@@ -194,7 +206,7 @@ class Steps:
         批准的调用（requested：调用 id -> pin，sessions.approvals）同一个事务提交。分开提交时，进程在两者之间退出会留下一个
         没有结果、又不算在等批准的调用；放到运行注销之后（收尾事务），这中间到的停止又会对着缺了结尾的历史补结果。"""
         async with self._db.transaction() as s:
-            await save_tail_in(s, state)
+            await self.save_tail_in(s, state)
             if requested:
                 await record_approvals_in(s, state.session.id, requested)
 
@@ -203,41 +215,39 @@ class Steps:
     ) -> None:
         """一步：这些消息与它们带上的信件（记为已处理）在同一个事务里提交。"""
         async with self._db.transaction() as s:
-            await save_in(s, state, messages, consumed=consumed)
+            await self.save_in(s, state, messages, consumed=consumed)
 
+    async def save_tail_in(self, s: AsyncSession, state: RunState) -> None:
+        """在调用方事务里保存运行中的历史里还没保存的部分，只在运行结束的那个事务里调用：
+        - 正常结束（Steps.save_end）：和等批准的记录一起。
+        - 被停止时（sessions.halt 的 first）：当前这一步已产生的部分（包括生成到一半的回答）原样存库，没出结果的调用与停止标记
+          由同一事务里的停止从库里补齐。
+        开头取走、还没随请求交给模型的信件（state.taken）不算处理过。"""
+        if state.live is not None and len(state.live) > state.saved:
+            await self.save_in(s, state, state.live[state.saved :], consumed=[])
+            state.saved = len(state.live)
 
-async def save_tail_in(s: AsyncSession, state: RunState) -> None:
-    """在调用方事务里保存运行中的历史里还没保存的部分，只在运行结束的那个事务里调用：
-    - 正常结束（Steps.save_end）：和等批准的记录一起。
-    - 被停止时（sessions.halt 的 first）：当前这一步已产生的部分（包括生成到一半的回答）原样存库，没出结果的调用与停止标记
-      由同一事务里的停止从库里补齐。
-    开头取走、还没随请求交给模型的信件（state.taken）不算处理过。"""
-    if state.live is not None and len(state.live) > state.saved:
-        await save_in(s, state, state.live[state.saved :], consumed=[])
-        state.saved = len(state.live)
-
-
-async def save_in(
-    s: AsyncSession, state: RunState, messages: Sequence[ModelMessage], *, consumed: Sequence[Mail]
-) -> None:
-    """在调用方事务里把这次运行的这些消息接在历史末尾，并把它们带上的信件记为已处理。运行保存消息只经这里。"""
-    stored = redact_messages(list(messages))
-    if await s.get(Session, state.session.id) is None:
-        raise RuntimeError(f"session {state.session.id} vanished during its run")
-    rows = await append_in(s, state.session.id, state.run_id, stored)
-    await consume_in(s, [m.id for m in consumed], state.run_id)
-    log.info(
-        "step saved",
-        extra={
-            "session_id": state.session.id,
-            "run_id": state.run_id,
-            "messages": len(rows),
-            "consumed_mail": [m.id for m in consumed],
-        },
-    )
-    state.messages += stored
-    if rows:
-        state.last_row = rows[-1]
+    async def save_in(
+        self, s: AsyncSession, state: RunState, messages: Sequence[ModelMessage], *, consumed: Sequence[Mail]
+    ) -> None:
+        """在调用方事务里把这次运行的这些消息接在历史末尾，并把它们带上的信件记为已处理。运行保存消息只经这里。"""
+        stored = self._redaction.messages(messages)
+        if await s.get(Session, state.session.id) is None:
+            raise RuntimeError(f"session {state.session.id} vanished during its run")
+        rows = await append_in(s, state.session.id, state.run_id, stored)
+        await consume_in(s, [m.id for m in consumed], state.run_id)
+        log.info(
+            "step saved",
+            extra={
+                "session_id": state.session.id,
+                "run_id": state.run_id,
+                "messages": len(rows),
+                "consumed_mail": [m.id for m in consumed],
+            },
+        )
+        state.messages += stored
+        if rows:
+            state.last_row = rows[-1]
 
 
 def _preview(item: Item) -> Item:

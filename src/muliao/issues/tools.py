@@ -17,9 +17,8 @@ from muliao.platform.tool_views import (
     ToolRender,
     ViewBlock,
     fields,
-    rendered_by,
 )
-from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
+from muliao.platform.tooling import TOOL_MAX_RETRIES, Access, RunScope, declared
 from muliao.platform.values import KEEP, Keep
 from muliao.sessions.api import WorkState
 
@@ -160,7 +159,7 @@ def issues_toolset(board: IssueService, agents: AgentService) -> FunctionToolset
             updated_at=issue.updated_at,
         )
 
-    @ts.tool_plain(metadata=rendered_by(_LIST_RENDER))
+    @ts.tool_plain(metadata=declared(Access.READ, render=_LIST_RENDER))
     async def issue_list(
         statuses: tuple[IssueStatus, ...] = (), assignee: str | None = None, owner: str | None = None
     ) -> list[IssueSummary]:
@@ -187,7 +186,7 @@ def issues_toolset(board: IssueService, agents: AgentService) -> FunctionToolset
         work = await board.work(found)
         return [summary(i, names, work[i.id]) for i in found]
 
-    @ts.tool_plain(metadata=rendered_by(_SHOW_RENDER))
+    @ts.tool_plain(metadata=declared(Access.READ, render=_SHOW_RENDER))
     async def issue_show(issue_id: int) -> str:
         """Show an issue with its description, dependencies, comments and history.
 
@@ -211,7 +210,7 @@ def issues_toolset(board: IssueService, agents: AgentService) -> FunctionToolset
             key=item.key,
         )
 
-    @ts.tool(metadata=rendered_by(_CREATE_RENDER))
+    @ts.tool(metadata=declared(Access.WRITE, render=_CREATE_RENDER))
     async def issue_create(
         ctx: RunContext[RunScope],
         title: str | None = None,
@@ -277,7 +276,7 @@ def issues_toolset(board: IssueService, agents: AgentService) -> FunctionToolset
         ]
         return "created issues:\n" + "\n".join(lines)
 
-    @ts.tool(metadata=rendered_by(_UPDATE_RENDER))
+    @ts.tool(metadata=declared(Access.WRITE, render=_UPDATE_RENDER))
     async def issue_update(
         ctx: RunContext[RunScope],
         issue_id: int,
@@ -331,7 +330,7 @@ def issues_toolset(board: IssueService, agents: AgentService) -> FunctionToolset
         )
         return f"updated issue #{issue.id} (status: {issue.status})"
 
-    @ts.tool(metadata=rendered_by(_STOP_RENDER))
+    @ts.tool(metadata=declared(Access.WRITE, render=_STOP_RENDER))
     async def issue_stop(
         ctx: RunContext[RunScope], issue_id: int, status: IssueStatus, message: str | None = None
     ) -> str:
@@ -361,7 +360,7 @@ def issues_toolset(board: IssueService, agents: AgentService) -> FunctionToolset
         done = f"stopped {name}'s conversation on issue #{issue_id}; it is {result.issue.status}"
         return done + ("; your message was delivered there" if message is not None else "")
 
-    @ts.tool(metadata=rendered_by(_COMMENT_RENDER))
+    @ts.tool(metadata=declared(Access.WRITE, render=_COMMENT_RENDER))
     async def issue_comment(ctx: RunContext[RunScope], issue_id: int, body: str) -> str:
         """Comment on an issue (Markdown): progress, findings, results, questions for the user. Delivered like any
         other change (see `issue_update`).

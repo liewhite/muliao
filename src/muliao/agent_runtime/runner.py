@@ -43,7 +43,7 @@ from muliao.agent_runtime.attachments import AttachmentsForModel, ToolImagesToFi
 from muliao.agent_runtime.instructions import build_instructions, build_run_context
 from muliao.agent_runtime.llm import ModelResolver, check_thinking, model_settings, thinking_text
 from muliao.agent_runtime.outcome import Finished, Paused, deferred_tool_results, outcome_of
-from muliao.agent_runtime.redaction import redact_call, redact_retry, tool_input_kept_out_of_failures
+from muliao.agent_runtime.redaction import tool_input_kept_out_of_failures
 from muliao.agent_runtime.tool_errors import DomainErrorsAsRetry
 from muliao.agent_runtime.toolbox import RunProfile
 from muliao.agent_runtime.transient import transient_as_retryable
@@ -92,7 +92,7 @@ class StepHooks:
     # 模型回复之后（回复已在 history 末尾），工具执行之前：保存它
     after_response: Callable[[ModelResponse, list[ModelMessage]], Awaitable[None]]
 
-    # 流式展示（会话页）：模型回答与思考的文字增量、工具调用（参数已脱敏）与结果。都是完整保存之前的预览，保存后
+    # 流式展示（会话页）：模型回答与思考的文字增量、工具调用与结果（参数原样，由消费者脱敏，同保存）。都是完整保存之前的预览，保存后
     # 历史里有完整的一份；续跑时交回结果的挂起调用已在历史里，不再报告
     on_text: Callable[[TextKind, str], None]
     on_tool_call: Callable[[ToolCallPart], None]
@@ -432,7 +432,6 @@ async def _forward_events(
         ):
             continue
         elif isinstance(event, FunctionToolCallEvent):
-            hooks.on_tool_call(redact_call(event.part))
+            hooks.on_tool_call(event.part)
         elif isinstance(event, FunctionToolResultEvent):
-            part = event.part
-            hooks.on_tool_result(redact_retry(part) if isinstance(part, RetryPromptPart) else part)
+            hooks.on_tool_result(event.part)

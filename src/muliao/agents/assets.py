@@ -40,7 +40,7 @@ from muliao.agents.agent_file import AGENT_FILE, Thinking
 from muliao.agents.kinds import StoredKind, label
 from muliao.agents.mcp_config import McpConfig, parse_mcp_file
 from muliao.agents.naming import PLATFORM, file_name, nfc, validate_slug
-from muliao.agents.permissions import ADMIN, AgentRules, Role
+from muliao.agents.permissions import ADMIN, AgentRules, Role, ToolTable
 from muliao.agents.secrets_format import SecretFile, parse_secret_file, validate_key
 from muliao.agents.skill_package import SKILL_FILE, approval_scripts, parse_frontmatter
 from muliao.errors import Conflict, InvalidInput, NotFound
@@ -210,6 +210,8 @@ class Snapshot:
     roles: Mapping[str, Role]
     # access.toml 里各 agent 的规则，按 id；没写的 agent 只有 base
     rules: Mapping[str, AgentRules]
+    # 读这棵树时用的内置工具表（内置角色的固定规则、规则引用的工具按它算）；能用的工具也只在它里面取
+    tools: ToolTable
     problems: tuple[Problem, ...]
     # 磁盘上有、但读坏了或名字冲突而没加载的资源名：新建同名的会再添一处冲突，按已占用处理（check_free）
     unloaded: Mapping[StoredKind, frozenset[str]]
@@ -309,8 +311,16 @@ def _visible(entries: list[Path]) -> list[Path]:
 class _Reader:
     """读一棵树：一次性的状态（收集到的资源与问题）。"""
 
-    def __init__(self, root: Path, known: Mapping[str, str], memory_max_chars: int, last: Snapshot | None):
+    def __init__(
+        self,
+        root: Path,
+        known: Mapping[str, str],
+        memory_max_chars: int,
+        last: Snapshot | None,
+        tools: ToolTable,
+    ):
         self.root = root
+        self.tools = tools
         self.known = known
         self.memory_max_chars = memory_max_chars
         self.last = last
@@ -370,7 +380,7 @@ class _Reader:
                     agent_id,
                 )
         path = self.root / PLATFORM / ACCESS_FILE
-        access = access_file.read(path, {a.name: a.id for a in agents.values()})
+        access = access_file.read(path, {a.name: a.id for a in agents.values()}, self.tools)
         roles, rules = access.roles, access.rules
         if access.readable:
             consequence = ""
@@ -393,6 +403,7 @@ class _Reader:
             {kind: self.resolved(kind) for kind in StoredKind},
             roles,
             rules,
+            self.tools,
             tuple(self.problems),
             {k: frozenset(v) for k, v in self.unloaded.items()},
             {k: dict(v) for k, v in self.shadowed.items()},
@@ -539,10 +550,12 @@ class _Reader:
                 return Asset(kind, name, owner, path, secret.description, updated(path), secret=secret)
 
 
-def load_tree(root: Path, known: Mapping[str, str], memory_max_chars: int, last: Snapshot | None) -> Snapshot:
+def load_tree(
+    root: Path, known: Mapping[str, str], memory_max_chars: int, last: Snapshot | None, tools: ToolTable
+) -> Snapshot:
     """读整棵树。known 是数据库里的 agent（id → 名字，含正在删除的）：agent 目录按 agent.toml 的 id 对上它们。last 是上一份
     快照（本进程还没读过为 None）：access.toml 整个读不出来时沿用它的角色与规则。同步 IO，调用方放到线程里。"""
-    return _Reader(root, known, memory_max_chars, last).read()
+    return _Reader(root, known, memory_max_chars, last, tools).read()
 
 
 def fingerprint(root: Path) -> tuple[tuple[str, int, int], ...]:

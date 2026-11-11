@@ -62,7 +62,7 @@ from muliao.sessions.pending import (
 from muliao.sessions.questions import waiting_text
 from muliao.sessions.runs import RunPayload, hand_over_in
 from muliao.sessions.settlement import settle_failure_in
-from muliao.sessions.steps import CompactionDue, RunState, Steps, save_in, save_tail_in
+from muliao.sessions.steps import CompactionDue, RunState, Steps
 from muliao.sessions.stopping import StoppableRuns
 from muliao.sessions.tables import Mail
 
@@ -248,7 +248,7 @@ class Consumer:
                     },
                 )
                 filled = interrupted_results(interrupted)
-                await save_in(s, state, filled, consumed=[])
+                await self._steps.save_in(s, state, filled, consumed=[])
                 history = [*history, *filled]
             last_message = await last_message_id_in(s, session_id)
         current.state = state
@@ -361,7 +361,7 @@ class Consumer:
     async def _stopped(self, run_id: int, session_id: str, current: _Current) -> Commit:
         state = current.state
         log.info("run stopped by user", extra={"session_id": session_id, "run_id": run_id})
-        save_tail = None if state is None else partial(save_tail_in, state=state)
+        save_tail = None if state is None else partial(self._steps.save_tail_in, state=state)
         if await self._halt(session_id, first=save_tail) == Halted.GONE:
             # 正在运行的会话忙，不能被删除：走到这里是 bug
             raise RuntimeError(f"session {session_id} was deleted while its run was being stopped")

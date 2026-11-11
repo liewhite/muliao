@@ -8,7 +8,7 @@ from pydantic_ai import FunctionToolset, RunContext
 
 from muliao.agent_runtime.api import defer_call
 from muliao.errors import Conflict
-from muliao.platform.tooling import TOOL_MAX_RETRIES, Audience, RunScope
+from muliao.platform.tooling import TOOL_MAX_RETRIES, Access, Audience, RunScope, declared
 from muliao.sessions.pending import ASK_USER_KIND
 from muliao.sessions.questions import Questions
 
@@ -28,7 +28,7 @@ REJECTED: dict[Audience, str] = {Audience.AGENT: ASKED_BY_AGENT, Audience.NONE: 
 def ask_user_toolset() -> FunctionToolset[RunScope]:
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
-    @ts.tool(name=ASK_USER_KIND.name)
+    @ts.tool(name=ASK_USER_KIND.name, metadata=declared(Access.READ))
     async def ask_user(
         ctx: RunContext[RunScope],
         questions: Questions,

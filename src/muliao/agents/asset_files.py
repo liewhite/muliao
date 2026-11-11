@@ -193,8 +193,8 @@ def _access(snapshot: Snapshot, text: str) -> None:
     的目录暂时读坏了）。现在的文件不合法时，新内容合法就放行（#550、#573：让 admin 能把它改回来，只是引用了不存在的
     东西的问题写入后照常报出）；都不合法、又没有新的不合法之处的也放行（读树照旧沿用上一份，不放宽）。"""
     agents = {a.name: a.id for a in snapshot.agents.values()}
-    after = access_file.parse(text, agents)
-    before = access_file.read(snapshot.access_path, agents)
+    after = access_file.parse(text, agents, snapshot.tools)
+    before = access_file.read(snapshot.access_path, agents, snapshot.tools)
     if after.readable and not before.readable:
         return
     existing = {p.reason for p in before.problems}

@@ -17,8 +17,8 @@ from muliao.files.api import FileStore
 from muliao.platform.fs import real, resolve_within
 from muliao.platform.shell import LEFT_RUNNING_NOTE, run_bash
 from muliao.platform.text_edit import truncate
-from muliao.platform.tool_views import TerminalBlock, ToolRender, ViewBlock, rendered_by
-from muliao.platform.tooling import RunScope
+from muliao.platform.tool_views import TerminalBlock, ToolRender, ViewBlock
+from muliao.platform.tooling import Access, RunScope, declared
 from muliao.sessions.api import check_interval
 from muliao.workspace.file_tools import ShellLimits, file_toolset
 from muliao.workspace.grants import GRANTED_NOTE, ScriptCall, ScriptGrants
@@ -105,7 +105,7 @@ def workspace_toolset(
     # 输出上限是配置的值，写进说明：模型不知道它，长输出被截了才学会
     description = _SHELL_DESCRIPTION.format(max_output=limits.max_output_chars) + _BACKGROUND_DESCRIPTION
 
-    @ts.tool(description=description, metadata=rendered_by(SHELL_RENDER))
+    @ts.tool(description=description, metadata=declared(Access.WRITE, render=SHELL_RENDER))
     async def run_shell(
         ctx: RunContext[RunScope],
         command: str,
@@ -129,7 +129,7 @@ def workspace_toolset(
         """
         return await execute(ctx.deps, command, timeout, secrets, background, heartbeat_seconds, shell=True)
 
-    @ts.tool(description=_SKILL_RUN_DESCRIPTION, metadata=rendered_by(SKILL_RUN_RENDER))
+    @ts.tool(description=_SKILL_RUN_DESCRIPTION, metadata=declared(Access.WRITE, render=SKILL_RUN_RENDER))
     async def skill_run(
         ctx: RunContext[RunScope],
         skill: str,
@@ -232,7 +232,7 @@ def workspace_toolset(
             "keep working or end your reply."
         )
 
-    @ts.tool
+    @ts.tool(metadata=declared(Access.READ))
     async def job_status(ctx: RunContext[RunScope], job_id: int) -> str:
         """Show a background job's status (running, exited with its code, killed, interrupted), how long it has
         run and the last lines of its output (read its log file for all of it). Use it to look at a job between
@@ -248,7 +248,7 @@ def workspace_toolset(
             f"last lines:\n{info.tail or '(no output yet)'}"
         )
 
-    @ts.tool
+    @ts.tool(metadata=declared(Access.WRITE))
     async def job_kill(ctx: RunContext[RunScope], job_id: int) -> str:
         """Kill a running background job (its whole process tree), e.g. when a check-in shows it is stuck or no
         longer needed. Its final status (killed) arrives as an event.

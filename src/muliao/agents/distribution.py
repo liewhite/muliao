@@ -26,7 +26,7 @@ from muliao.agents.assets import Snapshot
 from muliao.agents.kinds import Kind, StoredKind, as_kind
 from muliao.agents.mcp import McpServer, server_of
 from muliao.agents.permissions import (
-    FIXED_RULES,
+    BUILTIN_ROLES,
     Action,
     AgentRules,
     Role,
@@ -89,13 +89,10 @@ class Distribution:
     def __init__(
         self,
         source: AssetSource,
-        # 当前配置下注册的工具（permissions.available_tools）：能用的工具只在它里面取
-        tools: Sequence[str],
         # agent 还可用（正在删除的按不存在处理），否则 NotFound（agents.service.AgentService.get_active）
         check_agent: Callable[[str], Awaitable[object]],
     ):
         self._source = source
-        self.tools = tuple(tools)
         self._check_agent = check_agent
 
     # ---- agent 的规则 ----
@@ -111,9 +108,13 @@ class Distribution:
 
     async def reach(self, agent_id: str) -> Reach:
         """agent 最终能用的内置工具与 skill、MCP server、secret、记忆（agents.access 的 Grants.can）：get_agent 与界面同一套计算；
-        运行时（agent_runtime.Toolbox）按实际注册的工具集算，两者一致由组合根启动时核对 available_tools 与注册的工具保证。"""
+        运行时（agent_runtime.Toolbox.profile）按同一份规则在注册的工具里取，工具表也由注册的工具收集而来。"""
         snapshot = await self._source.snapshot()
-        return reach_of(snapshot, self.tools, grants_for(snapshot, agent_id))
+        return reach_of(snapshot, grants_for(snapshot, agent_id))
+
+    async def tool_names(self) -> tuple[str, ...]:
+        """全部内置工具（当前配置下注册的，按注册顺序）：get_agent 列出，写规则时参照。"""
+        return (await self._source.snapshot()).tools.names
 
     async def assets(self, agent_id: str) -> list[UsedAsset]:
         """agent 能用的 skill、MCP server、secret、记忆（按种类、名称），每项带来源与能不能改：界面的 agent 详情。与运行时同一
@@ -153,7 +154,7 @@ class Distribution:
         check_agent_rules(snapshot, rules, before)
         known = snapshot.roles
         # 还没建的 agent 没有自己的资源，只看规则
-        return reach_of(snapshot, self.tools, Grants(agent_id, rules.effective(known)))
+        return reach_of(snapshot, Grants(agent_id, rules.effective(known)))
 
     # ---- 角色 ----
 
@@ -196,13 +197,14 @@ class Distribution:
         await asyncio.to_thread(
             access_file.edit,
             snapshot.access_path,
+            snapshot.tools,
             lambda doc: access_file.set_role(
                 doc, spec.name, spec.description, list(spec.allow), list(spec.deny)
             ),
         )
 
     async def delete(self, name: str) -> None:
-        if name in FIXED_RULES:
+        if name in BUILTIN_ROLES:
             raise InvalidInput(f"role {name!r} is built in and cannot be deleted")
         async with self._source.writing() as snapshot:
             role = _role(snapshot, name)
@@ -212,7 +214,10 @@ class Distribution:
                     f"role {name!r} is used by agents {[snapshot.agents[a].name for a in holders]}"
                 )
             await asyncio.to_thread(
-                access_file.edit, snapshot.access_path, lambda doc: access_file.delete_role(doc, name)
+                access_file.edit,
+                snapshot.access_path,
+                snapshot.tools,
+                lambda doc: access_file.delete_role(doc, name),
             )
 
     async def views(self) -> list[RoleView]:
@@ -228,7 +233,7 @@ class Distribution:
         """reach 只按角色自己的规则（固定的与可编辑的），不含任何 agent 自己的资源。"""
         return RoleView(
             role,
-            reach_of(snapshot, self.tools, Grants(None, role.effective)),
+            reach_of(snapshot, Grants(None, role.effective)),
             tuple(holders_of(snapshot, role)),
         )
 
@@ -239,7 +244,7 @@ class Distribution:
         rules = Rules(tuple(allow), tuple(deny))
         check_rules(snapshot, rules, Rules() if role is None else role.rules)
         effective = rules if role is None else Rules.union([role.fixed, rules])
-        return reach_of(snapshot, self.tools, Grants(None, effective))
+        return reach_of(snapshot, Grants(None, effective))
 
 
 def check_agent_rules(snapshot: Snapshot, rules: AgentRules, before: AgentRules = AgentRules()) -> None:
@@ -264,21 +269,25 @@ def check_rules(snapshot: Snapshot, rules: Rules, before: Rules = Rules()) -> No
     内容用同样的形式规则（agents.access_file，任何一处不合法整份作废）。"""
     check_patterns(rules.allow)
     check_patterns(rules.deny)
-    assets = [pattern_of(as_kind(k), n) for k, by_name in snapshot.assets.items() for n in by_name]
+    assets = [
+        *(pattern_of(Kind.TOOL, n) for n in snapshot.tools.names),
+        *(pattern_of(as_kind(k), n) for k, by_name in snapshot.assets.items() for n in by_name),
+    ]
     _check_new(assets, rules.allow, before.allow)
     _check_new(assets, rules.deny, before.deny)
 
 
 def _check_new(assets: Sequence[str], patterns: Sequence[str], before: Sequence[str]) -> None:
-    """新加的针对某种资源的规则（不在 before 里的）至少匹配 assets（全部资源的 `kind:name`）里的一项：拼错的在写入时报出。
-    已有的规则不查——资源删掉再建时分发不丢，也不让改别的字段的写入失败。不限种类的（`write:*`）与路径规则（目录可以
-    还没建）不查。"""
-    new = [p for p in patterns if p not in before and kind_of(p) not in (Kind.TOOL, Kind.PATH, None)]
+    """新加的针对某种资产的规则（不在 before 里的）至少匹配 assets（当前注册的内置工具与全部资源的 `kind:name`）里的一项：
+    拼错的在写入时报出。已有的规则不查——资源删掉再建时分发不丢，没配置 [web] 时已有的 `use:tool:web_*` 也不让改别的字段
+    的写入失败。不限种类的（`write:*`）与路径规则（目录可以还没建）不查。"""
+    new = [p for p in patterns if p not in before and kind_of(p) not in (Kind.PATH, None)]
     if not new:
         return
     candidates = [f"{a.value}:{i}" for i in assets for a in Action]
     bad = [p for p in new if not any(fnmatchcase(i, p) for i in candidates)]
     if bad:
         raise InvalidInput(
-            f"rules {bad} match no existing skill, MCP server, secret or memory; check the names"
+            f"rules {bad} match no existing tool, skill, MCP server, secret or memory; check the names "
+            "(tools are listed by get_agent, e.g. 'use:tool:issue_*')"
         )

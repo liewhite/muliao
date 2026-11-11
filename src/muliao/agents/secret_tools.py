@@ -3,19 +3,13 @@
 from pydantic_ai import FunctionToolset, RunContext
 
 from muliao.agents.secrets import Vault
-from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
-
-# 工具名 → 明文参数名：agent_runtime 在消息落库、推送前据此脱敏（经 agents.api 导出）。
-# 改工具名或参数名时一起改；tests/test_tool_schemas.py 断言它们在注册的工具 schema 里存在。
-SECRET_TOOL_ARGS: dict[str, frozenset[str]] = {
-    "vault_set": frozenset({"value"}),
-}
+from muliao.platform.tooling import TOOL_MAX_RETRIES, Access, RunScope, declared
 
 
 def vault_toolset(vault: Vault) -> FunctionToolset[RunScope]:
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
-    @ts.tool
+    @ts.tool(metadata=declared(Access.WRITE, secret_args={"value"}))
     async def vault_set(
         ctx: RunContext[RunScope],
         key: str,

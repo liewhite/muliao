@@ -1,10 +1,15 @@
 """工具的共同契约（各领域的工具集都依赖它，包括 agent_runtime 之下的 agents，所以它在平台里）：一次运行的
-上下文 RunScope 与回答交给谁（Audience），以及工具连续失败的容忍次数。会话来源归会话领域（sessions.origins），
-把领域错误交还模型的包装归 agent_runtime（tool_errors）。"""
+上下文 RunScope 与回答交给谁（Audience），内置工具自己声明的属性（ToolTraits，注册时用 declared 挂在 metadata 上），
+以及工具连续失败的容忍次数。会话来源归会话领域（sessions.origins），把领域错误交还模型的包装归 agent_runtime
+（tool_errors）。"""
 
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
+
+from muliao.platform.tool_views import ToolRender
 
 
 class Audience(StrEnum):
@@ -43,3 +48,44 @@ class RunScope:
 
 # 工具连续失败的容忍次数；成功一次即清零（pydantic-ai 语义）
 TOOL_MAX_RETRIES = 3
+
+
+class Access(StrEnum):
+    """内置工具读还是写（界面、get_agent 展示）。"""
+
+    READ = "read"
+    WRITE = "write"
+
+
+@dataclass(frozen=True)
+class ToolTraits:
+    """一个内置工具自己声明的属性：注册时挂在 metadata 上（declared，pydantic-ai 的 metadata 不交给模型），由
+    agent_runtime.Toolbox 收集后交给各个用它的地方——分发（读写、管理类）、消息落库前脱敏（secret_args）、界面展示
+    （render）。加一个工具只改它自己的定义；每个内置工具都要声明，没声明的启动即报错（Toolbox.traits）。"""
+
+    access: Access
+    # 管理类工具（建、删 agent）：内置角色 base 不含，只经 admin 角色或显式规则给出（agents.permissions）
+    admin: bool = False
+    # 明文参数名：消息落库、推送前替换掉（agent_runtime.redaction）
+    secret_args: frozenset[str] = frozenset()
+    # 界面上的展示形式（platform.tool_views）；None 显示参数与结果的原文
+    render: ToolRender[Any] | None = None
+
+
+# metadata 里挂 ToolTraits 的键
+_TRAITS_KEY = "muliao_tool"
+
+
+def declared(
+    access: Access,
+    *,
+    admin: bool = False,
+    secret_args: Collection[str] = (),
+    render: ToolRender[Any] | None = None,
+) -> dict[str, Any]:
+    """内置工具的 metadata：`@ts.tool(metadata=declared(Access.WRITE, render=...))`。"""
+    return {_TRAITS_KEY: ToolTraits(access, admin, frozenset(secret_args), render)}
+
+
+def traits_in(metadata: Mapping[str, Any] | None) -> ToolTraits | None:
+    return None if metadata is None else metadata.get(_TRAITS_KEY)

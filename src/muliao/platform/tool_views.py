@@ -2,7 +2,7 @@
 没定的（包括全部 MCP 工具）照旧显示参数与结果的原文。
 
 - 展示块是结构化的描述（ViewBlock），不是 HTML：界面每种块一个组件，样式与安全都在界面一处。
-- render 挂在定义工具的地方（`@ts.tool(metadata=rendered_by(...))`，pydantic-ai 的 metadata 不交给模型），
+- render 挂在定义工具的地方（`@ts.tool(metadata=declared(..., render=...))`，见 platform.tooling.ToolTraits），
   由 agent_runtime.toolbox.Toolbox.renders 收集并配上工具自己的参数校验（BoundRender），会话领域投影条目时调用
   （sessions.transcript）。历史与运行中的条目走同一份投影，所以历史消息同样按 render 展示。
 - 参数先经工具自己的 schema 校验（与执行时同一个校验器，含默认值）再交给 call：不合 schema 的调用（会被退回）
@@ -173,19 +173,6 @@ class BoundRender:
 
 def _view(blocks: Sequence[ViewBlock] | None) -> View | None:
     return None if blocks is None else list(blocks)
-
-
-# metadata 里挂 render 的键
-_RENDER_KEY = "muliao_render"
-
-
-def rendered_by(render: ToolRender[Any]) -> dict[str, Any]:
-    """工具的 metadata：`@ts.tool(metadata=rendered_by(ToolRender(...)))`。"""
-    return {_RENDER_KEY: render}
-
-
-def render_in(metadata: Mapping[str, Any] | None) -> ToolRender[Any] | None:
-    return None if metadata is None else metadata.get(_RENDER_KEY)
 
 
 # 工具名 → 展示规则（Toolbox.renders）；没有的工具显示原文

@@ -18,7 +18,7 @@ from muliao.history.service import (
     HistoryRecord,
 )
 from muliao.issues.api import IssueService, UserActions
-from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
+from muliao.platform.tooling import TOOL_MAX_RETRIES, Access, RunScope, declared
 from muliao.sessions.api import SESSION_READ, Activity, SessionRecall, indented, place
 
 # history_search 的 agent 取这个值时检索全部 agent
@@ -162,7 +162,7 @@ def history_toolset(
             return None
         return [(await agents.find_by_name(agent)).id]
 
-    @ts.tool
+    @ts.tool(metadata=declared(Access.WRITE))
     async def history_append(ctx: RunContext[RunScope], entries: list[HistoryItem]) -> str:
         """Append entries to your own work history: one entry per piece of work. Entries can never be changed or
         deleted, so check first with `history_search` (since/until = that day) that the day is not recorded yet.
@@ -177,7 +177,7 @@ def history_toolset(
         days = sorted({r.day.isoformat() for r in records})
         return f"appended {len(records)} entries (ids {records[0].id}-{records[-1].id}) for {', '.join(days)}"
 
-    @ts.tool
+    @ts.tool(metadata=declared(Access.READ))
     async def history_search(
         ctx: RunContext[RunScope],
         query: str | None = None,
@@ -223,7 +223,7 @@ def history_toolset(
             for r in found
         ]
 
-    @ts.tool
+    @ts.tool(metadata=declared(Access.READ))
     async def activity_overview(
         ctx: RunContext[RunScope],
         day: date | None = None,

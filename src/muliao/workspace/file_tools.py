@@ -22,8 +22,8 @@ from muliao.platform import text_edit
 from muliao.platform.fs import read_text, real, write_text
 from muliao.platform.sandbox import Confinement
 from muliao.platform.text_edit import truncate
-from muliao.platform.tool_views import Args, CodeBlock, ToolRender, ViewBlock, diff, rendered_by
-from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
+from muliao.platform.tool_views import Args, CodeBlock, ToolRender, ViewBlock, diff
+from muliao.platform.tooling import TOOL_MAX_RETRIES, Access, RunScope, declared
 from muliao.workspace import file_edit
 from muliao.workspace.file_edit import numbered
 from muliao.workspace.syntax_edit import PatternEdit, language_of
@@ -153,7 +153,7 @@ def file_toolset(
     # run_shell 等之间照旧并行（它们由 tools.workspace_toolset 加进同一个工具集，所以逐个工具标，不用工具集的默认值）。
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
-    @ts.tool(sequential=True, metadata=rendered_by(_READ_RENDER))
+    @ts.tool(sequential=True, metadata=declared(Access.READ, render=_READ_RENDER))
     @_io_errors_returned
     async def read_file(
         ctx: RunContext[RunScope],
@@ -198,7 +198,7 @@ def file_toolset(
             return truncate(excerpt.body, limits.max_output_chars) + excerpt.more_note
         return _read_parts(ctx.deps, confinement, reads, limits.max_output_chars)
 
-    @ts.tool(sequential=True, metadata=rendered_by(_WRITE_RENDER))
+    @ts.tool(sequential=True, metadata=declared(Access.WRITE, render=_WRITE_RENDER))
     @_io_errors_returned
     async def write_file(ctx: RunContext[RunScope], path: str, content: str) -> str:
         """Create or overwrite a text file. Parent directories are created as needed.
@@ -229,7 +229,7 @@ def file_toolset(
         verb = "overwrote" if existed else "created"
         return f"{verb} {target} ({len(content.splitlines())} lines, {len(content)} chars)"
 
-    @ts.tool(sequential=True, metadata=rendered_by(_EDIT_RENDER))
+    @ts.tool(sequential=True, metadata=declared(Access.WRITE, render=_EDIT_RENDER))
     @_io_errors_returned
     async def edit_file(
         ctx: RunContext[RunScope],
@@ -373,7 +373,7 @@ def file_toolset(
         reports = [_edit_report(t, before[t], after[t], counts[t]) for t in after]
         return truncate("\n\n".join(reports), limits.max_output_chars)
 
-    @ts.tool(sequential=True)
+    @ts.tool(sequential=True, metadata=declared(Access.WRITE))
     @_io_errors_returned
     async def share_file(ctx: RunContext[RunScope], path: str) -> ToolReturn:
         """Share a file from your workspace with the user, e.g. a chart you made or a document you wrote.

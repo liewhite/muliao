@@ -8,7 +8,7 @@ from pydantic_ai import FunctionToolset, RunContext
 from muliao.errors import InvalidInput
 from muliao.platform.db import Database, utcnow
 from muliao.platform.tasks import Clock
-from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
+from muliao.platform.tooling import TOOL_MAX_RETRIES, Access, RunScope, declared
 from muliao.sessions.wakeups import WAKE_ME, cancel_in, local_time, schedule_in
 
 
@@ -38,7 +38,7 @@ def _due(at: str | None, after_seconds: float | None, tz: ZoneInfo, now: datetim
 def wakeup_toolset(db: Database, tz: ZoneInfo, clock: Clock = utcnow) -> FunctionToolset[RunScope]:
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
-    @ts.tool(name=WAKE_ME)
+    @ts.tool(name=WAKE_ME, metadata=declared(Access.WRITE))
     async def wake_me(
         ctx: RunContext[RunScope],
         note: str | None = None,

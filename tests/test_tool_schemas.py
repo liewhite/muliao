@@ -46,17 +46,20 @@ async def test_array_and_object_parameters_are_not_nullable_unless_null_means_so
 
 
 async def test_redacted_secret_arguments_exist_in_the_registered_tool_schemas(container):
-    """脱敏表若与工具定义脱节（改了工具名或参数名），secret 明文会悄悄进入 messages 表和 SSE。"""
-    from muliao.agents.api import SECRET_TOOL_ARGS
+    """工具声明的脱敏参数（declared 的 secret_args）若与参数名脱节（改了参数名），secret 明文会悄悄进入 messages 表和 SSE。"""
+    from muliao.platform.tooling import traits_in
 
-    params = {
-        tool.name: set(tool.function_schema.json_schema.get("properties", {}))
-        for tool in session_tools(container).values()
-    }
-    assert SECRET_TOOL_ARGS
-    for name, secret in SECRET_TOOL_ARGS.items():
-        assert name in params, f"{name} is not a registered tool"
-        assert secret <= params[name], f"{name} has no parameter {set(secret - params[name])}"
+    secret = {}
+    for tool in session_tools(container).values():
+        traits = traits_in(tool.metadata)
+        assert traits is not None, tool.name
+        if traits.secret_args:
+            params = set(tool.function_schema.json_schema.get("properties", {}))
+            assert traits.secret_args <= params, (
+                f"{tool.name} has no parameter {set(traits.secret_args - params)}"
+            )
+            secret[tool.name] = traits.secret_args
+    assert secret == {"vault_set": frozenset({"value"})}
 
 
 async def test_deferred_tools_are_registered_under_their_table_names(container):

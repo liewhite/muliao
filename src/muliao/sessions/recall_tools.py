@@ -10,7 +10,7 @@ from pydantic_ai import FunctionToolset, RunContext
 from muliao.agents.api import AgentService
 from muliao.errors import InvalidInput
 from muliao.platform.text_edit import truncate
-from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
+from muliao.platform.tooling import TOOL_MAX_RETRIES, Access, RunScope, declared
 from muliao.sessions.info import SessionInfo
 from muliao.sessions.origins import Origin
 from muliao.sessions.recall import Entry, SessionRecall
@@ -89,7 +89,7 @@ def recall_toolset(
     """max_chars：一次交给模型的上限（runtime.tool_output_max_chars），超出时在整条处停下、告诉模型从哪接着读。"""
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
-    @ts.tool(name=SESSION_READ)
+    @ts.tool(name=SESSION_READ, metadata=declared(Access.READ))
     async def session_read(
         ctx: RunContext[RunScope],
         session: str,

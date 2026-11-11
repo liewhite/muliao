@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from muliao.agents.api import AgentPatch, Rules, WriteScope
+from muliao.agents.api import AgentPatch, Rules, ToolTable, WriteScope
 from muliao.agents.assets import load_tree
 from muliao.errors import Forbidden, InvalidInput
 from muliao.platform.sandbox import Category, Confinement, Sandbox, WritablePaths, real_forms, sandbox_for
@@ -249,7 +249,12 @@ async def test_an_agent_writes_its_workspace_the_defaults_and_its_grants_minus_p
 
     async def scope_of(agent: str) -> WriteScope:
         return WriteScope(
-            tree, (tree / "a1",), ("~/proj",), ("~/proj/secret",), agent, load_tree(tree, {}, 4000, None)
+            tree,
+            (tree / "a1",),
+            ("~/proj",),
+            ("~/proj/secret",),
+            agent,
+            load_tree(tree, {}, 4000, None, ToolTable.of([])),
         )
 
     confiner = Confiner(sandbox, lambda a: tmp_path / "ws" / a, scope_of, home=home, private=())

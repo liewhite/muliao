@@ -7,7 +7,7 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
-from muliao.agents.service import AgentSpec
+from muliao.agents.service import AgentPatch, AgentSpec
 from muliao.container import assemble
 from muliao.errors import InvalidInput, TransientError
 from muliao.platform.db import migrate
@@ -383,10 +383,18 @@ async def test_without_web_config_web_permissions_grant_no_tools_and_does_not_bl
     without_web = assemble(with_web.settings, model_checker=lambda _m, _t: None)
     await without_web.agents.report_leftovers()
     toolbox = without_web.consumer._toolbox  # noqa: SLF001
-    assert "web_search" not in toolbox.tool_names()
+    assert "web_search" not in toolbox.traits()
     # 界面与 get_agent 也不列出这次配置没有的工具（与运行时取同一份注册的工具）
     assert "web_search" not in (await without_web.distribution.reach(reader.id)).tool_names
     assert "web_search" in (await with_web.distribution.reach(reader.id)).tool_names
+    # 已有的规则匹配不上这次注册的工具只记问题、不起作用，改别的字段不因它失败（只查新加的规则）
+    problems = [p.reason for p in (await without_web.assets.snapshot()).problems]
+    assert any("'use:tool:web_*' matches no tool" in r for r in problems), problems
+    await without_web.agents.update(reader.id, AgentPatch(description="changed"), actor="user")
+    with pytest.raises(InvalidInput, match="no existing tool"):
+        await without_web.agents.update(
+            reader.id, AgentPatch(allow=["use:tool:web_*", "use:tool:web_fetch"]), actor="user"
+        )
     await without_web.db.engine.dispose()
 
 

@@ -11,7 +11,7 @@ import tomlkit
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo
 
-from muliao.agents.api import McpTransport, RoleSpec, StoredKind, mcp_config
+from muliao.agents.api import McpTransport, RoleSpec, StoredKind, ToolTable, mcp_config
 from muliao.agents.assets import load_tree
 from muliao.agents.service import AgentPatch, AgentSpec
 from muliao.errors import Conflict, Forbidden, InvalidInput, NotFound
@@ -212,7 +212,7 @@ async def test_a_failed_rename_puts_the_files_back(container, make_agent, monkey
     access = r / "platform" / "access.toml"
     before = access.read_text() if access.exists() else None
 
-    def broken(path, change):  # noqa: ANN001, ANN202
+    def broken(path, tools, change):  # noqa: ANN001, ANN202
         raise OSError("disk full")
 
     monkeypatch.setattr(access_file, "edit", broken)
@@ -386,7 +386,7 @@ async def test_an_unparsable_access_toml_keeps_the_last_rules_and_reports_to_the
 
 def test_an_unparsable_access_toml_without_an_earlier_read_leaves_only_the_fixed_parts(tmp_path):
     write(tmp_path / "platform" / "access.toml", "[agents.alpha\n")
-    snapshot = load_tree(tmp_path, {}, 4000, None)
+    snapshot = load_tree(tmp_path, {}, 4000, None, ToolTable.of([]))
     assert snapshot.rules == {}
     [problem] = snapshot.problems
     assert "only the fixed parts of built-in roles apply" in problem.reason
@@ -404,7 +404,7 @@ def test_hidden_entries_are_ignored(tmp_path):
     (tmp_path / ".git").mkdir()
     write(tmp_path / ".DS_Store", "x")
     write(tmp_path / "platform" / "memory" / ".swp", "x")
-    snapshot = load_tree(tmp_path, {}, 4000, None)
+    snapshot = load_tree(tmp_path, {}, 4000, None, ToolTable.of([]))
     assert snapshot.problems == ()
 
 

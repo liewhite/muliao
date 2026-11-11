@@ -11,7 +11,7 @@ from pydantic_ai import FunctionToolset, RunContext
 
 from muliao.agents.api import AgentNames, AgentService
 from muliao.errors import InvalidInput
-from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
+from muliao.platform.tooling import TOOL_MAX_RETRIES, Access, RunScope, declared
 from muliao.platform.values import KEEP
 from muliao.routing.api import ADDRESS_HELP
 from muliao.triggers.faults import TriggerFault
@@ -102,13 +102,13 @@ def triggers_toolset(
             finished_at=t.finished_at,
         )
 
-    @ts.tool_plain
+    @ts.tool_plain(metadata=declared(Access.READ))
     async def trigger_kinds() -> list[TriggerKindInfo]:
         """List the kinds of triggers and the `config` each one takes. Returns a JSON array, each item with `kind`
         and `description`."""
         return [TriggerKindInfo(kind=k.name, description=k.description) for k in triggers.kinds.values()]
 
-    @ts.tool_plain
+    @ts.tool_plain(metadata=declared(Access.READ))
     async def trigger_list(finished: bool = False) -> list[TriggerInfo]:
         """List triggers: things that wake an agent (schedules, webhooks, ...), delivering to their `route`. Returns a
         JSON array of triggers, each with `name`, `kind`, `agent`, `prompt`, `config`, `route`, `status` (kind-specific
@@ -123,7 +123,10 @@ def triggers_toolset(
         names = await agents.names()
         return [await info(t, names) for t in await triggers.list(finished=finished)]
 
-    @ts.tool(description=_CREATE_DESCRIPTION.format(timeout=precheck_timeout, address_help=ADDRESS_HELP))
+    @ts.tool(
+        description=_CREATE_DESCRIPTION.format(timeout=precheck_timeout, address_help=ADDRESS_HELP),
+        metadata=declared(Access.WRITE),
+    )
     async def trigger_create(
         ctx: RunContext[RunScope],
         name: str,
@@ -162,7 +165,7 @@ def triggers_toolset(
             f"status: {triggers.view(trigger).status.model_dump_json()}"
         )
 
-    @ts.tool_plain
+    @ts.tool_plain(metadata=declared(Access.WRITE))
     async def trigger_update(
         name: str,
         prompt: str | None = None,
@@ -200,7 +203,7 @@ def triggers_toolset(
             f"status: {triggers.view(trigger).status.model_dump_json()}"
         )
 
-    @ts.tool_plain
+    @ts.tool_plain(metadata=declared(Access.WRITE))
     async def trigger_run(name: str) -> str:
         """Fire a trigger now (without an event body), delivering to its route like any firing. Its precheck,
         if any, runs first, so this also tests the precheck and its `@route` lines. This does not use up a
@@ -215,7 +218,7 @@ def triggers_toolset(
             return f"precheck of {name} found nothing to do (or recorded its baseline): not fired"
         return f"fired trigger {name}: {len(fired.sessions)} deliveries"
 
-    @ts.tool_plain
+    @ts.tool_plain(metadata=declared(Access.WRITE))
     async def trigger_delete(name: str) -> str:
         """Delete a trigger.
 

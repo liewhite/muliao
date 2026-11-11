@@ -570,7 +570,7 @@ export interface paths {
         };
         /**
          * List Assets
-         * @description 全部资源：内置工具（按登记顺序，仅当前配置下注册的）在前，存成文件的按种类、名称；每种带自己的
+         * @description 全部资源：内置工具（当前配置下注册的，按注册顺序）在前，存成文件的按种类、名称；每种带自己的
          *     详情（工具的读写与管理类、MCP 的配置与启停）。
          */
         get: operations["list_assets_api_assets_get"];
@@ -3484,7 +3484,7 @@ export interface components {
         };
         /**
          * ToolOut
-         * @description 一个内置工具（agents.permissions.TOOLS 里登记的），在规则里写作 `tool:<name>`。
+         * @description 一个内置工具（当前配置下注册的，工具自己声明读写与是否管理类），在规则里写作 `tool:<name>`。
          */
         ToolOut: {
             /** Name */

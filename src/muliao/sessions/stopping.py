@@ -1,4 +1,4 @@
-"""用户停止与外层取消（目前是关停）的区分。停止之后要做的事在 sessions.halt（SessionHalt，同一事务里先由 sessions.steps.save_tail_in 保存这一步），设计见
+"""用户停止与外层取消（目前是关停）的区分。停止之后要做的事在 sessions.halt（SessionHalt，同一事务里先由 sessions.Steps.save_tail_in 保存这一步），设计见
 docs/architecture.md「停止会话」。
 
 停止是同步的：stop 等到这次运行连同停止之后的收尾（宿主交给 run 的 stopped，即保存与停止事务）做完才返回，调用方

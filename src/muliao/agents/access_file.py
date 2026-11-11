@@ -24,12 +24,13 @@ from muliao.agents.kinds import Kind
 from muliao.agents.naming import nfc, validate_slug
 from muliao.agents.permissions import (
     BASE,
-    FIXED_RULES,
     AgentRules,
     Role,
     Rules,
-    check_patterns,
+    ToolTable,
+    fixed_rules,
     kind_of,
+    matches_no_tool,
     pattern_of,
 )
 from muliao.errors import Conflict, InvalidInput
@@ -82,32 +83,34 @@ class Access:
     readable: bool
 
 
-def read(path: Path, agents: Mapping[str, str]) -> Access:
-    """读 path（没有这个文件就是空的）。agents：加载成功的 agent，名字 → id。同步 IO。"""
+def read(path: Path, agents: Mapping[str, str], tools: ToolTable) -> Access:
+    """读 path（没有这个文件就是空的）。agents：加载成功的 agent，名字 → id；tools：内置工具表（内置角色的固定规则、规则
+    引用的工具）。同步 IO。"""
     if not path.is_file():
-        return parse(None, agents)
+        return parse(None, agents, tools)
     try:
         text = path.read_text(encoding="utf-8")
     except UnicodeDecodeError as e:
-        return _Parser(agents).unreadable(str(e))
-    return parse(text, agents)
+        return _Parser(agents, tools).unreadable(str(e))
+    return parse(text, agents, tools)
 
 
-def parse(text: str | None, agents: Mapping[str, str]) -> Access:
+def parse(text: str | None, agents: Mapping[str, str], tools: ToolTable) -> Access:
     """文件内容 text（没有这个文件为 None）读成 Access。"""
-    return _Parser(agents).parse(text)
-
-
-def _builtin_roles() -> dict[str, Role]:
-    return {n: Role(n, BUILTIN_DESCRIPTIONS[n], Rules(), fixed) for n, fixed in FIXED_RULES.items()}
+    return _Parser(agents, tools).parse(text)
 
 
 class _Parser:
-    def __init__(self, agents: Mapping[str, str]):
+    def __init__(self, agents: Mapping[str, str], tools: ToolTable):
         self.agents = agents
+        self.tools = tools
+        self.fixed = fixed_rules(tools)
         self.problems: list[AccessProblem] = []
-        self.roles = _builtin_roles()
+        self.roles = self.builtin_roles()
         self.rules: dict[str, AgentRules] = {}
+
+    def builtin_roles(self) -> dict[str, Role]:
+        return {n: Role(n, BUILTIN_DESCRIPTIONS[n], Rules(), fixed) for n, fixed in self.fixed.items()}
 
     def problem(self, reason: str, agent_id: str | None = None) -> None:
         self.problems.append(AccessProblem(reason, agent_id))
@@ -123,7 +126,7 @@ class _Parser:
     def done(self) -> Access:
         invalid = [p for p in self.problems if p.invalid]
         if invalid:
-            return Access(_builtin_roles(), {}, tuple(invalid), readable=False)
+            return Access(self.builtin_roles(), {}, tuple(invalid), readable=False)
         return Access(self.roles, self.rules, tuple(self.problems), readable=True)
 
     def parse(self, text: str | None) -> Access:
@@ -162,7 +165,7 @@ class _Parser:
         if not description:
             self.invalid(f"{what}: description must not be empty")
         rules = Rules(self.patterns(entry.allow, what), self.patterns(entry.deny, what))
-        self.roles[name] = Role(name, description, rules, FIXED_RULES.get(name, Rules()))
+        self.roles[name] = Role(name, description, rules, self.fixed.get(name, Rules()))
 
     def agent(self, name: str, raw: object) -> None:
         what = f"agent {name!r}"
@@ -203,43 +206,44 @@ class _Parser:
             except InvalidInput as e:
                 self.invalid(f"{what}: {e}")
             else:
-                try:
-                    check_patterns([p])
-                except InvalidInput as e:
-                    self.problem(f"{what}: {e}", agent_id)
+                if matches_no_tool(p, self.tools):
+                    self.problem(
+                        f"{what}: rule {p!r} matches no tool; tools are listed by get_agent, e.g. 'use:tool:issue_*'",
+                        agent_id,
+                    )
         return unique
 
 
 # ---- 写 ----
 
 
-def edit(path: Path, change: Callable[[TOMLDocument], None]) -> None:
+def edit(path: Path, tools: ToolTable, change: Callable[[TOMLDocument], None]) -> None:
     """读出 path（不存在就是空文档）、交给 change 改、原子写回；现在的文件不合法（与读树同一套规则）时 Conflict，不写。
-    同步 IO。"""
-    text = _valid_text(path)
+    tools 只因读法（parse）要算内置角色的固定规则而传，不影响合法与否。同步 IO。"""
+    text = _valid_text(path, tools)
     doc = tomlkit.parse(text) if text is not None else tomlkit.document()
     change(doc)
     out = tomlkit.dumps(doc)
     # 改完也要合法（与读树、文件工具同一套规则，角色名与描述等只在这里查）：比如描述空了，或删掉的角色还被一节对不上
     # 已加载目录的 [agents.X] 引用着（调用方只看得到已加载的 agent）
-    after = parse(out, {})
+    after = parse(out, {}, tools)
     if not after.readable:
         raise InvalidInput("; ".join(p.reason for p in after.problems))
     write_atomic(path, out)
 
 
-def check_valid(path: Path) -> None:
+def check_valid(path: Path, tools: ToolTable) -> None:
     """path 现在的内容整份合法，否则 Conflict：平台不在不合法的文件上改（与读树同一套规则），由 admin 先修好它。同步 IO。"""
-    _valid_text(path)
+    _valid_text(path, tools)
 
 
-def _valid_text(path: Path) -> str | None:
+def _valid_text(path: Path, tools: ToolTable) -> str | None:
     """合法的现有内容（没有文件为 None），否则 Conflict 列出不合法的每一处。"""
     try:
         text = path.read_text(encoding="utf-8") if path.is_file() else None
     except UnicodeDecodeError as e:
         raise Conflict(f"{path} is not UTF-8 text ({e}); fix it first") from e
-    access = parse(text, {})
+    access = parse(text, {}, tools)
     if not access.readable:
         reasons = "; ".join(p.reason for p in access.problems)
         raise Conflict(f"{path} is invalid ({reasons}); fix it first")

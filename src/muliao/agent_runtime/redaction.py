@@ -5,25 +5,16 @@
 
 import dataclasses
 import json
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import Any
 
 from pydantic import ValidationError
 from pydantic_ai.exceptions import ToolRetryError, UnexpectedModelBehavior
 from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, RetryPromptPart, ToolCallPart
 
-# SECRET_TOOL_ARGS（工具名 → 需要脱敏的参数名）由定义这些工具的 agents 领域声明（agents/secret_tools.py）
-from muliao.agents.api import SECRET_TOOL_ARGS
-
 REDACTED = "[redacted]"
-
-
-def redact_args(tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
-    secret = SECRET_TOOL_ARGS.get(tool_name)
-    if not secret:
-        return args
-    return {k: REDACTED if k in secret else v for k, v in args.items()}
 
 
 def _args_dict(part: ToolCallPart) -> dict[str, Any] | None:
@@ -42,25 +33,46 @@ def _args_dict(part: ToolCallPart) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
-def redact_call(part: ToolCallPart) -> ToolCallPart:
-    if part.tool_name not in SECRET_TOOL_ARGS:
-        return part
-    parsed = _args_dict(part)
-    if parsed is None:
-        # 无法定位字段：整体替换，宁可丢掉参数也不留下明文
-        return dataclasses.replace(part, args=json.dumps({"_": REDACTED}))
-    redacted = redact_args(part.tool_name, parsed)
-    args: str | dict[str, Any] = json.dumps(redacted) if isinstance(part.args, str) else redacted
-    return dataclasses.replace(part, args=args)
+@dataclass(frozen=True)
+class Redaction:
+    """工具名 → 要脱敏的参数名：各内置工具注册时自己声明（platform.tooling.declared 的 secret_args），由
+    Toolbox.redaction 收集。MCP 工具没有。"""
 
+    secret_args: Mapping[str, frozenset[str]]
 
-def redact_retry(part: RetryPromptPart) -> RetryPromptPart:
-    """参数校验失败时交还模型的错误：pydantic 的每条错误都带着 input（出错的那部分参数，缺字段时是整个参数
-    dict），里面就有明文。去掉 input，错误位置与原因（loc、msg、type）照常留给模型看。工具自己报的错误（字符串）
-    由工具负责不带明文。"""
-    if part.tool_name not in SECRET_TOOL_ARGS or isinstance(part.content, str):
-        return part
-    return dataclasses.replace(part, content=[{**e, "input": REDACTED} for e in part.content])
+    def call(self, part: ToolCallPart) -> ToolCallPart:
+        secret = self.secret_args.get(part.tool_name)
+        if not secret:
+            return part
+        parsed = _args_dict(part)
+        if parsed is None:
+            # 无法定位字段：整体替换，宁可丢掉参数也不留下明文
+            return dataclasses.replace(part, args=json.dumps({"_": REDACTED}))
+        redacted = {k: REDACTED if k in secret else v for k, v in parsed.items()}
+        args: str | dict[str, Any] = json.dumps(redacted) if isinstance(part.args, str) else redacted
+        return dataclasses.replace(part, args=args)
+
+    def retry(self, part: RetryPromptPart) -> RetryPromptPart:
+        """参数校验失败时交还模型的错误：pydantic 的每条错误都带着 input（出错的那部分参数，缺字段时是整个参数
+        dict），里面就有明文。去掉 input，错误位置与原因（loc、msg、type）照常留给模型看。工具自己报的错误（字符串）
+        由工具负责不带明文。"""
+        if part.tool_name not in self.secret_args or isinstance(part.content, str):
+            return part
+        return dataclasses.replace(part, content=[{**e, "input": REDACTED} for e in part.content])
+
+    def messages(self, messages: Sequence[ModelMessage]) -> list[ModelMessage]:
+        result: list[ModelMessage] = []
+        for msg in messages:
+            if isinstance(msg, ModelResponse):
+                msg = dataclasses.replace(
+                    msg, parts=[self.call(p) if isinstance(p, ToolCallPart) else p for p in msg.parts]
+                )
+            elif isinstance(msg, ModelRequest):
+                msg = dataclasses.replace(
+                    msg, parts=[self.retry(p) if isinstance(p, RetryPromptPart) else p for p in msg.parts]
+                )
+            result.append(msg)
+        return result
 
 
 @contextmanager
@@ -75,18 +87,3 @@ def tool_input_kept_out_of_failures() -> Iterator[None]:
         if not isinstance(e.__cause__, ValidationError | ToolRetryError):
             raise
         raise UnexpectedModelBehavior(e.message, e.body) from None
-
-
-def redact_messages(messages: Sequence[ModelMessage]) -> list[ModelMessage]:
-    result: list[ModelMessage] = []
-    for msg in messages:
-        if isinstance(msg, ModelResponse):
-            msg = dataclasses.replace(
-                msg, parts=[redact_call(p) if isinstance(p, ToolCallPart) else p for p in msg.parts]
-            )
-        elif isinstance(msg, ModelRequest):
-            msg = dataclasses.replace(
-                msg, parts=[redact_retry(p) if isinstance(p, RetryPromptPart) else p for p in msg.parts]
-            )
-        result.append(msg)
-    return result
