@@ -673,20 +673,20 @@ function TriggerEditor({ trigger, facts, onDone }: { trigger: Trigger; facts: Re
       if (Object.keys(form.changes).length > 0) await api.updateTrigger(trigger.id, patch)
       onDone()
     })
-  // 配置与前置检查的编辑器自己保存编辑中的内容、只在挂载时读初值：基线换了（跟上服务端、用对方的）就按 key 重新挂载，
-  // 从此刻的草稿开始（草稿不合法时从基线开始）
+  // 配置与前置检查的编辑器自己保存编辑中的内容、只在挂载时读初值（这两个是例外，不由草稿受控）：草稿被外部换掉（跟上
+  // 服务端、用对方的）就按 key 重新挂载，从换上的草稿开始（被换上的总是合法的，null 只出现在用户输入中，那时不重新挂载）
   const config = { kind: trigger.kind, config: draft.config ?? form.base.config } as KindConfig
   return (
     <>
       <Modal.Body className="flex flex-col gap-3">
         {facts}
         <ConfigEditor
-          key={JSON.stringify(form.base.config)}
+          key={form.replaced('config')}
           value={config}
           onChange={(c) => form.set({ config: c?.config ?? null })}
         />
         <PrecheckEditor
-          key={JSON.stringify(form.base.precheck)}
+          key={form.replaced('precheck')}
           precheck={draft.precheck}
           onChange={(precheck) => form.set({ precheck })}
         />

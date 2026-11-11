@@ -17,10 +17,8 @@ from pydantic import BaseModel
 from muliao.errors import Conflict
 
 
-def check_base(what: str, current: Mapping[str, Any], base: BaseModel | None) -> None:
+def check_base(what: str, current: Mapping[str, Any], base: BaseModel) -> None:
     """base 里给出的每个字段（JSON 形状）都等于 current（此刻的接口输出，含全部可改字段）里的值，否则 Conflict。"""
-    if base is None:
-        return
     # 只取给出的字段，字段里的值按完整的 JSON 比（里层省略的缺省值补上，与输出一致）
     dumped = base.model_dump(mode="json")
     given = [field for field in type(base).model_fields if field in base.model_fields_set]

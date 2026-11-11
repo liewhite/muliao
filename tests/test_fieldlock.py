@@ -7,12 +7,17 @@
 from typing import Any
 
 import pytest
+from pydantic import BaseModel
 
+from muliao.api.agents import AgentFields, AgentOut, RoleFields, _editable
+from muliao.api.issues import IssueFields
+from muliao.api.triggers import TriggerFields
 from tests.conftest import login
 
 
-def _pick(out: dict[str, Any], fields: tuple[str, ...]) -> dict[str, Any]:
-    return {f: out[f] for f in fields}
+def _pick(out: dict[str, Any], fields: type[BaseModel]) -> dict[str, Any]:
+    """全部可改字段（按模型推出，新增字段自动覆盖）此刻的值；输出里缺了哪个就在这里报 KeyError。"""
+    return {f: out[f] for f in fields.model_fields}
 
 
 async def _locks(client, path: str, base: dict[str, Any], field: str, other: tuple[str, Any]) -> None:
@@ -44,9 +49,8 @@ async def test_issue_fields_are_locked_by_their_opened_values(client, make_agent
             "/api/issues", json={"title": "t", "description": "d", "owner": alpha, "depends_on": [up["id"]]}
         )
     ).json()
-    fields = ("owner", "title", "description", "status", "priority", "assignee", "depends_on")
     path = f"/api/issues/{issue['id']}"
-    await _locks(client, path, _pick(issue, fields), "description", ("depends_on", []))
+    await _locks(client, path, _pick(issue, IssueFields), "description", ("depends_on", []))
     # 不带 base 的修改（agent 的工具、一点就改的开关）照常
     assert (await client.patch(path, json={"title": "t3"})).status_code == 200
 
@@ -67,11 +71,10 @@ async def test_trigger_fields_are_locked_by_their_opened_values(client, make_age
             },
         )
     ).json()
-    fields = ("prompt", "config", "enabled", "precheck", "route")
     await _locks(
         client,
         f"/api/triggers/{trigger['id']}",
-        _pick(trigger, fields),
+        _pick(trigger, TriggerFields),
         "prompt",
         ("config", {"cron": "0 10 * * *"}),
     )
@@ -80,13 +83,15 @@ async def test_trigger_fields_are_locked_by_their_opened_values(client, make_age
 async def test_agent_fields_are_locked_by_their_opened_values(client):
     await login(client)
     agent = (await client.post("/api/agents", json={"name": "a1", "description": "d"})).json()
-    base = {**agent["config"], **_pick(agent, ("name", "roles", "allow", "deny"))}
+    out = AgentOut.model_validate(agent)
+    assert out.config is not None
+    # 接口比对用的「此刻的值」正好是全部可改字段
+    assert set(_editable(out, out.config)) == set(AgentFields.model_fields)
+    base = _pick({**agent["config"], **agent}, AgentFields)
     await _locks(client, f"/api/agents/{agent['id']}", base, "description", ("name", "a2"))
 
 
 async def test_role_fields_are_locked_by_their_opened_values(client):
     await login(client)
     role = (await client.post("/api/roles/ops", json={"description": "d", "allow": [], "deny": []})).json()
-    await _locks(
-        client, "/api/roles/ops", _pick(role, ("description", "allow", "deny")), "description", ("deny", [])
-    )
+    await _locks(client, "/api/roles/ops", _pick(role, RoleFields), "description", ("deny", []))

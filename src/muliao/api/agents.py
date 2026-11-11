@@ -381,19 +381,19 @@ class AgentUpdate(AgentFields):
     base: AgentFields | None = None
 
 
-def _editable(a: AgentOut) -> dict[str, object]:
-    """agent 能改的字段此刻的值（AgentFields 的形状）：配置展开到顶层。目录没加载时配置各项按 None 比，修改本身随后
-    会因目录没加载而失败。"""
+def _editable(a: AgentOut, config: AgentConfigOut) -> dict[str, object]:
+    """agent 能改的字段此刻的值（AgentFields 的形状）：配置展开到顶层。"""
     out = a.model_dump(mode="json")
-    config = out["config"] or dict.fromkeys(AgentConfigOut.model_fields)
-    return {**config, **{f: out[f] for f in ("name", "roles", "allow", "deny")}}
+    return {**config.model_dump(mode="json"), **{f: out[f] for f in ("name", "roles", "allow", "deny")}}
 
 
 @router.patch("/agents/{agent_id}")
 async def update_agent(c: C, agent_id: str, body: AgentUpdate) -> AgentOut:
     if body.base is not None:
         current = AgentOut.of(await c.agents.view(agent_id))
-        check_base(f"agent {current.name!r}", _editable(current), body.base)
+        # 目录没加载（配置为 null）时不比：下面的修改会报出真正的原因
+        if current.config is not None:
+            check_base(f"agent {current.name!r}", _editable(current, current.config), body.base)
     patch = AgentPatch(**body.model_dump(exclude={"base"}))
     return await _out(c, await c.agents.update(agent_id, patch, actor=USER))
 

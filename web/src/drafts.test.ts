@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { conflictingFields, editedFields, followed } from './drafts'
+import { adopted, conflictingFields, draftState, editedFields, followed } from './drafts'
 import { coalesced } from './events'
 
 describe('drafts', () => {
@@ -13,7 +13,7 @@ describe('drafts', () => {
   it('follows the server on untouched fields and keeps the edited ones', () => {
     const draft = { ...opened, description: 'mine' }
     const latest = { name: 'renamed by agent', description: 'theirs', roles: ['y'] }
-    const next = followed(opened, draft, latest)
+    const next = followed({ ...draftState(opened), draft }, latest)
     expect(next.draft).toEqual({ name: 'renamed by agent', description: 'mine', roles: ['y'] })
     // 改过的字段基线不动：服务端的新值与基线不同，就是冲突
     expect(next.base).toEqual({ name: 'renamed by agent', description: 'd', roles: ['y'] })
@@ -25,7 +25,19 @@ describe('drafts', () => {
     const draft = { ...opened, description: 'mine' }
     const latest = { ...opened, description: 'mine' }
     expect(conflictingFields(opened, draft, latest)).toEqual([])
-    expect(followed(opened, draft, latest)).toEqual({ base: latest, draft: latest })
+    const next = followed({ ...draftState(opened), draft }, latest)
+    expect([next.base, next.draft, next.replaced]).toEqual([latest, latest, {}])
+  })
+
+  it('takes theirs or keeps mine on a conflicting field', () => {
+    const latest = { ...opened, description: 'theirs' }
+    const s = { ...draftState(opened), draft: { ...opened, description: 'mine' } }
+    const theirs = adopted(s, ['description'], latest, false)
+    expect([theirs.draft, theirs.base, theirs.replaced]).toEqual([latest, latest, { description: 1 }])
+    // 覆盖：基线换成对方的，草稿留着；提交时以对方的值为原值
+    const mine = adopted(s, ['description'], latest, true)
+    expect([mine.draft.description, mine.base.description, mine.replaced]).toEqual(['mine', 'theirs', {}])
+    expect(conflictingFields(mine.base, mine.draft, latest)).toEqual([])
   })
 
   it('has no conflict while the server still holds the base', () => {
