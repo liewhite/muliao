@@ -1,5 +1,5 @@
-"""edit_file 的多处修改（纯函数）：每处修改（Edit）按自己的方式定位——原文（Replace）、行号区间
-（LineRange）、语法结构（workspace.syntax_edit.PatternEdit）——只报出要做的替换（Splice），apply_each 依次拼出新文本；
+"""edit_file 的多处修改（纯函数）：每处修改（Edit）按自己的方式定位——原文（Replace）或行号区间
+（LineRange）——只报出要做的替换（Splice），apply_each 依次拼出新文本；
 行号一律指调用前的原文，由 Origin 换算。另有带行号展示（read_file、edit_file 的回显与报错）与改动处的行范围。"""
 
 import difflib
@@ -224,8 +224,8 @@ def as_lines(new: str, replaced: str) -> str:
 def apply_each[K](
     texts: Mapping[K, str], edits: Sequence[tuple[K, Edit]]
 ) -> tuple[dict[K, str], dict[K, int]]:
-    """依次做多处修改，每项作用在它那份文本上（键是文本的名字，如文件路径）。同一份文本里按内容定位的（原文、语法
-    模式）在前面改过的结果上找；按行号定位的，行号一律指调用前的原文，按 Origin 换算。返回各份的新文本与替换数（只含
+    """依次做多处修改，每项作用在它那份文本上（键是文本的名字，如文件路径）。同一份文本里按原文定位的在前面改过的
+    结果上找；按行号定位的，行号一律指调用前的原文，按 Origin 换算。返回各份的新文本与替换数（只含
     被改到的键）。任何一项失败都整体失败，报错指出是第几项；调用方只在成功后写盘，所以不会因为某处对不上而留下改了
     一半的文件（写盘本身的 IO 失败不归这里管）。"""
     if not edits:
@@ -245,7 +245,7 @@ def apply_each[K](
                 raise
             k = sum(1 for earlier, _ in edits[: i - 1] if earlier == key)
             after = (
-                f" (old_text/pattern are matched against the text with the {k} earlier edit(s) to it applied; "
+                f" (old_text is matched against the text with the {k} earlier edit(s) to it applied; "
                 "line numbers refer to the text before this call)"
                 if k
                 else ""

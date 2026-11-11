@@ -1,4 +1,3 @@
-import json
 from datetime import timedelta
 
 from pydantic_ai.messages import ModelResponse
@@ -80,48 +79,6 @@ async def test_the_old_per_kind_endpoints_are_gone(client):
     ):
         assert (await client.get(path)).status_code == 404, path
     assert (await client.put("/api/vault/K", json={"value": "v"})).status_code == 404
-
-
-async def test_a_skill_exported_over_http_imports_into_another_owner(client, container, make_agent):
-    agent_id = (await make_agent()).id
-    await login(client)
-    await client.put(
-        "/api/assets/skill/shared",
-        json={"owner": None, "description": "for all", "body": "steps", "version": None},
-    )
-    # 二进制文件不进包，同导入一样列出来（响应头里的 JSON，非 ASCII 转义）
-    (await container.skills.directory("shared") / "图.png").write_bytes(b"\x89PNG\xff")
-
-    resp = await client.get("/api/assets/skill/shared/package")
-    assert resp.status_code == 200, resp.text
-    assert resp.headers["content-type"] == "application/zip"
-    assert resp.headers["content-disposition"] == 'attachment; filename="shared.skill"'
-    assert json.loads(resp.headers["x-skipped-files"]) == [{"path": "图.png", "reason": "not UTF-8 text"}]
-    package = resp.content
-
-    # 名字全局唯一：平台的还在时导入不进别的 owner
-    assert (
-        await client.post("/api/assets/skill", params={"owner": agent_id}, content=package)
-    ).status_code == 409
-    assert (await client.delete("/api/assets/skill/shared")).status_code == 204
-    resp = await client.post("/api/assets/skill", params={"owner": agent_id}, content=package)
-    assert resp.status_code == 200, resp.text
-    assert resp.json() == {
-        "skill": {"name": "shared", "description": "for all", "owner": agent_id},
-        "skipped": [],
-    }
-    assert (await client.get("/api/assets/skill/shared/package")).status_code == 200
-    assert (await client.get("/api/assets/skill/shared")).json()["body"].strip() == "steps"
-
-    assert (
-        await client.post("/api/assets/skill", params={"owner": agent_id}, content=package)
-    ).status_code == 409
-    replaced = await client.post(
-        "/api/assets/skill", params={"owner": agent_id, "replace": True}, content=package
-    )
-    assert replaced.status_code == 200
-    assert (await client.post("/api/assets/skill", content=b"not a zip")).status_code == 422
-    assert (await client.get("/api/assets/skill/nope/package")).status_code == 404
 
 
 async def test_assets_list_every_owners_assets_with_the_roles_that_give_them(client, container, make_agent):

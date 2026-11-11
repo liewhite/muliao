@@ -1,13 +1,12 @@
-import { useRef, useState } from 'react'
+import { useState } from 'react'
 import { Button, Card, toast } from '@heroui/react'
-import { Download, Plus, Trash2, Upload } from 'lucide-react'
+import { Plus, Trash2 } from 'lucide-react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { api, ApiError, skillFileUrl, type AgentId, type AssetOf, type Schemas, type Skill } from '../api'
+import { api, skillFileUrl, type AgentId, type AssetOf, type Skill } from '../api'
 import { FileBrowser } from './FileBrowser'
 import { AssetAccess, OwnerSelect } from './assetParts'
 import { useDraft } from '../drafts'
 import { ActionButton,
-  CollapsibleForm,
   DraftConflicts,
   EmptyHint,
   ErrorAlert,
@@ -31,7 +30,6 @@ function editorPath(name?: string): string {
 
 /** skill 的资产页：assets 是资产池里（已筛选的）skill，点进编辑 */
 export function SkillTab({ assets }: { assets: AssetOf<'skill'>[] }) {
-  const [owner, setOwner] = useState<AgentId | null>(null)
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap gap-2">
@@ -40,10 +38,6 @@ export function SkillTab({ assets }: { assets: AssetOf<'skill'>[] }) {
           新建 skill
         </LinkButton>
       </div>
-      <CollapsibleForm title="导入 .skill">
-        <OwnerSelect value={owner} onChange={setOwner} />
-        <ImportSkill owner={owner} />
-      </CollapsibleForm>
       {assets.length === 0 ? (
         <EmptyHint>没有 skill</EmptyHint>
       ) : (
@@ -63,80 +57,6 @@ export function SkillTab({ assets }: { assets: AssetOf<'skill'>[] }) {
           ))}
         </div>
       )}
-    </div>
-  )
-}
-
-/** 导入标准 .skill 文件为 owner 的 skill；同名已存在时问是否覆盖，没有导入的文件列在下面。 */
-function ImportSkill({ owner }: { owner: AgentId | null }) {
-  const input = useRef<HTMLInputElement>(null)
-  const confirm = useConfirm()
-  const action = useAction()
-  const [result, setResult] = useState<Schemas['SkillImportOut'] | null>(null)
-
-  async function importFile(file: File) {
-    setResult(null)
-    await action.run(async () => {
-      let imported: Schemas['SkillImportOut']
-      try {
-        imported = await api.importSkill(owner, file, false)
-      } catch (e) {
-        if (!(e instanceof ApiError && e.status === 409)) throw e
-        const ok = await confirm({
-          title: '同名 skill 已存在，覆盖它？',
-          body: '覆盖后它的整个目录（SKILL.md 与附件）换成包里的内容，旧内容不保留。',
-          confirmLabel: '覆盖',
-          danger: true,
-        })
-        if (!ok) return
-        imported = await api.importSkill(owner, file, true)
-      }
-      setResult(imported)
-      toast.success(`已导入 skill「${imported.skill.name}」`)
-    })
-  }
-
-  return (
-    <>
-      <input
-        ref={input}
-        type="file"
-        accept=".skill,.zip"
-        hidden
-        onChange={(e) => {
-          const file = e.target.files?.[0]
-          // 允许再次选择同一个文件
-          e.target.value = ''
-          if (file) void importFile(file)
-        }}
-      />
-      <ActionButton variant="secondary" size="sm" isPending={action.busy} onPress={() => input.current?.click()}>
-        <Upload className="size-4" />
-        导入 .skill
-      </ActionButton>
-      {action.error && (
-        <div className="w-full">
-          <ErrorAlert error={action.error} />
-        </div>
-      )}
-      {result && <SkippedFiles what="导入" skipped={result.skipped} />}
-    </>
-  )
-}
-
-/** 导入、导出时没收进来的文件与原因（二进制、不是 UTF-8 文本……）；没有时不显示 */
-function SkippedFiles({ what, skipped }: { what: string; skipped: Schemas['SkippedOut'][] }) {
-  if (skipped.length === 0) return null
-  return (
-    <div className="w-full text-sm text-muted">
-      <div>以下文件没有{what}：</div>
-      <ul className="list-disc pl-5">
-        {skipped.map((s) => (
-          <li key={s.path}>
-            <span className="font-mono">{s.path}</span>：{s.reason}
-          </li>
-        ))}
-      </ul>
     </div>
   )
 }
@@ -219,8 +139,6 @@ function SkillDraft({ latest }: { latest: Skill }) {
   const agents = useAgents()
   const doc = useDraft<SkillText>({ description: latest.description, body: latest.body })
   const action = useAction()
-  // 上一次导出没打进包的文件
-  const [exportSkipped, setExportSkipped] = useState<Schemas['SkippedOut'][] | null>(null)
 
   async function save() {
     const ok = await action.run(async () => {
@@ -229,21 +147,6 @@ function SkillDraft({ latest }: { latest: Skill }) {
       toast.success('skill 已保存')
     })
     if (ok) navigate(SKILLS)
-  }
-
-  async function exportPackage() {
-    setExportSkipped(null)
-    await action.run(async () => {
-      const exported = await api.exportSkill(name)
-      setExportSkipped(exported.skipped)
-      const url = URL.createObjectURL(exported.blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = `${name}.skill`
-      link.click()
-      // 点击触发的下载异步开始，太早释放会取消它
-      setTimeout(() => URL.revokeObjectURL(url), 10_000)
-    })
   }
 
   async function remove() {
@@ -263,16 +166,11 @@ function SkillDraft({ latest }: { latest: Skill }) {
             <ActionButton isPending={action.busy} isDisabled={doc.conflicts.length > 0} onPress={() => void save()}>
               保存
             </ActionButton>
-            <Button variant="secondary" isDisabled={action.busy} onPress={() => void exportPackage()}>
-              <Download className="size-4" />
-              导出 .skill
-            </Button>
             <Button variant="danger-soft" isDisabled={action.busy} onPress={() => void remove()}>
               <Trash2 className="size-4" />
               删除
             </Button>
           </div>
-          {exportSkipped && <SkippedFiles what="打进导出的包" skipped={exportSkipped} />}
         </Card.Content>
       </Card>
       <section className="flex flex-col gap-2">

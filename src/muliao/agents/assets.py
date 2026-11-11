@@ -43,7 +43,7 @@ from muliao.agents.mcp_config import McpFile
 from muliao.agents.memory_file import MemoryText
 from muliao.agents.naming import PLATFORM, nfc
 from muliao.agents.permissions import Action, AgentRules, Role, ToolTable, pattern_of
-from muliao.agents.skill_package import SkillDir
+from muliao.agents.skill_file import SkillDir
 from muliao.errors import Conflict, InvalidInput, NotFound
 
 # 各种类的内容在各自的格式模块，这里一并给出（agents.api）

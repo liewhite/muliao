@@ -154,7 +154,7 @@ export const unauthorizedEvent = new EventTarget()
 
 // 请求的时限：服务端或网络卡住时报错，而不是让等它的操作（按钮）一直转。要大于服务端单个操作的上限，否则服务端随后
 // 成功或报出的真正原因被换成「超时」：最长的是探测 MCP server（连接 30 秒，agent_runtime/mcp.py 的 _CONNECT_TIMEOUT，再列工具）。
-// 传文件（上传、录音、导入导出、预览）按大小与网速可能很久
+// 传文件（上传、录音、预览）按大小与网速可能很久
 export const REQUEST_TIMEOUT_MS = 120_000
 const FILE_TIMEOUT_MS = 600_000
 
@@ -164,7 +164,7 @@ async function send<T>(
   path: string,
   query: Query | undefined,
   body?: { type: string; data: BodyInit },
-  // 响应体是文件（如 .skill 包）：成功时交出响应本身，由调用方读 Blob 与响应头
+  // 响应体是文件（如预览的文件）：成功时交出响应本身，由调用方读 Blob
   raw = false,
 ): Promise<T> {
   const timeoutMs = raw || body?.data instanceof Blob ? FILE_TIMEOUT_MS : REQUEST_TIMEOUT_MS
@@ -395,16 +395,6 @@ export const api = {
   /** skill 目录里 path（相对 skill 目录，空为根）这一层，同工作目录浏览 */
   skillFiles: (name: string, path: string) =>
     call('get', '/api/assets/skill/{name}/files', { path: { name }, query: { path } }),
-  /** 标准 .skill 文件（zip）与没打进包的文件（响应头 X-Skipped-Files）；失败时与其他调用一样抛 ApiError，不会把错误体当成文件存下 */
-  exportSkill: async (name: string) => {
-    const resp = await send<Response>('GET', `/api/assets/skill/${encodeURIComponent(name)}/package`, undefined, undefined, true)
-    const skipped = resp.headers.get('X-Skipped-Files')
-    if (skipped === null) throw new Error('skill export answered without the X-Skipped-Files header')
-    return { blob: await resp.blob(), skipped: JSON.parse(skipped) as Schemas['SkippedOut'][] }
-  },
-  /** 导入标准 .skill 文件（名字取自包）；同名 skill 已存在时 409，replace 为 true 时覆盖 */
-  importSkill: (owner: string | null, file: Blob, replace: boolean) =>
-    send<Schemas['SkillImportOut']>('POST', '/api/assets/skill', { owner, replace }, { type: 'application/zip', data: file }),
 
   /** trigger_id：只列这个触发器发起过的会话（不能再给 origin）；q 是关键字（标题或消息含有它，不能为空串） */
   sessions: (query: {

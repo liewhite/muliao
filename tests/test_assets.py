@@ -575,7 +575,7 @@ async def test_saving_memory_or_skill_changed_elsewhere_since_opening_is_a_confl
     assert (await client.put("/api/assets/skill/s", json={**body, "version": fresh})).status_code == 409
 
 
-async def test_skills_are_written_imported_exported_and_deleted_as_directories(container, make_agent):
+async def test_skills_are_written_and_deleted_as_directories(container, make_agent):
     alpha = await make_agent("alpha")
     meta = await container.skills.write("digest", "When digesting", "Do it.", version=None, owner=alpha.id)
     directory = root(container) / "alpha" / "skills" / "digest"
@@ -594,16 +594,9 @@ async def test_skills_are_written_imported_exported_and_deleted_as_directories(c
     text = (directory / "SKILL.md").read_text()
     assert "license: MIT" in text and "New." in text
     assert (directory / "scripts" / "run.sh").exists()
-    package = (await container.skills.export("digest")).package
+    assert os.access(directory / "scripts" / "run.sh", os.X_OK)
     await container.catalog.delete(StoredKind.SKILL, "digest")
     assert not directory.exists()
-    imported = await container.skills.import_package(package, owner=None, replace=False)
-    assert imported.meta.owner is None
-    copy = root(container) / "platform" / "skills" / "digest"
-    assert os.access(copy / "scripts" / "run.sh", os.X_OK)
-    with pytest.raises(Conflict):
-        await container.skills.import_package(package, owner=None, replace=False)
-    await container.skills.import_package(package, owner=None, replace=True)
 
 
 async def test_mcp_servers_are_files(container, make_agent):

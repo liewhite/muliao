@@ -1,4 +1,4 @@
-"""各种资源文件的格式模块（memory_file、skill_package、mcp_config、secrets_format）交给 KindSpec 的两个槽位的约定
+"""各种资源文件的格式模块（memory_file、skill_file、mcp_config、secrets_format）交给 KindSpec 的两个槽位的约定
 （agents.kinds）：读树按 load 读一项，写入口按 vet 校验要写成的全文。这里只有两个槽位的输入与输出，不依赖任何种类。"""
 
 from __future__ import annotations

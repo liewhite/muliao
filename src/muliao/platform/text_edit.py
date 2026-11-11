@@ -1,6 +1,6 @@
 """文本的唯一规则（纯函数）：找恰好出现一次的片段（locate_once）与找不到时的提示（miss）、按位置替换（splice）；截断过长的
 文本（交给模型、展示、通知的长输出都用它）；带行号展示的 cat -n 格式（numbered）。edit_file 的多处修改（替换全部、按行号
-区间、按语法结构、换算原文行号）在 workspace.file_edit。"""
+区间、换算原文行号）在 workspace.file_edit。"""
 
 import re
 from collections.abc import Sequence
