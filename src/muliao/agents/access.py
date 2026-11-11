@@ -121,10 +121,8 @@ class Sharing:
     def shared(self, kind: Kind, name: str | None, owner: str | None) -> bool:
         """「分发出去了」：base 收录它（人人可用，也给以后新建的 agent），或某个不是它 owner 的 agent 的规则收录它（放行
         use：admin 的 `write:*` 不算分发）。只有一个定义：资产页据此说明谁能用（CatalogAsset.shared），删 agent 时据此把它
-        名下分发出去的资产转给平台。没分给任何 agent 的自建角色收录它不算。name 是它在规则里的名字（Asset.rule_name）：
-        私有记忆（None）不算分发，它只属于它的 agent，删 agent 时随目录删掉（它在平台没有名字）。"""
-        if name is None:
-            return False
+        名下分发出去的资产转给平台。没分给任何 agent 的自建角色收录它不算。name 是它在规则里的名字（Asset.rule_name，
+        私有记忆为 None，只有不限种类的规则管得到）。"""
         return self.base.includes(kind, name) or any(
             r.includes(kind, name) for a, r in self.agents if a != owner
         )
@@ -176,6 +174,7 @@ class WriteScope:
       `write:memory:global`）；
     - 别的 agent：assets 是自己的目录加上规则放行 write 的别人的资源（记忆、MCP、secret 是那个文件，skill 是它的目录），
       withheld 为空。
+    withheld 只收回现在加载了的资源：admin 的 deny 指向还没建、读坏了的资源时，沙箱照样放行那个位置。
     自己目录里的资源都能写（deny 不作用于自己的资源）。granted / revoked：`write:path:<目录>` 的 allow 与 deny（Rules.paths）。"""
 
     tree: Path

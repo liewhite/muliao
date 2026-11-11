@@ -23,7 +23,7 @@ from muliao.agents import access_file, assets
 from muliao.agents.access import sharing_of
 from muliao.agents.assets import Snapshot
 from muliao.agents.events import AgentDeleting
-from muliao.agents.kinds import StoredKind, as_kind
+from muliao.agents.kinds import as_kind
 from muliao.agents.service import (
     AgentInfo,
     AgentService,
@@ -142,9 +142,10 @@ def _retire_assets(snapshot: Snapshot, agent_id: str) -> None:
             "directory of a deleted agent removed without being loaded", extra={"path": str(directory)}
         )
     sharing = sharing_of(snapshot)
-    for kind in StoredKind:
-        for a in snapshot.of_kind(kind):
-            if a.owner == agent_id and sharing.shared(as_kind(kind), a.rule_name, agent_id):
+    # 只看按名字认的资源：私有记忆只属于它的 agent，在平台没有名字，随目录删掉
+    for kind, by_name in snapshot.assets.items():
+        for a in by_name.values():
+            if a.owner == agent_id and sharing.shared(as_kind(kind), a.name, agent_id):
                 assets.move(a.path, snapshot.path_of(kind, a.name, None))
                 log.info(
                     "asset moved to the platform with its agent deleted",
