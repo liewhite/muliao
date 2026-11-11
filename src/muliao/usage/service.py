@@ -44,6 +44,9 @@ class UsageTotals:
     def __add__(self, other: "UsageTotals") -> "UsageTotals":
         return UsageTotals(*(getattr(self, f) + getattr(other, f) for f in COUNTS))
 
+    def __sub__(self, other: "UsageTotals") -> "UsageTotals":
+        return UsageTotals(*(getattr(self, f) - getattr(other, f) for f in COUNTS))
+
 
 # 计数的字段名（与 ModelUsage 的列同名）
 COUNTS = tuple(f.name for f in fields(UsageTotals))
@@ -51,7 +54,7 @@ COUNTS = tuple(f.name for f in fields(UsageTotals))
 
 @dataclass(frozen=True)
 class UsageEntry:
-    """一次模型运行的用量。token 口径见 ModelUsage：input_tokens 已包含缓存读写。"""
+    """一笔用量（一次模型请求，或运行收尾时还没记上的部分）。token 口径见 ModelUsage：input_tokens 已包含缓存读写。"""
 
     agent_id: str
     session_id: str | None
@@ -111,7 +114,7 @@ class UsageLog:
         self._tz = tz
 
     async def record(self, entry: UsageEntry) -> None:
-        """记一次模型运行的用量（自己开事务）。"""
+        """记一笔用量（自己开事务）。"""
         async with self._db.transaction() as s:
             s.add(
                 ModelUsage(

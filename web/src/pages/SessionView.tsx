@@ -824,8 +824,8 @@ function useFollowBottom() {
 
 /**
  * 输入框上方的一行小字（不随内容滚动：会话从底部看起，运行中也看得到）：发给模型的上下文现在多大、到多大会压缩，
- * 以及这个会话累计花掉的 token（输入已含缓存读写）。上下文随每一步保存更新；累计在每次运行结束时才记上，运行中
- * 不含正在进行的这一次
+ * 以及这个会话累计花掉的 token（输入已含缓存读写）。两者都随每一步保存更新：每次模型请求完成就记账，
+ * 运行中只差正在进行的那一次请求
  */
 function UsageLine({ context, usage }: Pick<SessionDetail, 'context' | 'usage'>) {
   return (
@@ -833,7 +833,7 @@ function UsageLine({ context, usage }: Pick<SessionDetail, 'context' | 'usage'>)
       <span title="发给模型的上下文：现在的大小 / 压缩阈值（超过就压缩）">
         上下文 {contextText(context.tokens, context.threshold_tokens)}
       </span>
-      <span title="这个会话累计花掉的 token（正在进行的运行结束时才记上）">
+      <span title="这个会话累计花掉的 token（每次模型请求完成就记上）">
         累计 输入 {formatTokens(usage.input_tokens)} · 输出 {formatTokens(usage.output_tokens)} · 缓存命中{' '}
         {cacheHitPercent(usage.input_tokens, usage.cache_read_tokens)}% · {usage.requests} 次请求
       </span>

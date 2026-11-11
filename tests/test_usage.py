@@ -1,4 +1,4 @@
-"""用量：每次模型运行（对话、压缩）记一条，按时间范围与维度汇总。"""
+"""用量：会话运行每次模型请求记一条、压缩每次记一条，按时间范围与维度汇总。"""
 
 import asyncio
 from datetime import UTC, datetime, timedelta
@@ -34,6 +34,20 @@ def answering(text: str = "ok"):
     return scripted(fn)
 
 
+def tool_then_answer():
+    """第一次请求调一个工具，第二次回答；两次都报告固定用量。"""
+
+    def fn(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        if any(isinstance(m, ModelResponse) for m in messages):
+            return ModelResponse(parts=[TextPart("done")], usage=REPLY_USAGE)
+        return ModelResponse(
+            parts=[ToolCallPart("history_append", note_args("- x"), tool_call_id="c")],
+            usage=REPLY_USAGE,
+        )
+
+    return scripted(fn)
+
+
 async def usage_rows(container) -> list[ModelUsage]:
     async with container.db.transaction() as s:
         return list((await s.scalars(select(ModelUsage).order_by(ModelUsage.id))).all())
@@ -53,6 +67,43 @@ async def test_a_turn_records_its_usage_against_its_agent_and_session(container,
     assert (row.kind, row.agent_id, row.session_id, row.model) == (RunKind.RUN, alpha.id, session.id, "m")
     assert row.requests == 1
     assert row.input_tokens > 0 and row.output_tokens > 0
+
+
+async def test_each_model_request_is_billed_as_soon_as_its_reply_arrives(container, make_agent, models):
+    alpha = await make_agent("alpha", model="m")
+
+    models.models["m"] = tool_then_answer()
+    session = await start(container, alpha.id, "hi", origin=Origin.TRIGGER)
+    await drain(container)
+
+    # 两次请求各记一笔（#625），而不是整次运行结束时记一条
+    rows = await usage_rows(container)
+    assert [(r.kind, r.session_id, r.requests) for r in rows] == [(RunKind.RUN, session.id, 1)] * 2
+
+
+async def test_a_bill_that_failed_mid_run_is_carried_into_the_next_one(
+    container, make_agent, models, monkeypatch
+):
+    alpha = await make_agent("alpha", model="m")
+
+    models.models["m"] = tool_then_answer()
+    record = container.usage.record
+    calls = 0
+
+    async def flaky(entry: UsageEntry) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("database is locked")
+        await record(entry)
+
+    monkeypatch.setattr(container.usage, "record", flaky)
+    await start(container, alpha.id, "hi", origin=Origin.TRIGGER)
+    await drain(container)
+
+    # 第一笔没记上，随第二次请求一起记：不丢也不重复
+    [row] = await usage_rows(container)
+    assert row.requests == 2
 
 
 async def test_compaction_is_billed_to_the_session_it_compacts(container, make_agent, models, monkeypatch):
@@ -132,6 +183,14 @@ async def test_a_stopped_run_still_records_what_it_spent(client, container, make
         await asyncio.sleep(0.02)
     else:
         raise AssertionError("the run never reached its tool call")
+    # 运行还在工具里：已经完成的那次请求已记账，会话详情的累计里看得到（#625）
+    for _ in range(250):
+        usage = (await client.get(f"/api/sessions/{session_id}")).json()["usage"]
+        if usage["requests"] == 1:
+            break
+        await asyncio.sleep(0.02)
+    else:
+        raise AssertionError(f"the finished request was not billed while the run went on: {usage}")
     assert (await client.post(f"/api/sessions/{session_id}/stop")).status_code == 202
     await worker
 

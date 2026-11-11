@@ -3,7 +3,8 @@
 import logging
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
+from functools import partial
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
@@ -71,8 +72,35 @@ log = logging.getLogger(__name__)
 
 TextKind = Literal["assistant", "thinking"]
 
-# 运行结束后记用量最多等这么久。记账在屏蔽作用域里进行（被取消的运行也花了 token），加时限是为了关停不被它拖住
+# 记一笔用量最多等这么久。记账在屏蔽作用域里进行（被取消的运行也花了 token），加时限是为了关停不被它拖住
 _BILLING_SECONDS = 10.0
+
+
+@dataclass
+class _Meter:
+    """一次模型运行的计量：pydantic-ai 往 usage 里累加每次请求的用量；bill 把上次记上之后新增的部分记一笔（#625：
+    逐步运行每次请求后记，会话的累计随步骤更新，服务被硬杀时只丢在途那次请求的）。记不上时 billed 不动，下次连同
+    这次的一起记。"""
+
+    bill_delta: Callable[[UsageTotals], Awaitable[bool]]
+    usage: RunUsage = field(default_factory=RunUsage)
+    billed: UsageTotals = field(default_factory=UsageTotals.zero)
+
+    @property
+    def spent(self) -> UsageTotals:
+        u = self.usage
+        return UsageTotals(
+            requests=u.requests,
+            input_tokens=u.input_tokens,
+            output_tokens=u.output_tokens,
+            cache_read_tokens=u.cache_read_tokens,
+            cache_write_tokens=u.cache_write_tokens,
+        )
+
+    async def bill(self) -> None:
+        spent = self.spent
+        if await self.bill_delta(spent - self.billed):
+            self.billed = spent
 
 
 @dataclass(frozen=True)
@@ -198,7 +226,7 @@ class AgentRuntime:
         的续跑语义）。交进来的历史要完整：除了挂起、待重放的，每个调用都已有结果（调用方补齐并存库）。pydantic-ai
         还是动手修补了时当场报错（_unrepaired）：只在内存里修补的历史和库里的对不上，之后的运行会在错位置上再补一次。
 
-        外壳：记账与日志（_billed）、工具失败信息里不带参数（tool_input_kept_out_of_failures）、确认运行从用户 prompt
+        外壳：记账与日志（_billed，每次模型回复后记一笔）、工具失败信息里不带参数（tool_input_kept_out_of_failures）、确认运行从用户 prompt
         节点开始，再由 _step_through 逐步驱动到结束。"""
         # 这次交回结果的挂起调用：调用已在历史里，结果随第一步保存
         resumed = frozenset(deferred or ())
@@ -216,7 +244,7 @@ class AgentRuntime:
         resolved, settings = self._model(config.model, config.thinking)
         async with self._billed(
             RunKind.RUN, scope.agent_id, config.model, scope.session_id, ctx, len(history)
-        ) as usage:
+        ) as meter:
             with tool_input_kept_out_of_failures():
                 async with self._pai.iter(
                     None if prompt is None else list(prompt),
@@ -228,13 +256,13 @@ class AgentRuntime:
                     toolsets=[DomainErrorsAsRetry(t) for t in profile.toolsets],
                     output_type=[str, DeferredToolRequests],
                     deferred_tool_results=None if deferred is None else deferred_tool_results(deferred),
-                    usage=usage,
+                    usage=meter.usage,
                     usage_limits=_UNLIMITED,
                 ) as run:
                     first = run.next_node
                     if not PaiAgent.is_user_prompt_node(first):
                         raise RuntimeError(f"agent run did not start with the user prompt node: {first!r}")
-                    await _step_through(run, first, hooks, resumed, scope.notices, history)
+                    await _step_through(run, first, hooks, resumed, scope.notices, history, meter)
                     result = run.result
         if result is None:
             raise RuntimeError("agent run ended without a result")
@@ -257,13 +285,13 @@ class AgentRuntime:
             "thinking": config.thinking,
         }
         resolved, settings = self._model(config.model, config.thinking)
-        async with self._billed(RunKind.COMPACTION, config.id, config.model, session_id, ctx) as usage:
+        async with self._billed(RunKind.COMPACTION, config.id, config.model, session_id, ctx) as meter:
             result = await self._pai.run(
                 prompt,
                 model=resolved,
                 model_settings=settings,
                 instructions=instructions,
-                usage=usage,
+                usage=meter.usage,
             )
         return result.output
 
@@ -276,28 +304,23 @@ class AgentRuntime:
         session_id: str | None,
         ctx: Mapping[str, object],
         history: int | None = None,
-    ) -> AsyncIterator[RunUsage]:
+    ) -> AsyncIterator[_Meter]:
         """一次模型运行的边界（每个入口都经过它）：记「agent run started」日志（ctx 与带上的历史条数；压缩没有历史这一说，不记），
-        交出给 pydantic-ai 累加用量的 RunUsage；运行无论成功、失败还是被取消，退出时都把已花掉的部分记到 session_id 名下
-        （_bill）。运行里抛出的暂时性失败（模型提供方、网络层）在这里换成 ModelUnavailable，交给任务队列按 outage 策略重试（transient）。"""
+        交出计量（_Meter：pydantic-ai 往里累加用量，运行中可以先记一笔）；运行无论成功、失败还是被取消，退出时都把还没记上的
+        部分记到 session_id 名下，并把整次运行的用量写进「agent run finished」日志。运行里抛出的暂时性失败（模型提供方、
+        网络层）在这里换成 ModelUnavailable，交给任务队列按 outage 策略重试（transient）。"""
         log.info("agent run started", extra=dict(ctx) if history is None else {**ctx, "history": history})
-        usage = RunUsage()
+        entry = partial(UsageEntry, agent_id=agent_id, session_id=session_id, kind=kind, model=model)
+        meter = _Meter(lambda totals: self._bill(entry(totals=totals), ctx))
         try:
             with transient_as_retryable():
-                yield usage
+                yield meter
         finally:
-            await self._bill(kind, agent_id, session_id, model, usage, ctx)
+            await meter.bill()
+            log.info("agent run finished", extra={**ctx, **asdict(meter.spent)})
 
-    async def _bill(
-        self,
-        kind: RunKind,
-        agent_id: str,
-        session_id: str | None,
-        model: str,
-        usage: RunUsage,
-        ctx: Mapping[str, object],
-    ) -> None:
-        """记下这次模型运行花掉的 token，并把结果写进「agent run finished」日志。
+    async def _bill(self, entry: UsageEntry, ctx: Mapping[str, object]) -> bool:
+        """记一笔用量；返回这笔是否已入账（没有用量算已入账）。
 
         用量是账目，不是这次运行的一部分：记不上只记 error 日志，不改变运行的结果或异常——一次记账故障不该让
         已经做完的工作白做，也不该把一个真正的失败换成另一个。没有任何用量（例如还没发出请求就失败了）就跳过。
@@ -308,17 +331,8 @@ class AgentRuntime:
         用户才按停止，这一条用量会随取消一起丢掉。不为它加防御——结局和「停止早到一瞬」一样，消息都已逐步保存，
         代价只是一条账目。
         """
-        totals = UsageTotals(
-            requests=usage.requests,
-            input_tokens=usage.input_tokens,
-            output_tokens=usage.output_tokens,
-            cache_read_tokens=usage.cache_read_tokens,
-            cache_write_tokens=usage.cache_write_tokens,
-        )
-        log.info("agent run finished", extra={**ctx, **asdict(totals)})
-        if totals == UsageTotals.zero():
-            return
-        entry = UsageEntry(agent_id=agent_id, session_id=session_id, kind=kind, model=model, totals=totals)
+        if entry.totals == UsageTotals.zero():
+            return True
         failed: Exception | None = None
         with anyio.CancelScope(shield=True), anyio.move_on_after(_BILLING_SECONDS) as limited:
             try:
@@ -326,9 +340,12 @@ class AgentRuntime:
             except Exception as e:
                 failed = e
         if failed is not None:
-            log.error("recording model usage failed: %r", failed, extra={**ctx, "kind": kind.value})
-        elif limited.cancelled_caught:
-            log.error("recording model usage timed out", extra={**ctx, "kind": kind.value})
+            log.error("recording model usage failed: %r", failed, extra={**ctx, "kind": entry.kind.value})
+            return False
+        if limited.cancelled_caught:
+            log.error("recording model usage timed out", extra={**ctx, "kind": entry.kind.value})
+            return False
+        return True
 
 
 async def _step_through(
@@ -338,9 +355,11 @@ async def _step_through(
     resumed: frozenset[str],
     notices: Sequence[str],
     given: Sequence[ModelMessage],
+    meter: _Meter,
 ) -> None:
     """从用户 prompt 节点把运行逐步驱动到结束，在每次请求模型之前、模型回复之后回调 hooks。notices 是这次驱动的
-    scope 里的那份列表：工具组在进入 iter 时已经构建、连接，到这里已经齐了。"""
+    scope 里的那份列表：工具组在进入 iter 时已经构建、连接，到这里已经齐了。每次回复后先记这次请求的用量再回调
+    after_response：它保存这一步、通知会话页重新拉取，拉到的累计就含这次请求。"""
     node = await run.next(first)
     # 从末尾的请求续跑时 pydantic-ai 把它从历史里取出、放进第一次请求的节点，一起查
     _unrepaired(
@@ -358,6 +377,7 @@ async def _step_through(
             response = messages[-1]
             if not isinstance(response, ModelResponse):
                 raise RuntimeError(f"model request ended without a response, history ends with {response!r}")
+            await meter.bill()
             await hooks.after_response(response, messages)
         elif PaiAgent.is_call_tools_node(node):
             async with node.stream(run.ctx) as stream:
