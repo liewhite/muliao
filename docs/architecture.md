@@ -488,13 +488,13 @@ agent 在任何一次运行里都可以在自己的资源目录里建 `skills/<�
 
 触发点有两类：用户在网页发起对话，以及触发器。agent 之间的委派是 agent 内部能力，在父会话下开 thread（第 7 节）。
 
-**统一入口**：用户消息、触发器、agent 委派都是同一件事——把一段内容投进某个 agent 的某个会话的信箱。各来源只做适配（鉴权、触发时机、组装内容），三种入口各有自己的类型，字段只有这个入口用得上的，不合用的组合构造不出来（不到运行时才拒绝）：界面的 `UserMessage`（续写的会话 id 或 `NewChat(agent, 可选的压缩阈值)`——标题由消息推导，可带附件与回答，用户在等；`SessionService.receive`），别的领域的 `SenderMail`（只有文字、没人在等，origin 只能是有身份的发送方，目标是会话 id、`NewConversation`（预先分配的 id、agent、标题）或 `SessionKey`；`receive_command_in` 校验后经定向命令 `Receive` 投递，见下文「投信」），委派由会话领域的 `Threads` 在内部构造。三者都转成内部的 `Inbound` 交给 `inbound.receive`：
+**统一入口**：用户消息、触发器、agent 委派都是同一件事——把一段内容投进某个 agent 的某个会话的信箱。各来源只做适配（鉴权、触发时机、组装内容），三种入口各有自己的类型，字段只有这个入口用得上的，不合用的组合构造不出来（不到运行时才拒绝）：界面的 `UserMessage`（续写的会话 id 或 `NewChat(agent, 可选的压缩阈值)`——标题由消息推导，可带附件与回答，用户在等；`SessionService.receive`），别的领域的 `SenderMail`（只有文字、没人在等，origin 只能是有身份的发送方，目标是会话 id、`NewConversation`（预先分配的 id、agent、标题）或 `SessionKey`，可序列化、后两者带判别字段 `to`；`receive_command_in` 校验后把它原样装进定向命令 `Receive(mail)` 投递，见下文「投信」），委派由会话领域的 `Threads` 在内部构造。三者都转成内部的 `Inbound` 交给 `inbound.receive`：
 
 | 字段 | 含义 |
 |---|---|
 | `origin` / `origin_ref` | 来源与具体发送方：用户（无）、触发器 id、issue id、委派方（父）会话 id；与会话上的同名字段是同一个概念（会话记的是发起它的那一个事件的来源） |
 | `content` | 交给 agent 的内容 |
-| `session` | 已有会话的 id（在其中继续）；`NewSession`（新建：agent、标题，委派时还有父会话、thread 名与种类；触发器经 `Receive` 投递时带预先分配的会话 id，好立即告诉调用方）；或 `SessionKey`（按发送方定位：这个发送方给这个 agent 开过的最新一个顶层会话，没有就以给定标题新建——发送方不用存会话 id，issue 用它让每个（issue, agent）对应唯一一个会话） |
+| `session` | 各入口自己的目标原样放进来：已有会话的 id（在其中继续）；`NewConversation`（新建，发送方预先分配会话 id 好立即告诉调用方）或 `NewChat`（新建，标题在 `receive_into` 里由消息推导），两者在那里转成 `create_session` 的 `NewSession`（thread 由 `Threads` 直接用它新建，带父会话与 thread 名）；或 `SessionKey`（按发送方定位：这个发送方给这个 agent 开过的最新一个顶层会话，没有就以给定标题新建——发送方不用存会话 id，issue 用它让每个（issue, agent）对应唯一一个会话） |
 | `awaited` | 用户是否在等它的回答（处理它的运行结束时推送；UserMessage 为真，SenderMail 为假，委派由 Threads 定） |
 | `attachments` / `answers` | 用户随消息发送的文件、对挂起提问的回答（只有用户会带） |
 

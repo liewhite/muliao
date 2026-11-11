@@ -69,7 +69,7 @@ async def of_agent_in(s: AsyncSession, agent_id: str) -> list[Session]:
 async def keyed_rows_among(
     s: AsyncSession, origin: Origin, origin_refs: Collection[str], agent_id: str | None = None
 ) -> dict[tuple[str, str], Session]:
-    """按发送方定位会话（inbound.SessionKey）的唯一规则：(发送方身份, agent id) -> 这个发送方给这个 agent 开过的最新
+    """按发送方定位会话（events.SessionKey）的唯一规则：(发送方身份, agent id) -> 这个发送方给这个 agent 开过的最新
     一个顶层会话，一次查询。给出 agent_id 时只看这个 agent。委派开出的 thread 没有发送方身份（origin_ref 为 None，
     inbound.create_session），不会被按发送方定位到。"""
     query = (

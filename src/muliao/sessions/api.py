@@ -17,16 +17,10 @@ from muliao.config import MIN_COMPACTION_THRESHOLD_TOKENS
 from muliao.sessions.activity import SessionActivity, WorkState
 from muliao.sessions.approvals import Choice as ApprovalChoice
 from muliao.sessions.assembly import SessionDomain, SessionPorts
+from muliao.sessions.events import NewConversation, SenderMail, SessionKey
 from muliao.sessions.halt import Halted, StopSession
 from muliao.sessions.holds import registered_in as hold_registered_in
-from muliao.sessions.inbound import (
-    NewChat,
-    NewConversation,
-    SenderMail,
-    SessionKey,
-    UserMessage,
-    receive_command_in,
-)
+from muliao.sessions.inbound import NewChat, UserMessage, receive_command_in
 from muliao.sessions.info import SessionInfo, keyed_session_in, keyed_sessions_among, session_in
 from muliao.sessions.lanes import COMPACTION_TASK, RUN_TASK
 from muliao.sessions.live import LiveSegment, RunDeltaEvent, RunEvent, RunItemEvent, SavedEvent

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from typing import Annotated, Literal, Self
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from muliao.platform.messaging import Command, DomainEvent
-from muliao.sessions.origins import Origin
+from muliao.sessions.origins import RULES, Origin
 
 
 class RunEnded(DomainEvent):
@@ -118,21 +120,46 @@ class WorkCheckIn(Command):
     text: str
 
 
-class ReceiveNewSession(BaseModel):
-    """Receive 要新建的会话：id 由发送方预先分配。"""
+class NewConversation(BaseModel):
+    """别的领域的来信要新建的顶层会话：id 由发送方预先分配（投递是异步的，发送方要立即告诉它的调用方会话 id），
+    标题由发送方给出。"""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
+    to: Literal["new"] = "new"
     id: str
     agent_id: str
     title: str
 
 
-class ReceiveKey(BaseModel):
-    """Receive 投进按发送方定位的会话（inbound.SessionKey）：没有就以 title 新建。"""
+class SessionKey(BaseModel):
+    """按发送方定位的会话：来信的发送方（origin, origin_ref）给这个 agent 的会话，没有就以 title 新建。发送方因此不用
+    记会话 id（issue：每个 issue 与 agent 对应唯一一个会话）。有多个时（同一发送方新建过多个会话）取最新的。"""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
+    to: Literal["keyed"] = "keyed"
     agent_id: str
     title: str
+
+
+# 别的领域的来信投到哪个会话：已有会话的 id（在其中续写）、新建的会话、按发送方定位的会话
+type MailTarget = str | Annotated[NewConversation | SessionKey, Field(discriminator="to")]
+
+
+class SenderMail(BaseModel):
+    """别的领域（触发器、issue）的来信，经 inbound.receive_command_in 校验、定向命令 Receive 投递：只有文字，没有人在等
+    （处理它的运行不推送）。origin_ref 是具体的发送方（触发器 id、issue id）。"""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    origin: Origin
+    origin_ref: str
+    content: str
+    session: MailTarget
+
+    @model_validator(mode="after")
+    def _identified(self) -> Self:
+        if not RULES[self.origin].identified:
+            raise ValueError(f"{self.origin} mail is received directly, not sent by another domain")
+        return self
 
 
 class Receive(Command):
@@ -141,11 +168,4 @@ class Receive(Command):
     删除（校验之后的变化）就不投，记日志。"""
 
     TYPE = "session.receive"
-    origin: Origin
-    origin_ref: str | None
-    content: str
-    awaited: bool
-    # 目标会话，三者恰好给出一个：续写的会话、新建的会话、按发送方定位的会话
-    session_id: str | None
-    new_session: ReceiveNewSession | None
-    key: ReceiveKey | None
+    mail: SenderMail

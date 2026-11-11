@@ -23,6 +23,7 @@ from sqlalchemy import select
 
 from muliao.notifications.push import DELIVER_TASK
 from muliao.notifications.webpush import WebPushDelivery
+from muliao.platform.ids import new_id
 from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
 from muliao.platform.tool_views import NO_RENDERS
 from muliao.platform.worker import Worker
@@ -30,7 +31,8 @@ from muliao.sessions.api import Origin, UserMessage
 from muliao.sessions.codec import load_messages
 from muliao.sessions.consumer import RunHandler
 from muliao.sessions.conventions import run_context_index
-from muliao.sessions.inbound import Inbound, NewSession, receive
+from muliao.sessions.events import NewConversation
+from muliao.sessions.inbound import Inbound, receive
 from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.tables import Mail, Message
 from muliao.sessions.transcript import to_items
@@ -144,7 +146,7 @@ async def start(container, agent: str, prompt: str, origin: Origin = Origin.USER
         origin=origin,
         origin_ref=None,
         content=prompt,
-        session=NewSession(agent_id=agent, title=prompt[:20]),
+        session=NewConversation(id=new_id(), agent_id=agent, title=prompt[:20]),
         awaited=origin == Origin.USER,
     )
     async with container.db.transaction() as s:

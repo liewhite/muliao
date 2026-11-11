@@ -29,7 +29,7 @@ def receive_lane(session_id: str) -> str:
 
 
 def keyed_receive_lane(origin: str, origin_ref: str, agent_id: str) -> str:
-    """按发送方定位会话的 Receive（inbound.SessionKey）：会话可能还不存在，lane 按 key 命名。同一个 key 的来信串行投递，
+    """按发送方定位会话的 Receive（events.SessionKey）：会话可能还不存在，lane 按 key 命名。同一个 key 的来信串行投递，
     「没有就新建」不会建出两个。"""
     return f"sessions.receive:{origin}:{origin_ref}:{agent_id}"
 

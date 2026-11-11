@@ -65,7 +65,7 @@ async def work_states_in(
     的运行、还没投递的来信；waiting 有 active 占用（后台任务、委派、到点唤醒）或还能回答的提问、还能批准的调用；
     否则 idle。"""
     lanes: dict[str, tuple[str, ...]] = {x: (session_lane(x), receive_lane(x)) for x in session_ids}
-    # 按发送方定位（inbound.SessionKey）投给它、还没投递的来信在按 key 命名的 lane 上
+    # 按发送方定位（events.SessionKey）投给它、还没投递的来信在按 key 命名的 lane 上
     for x, (origin, origin_ref, agent_id) in (await keyed_among(s, session_ids)).items():
         lanes[x] = (*lanes[x], keyed_receive_lane(origin, origin_ref, agent_id))
     busy = await queue.busy_lanes(s, [lane for pair in lanes.values() for lane in pair])
@@ -109,7 +109,7 @@ class SessionActivity:
     async def keyed_work_states_in(
         self, s: AsyncSession, origin: Origin, keys: Collection[tuple[str, str]]
     ) -> dict[tuple[str, str], WorkState | None]:
-        """按发送方定位的会话（inbound.SessionKey）的工作状态，key 是 (origin_ref, agent id)：会话存在时是它的状态；还没
+        """按发送方定位的会话（events.SessionKey）的工作状态，key 是 (origin_ref, agent id)：会话存在时是它的状态；还没
         建出来、但按 key 投给它的来信还没投递时是 running（信一投就建出会话开始处理）；否则 None。"""
         keyed = await keyed_sessions_among(s, origin, {ref for ref, _ in keys})
         found = {k: keyed[k[0]][k[1]].id for k in keys if k[1] in keyed[k[0]]}

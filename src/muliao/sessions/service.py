@@ -258,7 +258,11 @@ class SessionService:
                 # 发送方校验之后会话或 agent 被删除、agent 被归档：契约内的变化，这封信不再有收件人
                 log.info(
                     "inbound mail dropped: its session or agent is gone or archived",
-                    extra={"message_id": delivery.message_id, "origin": command.origin, "reason": str(e)},
+                    extra={
+                        "message_id": delivery.message_id,
+                        "origin": command.mail.origin,
+                        "reason": str(e),
+                    },
                 )
                 return
             await receive_into(s, self._queue, inbound, *target)

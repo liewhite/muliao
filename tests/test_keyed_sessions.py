@@ -1,8 +1,9 @@
-"""按发送方定位的会话（sessions.inbound.SessionKey）：同一发送方给同一个 agent 的来信进同一个会话，没有就建。"""
+"""按发送方定位的会话（sessions.events.SessionKey）：同一发送方给同一个 agent 的来信进同一个会话，没有就建。"""
 
 import pytest
 
 from muliao.sessions.api import (
+    NewConversation,
     Origin,
     SenderMail,
     SessionActivity,
@@ -11,6 +12,7 @@ from muliao.sessions.api import (
     keyed_sessions_among,
     receive_command_in,
 )
+from muliao.sessions.events import Receive
 from muliao.sessions.inbound import inbound_of
 from tests.test_flow import deliver, drain
 
@@ -74,7 +76,18 @@ async def test_a_keyed_receive_command_round_trips(container, make_agent):
     inbound = _keyed(alpha, "7", "hello")
     async with container.db.transaction() as s:
         command = await receive_command_in(s, inbound)
-    assert inbound_of(command) == inbound.inbound()
+    # 定向命令存进投递任务再读回来，目标不变
+    assert type(command).model_validate_json(command.model_dump_json()) == command
+    assert inbound_of(command).session == inbound.session
+
+
+@pytest.mark.parametrize(
+    "target",
+    ["s-1", NewConversation(id="s-2", agent_id="a", title="t"), SessionKey(agent_id="a", title="t")],
+)
+def test_every_receive_target_survives_the_task_payload(target):
+    command = Receive(mail=SenderMail(origin=Origin.TRIGGER, origin_ref="1", content="x", session=target))
+    assert Receive.model_validate_json(command.model_dump_json()).mail.session == target
 
 
 @pytest.mark.usefixtures("deliveries_later")
