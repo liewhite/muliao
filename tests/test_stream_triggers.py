@@ -203,6 +203,19 @@ async def test_a_command_refused_a_write_gets_the_note_after_its_error(container
     assert re.search(r"Operation not permitted\n\[.*is outside.*write:path", fault)
     assert not any(blocked.iterdir())
 
+    # 日志是追加的：换成因别的原因退出的命令后，旧命令留在日志末尾的拒绝不算在新命令头上
+    trigger = await container.triggers.get_by_name("feed")
+    await container.triggers.update(trigger.id, config={"command": "echo unrelated >&2; exit 2"})
+    async with _running(_runner(container)):
+
+        async def recorded_again() -> bool:
+            return "exited with 2" in (await _stream_fault(container) or "")
+
+        await _until(recorded_again)
+
+    fault = await _stream_fault(container)
+    assert fault is not None and "unrelated" in fault and "is outside" not in fault
+
 
 async def test_a_killed_command_is_restarted_and_disabling_kills_it(container, make_agent):
     alpha = (await make_agent()).id

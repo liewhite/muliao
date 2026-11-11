@@ -327,9 +327,8 @@ class StreamRunner:
             return f"stream secrets unavailable: {e}"
         cwd = self._workspace_of(spec.agent_id)
         log_file = cwd / stderr_log(spec.name)
-        await anyio.to_thread.run_sync(
-            _prepare_log, log_file, f"--- started {self._clock().isoformat()} ---\n"
-        )
+        started = f"--- started {self._clock().isoformat()} ---"
+        await anyio.to_thread.run_sync(_prepare_log, log_file, f"{started}\n")
         confinement = await self._confine(spec.agent_id)
         proc = await spawn_bash(
             config.command, cwd=cwd, secrets=secrets, confinement=confinement, pipefail=True
@@ -357,8 +356,11 @@ class StreamRunner:
             if proc.returncode is None:
                 with anyio.CancelScope(shield=True), anyio.move_on_after(DRAIN_SECONDS):
                     await wait_exit_code(proc)
-        stderr_tail = (await anyio.to_thread.run_sync(tail, log_file))[-_ERROR_TAIL_CHARS:].strip()
-        refused = denial_note(confinement, stderr_tail)
+        logged = await anyio.to_thread.run_sync(tail, log_file)
+        # 日志是追加的，末尾几行里可能有前几次启动（甚至改配置前那条命令）的报错：补说明只看这次的分隔行之后的整行
+        # （分隔行已不在末尾几行里时，整段都是这次的）
+        refused = denial_note(confinement, logged.rpartition(started)[2])
+        stderr_tail = logged[-_ERROR_TAIL_CHARS:].strip()
         return f"stream command exited with {code}: {stderr_tail}" + (
             "" if refused is None else f"\n{refused}"
         )
