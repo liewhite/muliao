@@ -23,12 +23,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from muliao.errors import DomainError
 from muliao.notifications.events import Notify
 from muliao.platform.db import utcnow
-from muliao.platform.ids import new_id
 from muliao.platform.messaging import Messaging
 from muliao.platform.tasks import Clock
 from muliao.platform.values import local_time
-from muliao.sessions.api import NewConversation, Origin, SenderMail, receive_command_in
+from muliao.triggers.router import Sender, routed_in
 from muliao.triggers.tables import Trigger
+from muliao.triggers.targets import DEFAULT
 
 log = logging.getLogger(__name__)
 
@@ -130,18 +130,9 @@ class Faults:
         self, s: AsyncSession, trigger: Trigger, *, title: str, letter: str, summary: str
     ) -> None:
         """告诉触发器所属的 agent（新会话，letter 说明出了什么错、怎么处理）；投不进去时退回给用户推送（title 与 summary）。"""
-        inbound = SenderMail(
-            origin=Origin.TRIGGER,
-            origin_ref=str(trigger.id),
-            content=letter,
-            session=NewConversation(
-                id=new_id(),
-                agent_id=trigger.agent_id,
-                title=f"{trigger.name} {title} · {local_time(self._clock(), self._tz)}",
-            ),
-        )
+        sender = Sender.of(trigger, f"{trigger.name} {title} · {local_time(self._clock(), self._tz)}")
         try:
-            command = await receive_command_in(s, inbound)
+            routed = await routed_in(s, sender, DEFAULT, letter)
         except DomainError as e:
             log.warning(
                 "trigger alert could not reach the agent, notifying the user: %s",
@@ -159,4 +150,4 @@ class Faults:
                 ),
             )
             return
-        self._messaging.send_in(s, command)
+        self._messaging.send_in(s, routed.command)

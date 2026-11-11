@@ -209,7 +209,7 @@ async def test_event_cannot_write_into_sessions_it_did_not_start(client, contain
         assert resp.status_code == 403, resp.text
         assert "github" not in resp.text and "slack" not in resp.text
     missing = await client.post("/api/hooks/github?session_id=nope", content="x", headers=_bearer(github))
-    # 续写的会话不存在：和存下的目标没了一样是目标不合法（routing.routed_in）
+    # 续写的会话不存在：和存下的目标没了一样是目标不合法（triggers.router.routed_in）
     assert missing.status_code == 422
 
 

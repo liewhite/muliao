@@ -15,7 +15,7 @@
   超过 1 MiB 就轮换一份 .1），agent 可以自己读。
 - 事件按 debounce 窗口合并：第一行到达后再等 debounce_seconds，期间到达的一起成为一次触发，事件内容是这些行
   （以换行分隔）。`@route` 行按到达顺序给之后的行定目标（跨批次保持，与把整条流当一段文本相同，_Pending），
-  分段与同一目标的合并在投递时做（routing.plan_in）。上一次触发的会话还没做完（previous_fire_state_in，与定时触发同一个定义）时事件排队、不重叠，
+  分段与同一目标的合并在投递时做（router.plan_in）。上一次触发的会话还没做完（previous_fire_state_in，与定时触发同一个定义）时事件排队、不重叠，
   它结束后合并投递；挡路的会话在等待（可能永远等不到，如没人回答的提问）时通知用户一次（这一份托管进程里每个挡路
   会话一次）。排队的事件以事件上限为界：排满了就不再读命令的输出，管道写满后命令自己阻塞——不丢、不重叠，内存与
   并行会话都有界。单行超过事件上限的丢弃并记日志。
@@ -48,7 +48,6 @@ from muliao.platform.messaging import Messaging
 from muliao.platform.output import CHUNK, record_output, tail
 from muliao.platform.shell import DRAIN_SECONDS, kill_group, redact, wait_exit_code
 from muliao.platform.tasks import Clock
-from muliao.routing.api import route_header, route_line
 from muliao.sessions.api import SessionActivity, WorkState
 from muliao.triggers.faults import Faults, FaultSource, TriggerFault, recovered
 from muliao.triggers.service import (
@@ -58,6 +57,7 @@ from muliao.triggers.service import (
     set_state,
 )
 from muliao.triggers.tables import Trigger
+from muliao.triggers.targets import route_header, route_line
 from muliao.workspace.api import AgentCommands
 
 log = logging.getLogger(__name__)

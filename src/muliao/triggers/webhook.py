@@ -5,7 +5,7 @@
   存的是外部系统发给我们的凭证。
 - 先鉴权再读请求体；触发器不存在、不是 webhook、没有 token、token 不匹配，都返回同一个 401，不暴露哪些名称存在。
 - 不带 session_id 按触发器的投递目标投递（默认新建会话），响应返回会话 id；带上它的后续事件以那个会话为默认目标继续
-  （routing.Continue，只能续写本触发器发起的会话），内容里的 `@route` 行照样分到别处。
+  （targets.Continue，只能续写本触发器发起的会话），内容里的 `@route` 行照样分到别处。
 """
 
 from __future__ import annotations
@@ -21,9 +21,9 @@ from sqlalchemy import select
 
 from muliao.errors import InvalidInput, Unauthorized
 from muliao.platform.db import Database
-from muliao.routing.api import Continue
 from muliao.triggers.service import Fired, TriggerService, parse_config, set_state, trigger_in
 from muliao.triggers.tables import Trigger
+from muliao.triggers.targets import Continue
 
 log = logging.getLogger(__name__)
 

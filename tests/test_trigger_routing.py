@@ -1,4 +1,4 @@
-"""事件投递（routing）：触发器的默认投递目标与事件文本里的 `@route` 行，把事件投到新会话、别的 agent、最近的会话或 issue。"""
+"""事件投递（triggers.router / targets）：触发器的默认投递目标与事件文本里的 `@route` 行，把事件投到新会话、别的 agent、最近的会话或 issue。"""
 
 import pytest
 from sqlalchemy import select
@@ -6,10 +6,10 @@ from sqlalchemy import select
 from muliao.agents.api import USER, AgentArchived
 from muliao.errors import InvalidInput
 from muliao.issues.api import ActivityKind, IssueStatus
-from muliao.routing.targets import parse_address, split_routed
 from muliao.sessions.api import Origin
 from muliao.sessions.tables import Mail, Session
 from muliao.triggers.api import FaultSource, route_address
+from muliao.triggers.targets import parse_address, split_routed
 from tests.test_flow import deliver
 
 
@@ -232,8 +232,8 @@ async def test_a_part_whose_target_refuses_it_is_dropped_but_a_bad_default_targe
 ):
     """地址解析得了、投递时目标不接受：内容里的地址只丢那段；和默认目标合并的段或默认目标本身不接受仍是触发器配置的问题。"""
     from muliao.errors import Forbidden
-    from muliao.routing import router
-    from muliao.routing.api import NewTo
+    from muliao.triggers import router
+    from muliao.triggers.targets import NewTo
 
     alpha, beta = await make_agent("alpha"), await make_agent("beta")
     real = router.routed_in
@@ -321,7 +321,7 @@ async def test_a_route_to_an_archived_agent_is_a_bad_target_not_the_trigger_bein
 
 async def test_each_target_of_a_firing_is_checked_once(container, make_agent, monkeypatch):
     """默认目标有内容时只校验一次（#613：以前先单独校验一次、投递时再校验一次，白分配一个会话 id）。"""
-    from muliao.routing import router
+    from muliao.triggers import router
 
     alpha, _beta = await make_agent("alpha"), await make_agent("beta")
     trigger = await _webhook(container, alpha.id)

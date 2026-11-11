@@ -1,12 +1,14 @@
-"""投递：把一个事件按目标（routing.targets）变成给会话领域或 issue 领域的定向命令，在发送方的事务里只读地校验。
+"""投递（触发器领域内部）：把一个事件按目标（triggers.targets）变成给会话领域或 issue 领域的定向命令，在触发器的事务里只读地校验。
 
 和 sessions.api.receive_command_in 同一个模式：这里只读（解析地址、确认 agent 与 issue 存在、校验来信），返回命令；
-发送方（如触发器）在同一事务里记下自己的状态并 send_in 这些命令，由接收的领域在自己的事务里执行——记下触发与投递
+触发器在同一事务里记下自己的状态并 send_in 这些命令，由接收的领域在自己的事务里执行——记下触发与投递
 一起提交，恰好一次；提交后由 Messaging 马上执行投递。目标不合法（地址写错、agent 或 issue 不存在、
 agent 已归档、会话不接受这个发送方续写）时：默认目标的问题 plan_in 当场报领域错误（只读，不留下写入）；内容里 `@route`
-地址的问题（解析不了或目标不接受）连同那段记在 Plan.rejected，是整次不投（发送方回滚）还是只丢那段由发送方定。发送方
-自己（如触发器所属的 agent）是否可用由发送方在调用之前查，这里出的任何领域错误都是目标的问题，发送方不按异常类型分辨。
+地址的问题（解析不了或目标不接受）连同那段记在 Plan.rejected，是整次不投还是只丢那段由触发器定（service._By）。触发器
+自己的 agent 是否可用在调用之前查，这里出的任何领域错误都是目标的问题，调用方不按异常类型分辨。
 """
+
+from __future__ import annotations
 
 import logging
 from collections.abc import Callable
@@ -20,7 +22,16 @@ from muliao.issues.api import check_issue_in
 from muliao.issues.events import PostIssueEvent
 from muliao.platform.ids import new_id
 from muliao.platform.messaging import Command
-from muliao.routing.targets import (
+from muliao.sessions.api import (
+    NewConversation,
+    Origin,
+    SenderMail,
+    SessionKey,
+    keyed_session_in,
+    receive_command_in,
+)
+from muliao.triggers.tables import Trigger
+from muliao.triggers.targets import (
     Continue,
     Destination,
     IssueTo,
@@ -30,22 +41,14 @@ from muliao.routing.targets import (
     parse_address,
     split_routed,
 )
-from muliao.sessions.api import (
-    NewConversation,
-    Origin,
-    SenderMail,
-    SessionKey,
-    keyed_session_in,
-    receive_command_in,
-)
 
 log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
 class Sender:
-    """事件的发送方：会话领域里的身份（origin, origin_ref），它所属的 agent（默认目标、issue 时间线上的 actor），来源的
-    描述（issue 时间线上显示，如 "trigger slack-live"），新开会话与续写的会话新建时的标题。"""
+    """事件的发送方，一个触发器：会话领域里的身份（origin, origin_ref），它所属的 agent（默认目标、issue 时间线上的
+    actor），来源的描述（issue 时间线上显示，如 "trigger slack-live"），新开会话与续写的会话新建时的标题。"""
 
     origin: Origin
     origin_ref: str
@@ -53,6 +56,18 @@ class Sender:
     source: str
     title: str
     latest_title: str
+
+    @classmethod
+    def of(cls, trigger: Trigger, title: str) -> Sender:
+        """触发器作为发送方；title 是这次新开的会话的标题（续写的会话新建时用触发器名）。"""
+        return cls(
+            origin=Origin.TRIGGER,
+            origin_ref=str(trigger.id),
+            agent_id=trigger.agent_id,
+            source=f"trigger {trigger.name}",
+            title=title,
+            latest_title=trigger.name,
+        )
 
 
 @dataclass(frozen=True)

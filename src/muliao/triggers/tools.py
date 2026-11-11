@@ -13,11 +13,11 @@ from muliao.agents.api import AgentNames, AgentService
 from muliao.errors import InvalidInput
 from muliao.platform.tooling import TOOL_MAX_RETRIES, Access, RunScope, declared
 from muliao.platform.values import KEEP
-from muliao.routing.api import ADDRESS_HELP
 from muliao.triggers.faults import TriggerFault
 from muliao.triggers.precheck import Precheck
 from muliao.triggers.service import TriggerService, route_address
 from muliao.triggers.tables import Trigger
+from muliao.triggers.targets import ADDRESS_HELP
 
 
 class TriggerKindInfo(BaseModel):

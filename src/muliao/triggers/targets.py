@@ -72,7 +72,7 @@ ADDRESS_HELP = (
 
 
 class Address(BaseModel):
-    """文字地址解析出的目标，agent 还是名称（解析成 id 要查库，见 routing.router.resolve_in）。"""
+    """文字地址解析出的目标，agent 还是名称（解析成 id 要查库，见 router.resolve_in）。"""
 
     model_config = ConfigDict(frozen=True)
     to: Literal["new", "session", "issue"]

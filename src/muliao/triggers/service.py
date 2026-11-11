@@ -39,18 +39,7 @@ from muliao.platform.db import Database, utcnow
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tasks import Clock, Commit
 from muliao.platform.values import KEEP, Keep, local_time
-from muliao.routing.api import (
-    DEFAULT,
-    TARGET,
-    Destination,
-    Rejected,
-    Sender,
-    Target,
-    describe,
-    plan_in,
-    resolve_in,
-)
-from muliao.sessions.api import Origin, SessionActivity, WorkState
+from muliao.sessions.api import SessionActivity, WorkState
 from muliao.triggers.faults import Faults, FaultSource, TriggerFault, faults_of, reset
 from muliao.triggers.precheck import (
     Precheck,
@@ -63,7 +52,9 @@ from muliao.triggers.precheck import (
     precheck_of,
     set_precheck,
 )
+from muliao.triggers.router import Rejected, Sender, plan_in, resolve_in
 from muliao.triggers.tables import Trigger
+from muliao.triggers.targets import DEFAULT, TARGET, Destination, Target, describe
 from muliao.workspace.api import AgentCommands
 
 log = logging.getLogger(__name__)
@@ -122,7 +113,7 @@ def route_of(trigger: Trigger) -> Target:
 
 
 def route_address(trigger: Trigger, names: AgentNames) -> str:
-    """默认投递目标的文字地址（routing.api.ADDRESS_HELP），给模型与界面看。"""
+    """默认投递目标的文字地址（targets.ADDRESS_HELP），给模型与界面看。"""
     return describe(route_of(trigger), names)
 
 
@@ -316,7 +307,7 @@ class TriggerService:
         precheck: Precheck | None = None,
         route: str | None = None,
     ) -> Trigger:
-        """route 是默认投递目标的文字地址（routing.api.ADDRESS_HELP），不给是新开这个 agent 的会话。"""
+        """route 是默认投递目标的文字地址（targets.ADDRESS_HELP），不给是新开这个 agent 的会话。"""
         if not prompt.strip():
             raise InvalidInput("trigger prompt must not be empty")
         trigger_kind = self.kind(kind)
@@ -476,7 +467,7 @@ class TriggerService:
     ) -> Fired | None:
         """组装成事件按投递目标交出去（只由 _fire 调用）。
 
-        payload 为事件内容（无则只有处理说明），按目标投递（routing.plan_in）：内容里的 `@route` 行把各段分到各自的目标，其余投到
+        payload 为事件内容（无则只有处理说明），按目标投递（router.plan_in）：内容里的 `@route` 行把各段分到各自的目标，其余投到
         默认目标：调用方给出的 to（如 webhook 续写的会话），否则是触发器的 route（没设是新开它的 agent 的会话）。每段前面都
         带处理说明；各段都是空的时不触发（fired 为 None）。
         在这个事务里校验来信与目标、记下触发，同一事务发出各次投递：触发记下了就一定投递，投递恰好一次。新建的会话 id 在
@@ -485,14 +476,7 @@ class TriggerService:
         webhook）同样整次报错；激活机制只丢那一段，其余照投，记成出错并告警（triggers.faults）。
         """
         now = self._clock()
-        sender = Sender(
-            origin=Origin.TRIGGER,
-            origin_ref=str(trigger.id),
-            agent_id=trigger.agent_id,
-            source=f"trigger {trigger.name}",
-            title=f"{trigger.name} · {local_time(now, self._tz)}",
-            latest_title=trigger.name,
-        )
+        sender = Sender.of(trigger, f"{trigger.name} · {local_time(now, self._tz)}")
         default = route_of(trigger) if to is None else to
         plan = await plan_in(s, sender, payload, default, lambda body: event_prompt(trigger.prompt, body))
         if plan.rejected:

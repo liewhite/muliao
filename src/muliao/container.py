@@ -39,11 +39,7 @@ from muliao.history.tools import history_toolset
 from muliao.issues.api import SESSION_NOTE as ISSUE_SESSION_NOTE
 from muliao.issues.api import IssueService
 from muliao.issues.tools import issues_toolset
-from muliao.notifications.api import DELIVER_TASK, Notifications, PushSubscriptions, VapidKeys
-from muliao.notifications.inbox import push_message_in
-from muliao.notifications.push import DeliverHandler
-from muliao.notifications.tools import notify_toolset
-from muliao.notifications.webpush import WebPushDelivery
+from muliao.notifications.api import NotificationDomain, Notifications, PushSubscriptions, VapidKeys
 from muliao.platform.bus import EventBus, EventFeed
 from muliao.platform.checks import WorkWatcher
 from muliao.platform.db import Database, WriteCheck, create_engine, migrate
@@ -65,16 +61,8 @@ from muliao.sessions.reconcile import MailReconciler
 from muliao.sessions.threads import Threads
 from muliao.sessions.wakeups import WakeUps
 from muliao.speech.api import Transcriber, build_transcriber
-from muliao.triggers.api import EVENT_MAX_BYTES, TriggerService, Webhooks
 from muliao.triggers.api import SESSION_NOTE as TRIGGER_SESSION_NOTE
-from muliao.triggers.due import DueRunner
-from muliao.triggers.faults import Faults
-from muliao.triggers.once import OnceDue, OnceKind
-from muliao.triggers.precheck import PrecheckRunner
-from muliao.triggers.schedule import ScheduleDue, ScheduleKind
-from muliao.triggers.stream import StreamKind, StreamRunner
-from muliao.triggers.tools import triggers_toolset
-from muliao.triggers.webhook import WebhookKind
+from muliao.triggers.api import TriggerDomain, TriggerService, Webhooks
 from muliao.usage.api import UsageLog
 from muliao.web.api import WebProvider, build_web_provider
 from muliao.web.tools import web_toolset
@@ -163,9 +151,8 @@ class Assembly:
     notifications: Notifications
     mcp: McpRegistry
     triggers: TriggerService
-    due_triggers: DueRunner
-    # 流式触发器托管的常驻命令
-    streams: StreamRunner
+    # 触发器领域：到期扫描与流式托管的循环（running 里起）
+    trigger_domain: TriggerDomain
     webhooks: Webhooks
     push_subscriptions: PushSubscriptions
     vapid: VapidKeys
@@ -235,8 +222,8 @@ class Assembly:
             await self._prepare()
             async with self.jobs.running(), anyio.create_task_group() as root:
                 root.start_soon(_loop, "worker", self.worker.run_forever)
-                root.start_soon(_loop, "due", self.due_triggers.run_forever)
-                root.start_soon(_loop, "streams", self.streams.run_forever)
+                root.start_soon(_loop, "due", self.trigger_domain.due.run_forever)
+                root.start_soon(_loop, "streams", self.trigger_domain.streams.run_forever)
                 root.start_soon(_loop, "mail", self.mail.run_forever)
                 root.start_soon(_loop, "checks", self.work.run_forever)
                 root.start_soon(_loop, "retention", self.retention.run_forever)
@@ -374,33 +361,23 @@ def assemble(
     agent_lifecycle = AgentLifecycle(
         db, agents, assets, messaging, {"sessions": activity.blocks_agent_deletion_in}
     )
-    notifications = Notifications(db, queue, bus)
-    push_subscriptions = PushSubscriptions(db)
-    schedule_kind, once_kind = ScheduleKind(tz), OnceKind(tz)
-    # 触发方式在这里注册：新增一种（如消息队列）= 一个 TriggerKind + 它的激活机制
-    precheck = PrecheckRunner(commands, settings.runtime.precheck_timeout_seconds, EVENT_MAX_BYTES)
-    issues = IssueService(db, messaging, tz, activity, ports.stopper)
-    # 触发器脚本出错的记录与告警，触发与流式托管共用
-    faults = Faults(messaging, tz)
-    triggers = TriggerService(
-        db,
-        {
-            k.name: k
-            for k in (schedule_kind, once_kind, WebhookKind(settings.server.public_url), StreamKind())
-        },
-        tz,
-        commands,
-        precheck,
-        messaging,
-        faults,
+    notification_domain = NotificationDomain.build(
+        db=db,
+        queue=queue,
+        bus=bus,
+        vapid_key_path=settings.vapid_key_path,
+        vapid_subject=settings.push.vapid_subject,
     )
-    # 按到期时间触发的方式共用一个扫描循环，各自给出到期时间与这次到期被用掉之后这一行怎么变
-    due_triggers = DueRunner(db, triggers, [ScheduleDue(activity, schedule_kind, messaging), OnceDue()])
-    streams = StreamRunner(db, triggers, activity, commands, messaging, faults, EVENT_MAX_BYTES)
-    webhooks = Webhooks(db, triggers)
-    vapid = VapidKeys(settings.vapid_key_path)
-
-    pusher = WebPushDelivery(push_subscriptions, vapid, settings.push.vapid_subject)
+    issues = IssueService(db, messaging, tz, activity, ports.stopper)
+    trigger_domain = TriggerDomain.build(
+        db=db,
+        tz=tz,
+        messaging=messaging,
+        commands=commands,
+        activity=activity,
+        public_url=settings.server.public_url,
+        precheck_timeout_seconds=settings.runtime.precheck_timeout_seconds,
+    )
 
     usage = UsageLog(db, tz)
     history = HistoryLog(db, tz)
@@ -427,9 +404,9 @@ def assemble(
         ports.delegation_toolset(agents),
         ports.wakeup_toolset(),
         ports.recall_toolset(agents, settings.runtime.tool_output_max_chars),
-        notify_toolset(notifications),
+        notification_domain.toolset(),
         vault_toolset(vault),
-        triggers_toolset(triggers, agents, settings.runtime.precheck_timeout_seconds),
+        trigger_domain.toolset(agents),
         issues_toolset(issues, agents),
         *web_tools,
     ]
@@ -460,9 +437,9 @@ def assemble(
     session_domain.subscribe(messaging)
     jobs.subscribe(messaging)
     script_grants.subscribe(messaging)
-    notifications.subscribe(messaging)
+    notification_domain.subscribe(messaging)
     agent_lifecycle.subscribe(messaging)
-    triggers.subscribe(messaging)
+    trigger_domain.subscribe(messaging)
     issues.subscribe(messaging)
     # 各领域的任务种类在这里登记处理器；队列只接受登记过的种类（TaskQueue.accept）
     worker = Worker(
@@ -470,7 +447,7 @@ def assemble(
         register_handlers(
             (EVENT_TASK, messaging),
             *session_domain.handlers(messaging),
-            (DELIVER_TASK, DeliverHandler(db, push_message_in, pusher)),
+            *notification_domain.handlers(),
         ),
         bus,
     )
@@ -492,14 +469,13 @@ def assemble(
         catalog=catalog,
         agent_lifecycle=agent_lifecycle,
         sessions=session_domain.sessions,
-        notifications=notifications,
+        notifications=notification_domain.notifications,
         mcp=mcp,
-        triggers=triggers,
-        due_triggers=due_triggers,
-        streams=streams,
-        webhooks=webhooks,
-        push_subscriptions=push_subscriptions,
-        vapid=vapid,
+        triggers=trigger_domain.triggers,
+        trigger_domain=trigger_domain,
+        webhooks=trigger_domain.webhooks,
+        push_subscriptions=notification_domain.push_subscriptions,
+        vapid=notification_domain.vapid,
         worker=worker,
         messaging=messaging,
         threads=ports.threads,

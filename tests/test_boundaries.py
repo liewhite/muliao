@@ -20,8 +20,6 @@ LAYERS: list[set[str]] = [
     {"agent_runtime"},
     {"sessions"},
     {"workspace", "notifications", "issues"},
-    # 事件按投递目标交给会话或 issue（触发器经它投递）
-    {"routing"},
     {"triggers"},
     # 活动概览（热历史）要读会话与 issue 的动态
     {"history"},
@@ -347,7 +345,6 @@ READ_ONLY_IN_CALLER_TRANSACTION = {
     "agents": {"active_agent_in", "agent_in", "agent_names_in", "named_agent_in", "runnable_agent_in"},
     "files": {"load_metas"},
     "issues": {"check_issue_in"},
-    "routing": {"plan_in", "resolve_in"},
     "sessions": {
         "session_in",
         "receive_command_in",

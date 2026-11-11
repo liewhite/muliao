@@ -9,8 +9,8 @@ from pydantic import BaseModel, Field, TypeAdapter
 from muliao.agents.api import AgentNames
 from muliao.api.deps import C
 from muliao.platform.values import KEEP
-from muliao.routing.api import ADDRESS_HELP
 from muliao.triggers.api import (
+    ADDRESS_HELP,
     Fired,
     OnceConfig,
     OnceStatus,

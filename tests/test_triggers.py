@@ -8,11 +8,10 @@ import pytest
 from muliao.agents.api import AgentPatch, McpTransport, RoleSpec, mcp_config
 from muliao.api.triggers import TriggerCreate, TriggerOut
 from muliao.errors import Conflict, InvalidInput
-from muliao.routing.api import ADDRESS_HELP
 from muliao.sessions.api import Origin, SessionActivity, WorkState
 from muliao.sessions.mailbox import queued_in
 from muliao.sessions.tables import MailKind
-from muliao.triggers.api import TriggerKindName
+from muliao.triggers.api import ADDRESS_HELP, TriggerKindName
 from muliao.triggers.service import previous_fire_state_in, set_state, trigger_in
 from tests.conftest import login, owned, share
 from tests.test_flow import drain, history_of, start
@@ -21,7 +20,7 @@ ECHO_SERVER = str(Path(__file__).parent / "fixtures" / "echo_mcp.py")
 
 
 def _schedule(container):
-    return container.triggers, container.due_triggers
+    return container.triggers, container.trigger_domain.due
 
 
 async def _make_due(container, trigger_id: int) -> None:

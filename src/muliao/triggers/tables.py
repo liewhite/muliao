@@ -31,7 +31,7 @@ class Trigger(Base):
     enabled: Mapped[bool] = mapped_column(default=True)
     last_fired_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     last_session_id: Mapped[str | None] = mapped_column(String(36))
-    # 事件的默认投递目标（routing.api.Target 的 JSON）；None 是新开这个 agent 的会话。事件内容里的 `@route` 行可以按段另指目标
+    # 事件的默认投递目标（triggers.targets.Target 的 JSON）；None 是新开这个 agent 的会话。事件内容里的 `@route` 行可以按段另指目标
     route: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     # 触发前的前置检查（triggers.precheck.Precheck），所有触发方式共用；None 表示每次都交给 agent
     precheck: Mapped[dict[str, Any] | None] = mapped_column(JSON)
