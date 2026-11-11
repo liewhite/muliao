@@ -150,14 +150,14 @@ _TRIGGER_OUT: TypeAdapter[TriggerOut] = TypeAdapter(TriggerOut)
 
 class FiredOut(BaseModel):
     # 触发一次的结果（手动触发与 webhook 共用）：是否投出了信（前置检查判定这次不触发时为 false），代表这次触发的会话
-    # （Fired.session：开出或续写的第一个已知会话，和触发器的 last_session_id 是同一个；只投进了 issue、或要续写的会话
+    # （Fired.session_id：开出或续写的第一个已知会话，和触发器的 last_session_id 是同一个；只投进了 issue、或要续写的会话
     # 还没建出来时为 null）
     fired: bool
     session_id: str | None
 
     @classmethod
     def of(cls, fired: Fired | None) -> "FiredOut":
-        return cls(fired=fired is not None, session_id=None if fired is None else fired.session)
+        return cls(fired=fired is not None, session_id=None if fired is None else fired.session_id)
 
 
 async def _out(c: C, t: Trigger) -> TriggerOut:

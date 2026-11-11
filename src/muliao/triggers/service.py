@@ -109,7 +109,7 @@ class Fired:
     sessions: tuple[str | None, ...]
 
     @property
-    def session(self) -> str | None:
+    def session_id(self) -> str | None:
         """代表这次触发的会话：开出或续写的第一个已知会话；只投进了 issue、或续写的会话还没建出来时为 None。触发器记的
         last_session_id 与回给调用方（webhook、立即运行）的 session_id 都是它。"""
         return next((x for x in self.sessions if x is not None), None)
@@ -517,9 +517,9 @@ class TriggerService:
         for r in plan.routed:
             self._messaging.send_in(s, r.command)
         trigger.last_fired_at = now
-        # 定时跳过、流式排队看它的工作状态；这次没有（Fired.session 为 None）时留着上一次的，不清空
-        if fired.session is not None:
-            trigger.last_session_id = fired.session
+        # 定时跳过、流式排队看它的工作状态；这次没有（Fired.session_id 为 None）时留着上一次的，不清空
+        if fired.session_id is not None:
+            trigger.last_session_id = fired.session_id
         log.info(
             "trigger fired",
             extra={"trigger": trigger.name, "kind": trigger.kind, "sessions": list(fired.sessions)},

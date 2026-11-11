@@ -156,7 +156,7 @@ async def test_continued_event_still_splits_route_lines(client, container, make_
 async def test_returned_session_is_the_first_one_opened_even_when_the_first_part_goes_to_an_issue(
     client, container, make_agent
 ):
-    """返回的 session_id 与触发器的 last_session_id 是同一个（Fired.session）：跳过投进 issue 的那段；带它能续写。"""
+    """返回的 session_id 与触发器的 last_session_id 是同一个（Fired.session_id）：跳过投进 issue 的那段；带它能续写。"""
     alpha = (await make_agent("alpha")).id
     await login(client)
     _, token = await _create(client, alpha)
