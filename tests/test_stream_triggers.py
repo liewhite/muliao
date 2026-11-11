@@ -10,6 +10,7 @@ import anyio
 import pytest
 from pydantic_ai.messages import UserPromptPart
 
+from muliao.agents.api import AgentPatch
 from muliao.errors import InvalidInput, NotFound
 from muliao.sessions.api import Origin, SessionActivity
 from muliao.sessions.mailbox import queued_in
@@ -180,6 +181,27 @@ async def test_a_command_that_keeps_exiting_is_restarted_recorded_and_alerted_on
     alerts = [x for x in await _sessions(container, alpha) if "流式命令反复退出" in x.session.title]
     assert len(alerts) == 1
     assert await container.notifications.list(10) == []
+
+
+async def test_a_command_refused_a_write_gets_the_note_after_its_error(container, make_agent, tmp_path):
+    """与 run_shell、后台任务、前置检查一样：被写沙箱拦下的写，在系统报错后面补一句是谁拦的、找谁开（#592）。"""
+    blocked = tmp_path / "blocked"
+    blocked.mkdir()
+    alpha = (await make_agent()).id
+    await container.agents.update(alpha, AgentPatch(deny=[f"write:path:{blocked}"]), actor="user")
+    await _create(container, alpha, f"echo x > {blocked}/state")
+
+    async with _running(_runner(container)):
+
+        async def recorded() -> bool:
+            return await _stream_fault(container) is not None
+
+        await _until(recorded)
+
+    fault = await _stream_fault(container)
+    assert fault is not None and "exited with 1" in fault
+    assert re.search(r"Operation not permitted\n\[.*is outside.*write:path", fault)
+    assert not any(blocked.iterdir())
 
 
 async def test_a_killed_command_is_restarted_and_disabling_kills_it(container, make_agent):

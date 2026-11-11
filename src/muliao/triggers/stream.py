@@ -6,7 +6,7 @@
   改了配置用新配置重新起。
 - 退出（不论退出码：它本该一直运行）或起不来（secret 不可见、日志写不进去等）都算一次失败，按退避时间重启（1、2、
   4……秒，最多 5 分钟）。偶尔退出重连是常态，连续快速失败达到 _ALERT_AFTER 次才算脚本出错（triggers.faults：
-  原因含 stderr 日志的结尾，新出现时告警一次）；稳定运行一段时间（_STABLE_SECONDS）算恢复：清除出错、退避从头算。
+  原因含 stderr 日志的结尾，被写沙箱拦下的写补上说明，新出现时告警一次）；稳定运行一段时间（_STABLE_SECONDS）算恢复：清除出错、退避从头算。
   进程的运行状态（running_since、failures）由这里维护，每个托管进程开始时清零：服务重启、换配置都从头算（出错不随服务
   重启清除：还坏着就不再告警一次）。创建、改配置、重新启用时 configure 在同一事务里就清零并换一个新的 generation：托管进程
   按它重起（停用再启用来不及被对账看到时也一定重起，这就是「重启」），新进程登记之前 running_since 为空，
@@ -60,6 +60,7 @@ from muliao.triggers.service import (
     set_state,
 )
 from muliao.triggers.tables import Trigger
+from muliao.workspace.api import denial_note
 
 log = logging.getLogger(__name__)
 
@@ -357,7 +358,10 @@ class StreamRunner:
                 with anyio.CancelScope(shield=True), anyio.move_on_after(DRAIN_SECONDS):
                     await wait_exit_code(proc)
         stderr_tail = (await anyio.to_thread.run_sync(tail, log_file))[-_ERROR_TAIL_CHARS:].strip()
-        return f"stream command exited with {code}: {stderr_tail}"
+        refused = denial_note(confinement, stderr_tail)
+        return f"stream command exited with {code}: {stderr_tail}" + (
+            "" if refused is None else f"\n{refused}"
+        )
 
     async def _mark_stable(self, spec: _Spec, stable: anyio.Event) -> None:
         await anyio.sleep(self._stable_seconds)
