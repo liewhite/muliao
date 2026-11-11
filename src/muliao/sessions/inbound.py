@@ -94,8 +94,8 @@ class Inbound:
     answers: Mapping[str, Sequence[QuestionAnswer]] = field(default_factory=dict)
     # 对这个会话里等批准的调用的决定：tool_call_id -> 批准、拒绝或始终允许（sessions.approvals）；只有用户会带
     approvals: Mapping[str, Choice] = field(default_factory=dict)
-    # 委派来的信件：关联 id（发起方的占用者），结局按它交回；只有 Delegations.dispatch 会带
-    correlation: str | None = None
+    # 委派来的信件：是哪项委派（sessions.thread_calls 的行 id），结局按它交回；只有 Delegations.dispatch 会带
+    delegation: int | None = None
 
 
 def _inbound_of_mail(mail: SenderMail) -> Inbound:
@@ -349,7 +349,7 @@ async def receive_into(
                 content=inbound.content,
                 attachments=inbound.attachments,
                 awaited=inbound.awaited,
-                correlation=inbound.correlation,
+                delegation=inbound.delegation,
             )
         )
     log.info(

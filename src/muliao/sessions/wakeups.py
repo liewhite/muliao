@@ -22,7 +22,7 @@ from muliao.platform.db import Database, utcnow
 from muliao.platform.tasks import Clock, TaskQueue
 from muliao.sessions.holds import abandon, active_holders_of_in, active_holds, get_in, hold_in
 from muliao.sessions.tables import WakeUp
-from muliao.sessions.work import deliver_in
+from muliao.sessions.work import deliver_in, hold_of_in
 
 log = logging.getLogger(__name__)
 
@@ -121,8 +121,7 @@ class WakeUps:
                 await deliver_in(
                     s,
                     self._queue,
-                    row.session_id,
-                    row.holder,
+                    await hold_of_in(s, row.session_id, row.holder),
                     key=f"{row.holder}:due",
                     source=WAKE_ME,
                     event_text=wake_text(row, self._tz),

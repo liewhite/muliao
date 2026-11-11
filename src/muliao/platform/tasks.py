@@ -426,13 +426,6 @@ class TaskQueue:
         query = select(Task.id).where(Task.lane == lane, Task.kind == kind, Task.status.in_(statuses))
         return bool(await s.scalar(select(query.exists())))
 
-    async def update_payload_in(self, s: AsyncSession, task_id: int, payload: Mapping[str, Any]) -> None:
-        """在调用方事务里改写一个 task 的 payload（它的处理器记下执行中途的进展，如运行取走的信件）。"""
-        task = await s.get(Task, task_id)
-        if task is None:
-            raise RuntimeError(f"task {task_id} vanished while updating its payload")
-        task.payload = dict(payload)
-
     async def lane_busy(self, s: AsyncSession, lane: str) -> bool:
         return bool(await self.busy_lanes(s, [lane]))
 

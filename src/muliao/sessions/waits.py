@@ -1,5 +1,5 @@
 """等待项：会话为什么在 waiting（会话页列出，#298）。来源只有工作状态的唯一规则 activity.Waiting——active 占用与还能
-回答的提问、还能批准的调用；这里只把不透明的占用者认成具体的工作并补上它的参数：委派、到点唤醒在会话的子域里查，后台任务只给任务号
+回答的提问、还能批准的调用；这里只把占用认成具体的工作并补上它的参数：委派（占用引用的委派行）、到点唤醒在会话的子域里查，后台任务只给任务号
 （命令、日志属于工作区领域，由组合层去取）。认不出的占用者是缺陷，直接报错。"""
 
 from __future__ import annotations
@@ -69,15 +69,16 @@ Wait = Annotated[JobWait | DelegationWait | WakeWait | AskWait | ApprovalWait, F
 
 async def waits_of_in(s: AsyncSession, waiting: Waiting) -> list[Wait]:
     """会话在等的东西逐项展开：占用按登记先后，然后是提问、等批准的调用。"""
-    holders = [h.holder for h in waiting.holds]
-    delegations = await delegations_among(s, holders)
-    wakeups = await wakeups_among(s, holders)
+    delegations = await delegations_among(
+        s, [h.thread_call_id for h in waiting.holds if h.thread_call_id is not None]
+    )
+    wakeups = await wakeups_among(s, [h.holder for h in waiting.holds if h.holder is not None])
     waits: list[Wait] = []
     for hold in waiting.holds:
-        job_id = job_id_of_holder(hold.holder)
+        job_id = None if hold.holder is None else job_id_of_holder(hold.holder)
         if job_id is not None:
             waits.append(JobWait(job_id=job_id, since=hold.created_at))
-        elif (d := delegations.get(hold.holder)) is not None:
+        elif hold.thread_call_id is not None and (d := delegations.get(hold.thread_call_id)) is not None:
             waits.append(
                 DelegationWait(
                     thread_session_id=d.thread_id,
@@ -85,11 +86,11 @@ async def waits_of_in(s: AsyncSession, waiting: Waiting) -> list[Wait]:
                     since=hold.created_at,
                 )
             )
-        elif (w := wakeups.get(hold.holder)) is not None:
+        elif hold.holder is not None and (w := wakeups.get(hold.holder)) is not None:
             waits.append(WakeWait(due_at=w.due_at, note=w.note, since=hold.created_at))
         else:
             raise RuntimeError(
-                f"active hold {hold.holder!r} of session {hold.session_id} is of no known kind"
+                f"active hold {hold.id} ({hold.holder!r}) of session {hold.session_id} is of no known kind"
             )
     waits.extend(
         AskWait(call_id=call_id, headers=[q.header for q in questions])

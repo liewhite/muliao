@@ -3,13 +3,15 @@
 
 - 投信（post_in）：用户消息、对挂起调用的回答（用户回答提问、被问的 agent 交回结局）、触发器事件、委派来的任务、
   后台任务与 thread 的事件、运行中检查。
-- 一封信件在交给模型的那一步保存时记为已处理（consume_in，与那一步的消息同一个事务）。
+- 一封信件交给了哪次运行记在信上（mail.taken_by，唯一写处 give_in，归属见 docs/architecture.md 2.4 第 3 行）：投递运行时信箱里
+  已有的（wake_in）、运行开头取走的（sessions.consumer）、交给模型的那一步保存时——这时同时记为已处理（consume_in，与
+  那一步的消息同一个事务）。运行、结清只查信。
 - 用户停止会话时信箱清空（discard_in）：没交给模型的信件记为被丢弃，留着记录；对仍挂着的提问的回答在此之前
   已由停止写进历史、记为已处理（sessions.halt.close_history_in）。
 - 唤醒（wake_in，唯一规则）：会话里有排队的信件、没有排队或运行中的运行，并且有信件在最近一次运行之后才到；
   会话停在挂起的调用上、还不能继续时（sessions.pending.position 的 Paused.ready）等回答或新消息，事件等它们一起
   交给模型。调用方：投信时、运行结束时（含最终失败，RunHandler.failed_in 结清之后）、定期对账（MailReconciler，兜住投递时
-  事务失败与重启）。「最近一次运行之后才到」保证最终失败的运行不会因为同一批信件被无限重新投递：它被重试、或新信件
+  事务失败与重启）。「最近一次运行之后才到」就是还没交给过它（taken_by），保证最终失败的运行不会因为同一批信件被无限重新投递：它被重试、或新信件
   到达时再处理。
 """
 
@@ -39,7 +41,7 @@ from muliao.sessions.pending import (
     open_asks_of,
     position,
 )
-from muliao.sessions.runs import RunPayload, handed_to, latest_run, run_unfinished_in
+from muliao.sessions.runs import latest_run, run_unfinished_in
 from muliao.sessions.tables import Mail, MailKind, MailState, Session
 
 log = logging.getLogger(__name__)
@@ -47,19 +49,14 @@ log = logging.getLogger(__name__)
 
 def audience_of(mail: Sequence[Mail], delegated: bool) -> Audience:
     """一次运行的回答交给谁（唯一规则）：它处理的信件有用户在等的就是用户；否则会话有委派来、还没结清的工作
-    （delegated：带关联的信件还没结清，ask_agent 或 report_back，见 delegated_in）就是发起委派的 agent——会话做完
-    时最终回答在结清里交给它们，不论这次运行处理的是委派那封信，还是之后的后台任务事件、回答、运行中检查；都没有就
-    没人在等。"""
+    （delegated：ask_agent 或 report_back，见 sessions.settlement.delegated_in）就是发起委派的 agent——会话做完时
+    最终回答在结清里交给它们，不论这次运行处理的是委派那封信，还是之后的后台任务事件、回答、运行中检查；都没有就是
+    没人在等。发起方已被停止（占用 cleared）的委派不算：没人再等 thread 的回答（停止已给 thread 发了 StopThread）。"""
     if any(m.awaited for m in mail):
         return Audience.USER
     if delegated:
         return Audience.AGENT
     return Audience.NONE
-
-
-async def delegated_in(s: AsyncSession, session_id: str) -> bool:
-    """会话有委派来、还没结清的工作（排着的或已交给模型的带关联信件）。"""
-    return bool(await unsettled_in(s, session_id, [MailState.CONSUMED, MailState.QUEUED]))
 
 
 _SOURCE_MAX = 100
@@ -78,7 +75,7 @@ async def post_in(
     check_in: bool = False,
     attachments: Sequence[str] = (),
     answers: Mapping[str, Any] | None = None,
-    correlation: str | None = None,
+    delegation: int | None = None,
     dedupe_key: str | None = None,
 ) -> Mail:
     """在调用方事务里往会话信箱投一封信件，需要时唤醒消费者。带 dedupe_key 的投信只投一次：已经投过就返回那封。
@@ -113,7 +110,7 @@ async def post_in(
         attachments=list(attachments),
         answers=dict(answers or {}),
         awaited=awaited,
-        correlation=correlation,
+        delegation_id=delegation,
         dedupe_key=dedupe_key,
     )
     s.add(mail)
@@ -202,7 +199,7 @@ async def wake_in(s: AsyncSession, queue: TaskQueue, session: Session) -> bool:
         # 排队的运行开始时、运行中的那次每一步都会取走新信件；它结束时会再来这里
         return False
     latest = await latest_run(s, queue, session.id)
-    if latest is not None and latest.failed and all(handed_to(m.id, latest) for m in queued):
+    if latest is not None and latest.failed and all(m.taken_by == latest.id for m in queued):
         # 都已经交给过一次最终失败的运行：由它被重试、或之后新信件唤醒的运行处理，不重复投递。正常结束的运行没取走的
         # 信件（如从历史续跑、只重发了一条请求就结束）一定要有下一次运行
         return False
@@ -210,56 +207,53 @@ async def wake_in(s: AsyncSession, queue: TaskQueue, session: Session) -> bool:
         case Paused(ready=False) | Interrupted(after=Paused(ready=False)):
             # 停在挂起的调用上：等回答或新消息（跳过），事件到时一起交给模型
             return False
-    queue.enqueue(
+    run = queue.enqueue(
         s,
         kind=RUN_TASK,
         lane=session_lane(session.id),
         agent_id=session.agent_id,
         session_id=session.id,
-        payload=RunPayload(through_mail_id=queued[-1].id).model_dump(),
+        payload={},
     )
-    log.info("consumer woken", extra={"session_id": session.id, "queued": len(queued)})
+    await s.flush()
+    # 信箱里已有的信交给这次运行，哪怕它在取走它们之前就最终失败（如开头压缩失败）：不会因为它们再唤醒，失败的结清
+    # 也据此了结它们带来的委派（sessions.settlement.settle_failure_in）
+    await give_in(s, [m.id for m in queued], run.id)
+    log.info("consumer woken", extra={"session_id": session.id, "run_id": run.id, "queued": len(queued)})
     return True
 
 
-async def unsettled_in(s: AsyncSession, session_id: str, states: Sequence[MailState]) -> list[Mail]:
-    """会话里带关联、还没结清的信件（结清的时机与范围在 sessions.settlement）。"""
+async def give_in(s: AsyncSession, ids: Sequence[int], run_id: int) -> None:
+    """这些排着的信件交给这次运行（mail.taken_by 的写处，归属见 docs/architecture.md 2.4 第 3 行）：投递它时信箱里已有的
+    （wake_in）、它开头取走的（sessions.consumer）。交给模型那一步保存时由 consume_in 同时记下。已经不在排队的信件不动。"""
+    if ids:
+        await s.execute(
+            update(Mail).where(Mail.id.in_(list(ids)), Mail.state == MailState.QUEUED).values(taken_by=run_id)
+        )
+
+
+async def delegated_mail_in(s: AsyncSession, session_id: str, states: Sequence[MailState]) -> list[Mail]:
+    """会话里这些状态的委派来的信件，按到达顺序（结清没有不记在信上，由 sessions.settlement 问委派）。"""
     rows = await s.scalars(
         select(Mail)
-        .where(
-            Mail.session_id == session_id,
-            Mail.correlation.is_not(None),
-            Mail.correlation_settled.is_(False),
-            Mail.state.in_(states),
-        )
+        .where(Mail.session_id == session_id, Mail.delegation_id.is_not(None), Mail.state.in_(states))
         .order_by(Mail.id)
     )
     return list(rows.all())
 
 
-async def with_unsettled_in(s: AsyncSession) -> list[str]:
-    """有带关联、还没结清的信件（排着的或已交给模型的）的会话（信箱对账补做失败的结清）。"""
+async def sessions_with_delegations_in(
+    s: AsyncSession, delegation_ids: Collection[int], states: Sequence[MailState]
+) -> list[str]:
+    """带着这些委派、在这些状态的信件所在的会话（信箱对账补做失败的结清）。"""
+    if not delegation_ids:
+        return []
     rows = await s.scalars(
         select(Mail.session_id)
-        .where(
-            Mail.correlation.is_not(None),
-            Mail.correlation_settled.is_(False),
-            Mail.state.in_([MailState.CONSUMED, MailState.QUEUED]),
-        )
+        .where(Mail.delegation_id.in_(list(delegation_ids)), Mail.state.in_(states))
         .distinct()
     )
     return list(rows.all())
-
-
-def mark_settled(mail: Sequence[Mail]) -> list[str]:
-    """把这些信件带来的关联记为已结清（随调用方的事务提交），返回这次新结清的关联（去重、按信件顺序）。"""
-    correlations = list(
-        dict.fromkeys(m.correlation for m in mail if m.correlation and not m.correlation_settled)
-    )
-    for m in mail:
-        if m.correlation:
-            m.correlation_settled = True
-    return correlations
 
 
 async def with_queued_in(s: AsyncSession) -> list[str]:
@@ -271,8 +265,12 @@ async def with_queued_in(s: AsyncSession) -> list[str]:
 
 
 async def consumed_by_in(s: AsyncSession, session_id: str, run_id: int) -> list[Mail]:
-    """这次运行处理掉的信件（带上会话条件：按会话的索引只扫这个会话的行）。"""
-    rows = await s.scalars(select(Mail).where(Mail.session_id == session_id, Mail.consumed_by == run_id))
+    """这次运行处理掉的信件：交给了它、已交给模型（带上会话条件：按会话的索引只扫这个会话的行）。"""
+    rows = await s.scalars(
+        select(Mail).where(
+            Mail.session_id == session_id, Mail.taken_by == run_id, Mail.state == MailState.CONSUMED
+        )
+    )
     return list(rows.all())
 
 
@@ -303,7 +301,7 @@ async def consume_in(s: AsyncSession, ids: Sequence[int], run_id: int) -> None:
     result = await s.execute(
         update(Mail)
         .where(Mail.id.in_(list(ids)), Mail.state == MailState.QUEUED)
-        .values(state=MailState.CONSUMED, consumed_by=run_id)
+        .values(state=MailState.CONSUMED, taken_by=run_id)
     )
     if result.rowcount != len(ids):  # type: ignore[attr-defined]
         raise RuntimeError(

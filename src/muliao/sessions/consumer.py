@@ -43,11 +43,10 @@ from muliao.sessions.history import (
 )
 from muliao.sessions.live import LiveSegments
 from muliao.sessions.loading import load_session
-from muliao.sessions.mailbox import audience_of, consumed_by_in, delegated_in, queued_in, wake_in
+from muliao.sessions.mailbox import audience_of, consumed_by_in, give_in, queued_in, wake_in
 from muliao.sessions.origins import OriginNotes
 from muliao.sessions.questions import waiting_text
-from muliao.sessions.runs import RunPayload, hand_over_in
-from muliao.sessions.settlement import settle_failure_in
+from muliao.sessions.settlement import delegated_in, settle_failure_in
 from muliao.sessions.steps import CompactionDue, RunState, Steps
 from muliao.sessions.stopping import StoppableRuns
 from muliao.sessions.tables import Mail
@@ -182,7 +181,7 @@ class Consumer:
                 session=session,
                 agent=agent,
                 context=context,
-                handled=[*earlier, *adopted],
+                adopted=adopted,
                 messages=load_messages(r.payload for r in saved_rows),
                 last_row=saved_rows[-1] if saved_rows else None,
             )
@@ -226,7 +225,7 @@ class Consumer:
         profile = await self._toolbox.profile(agent)
         # 运行开始时就定下（工具与指令随之确定）：回答交给谁看它处理过的、和这次要处理的信件，以及会话有没有委派来、
         # 还没结清的工作（mailbox.audience_of）
-        audience = audience_of([*state.handled, *queued], delegated_work)
+        audience = audience_of([*earlier, *adopted, *queued], delegated_work)
         scope = self._runtime.scope(agent, session_id=session.id, audience=audience)
 
         # 随运行变化的上下文（当前时间、回答交给谁）不进 instructions——那是缓存前缀——而是挂在这次运行新增的
@@ -288,10 +287,10 @@ class Consumer:
         interrupted: dict[str, object] = {}
         answers = {} if opening.paused is None else opening.paused.answers
         if opening.queued:
-            # 开头取走的信件都交给了这次运行（mailbox.handed_to），哪怕它在第一次保存之前就最终失败：失败的结清据此
+            # 开头取走的信件都交给了这次运行（mailbox.give_in），哪怕它在第一次保存之前就最终失败：失败的结清据此
             # 了结它们，也不会为它们再唤醒一次运行。批准在同一个事务里记为已交给运行执行：之前交过的不再执行
             async with self._db.transaction() as s:
-                await hand_over_in(s, self._queue, state.run_id, opening.queued[-1].id)
+                await give_in(s, [m.id for m in opening.queued], state.run_id)
                 interrupted = await take_approvals_in(s, state.session.id, answers)
         deferred = (
             None
@@ -330,7 +329,7 @@ async def _adopted(s: AsyncSession, session_id: str, run_id: int) -> list[Mail]:
 class RunHandler:
     """队列里的运行（run task）。"""
 
-    # mail.consumed_by 指向运行（ON DELETE CASCADE）：删了会连带删掉它处理过的信件与幂等键
+    # mail.taken_by 指向运行（ON DELETE CASCADE）：删了会连带删掉它处理过的信件与幂等键
     prunable = False
 
     def __init__(self, consumer: Consumer, queue: TaskQueue, messaging: Messaging):
@@ -341,13 +340,12 @@ class RunHandler:
     async def execute(self, task: Task) -> Commit:
         if task.session_id is None:
             raise RuntimeError(f"run {task.id} has no session")
-        RunPayload.of(TaskView.of(task))  # 在第一现场校验存下的 payload，不等到唤醒或失败收尾时才读到它
         return await self._consumer.run(task.id, task.session_id)
 
     async def failed_in(self, s: AsyncSession, task: Task) -> None:
         """最终失败：交给这个会话、没能做完的委派以「失败」结清（发起方不会一直等）。按会话范围：已交给模型、还没结清的
         全部（包括早先停在挂起调用上的运行处理过的、被续跑接管的），加上交给过这次运行、还排着的——运行在第一次保存
-        之前就失败时，开头取走的信件一直排着，也不会再有运行因为它们被唤醒（mailbox.handed_to）；它们随结清一起
+        之前就失败时，交给它的信件一直排着，也不会再有运行因为它们被唤醒（mailbox.wake_in）；它们随结清一起
         退出信箱，不会在之后的运行里被悄悄执行。运行开始之后才到的不动：同一个事务里立即唤醒新的运行处理它们（如对
         同一 thread 的第二项委派），不等信箱对账。队列已把这次运行记为 failed，唤醒不会把它当成忙。
 

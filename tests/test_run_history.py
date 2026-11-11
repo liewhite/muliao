@@ -23,7 +23,6 @@ from muliao.sessions.api import Origin
 from muliao.sessions.compaction import COMPACTION_INSTRUCTIONS
 from muliao.sessions.conventions import INTERRUPTED_TOOL_RESULT, unanswered_calls
 from muliao.sessions.lanes import RUN_TASK, session_lane
-from muliao.sessions.runs import RunPayload
 from muliao.sessions.tables import ApprovalRequest
 from tests.conftest import restart
 from tests.scripted import scripted
@@ -210,7 +209,7 @@ async def test_a_run_with_nothing_to_hand_the_model_does_not_compact(
             lane=session_lane(session.id),
             agent_id=agent.id,
             session_id=session.id,
-            payload=RunPayload(through_mail_id=0).model_dump(),
+            payload={},
         )
     await drain(container)
 

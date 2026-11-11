@@ -11,7 +11,7 @@ from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
 from muliao.sessions.holds import hold_in
 from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.tables import HoldStatus, Mail, SessionHold
-from muliao.sessions.work import Delivered, deliver_in
+from muliao.sessions.work import Delivered, deliver_in, hold_of_in
 from tests.scripted import scripted
 from tests.test_delegations import _asking
 from tests.test_flow import drain, start, tool_returns
@@ -47,7 +47,7 @@ async def test_an_answered_ask_is_not_executed_again_and_its_hold_stays_as_the_r
     assert (hold.call_id, hold.status) == ("ask1", HoldStatus.RELEASED)
     async with container.db.transaction() as s:
         [delegation] = (
-            await s.scalars(select(SessionHold).where(SessionHold.holder.like("delegation:%")))
+            await s.scalars(select(SessionHold).where(SessionHold.thread_call_id.is_not(None)))
         ).all()
     assert delegation.status == HoldStatus.RELEASED
 
@@ -72,7 +72,12 @@ async def test_an_outcome_after_the_session_was_stopped_is_dropped_without_wakin
 
     async with container.db.transaction() as s:
         delivered = await deliver_in(
-            s, container.queue, session.id, "job:1", key="k", source="job:1", event_text="done"
+            s,
+            container.queue,
+            await hold_of_in(s, session.id, "job:1"),
+            key="k",
+            source="job:1",
+            event_text="done",
         )
 
     assert delivered == Delivered.DROPPED
@@ -86,7 +91,7 @@ async def test_an_outcome_for_a_hold_that_was_never_registered_is_a_bug(containe
     session = await start(container, agent, "go")
     with pytest.raises(RuntimeError, match="has no hold"):
         async with container.db.transaction() as s:
-            await deliver_in(s, container.queue, session.id, "job:9", key="k", source="job:9", event_text="x")
+            await hold_of_in(s, session.id, "job:9")
 
 
 async def test_a_final_failure_settles_delegations_handled_by_an_earlier_run(container, make_agent, models):
@@ -258,7 +263,7 @@ async def test_reconcile_settles_delegations_whose_failure_hook_failed(
     monkeypatch.undo()
     async with container.db.transaction() as s:
         assert (
-            await s.scalars(select(SessionHold).where(SessionHold.holder.like("delegation:%")))
+            await s.scalars(select(SessionHold).where(SessionHold.thread_call_id.is_not(None)))
         ).one().status == HoldStatus.ACTIVE
 
     await container.mail.reconcile()
@@ -266,7 +271,7 @@ async def test_reconcile_settles_delegations_whose_failure_hook_failed(
 
     async with container.db.transaction() as s:
         assert (
-            await s.scalars(select(SessionHold).where(SessionHold.holder.like("delegation:%")))
+            await s.scalars(select(SessionHold).where(SessionHold.thread_call_id.is_not(None)))
         ).one().status == HoldStatus.RELEASED
     assert any("failed" in p and "bad request" in p for p in recorder.prompts[-1])
 
@@ -311,9 +316,9 @@ async def test_stopping_a_thread_hands_back_at_once_and_deleting_its_agent_later
     await drain(container)
 
     async with container.db.transaction() as s:
-        assert (
-            await s.scalars(select(SessionHold).where(SessionHold.holder.like("delegation:%")))
-        ).one().status == HoldStatus.RELEASED
+        # thread 随 agent 删除，委派行随之删除，占用上的引用置空；占用本身留在发起方
+        [hold] = (await s.scalars(select(SessionHold).where(SessionHold.session_id == parent.id))).all()
+    assert hold.status == HoldStatus.RELEASED and hold.thread_call_id is None
     assert any("(reviewer) was stopped" in p for p in recorder.prompts[-1])
 
 
@@ -372,6 +377,7 @@ async def test_reconciliation_leaves_delegation_mail_that_arrived_after_the_fail
     from muliao.platform.tables import TaskStatus
     from muliao.sessions.settlement import reconcile_failures
     from muliao.sessions.tables import MailState
+    from muliao.sessions.thread_calls import owed_in
 
     lead = (await make_agent("lead", model="l")).id
     reviewer = await container.agents.get((await make_agent("reviewer", model="v")).id)
@@ -403,55 +409,26 @@ async def test_reconciliation_leaves_delegation_mail_that_arrived_after_the_fail
     # 失败之后才到：不属于那次运行
     await dispatch("second")
     async with container.db.transaction() as s:
-        # 新信件当场唤醒了一次新运行；删掉它，让失败的运行仍是最近一次，只看对账怎么对待这封信
+        # 新信件当场唤醒了一次新运行（信箱里的信都交给了它）；删掉它、把信改回唤醒之前交给谁，让失败的运行仍是最近
+        # 一次（如同唤醒没做成），只看对账怎么对待这封信
         [woken] = (
             await s.scalars(
                 select(Task).where(Task.session_id == child.id, Task.status == TaskStatus.PENDING)
             )
         ).all()
+        for m in (await s.scalars(select(Mail).where(Mail.session_id == child.id))).all():
+            m.taken_by = run.id if m.content.endswith("first") else None
+        await s.flush()
         await s.delete(woken)
 
     assert await reconcile_failures(container.db, container.queue) == [child.id]
     late = [m for m in await _mail_of(container, child.id) if m.content.endswith("second")]
-    assert [(m.state, m.correlation_settled) for m in late] == [(MailState.QUEUED, False)]
     first = [m for m in await _mail_of(container, child.id) if m.content.endswith("first")]
-    assert [(m.state, m.correlation_settled) for m in first] == [(MailState.DISCARDED, True)]
-
-
-async def test_a_thread_settling_a_delegation_its_existing_asker_has_no_hold_for_is_a_bug(
-    container, make_agent, models
-):
-    """发起方还在、却没有这个占用：不是「发起方已删除」，交回报错，不悄悄丢掉结局。"""
-    from muliao.sessions.delegation import Ending, hand_back_in
-    from muliao.sessions.tables import Session
-
-    lead = (await make_agent("lead", model="l")).id
-    reviewer = await container.agents.get((await make_agent("reviewer", model="v")).id)
-    models.models["l"] = scripted(Recorder())
-    parent = await start(container, lead, "go")
-    await drain(container)
     async with container.db.transaction() as s:
-        child = await container.delegations.dispatch(
-            s,
-            parent_id=parent.id,
-            agent=reviewer,
-            thread="review",
-            prompt="check",
-            call_id="k",
-            suspends=False,
-            awaited=False,
-        )
-    with pytest.raises(RuntimeError, match="has no hold"):
-        async with container.db.transaction() as s:
-            await hand_back_in(
-                s,
-                container.queue,
-                await s.get(Session, child.id),
-                ["delegation:nobody"],
-                Ending.FINISHED,
-                "x",
-                [],
-            )
+        owed = {o.delegation.id for o in await owed_in(s)}
+    # 结清没有只看委派（发起方的占用是否还 active）
+    assert [(m.state, m.delegation_id in owed) for m in late] == [(MailState.QUEUED, True)]
+    assert [(m.state, m.delegation_id in owed) for m in first] == [(MailState.DISCARDED, False)]
 
 
 async def test_deleting_a_stopped_asker_drops_its_threads_outcome(container, make_agent, models):

@@ -55,9 +55,9 @@ class RunState:
     # 发给模型的会话上下文：摘要与切点之后的历史，保存一步就接上这一步，压缩后从库里重新加载（Steps.compact）。
     # 运行从它续跑，压缩按它判断（Steps.compaction_due）
     context: SessionContext
-    # 这次运行处理过的信件：包括之前几次尝试里已经保存的（重试沿用同一个运行），以及接着别的运行保存的部分续跑时
-    # 那次运行处理过的（consumer._adopted）
-    handled: list[Mail]
+    # 接着别的运行保存的部分续跑时，那次运行处理过的信件（consumer._adopted）：这次运行接管它们的推送。这次运行自己
+    # 处理过的信件记在信上（mail.taken_by，mailbox.consumed_by_in），不在这里另记
+    adopted: list[Mail]
     # 这次运行保存的消息（包括之前几次尝试保存的），和最后保存的那一行
     messages: list[ModelMessage]
     last_row: Message | None
@@ -232,7 +232,6 @@ class Steps:
             return
         await self.save_in(s, state, list(state.unsaved), consumed=state.taken)
         state.unsaved.clear()
-        state.handled += state.taken
         state.taken = []
 
     async def save_in(

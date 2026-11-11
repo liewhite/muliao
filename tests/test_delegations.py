@@ -220,7 +220,7 @@ async def test_an_ask_has_no_check_in_and_no_timeout(container, make_agent, mode
     async with container.db.transaction() as s:
         [record] = (await s.scalars(select(ThreadCall))).all()
         [hold] = (await s.scalars(select(SessionHold))).all()
-    assert record.holder == hold.holder and hold.status == HoldStatus.ACTIVE
+    assert hold.thread_call_id == record.id and hold.holder is None and hold.status == HoldStatus.ACTIVE
     assert record.check_seconds is None
 
 
@@ -766,12 +766,10 @@ async def test_a_reported_thread_is_deleted_only_after_stopping_and_the_delegato
     assert "was stopped" in event.content
     assert await container.thread_checks.check() == 0
     # 委派记录随 thread 删除；之后推不出这个 thread
-    from muliao.sessions.delegation import delegation_holder
-    from muliao.sessions.thread_calls import delegations_among
+    from muliao.sessions.thread_calls import call_in
 
-    holder = delegation_holder(parent.id, "call-5")
     async with container.db.transaction() as s:
-        assert await delegations_among(s, [holder]) == {}
+        assert await call_in(s, parent.id, "call-5") is None
 
 
 async def test_no_check_ins_while_the_delegator_waits_on_the_ask(container, make_agent, models):
@@ -821,7 +819,7 @@ async def test_an_ask_whose_delegation_never_committed_is_executed_again_on_retr
     assert seen == ["checked check"]
     async with container.db.transaction() as s:
         assert (
-            len((await s.scalars(select(SessionHold).where(SessionHold.holder.like("delegation:%")))).all())
+            len((await s.scalars(select(SessionHold).where(SessionHold.thread_call_id.is_not(None)))).all())
             == 1
         )
 
@@ -839,7 +837,7 @@ async def test_stopping_the_asker_while_it_waits_abandons_the_ask(container, mak
 
     async with container.db.transaction() as s:
         [delegation] = (
-            await s.scalars(select(SessionHold).where(SessionHold.holder.like("delegation:%")))
+            await s.scalars(select(SessionHold).where(SessionHold.thread_call_id.is_not(None)))
         ).all()
         mail = (await s.scalars(select(Mail).where(Mail.session_id == parent.id))).all()
     assert delegation.status == HoldStatus.CLEARED

@@ -92,28 +92,29 @@ class Delivered(StrEnum):
 async def deliver_in(
     s: AsyncSession,
     queue: TaskQueue,
-    session_id: str,
-    holder: str,
+    hold: SessionHold | None,
     *,
     key: str,
     source: str,
     event_text: str,
     answer: CallResult | None = None,
 ) -> Delivered:
-    """交回占用 holder 的结局并释放它，唯一出口。会话还停在这项占用对应的挂起调用上、且给了 answer（那一种挂起调用的
-    回答信封）时作为那次调用的结果（回答信件）；否则作为事件信件（「迟到的回答改为事件」只在这里）。用户是否在等这封信随占用登记时记下的。
-    按 key 幂等。"""
-    hold = await _hold_in(s, session_id, holder)
+    """交回这项占用的结局并释放它，唯一出口。hold 为 None：会话已删除（占用随它删除，见 hold_of_in）。会话还停在
+    这项占用对应的挂起调用上、且给了 answer（那一种挂起调用的回答信封）时作为那次调用的结果（回答信件）；否则作为
+    事件信件（「迟到的回答改为事件」只在这里）。用户是否在等这封信随占用登记时记下的。按 key 幂等。"""
     if hold is None:
-        log.info("outcome for a deleted session dropped", extra={"session_id": session_id, "holder": holder})
+        log.info("outcome for a deleted session dropped", extra={"key": key})
         return Delivered.GONE
+    session_id = hold.session_id
     before = release(hold)
     if before == HoldStatus.CLEARED:
-        log.info("outcome for a stopped session dropped", extra={"session_id": session_id, "holder": holder})
+        log.info(
+            "outcome for a stopped session dropped", extra={"session_id": session_id, "hold_id": hold.id}
+        )
         return Delivered.DROPPED
     if before == HoldStatus.RELEASED and not await posted_with_key_in(s, session_id, key):
         # 重放带的是同一个 key（按它去重）；换了 key 再交回一次，是同一项工作被交回了两次
-        raise RuntimeError(f"hold {holder} of session {session_id} was already released by another delivery")
+        raise RuntimeError(f"hold {hold.id} of session {session_id} was already released by another delivery")
     waiting = paused(await position_in(s, session_id))
     if (
         answer is not None
@@ -146,20 +147,20 @@ async def deliver_in(
         delivered = Delivered.EVENT
     log.info(
         "outcome delivered",
-        extra={"session_id": session_id, "holder": holder, "delivered_as": delivered, "key": key},
+        extra={"session_id": session_id, "hold_id": hold.id, "delivered_as": delivered, "key": key},
     )
     return delivered
 
 
 async def post_check_in(
-    s: AsyncSession, queue: TaskQueue, session_id: str, holder: str, source: str, text: str
+    s: AsyncSession, queue: TaskQueue, hold: SessionHold | None, source: str, text: str
 ) -> bool:
-    """运行中检查（platform.checks.WorkWatcher 的节奏）：在调用方事务里给发起会话投一封检查信件（不推送）；这个来源
-    已有信件排着时不投（不堆积）。工作的占用已不是 active（会话被停止，或会话已删除）时也不投：停止之后不唤醒会话。
-    返回是否投了。"""
-    hold = await _hold_in(s, session_id, holder)
+    """运行中检查（platform.checks.WorkWatcher 的节奏）：在调用方事务里给这项工作的会话投一封检查信件（不推送）；这个
+    来源已有信件排着时不投（不堆积）。占用已不是 active（会话被停止）或会话已删除（hold 为 None）时也不投：停止之后
+    不唤醒会话。返回是否投了。"""
     if hold is None or hold.status != HoldStatus.ACTIVE:
         return False
+    session_id = hold.session_id
     if await has_queued_from(s, session_id, source):
         return False
     await post_in(
@@ -175,8 +176,8 @@ async def post_check_in(
     return True
 
 
-async def _hold_in(s: AsyncSession, session_id: str, holder: str) -> SessionHold | None:
-    """工作在会话上的占用（交回结局与运行中检查共用）：会话已删除时 None（占用随会话删除）；会话还在而占用从未登记过
+async def hold_of_in(s: AsyncSession, session_id: str, holder: str) -> SessionHold | None:
+    """外部工作在会话上的占用（交回结局与运行中检查用）：会话已删除时 None（占用随会话删除）；会话还在而占用从未登记过
     是 bug。"""
     hold = await get_in(s, session_id, holder)
     if hold is None and await s.get(Session, session_id) is not None:
@@ -192,8 +193,7 @@ def handle_work_commands(messaging: Messaging, queue: TaskQueue) -> None:
             await deliver_in(
                 s,
                 queue,
-                command.session_id,
-                command.holder,
+                await hold_of_in(s, command.session_id, command.holder),
                 key=f"{command.holder}:end",
                 source=command.holder,
                 event_text=command.text,
@@ -203,7 +203,13 @@ def handle_work_commands(messaging: Messaging, queue: TaskQueue) -> None:
 
     async def check_in(command: WorkCheckIn, _delivery: Delivery) -> Commit:
         async def commit(s: AsyncSession) -> None:
-            await post_check_in(s, queue, command.session_id, command.holder, command.holder, command.text)
+            await post_check_in(
+                s,
+                queue,
+                await hold_of_in(s, command.session_id, command.holder),
+                command.holder,
+                command.text,
+            )
 
         return commit
 

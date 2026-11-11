@@ -1,48 +1,46 @@
 """调用开出的 thread（thread_calls 表的唯一读写处）：哪次工具调用开出或续写了哪个 thread。开出/续写 thread 的事务里
 记下（sessions.threads），会话接口按调用 id 把 thread 挂在调用条目上（sessions.service），不看调用的结果。
 
-要交回结局的调用（ask_agent、delegate_task(report_back)）就是一项委派：同一行再记它在发起方的占用者与心跳间隔，是
-委派的记录。委派还在不在进行看发起方的占用（sessions.holds），结清没有看 thread 的信件（sessions.settlement）；
-流程在 sessions.delegation / sessions.threads。"""
+要交回结局的调用（ask_agent、delegate_task(report_back)）就是一项委派，这一行是委派的唯一主体（docs/architecture.md
+2.4 第 4 行）：发起方的占用（sessions.holds）与 thread 的信件（mail.delegation_id）只引用它的 id，行上再记心跳间隔。
+委派结清没有只看引用它的占用是否还 active；流程在 sessions.delegation / sessions.settlement。"""
 
 from __future__ import annotations
 
 from collections.abc import Collection
 from dataclasses import dataclass
-from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.sessions.holds import active_holds
-from muliao.sessions.tables import ThreadCall
+from muliao.sessions.holds import active_delegations_in
+from muliao.sessions.tables import SessionHold, ThreadCall
 
 
 @dataclass(frozen=True)
-class DelegationRecord:
-    holder: str
+class Delegation:
+    """thread_calls 的一行：一次开出或续写 thread 的调用，发起方有引用它的占用时就是一项委派。"""
+
+    id: int
     # 发起会话
     parent_id: str
-    # 做它的 thread（thread 删除时记录随之删除）
+    # 做它的 thread（thread 删除时行随之删除）
     thread_id: str
     # 并发等待（report_back）的心跳间隔；阻塞等待（ask_agent）为 None
     check_seconds: float | None
 
 
 @dataclass(frozen=True)
-class ActiveDelegation:
-    record: DelegationRecord
-    # 发起方登记占用的时刻（运行中检查从它起算）
-    since: datetime
-    # 运行中检查的间隔（秒）
-    interval: float
+class Owed:
+    """还没结清的委派与发起方引用它的 active 占用（结局经这个占用交回，sessions.work.deliver_in）。"""
+
+    delegation: Delegation
+    hold: SessionHold
 
 
-def _record(row: ThreadCall) -> DelegationRecord:
-    if row.holder is None:
-        raise RuntimeError(f"call {row.call_id} of session {row.parent_session_id} is not a delegation")
-    return DelegationRecord(
-        holder=row.holder,
+def _delegation(row: ThreadCall) -> Delegation:
+    return Delegation(
+        id=row.id,
         parent_id=row.parent_session_id,
         thread_id=row.thread_session_id,
         check_seconds=row.check_seconds,
@@ -55,35 +53,32 @@ async def record_call_in(
     call_id: str,
     thread_id: str,
     *,
-    holder: str | None = None,
     check_seconds: float | None = None,
-) -> None:
-    """记下这次调用开出或续写了这个 thread；holder 非空时它是一项委派（Delegations.dispatch），带上心跳间隔。续跑重新
-    执行同一次调用时已经记过，不再记；同一次调用记成别的样子是 bug。"""
-    existing = await s.scalar(
+) -> Delegation:
+    """记下这次调用开出或续写了这个 thread（委派的还带心跳间隔），返回这一行。同一次调用只记一次：续跑重新执行
+    时已经记过（Threads.send 照常重放），记成别的样子是 bug。"""
+    existing = await call_in(s, parent_id, call_id)
+    if existing is not None:
+        if (existing.thread_id, existing.check_seconds) != (thread_id, check_seconds):
+            raise RuntimeError(
+                f"call {call_id} of session {parent_id} was recorded as ({existing.thread_id}, "
+                f"{existing.check_seconds}), not ({thread_id}, {check_seconds})"
+            )
+        return existing
+    row = ThreadCall(
+        parent_session_id=parent_id, call_id=call_id, thread_session_id=thread_id, check_seconds=check_seconds
+    )
+    s.add(row)
+    await s.flush()
+    return _delegation(row)
+
+
+async def call_in(s: AsyncSession, parent_id: str, call_id: str) -> Delegation | None:
+    """这次调用记下的那一行（还没记过、或 thread 已删除时为 None）。"""
+    row = await s.scalar(
         select(ThreadCall).where(ThreadCall.parent_session_id == parent_id, ThreadCall.call_id == call_id)
     )
-    if existing is not None:
-        if (existing.thread_session_id, existing.holder, existing.check_seconds) != (
-            thread_id,
-            holder,
-            check_seconds,
-        ):
-            raise RuntimeError(
-                f"call {call_id} of session {parent_id} was recorded as ({existing.thread_session_id}, "
-                f"{existing.holder}, {existing.check_seconds}), not ({thread_id}, {holder}, {check_seconds})"
-            )
-        return
-    s.add(
-        ThreadCall(
-            parent_session_id=parent_id,
-            call_id=call_id,
-            thread_session_id=thread_id,
-            holder=holder,
-            check_seconds=check_seconds,
-        )
-    )
-    await s.flush()
+    return None if row is None else _delegation(row)
 
 
 async def call_threads_in(s: AsyncSession, parent_id: str) -> dict[str, str]:
@@ -96,21 +91,22 @@ async def call_threads_in(s: AsyncSession, parent_id: str) -> dict[str, str]:
     return {call_id: thread_id for call_id, thread_id in rows.all()}
 
 
-async def delegations_among(s: AsyncSession, holders: Collection[str]) -> dict[str, DelegationRecord]:
-    """这些占用者里是委派的那些的记录（后台任务等别的占用、thread 已删除的委派不在结果里），一次查询。"""
-    if not holders:
+async def delegations_among(s: AsyncSession, ids: Collection[int]) -> dict[int, Delegation]:
+    """这些委派行（thread 已删除的不在结果里），一次查询。"""
+    if not ids:
         return {}
-    rows = await s.scalars(select(ThreadCall).where(ThreadCall.holder.in_(list(holders))))
-    return {(r := _record(row)).holder: r for row in rows.all()}
+    rows = await s.scalars(select(ThreadCall).where(ThreadCall.id.in_(list(ids))))
+    return {row.id: _delegation(row) for row in rows.all()}
 
 
-async def active_reporting_in(s: AsyncSession) -> list[ActiveDelegation]:
-    """发起方占用还 active 的并发等待委派（带心跳间隔的），按登记先后（委派的运行中检查用），一次查询。"""
-    active = active_holds()
-    rows = await s.execute(
-        select(ThreadCall, active.c.created_at, ThreadCall.check_seconds)
-        .join(active, active.c.holder == ThreadCall.holder)
-        .where(ThreadCall.check_seconds.is_not(None))
-        .order_by(active.c.id)
-    )
-    return [ActiveDelegation(_record(row), since, interval) for row, since, interval in rows.all()]
+async def owed_in(s: AsyncSession, ids: Collection[int] | None = None) -> list[Owed]:
+    """还没结清的委派（发起方引用它的占用还 active），按占用登记先后；给了 ids 只看这些委派。一次查占用、一次查行。"""
+    holds = await active_delegations_in(s, ids)
+    rows = await delegations_among(s, [h.thread_call_id for h in holds if h.thread_call_id is not None])
+    owed = []
+    for hold in holds:
+        if hold.thread_call_id not in rows:
+            # 外键置空只发生在 thread 删除时，那之前委派已经结清（sessions.deletion）
+            raise RuntimeError(f"active hold {hold.id} points to a missing delegation {hold.thread_call_id}")
+        owed.append(Owed(rows[hold.thread_call_id], hold))
+    return owed

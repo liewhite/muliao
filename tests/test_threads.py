@@ -593,11 +593,39 @@ def test_the_audience_of_a_run_comes_from_its_mail_and_unsettled_delegations():
     from muliao.platform.tooling import Audience
     from muliao.sessions.mailbox import audience_of
 
-    user = Mail(awaited=True, correlation=None)
-    event = Mail(awaited=False, correlation=None)
+    user = Mail(awaited=True)
+    event = Mail(awaited=False)
     assert audience_of([user], delegated=True) == Audience.USER
     assert audience_of([event], delegated=True) == Audience.AGENT
     assert audience_of([event], delegated=False) == Audience.NONE
+
+
+async def test_a_thread_whose_asker_was_stopped_has_no_delegated_work(container, make_agent, models):
+    """#630：委派结清没有只看发起方的占用是否还 active。发起方被停止（占用 cleared）之后，没人再等 thread 的回答：
+    thread 不再算有委派来的工作（回答不交给 agent），之后 thread 结束也没有可交回的。"""
+    from muliao.sessions.settlement import delegated_in
+
+    lead = (await make_agent("lead", model="l")).id
+    helper = await container.agents.get((await make_agent("helper", model="h")).id)
+    models.models["l"] = echo("lead")
+    parent = await start(container, lead, "go")
+    await drain(container)
+    async with container.db.transaction() as s:
+        child = await container.delegations.dispatch(
+            s,
+            parent_id=parent.id,
+            agent=helper,
+            thread="t",
+            prompt="work",
+            call_id="k",
+            suspends=False,
+            awaited=False,
+            check_seconds=60.0,
+        )
+        assert await delegated_in(s, child.id)
+    await container.stopper(parent.id)
+    async with container.db.transaction() as s:
+        assert not await delegated_in(s, child.id)
 
 
 async def test_every_run_of_a_thread_with_unsettled_delegated_work_answers_to_the_agent(

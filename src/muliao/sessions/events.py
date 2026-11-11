@@ -61,7 +61,7 @@ class RunFailed(DomainEvent):
 
 
 class SessionStopped(DomainEvent):
-    """会话被用户停止：cleared 是被清掉的占用（它在外面的工作被放弃）。"""
+    """会话被用户停止：cleared 是被清掉的外部工作的占用者（如 job:12，它在外面的工作被放弃；委派由会话领域自己停）。"""
 
     TYPE = "session.stopped"
     session_id: str

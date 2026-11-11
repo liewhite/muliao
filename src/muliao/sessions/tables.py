@@ -128,15 +128,18 @@ class Mail(Base):
     answers: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     # 用户是否在等它的回答：一次运行处理过的信件里有一封是，结束时就把回答推送给用户
     awaited: Mapped[bool] = mapped_column(default=False)
-    # 不透明的关联 id：发送方要知道这封信件带来的工作什么时候结束（委派来的信件是它的 holder，sessions.holds）。
-    # 会话在结束时结清它，结局在同一事务里交回发起方（sessions.settlement、sessions.delegation），每个关联只结清一次
-    correlation: Mapped[str | None] = mapped_column(String(200))
-    correlation_settled: Mapped[bool] = mapped_column(default=False)
+    # 委派来的信件：是哪项委派（thread_calls 行，归属见 docs/architecture.md 2.4 第 4 行）。会话做完时结清它，结局在
+    # 同一事务里交回发起方（sessions.settlement、sessions.delegation）；结清没有只看发起方的占用是否还 active。
+    # 发起会话删除时行随之删除，这里置空（结局没有收件人）
+    delegation_id: Mapped[int | None] = mapped_column(
+        ForeignKey("thread_calls.id", ondelete="SET NULL", name="fk_mail_delegation_id")
+    )
     # 幂等键：带同一个键的投信只投一次（命令按键去重，docs/architecture.md 3.4）
     dedupe_key: Mapped[str | None] = mapped_column(String(200))
     state: Mapped[MailState] = mapped_column(StrEnumType(MailState), default=MailState.QUEUED)
-    # 处理掉它的运行（turn task）
-    consumed_by: Mapped[int | None] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"))
+    # 交给了哪次运行（归属见 docs/architecture.md 2.4 第 3 行，只经 sessions.mailbox.give_in 写）：投递运行时信箱里已有的、
+    # 运行开头取走的、交给模型那一步保存的（这时 state 记为 consumed）。排着的信件之后被更新的运行取走时改指那次运行
+    taken_by: Mapped[int | None] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"))
     # 索引：按日查各会话收到的信件（sessions.recall）
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
 
@@ -146,9 +149,9 @@ class Mail(Base):
         Index(
             "uq_mail_dedupe_key", "session_id", "dedupe_key", unique=True, sqlite_where=dedupe_key.isnot(None)
         ),
-        Index("ix_mail_correlation", "correlation", sqlite_where=correlation.isnot(None)),
+        Index("ix_mail_delegation_id", "delegation_id", sqlite_where=delegation_id.isnot(None)),
         # 外键的子表索引：删 tasks 时（保留策略）SQLite 按它查引用，没有它每删一行都扫整张 mail
-        Index("ix_mail_consumed_by", "consumed_by", sqlite_where=consumed_by.isnot(None)),
+        Index("ix_mail_taken_by", "taken_by", sqlite_where=taken_by.isnot(None)),
         {"sqlite_autoincrement": True},
     )
 
@@ -170,8 +173,13 @@ class SessionHold(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"), index=True)
-    # 不透明的占用者，如 job:12、delegation:<会话>:<键>
-    holder: Mapped[str] = mapped_column(String(200))
+    # 外部工作的不透明占用者，如 job:12、wake:<会话>:<键>；委派的占用为 None，引用委派行（thread_call_id）
+    holder: Mapped[str | None] = mapped_column(String(200))
+    # 委派的占用：引用那项委派（thread_calls 行，委派的唯一主体）。thread 删除时行随之删除，这里置空（那时占用已经
+    # 结清，只剩 call_id 这一永久事实）
+    thread_call_id: Mapped[int | None] = mapped_column(
+        ForeignKey("thread_calls.id", ondelete="SET NULL", name="fk_session_holds_thread_call_id")
+    )
     # 这项工作的结局作为这次挂起调用的结果交回（ask_agent）
     call_id: Mapped[str | None] = mapped_column(String(100))
     # 用户是否在等这项工作的结局：交回结局的信件随它推送（发起这项工作的运行有用户在等）
@@ -180,8 +188,16 @@ class SessionHold(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     ended_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
-    # 占用者全局唯一（job:<id>、delegation:<发起会话>:<工具调用 id>）：委派交回时按它找到发起方（sessions.delegation）
-    __table_args__ = (Index("uq_session_holds_holder", "holder", unique=True),)
+    __table_args__ = (
+        # 外部工作的占用者全局唯一（job:<id>、wake:<会话>:<键>）：结局按它找到占用
+        Index("uq_session_holds_holder", "holder", unique=True),
+        Index(
+            "uq_session_holds_thread_call_id",
+            "thread_call_id",
+            unique=True,
+            sqlite_where=thread_call_id.isnot(None),
+        ),
+    )
 
 
 class WakeUp(Base):
@@ -225,9 +241,10 @@ class ApprovalRequest(Base):
 class ThreadCall(Base):
     """哪次工具调用开出或续写了哪个 thread（sessions.thread_calls）：在开出/续写 thread 的同一个事务里记下，是界面把
     thread 显示在调用处的唯一来源，与调用有没有结果、结果是谁补的无关。续写同一个 thread 时每次调用各一行；随发起会话
-    或 thread 删除。要交回结局的调用（ask_agent、delegate_task(report_back)）就是一项委派，行上再记它在发起方的占用者
-    与心跳间隔（#546 前另存在 delegations 表）。委派的进行状态在发起方的占用上，是否结清在 thread 一侧以占用者为
-    关联 id 的信件上。"""
+    或 thread 删除。要交回结局的调用（ask_agent、delegate_task(report_back)）就是一项委派，发起方有一个引用这一行的占用，
+    行上再记心跳间隔（#546 前另存在 delegations 表）：行是委派的唯一主体（docs/architecture.md 2.4 第 4 行），发起方的占用
+    （session_holds.thread_call_id）与 thread 的信件（mail.delegation_id）都只引用它的 id；结清没有看占用是否还
+    active。"""
 
     __tablename__ = "thread_calls"
 
@@ -238,12 +255,7 @@ class ThreadCall(Base):
     thread_session_id: Mapped[str] = mapped_column(
         ForeignKey("sessions.id", ondelete="CASCADE", name="fk_thread_calls_thread_session_id"), index=True
     )
-    # 委派在发起方的占用者（delegation:<发起会话>:<调用 id>），也是 thread 信件的关联 id；不交回结局的调用为 None
-    holder: Mapped[str | None] = mapped_column(String(200))
     # 并发等待的委派（delegate_task(report_back) 的 heartbeat_seconds）的运行中检查间隔（秒）；其余为 None
     check_seconds: Mapped[float | None]
 
-    __table_args__ = (
-        Index("uq_thread_calls_call", "parent_session_id", "call_id", unique=True),
-        Index("uq_thread_calls_holder", "holder", unique=True, sqlite_where=holder.isnot(None)),
-    )
+    __table_args__ = (Index("uq_thread_calls_call", "parent_session_id", "call_id", unique=True),)

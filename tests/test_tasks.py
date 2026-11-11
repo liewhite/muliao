@@ -175,12 +175,12 @@ async def test_retention_prunes_only_old_done_event_and_deliver_tasks(container,
     assert left == set(rows) - {"old_event", "old_deliver"}
 
 
-async def test_mail_consumed_by_is_indexed_for_task_deletes(container):
-    """删 tasks 时 SQLite 按外键 mail.consumed_by 查引用：没有索引就每删一行扫一遍 mail（#47 审查实测 mail 5 万行时
+async def test_mail_taken_by_is_indexed_for_task_deletes(container):
+    """删 tasks 时 SQLite 按外键 mail.taken_by 查引用：没有索引就每删一行扫一遍 mail（#47 审查实测 mail 5 万行时
     删 6.7 万条要 135 秒）。"""
     async with container.db.transaction() as s:
-        plan = (await s.execute(text("EXPLAIN QUERY PLAN SELECT 1 FROM mail WHERE consumed_by = 1"))).all()
-    assert any("ix_mail_consumed_by" in row[-1] for row in plan), plan
+        plan = (await s.execute(text("EXPLAIN QUERY PLAN SELECT 1 FROM mail WHERE taken_by = 1"))).all()
+    assert any("ix_mail_taken_by" in row[-1] for row in plan), plan
 
 
 async def test_startup_reports_unfinished_tasks_of_kinds_without_a_handler(container, make_agent, caplog):

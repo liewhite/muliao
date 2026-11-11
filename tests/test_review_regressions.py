@@ -17,7 +17,7 @@ from muliao.platform.tables import TaskStatus
 from muliao.platform.tool_views import NO_RENDERS
 from muliao.sessions.api import Origin
 from muliao.sessions.lanes import RUN_TASK
-from muliao.sessions.tables import Message
+from muliao.sessions.tables import MailState, Message
 from muliao.sessions.transcript import to_items
 from tests.test_flow import call_then_answer, drain, history_of, start
 
@@ -344,8 +344,7 @@ async def test_retrying_a_failed_run_after_the_session_was_stopped_ends_quietly(
 
 
 async def test_mail_taken_at_a_runs_start_counts_as_handed_to_it(container, make_agent, models):
-    """运行开头取走的信件比投递它时记下的多：记进它的 payload，最终失败时据此了结、不为它们再唤醒一次。"""
-    from muliao.sessions.runs import RunPayload
+    """运行开头取走的信件比投递它时信箱里的多：取走时记在信上（taken_by），最终失败时据此了结、不为它们再唤醒一次。"""
     from tests.scripted import scripted
     from tests.test_flow import mail_of, reply, tasks_of
 
@@ -353,15 +352,14 @@ async def test_mail_taken_at_a_runs_start_counts_as_handed_to_it(container, make
     models.models["m"] = scripted(lambda _m, _i: ModelResponse(parts=[TextPart("ok")]))
     session = await start(container, alpha, "one", origin=Origin.TRIGGER)
     # 运行还在排队：这封信不另外唤醒，由它开头一起取走
-    later = await reply(container, session.id, "two")
+    await reply(container, session.id, "two")
     [run] = await tasks_of(container, RUN_TASK)
-    assert RunPayload.of(run).through_mail_id < later.id
+    assert [m.taken_by for m in await mail_of(container)] == [run.id, None]
 
     await drain(container)
 
     [run] = await tasks_of(container, RUN_TASK)
-    assert RunPayload.of(run).through_mail_id == later.id
-    assert {m.consumed_by for m in await mail_of(container)} == {run.id}
+    assert {(m.taken_by, m.state) for m in await mail_of(container)} == {(run.id, MailState.CONSUMED)}
 
 
 async def test_a_vault_set_call_failing_validation_keeps_the_value_out_of_history_and_live_events(

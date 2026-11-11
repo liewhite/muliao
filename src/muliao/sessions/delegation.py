@@ -1,17 +1,17 @@
 """委派：会话交给另一个 agent、要交回结局的工作（ask_agent，delegate_task(report_back)）。整个生命周期在会话领域里，
-由两个对称的事务完成（docs/architecture.md 第 8 节）：
+由两个对称的事务完成（docs/architecture.md 第 8 节）。委派的唯一主体是发出它的调用记下的那一行（sessions.thread_calls，归属见
+docs/architecture.md 2.4 第 4 行），别处只引用它的 id：
 
-- 发出（Delegations.dispatch）：一个事务里在发起方登记占用（holder 由工具调用 id 确定性派生，带 call_id 与「用户是否在等
-  发起方」），往 thread 投一封以 holder 为关联 id 的信件。
-- 交回（hand_back_in，由 thread 结清关联时调用：运行做完、最终失败、被停止、被删除）：同一个事务里经 deliver_in 把
-  结局交给发起方并释放占用——发起方还停在那次 ask_agent 调用上时作为调用的结果，否则作为事件；发起方已被停止
-  （占用 cleared）不投，已删除（占用随它删除）不投。
+- 发出（Delegations.dispatch）：一个事务里记下委派行（按发起会话与工具调用 id 幂等），在发起方登记引用它的占用（带 call_id
+  与「用户是否在等发起方」），往 thread 投一封引用它的信件。
+- 交回（hand_back_in，由 thread 结清时调用：运行做完、最终失败、被停止、被删除）：同一个事务里经 deliver_in 把结局
+  交给发起方并释放占用——发起方还停在那次 ask_agent 调用上时作为调用的结果，否则作为事件。只交回占用还 active 的：
+  发起方已被停止（占用 cleared）、已删除（行与占用随它删除）的没有可交回的。
 - 发起方被停止：停止事务清掉占用，并给做这些工作的 thread 各发一条定向命令 StopThread（逐层由它们自己的停止继续）。
 - 运行中检查（ThreadChecks）：并发等待的（report_back）按 heartbeat_seconds 给发起方投检查信件；阻塞等待的
   （ask_agent）不设超时，运行本身有界。
 
-委派的进行状态只有发起方的占用（active / released / cleared）一处；发起参数（thread、心跳间隔）记在发出它的那次
-调用的记录上（sessions.thread_calls）。
+委派的进行状态只有发起方的占用（active / released / cleared）一处；发起参数（thread、心跳间隔）记在委派行上。
 """
 
 from __future__ import annotations
@@ -30,19 +30,13 @@ from muliao.platform.tasks import Clock, TaskQueue, TaskView
 from muliao.sessions.activity import WorkState, work_states_in
 from muliao.sessions.answers import AgentAnswer, AgentAnswered
 from muliao.sessions.directory import among_in
-from muliao.sessions.holds import get_in as get_hold_in
-from muliao.sessions.holds import hold_in
+from muliao.sessions.holds import hold_delegation_in
 from muliao.sessions.inbound import Inbound, receive
 from muliao.sessions.origins import Origin
 from muliao.sessions.runs import latest_runs_among
 from muliao.sessions.sources import thread_source
 from muliao.sessions.tables import Session
-from muliao.sessions.thread_calls import (
-    DelegationRecord,
-    active_reporting_in,
-    delegations_among,
-    record_call_in,
-)
+from muliao.sessions.thread_calls import Owed, call_in, owed_in, record_call_in
 from muliao.sessions.threads import Threads, thread_name
 from muliao.sessions.work import CheckBeats, deliver_in, post_check_in
 
@@ -56,11 +50,6 @@ class Ending(StrEnum):
     STOPPED = "stopped"
     FAILED = "failed"
     DELETED = "deleted"
-
-
-def delegation_holder(parent_id: str, key: str) -> str:
-    """委派在发起方会话上的占用者，也是 thread 信件的关联 id。"""
-    return f"delegation:{parent_id}:{key}"
 
 
 class Delegations:
@@ -83,24 +72,25 @@ class Delegations:
         awaited: bool,
         check_seconds: float | None = None,
     ) -> Session:
-        """在调用方的一个事务里：打开或找到 thread，在发起方登记占用（suspends 时这次调用从此算作已交出），往 thread
-        投一封以占用者为关联 id 的信件（委派的全部状态，结局的交回见 hand_back_in），并记下这次调用开出或续写了这个
-        thread、是哪项委派（sessions.thread_calls）。thread 名不合法时抛 InvalidInput，什么都没写。call_id：发出它的
-        工具调用，按它幂等：续跑重新执行这次调用时只返回已经投递到的 thread。suspends：这次调用挂起、等结局作为它的
-        结果（ask_agent），占用带上 call_id。awaited：用户是否在等发起方的回答。check_seconds：并发等待时的运行中
-        检查间隔（阻塞等待的为 None，不设超时）。"""
-        holder = delegation_holder(parent_id, call_id)
-        if await get_hold_in(s, parent_id, holder) is not None:
-            record = (await delegations_among(s, [holder])).get(holder)
-            if record is None:
-                raise RuntimeError(f"delegation {holder} is held but its thread is gone")
-            child = await s.get(Session, record.thread_id)
+        """在调用方的一个事务里：打开或找到 thread，记下这项委派（sessions.thread_calls 的一行：这次调用开出或续写了
+        这个 thread），在发起方登记引用它的占用（suspends 时这次调用从此算作已交出），往 thread 投一封引用它的信件
+        （结局的交回见 hand_back_in）。thread 名不合法时抛 InvalidInput，什么都没写。call_id：发出它的工具调用，按它
+        幂等：续跑重新执行这次调用时只返回已经投递到的 thread。suspends：这次调用挂起、等结局作为它的结果（ask_agent），
+        占用带上 call_id。awaited：用户是否在等发起方的回答。check_seconds：并发等待时的运行中检查间隔（阻塞等待的为
+        None，不设超时）。"""
+        if (existing := await call_in(s, parent_id, call_id)) is not None:
+            # 委派行、占用与信件在同一个事务里写下：有行就是已经发出过（thread 删除时行随之删除，那时调用早有结果）
+            child = await s.get(Session, existing.thread_id)
             if child is None:
-                raise RuntimeError(f"delegation {holder} points to a missing thread {record.thread_id}")
+                raise RuntimeError(
+                    f"delegation {existing.id} points to a missing thread {existing.thread_id}"
+                )
             return child
         child = await self._threads.open(s, parent_id=parent_id, agent=agent, thread=thread)
-        await hold_in(s, parent_id, holder, call_id=call_id if suspends else None, awaited=awaited)
-        await record_call_in(s, parent_id, call_id, child.id, holder=holder, check_seconds=check_seconds)
+        delegation = await record_call_in(s, parent_id, call_id, child.id, check_seconds=check_seconds)
+        await hold_delegation_in(
+            s, parent_id, delegation.id, call_id=call_id if suspends else None, awaited=awaited
+        )
         await receive(
             s,
             self._queue,
@@ -111,7 +101,7 @@ class Delegations:
                 session=child.id,
                 # 没有人等 thread 的回答：结局交回发起方，由它处理
                 awaited=False,
-                correlation=holder,
+                delegation=delegation.id,
             ),
         )
         log.info(
@@ -119,7 +109,7 @@ class Delegations:
             extra={
                 "session_id": parent_id,
                 "thread_session_id": child.id,
-                "holder": holder,
+                "delegation": delegation.id,
                 "call_id": call_id,
             },
         )
@@ -150,33 +140,23 @@ async def hand_back_in(
     s: AsyncSession,
     queue: TaskQueue,
     child: Session,
-    holders: Sequence[str],
+    owed: Sequence[Owed],
     ending: Ending,
     text: str,
     attachments: Sequence[Attachment],
 ) -> None:
-    """thread 结清了这些委派：在同一个事务里把结局交给各自的发起方（deliver_in，唯一出口）。每个关联只结清一次
-    （mail.correlation_settled），所以每项委派只交回一次。"""
-    if not holders:
+    """thread 结清了这些还没结清的委派（sessions.settlement）：在同一个事务里把结局经发起方引用它们的占用交回
+    （deliver_in，唯一出口），交回即释放占用、即结清，所以每项委派只交回一次。"""
+    if not owed:
         return
     name = thread_name(child)
-    parent_id = child.parent_session_id
-    if parent_id is None:
-        # 发起方的唯一来源是 thread 的父会话（dispatch 总在发起方下开 thread）；holder 对这里是不透明的键。
-        # 父会话置空说明发起方已被删除，结局没有收件人
-        log.info(
-            "delegation outcomes of a thread whose asker is gone dropped", extra={"holders": list(holders)}
-        )
-        return
     agent = await agent_in(s, child.agent_id)
-    for holder in holders:
-        # 发起方已删除时 GONE；发起方还在却没有这个占用是 bug，deliver_in 报错
+    for o in owed:
         delivered = await deliver_in(
             s,
             queue,
-            parent_id,
-            holder,
-            key=f"{holder}:settled",
+            o.hold,
+            key=f"delegation:{o.delegation.id}:settled",
             source=thread_source(child.id),
             event_text=event_text(name, agent.name, ending, text),
             answer=AgentAnswered.of(
@@ -186,8 +166,8 @@ async def hand_back_in(
         log.info(
             "delegation handed back",
             extra={
-                "holder": holder,
-                "session_id": parent_id,
+                "delegation": o.delegation.id,
+                "session_id": o.delegation.parent_id,
                 "thread_session_id": child.id,
                 "ending": ending,
                 "delivered_as": delivered,
@@ -196,50 +176,52 @@ async def hand_back_in(
 
 
 class ThreadChecks:
-    """委派的运行中检查（WorkWatcher 的一种工作，sessions.work），按委派记录的发起参数（sessions.thread_calls），只看
-    发起方占用还 active、并发等待的委派（delegate_task(report_back)，带 check_seconds）：每过一个间隔给发起方投一封
-    检查信件。阻塞等待的（ask_agent）没有检查也没有超时：发问方停在调用上一直等到结局（运行本身有界）。"""
+    """委派的运行中检查（WorkWatcher 的一种工作，sessions.work），按委派行记的发起参数（sessions.thread_calls），只看
+    还没结清（发起方占用还 active）、并发等待的委派（delegate_task(report_back)，带 check_seconds）：每过一个间隔给
+    发起方投一封检查信件。阻塞等待的（ask_agent）没有检查也没有超时：发问方停在调用上一直等到结局（运行本身有界）。"""
 
     def __init__(self, db: Database, queue: TaskQueue, clock: Clock = utcnow):
         self._db = db
         self._queue = queue
         self._clock = clock
-        # 并发委派上一次投检查的时刻（还没投过的以登记时刻算）
-        self._beats: CheckBeats[str] = CheckBeats()
+        # 并发委派（按委派行 id）上一次投检查的时刻（还没投过的以登记时刻算）
+        self._beats: CheckBeats[int] = CheckBeats()
 
     async def check(self) -> int:
         posted = 0
         now = self._clock()
         async with self._db.transaction() as s:
-            active = await active_reporting_in(s)
-            self._beats.keep({a.record.holder for a in active})
+            reporting = [
+                (o, interval)
+                for o in await owed_in(s)
+                if (interval := o.delegation.check_seconds) is not None
+            ]
+            self._beats.keep({o.delegation.id for o, _ in reporting})
             # (发起会话, thread) -> 到期的委派与它的间隔
-            due: dict[tuple[str, str], tuple[DelegationRecord, float]] = {}
-            for a in active:
-                record, child_id, interval = a.record, a.record.thread_id, a.interval
-                if not self._beats.due(record.holder, a.since, interval, now):
+            due: dict[tuple[str, str], tuple[Owed, float]] = {}
+            for o, interval in reporting:
+                d = o.delegation
+                if not self._beats.due(d.id, o.hold.created_at, interval, now):
                     continue
-                self._beats.checked(record.holder, now)
+                self._beats.checked(d.id, now)
                 # 同一个发起方对同一个 thread 的几项委派同时到期，检查一次
-                due.setdefault((record.parent_id, child_id), (record, interval))
+                due.setdefault((d.parent_id, d.thread_id), (o, interval))
             child_ids = {child_id for _, child_id in due}
             states = await work_states_in(s, self._queue, child_ids)
             runs = await latest_runs_among(s, self._queue, child_ids)
             children = await among_in(s, child_ids)
             agents: dict[str, AgentInfo] = {}
-            for (_, child_id), (record, interval) in due.items():
+            for (_, child_id), (o, interval) in due.items():
                 child = children.get(child_id)
                 if child is None:
-                    # 不变量断言：thread 删除时记录随之删除，不会给出已删除的 thread
-                    raise RuntimeError(f"delegation {record.holder} points to a missing thread {child_id}")
+                    # 不变量断言：thread 删除时委派行随之删除，不会给出已删除的 thread
+                    raise RuntimeError(f"delegation {o.delegation.id} points to a missing thread {child_id}")
                 if child.agent_id not in agents:
                     agents[child.agent_id] = await agent_in(s, child.agent_id)
                 text = check_text(
                     child, agents[child.agent_id], states[child_id], runs.get(child_id), now, interval
                 )
-                posted += await post_check_in(
-                    s, self._queue, record.parent_id, record.holder, thread_source(child.id), text
-                )
+                posted += await post_check_in(s, self._queue, o.hold, thread_source(child.id), text)
         return posted
 
 

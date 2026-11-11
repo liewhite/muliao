@@ -8,7 +8,7 @@
 3. 全部 active 占用记为 cleared：之后才到的结局（后台任务、委派）一律不投（sessions.work.deliver_in）。
 4. 交给这个会话、还没结清的委派结清为「被停止」，结局交回它们的发起方（sessions.delegation）；清空信箱。
 5. 被清掉的委派：给做这些工作的 thread 各发一条定向命令 StopThread（逐层停止）。
-6. 发布 SessionStopped：工作区领域结束被清掉的进程。
+6. 发布 SessionStopped（被清掉的外部工作的占用者）：工作区领域结束被清掉的进程。
 """
 
 from __future__ import annotations
@@ -109,18 +109,23 @@ class SessionHalt:
                 s, self._queue, session, await latest_answer(s, session_id)
             )
             # 被清掉的委派：做这些工作的 thread 一起停下（逐层，由它们自己的停止继续）
-            threads = list(dict.fromkeys(r.thread_id for r in (await delegations_among(s, cleared)).values()))
+            delegations = await delegations_among(
+                s, [h.thread_call_id for h in cleared if h.thread_call_id is not None]
+            )
+            threads = list(dict.fromkeys(d.thread_id for d in delegations.values()))
             for thread_id in threads:
                 self._messaging.send_in(s, StopThread(session_id=thread_id))
-            self._messaging.publish_in(s, SessionStopped(session_id=session_id, cleared=cleared))
+            # 外部工作（后台任务）由它们的领域结束
+            holders = [h.holder for h in cleared if h.holder is not None]
+            self._messaging.publish_in(s, SessionStopped(session_id=session_id, cleared=holders))
         log.info(
             "session halted",
             extra={
                 "session_id": session_id,
                 "dropped_runs": dropped,
                 "discarded_mail": discarded,
-                "cleared_holds": cleared,
-                "settled_correlations": settled,
+                "cleared_holds": [h.id for h in cleared],
+                "settled_delegations": settled,
                 "stopping_threads": threads,
             },
         )

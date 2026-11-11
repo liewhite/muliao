@@ -1259,7 +1259,8 @@ def test_delegations_move_onto_their_thread_calls_and_downgrade(tmp_path):
             ],
         )
 
-    migrate(path)
+    # 停在这一版：#630 之后委派不再有 holder 列
+    migrate(path, "5d1c8e2a7f46")
     assert "delegations" not in _tables(path)
     with sqlite3.connect(path) as conn:
         assert conn.execute(
@@ -1959,3 +1960,131 @@ def test_model_usage_gets_a_session_index_and_downgrade_drops_only_the_index(tmp
     migrate(path)
     with sqlite3.connect(path) as conn:
         assert "ix_model_usage_session_id" in indexes(conn)
+
+
+def test_mail_records_its_run_and_delegations_are_referenced_by_row_and_downgrade(tmp_path):
+    """#630：consumed_by 改名 taken_by，排着的、在最近一次运行 through_mail_id 之内的信件补上那次运行，运行 payload 清空；
+    信件与占用的委派字符串换成委派行 id（对不上行的置空），删 correlation_settled 与 thread_calls.holder；还 active
+    却对不上行的委派占用拒绝升级。降级按行拼回字符串、按占用是否 active 算回 correlation_settled、按交给的信件算回
+    through_mail_id。"""
+    from alembic import command
+
+    from muliao.platform.db import _migration_engine
+
+    path = tmp_path / "m.db"
+    migrate(path, "c0fe84d4f804")
+    t = "2026-01-01 00:00:00"
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "insert into agents (id, name, description, model, created_at, updated_at) "
+            "values ('a1', 'a1', 'd', 'p:m', ?, ?)",
+            (t, t),
+        )
+        conn.executemany(
+            "insert into sessions (id, agent_id, title, origin, parent_session_id, thread, created_at, updated_at) "
+            "values (?, 'a1', 't', ?, ?, ?, ?, ?)",
+            [("p", "user", None, None, t, t), ("c", "delegation", "p", "r", t, t)],
+        )
+        task = (
+            "insert into tasks (id, kind, lane, session_id, payload, status, attempts, not_before, created_at) "
+            "values (?, 'run', ?, ?, ?, ?, 0, ?, ?)"
+        )
+        conn.executemany(
+            task,
+            [
+                (1, "session:c", "c", '{"through_mail_id": 2}', "done", t, t),
+                (2, "session:c", "c", '{"through_mail_id": 4}', "failed", t, t),
+                (3, "session:p", "p", '{"through_mail_id": 9}', "done", t, t),
+            ],
+        )
+        conn.executemany(
+            "insert into thread_calls (id, parent_session_id, call_id, thread_session_id, holder, check_seconds) "
+            "values (?, 'p', ?, 'c', ?, ?)",
+            [
+                (1, "ask", "delegation:p:ask", None),
+                (2, "report", "delegation:p:report", 30.0),
+                (3, "send", None, None),
+            ],
+        )
+        conn.executemany(
+            "insert into session_holds (session_id, holder, call_id, awaited, status, created_at) "
+            "values ('p', ?, ?, 0, ?, ?)",
+            [
+                ("delegation:p:ask", "ask", "released", t),
+                ("delegation:p:report", None, "active", t),
+                ("delegation:p:gone", None, "released", t),
+                ("job:7", None, "active", t),
+            ],
+        )
+        mail = (
+            "insert into mail (id, session_id, kind, content, attachments, answers, awaited, correlation, "
+            "correlation_settled, state, consumed_by, created_at) values (?, 'c', 'message', 'x', '[]', '{}', 0, ?, ?, ?, ?, ?)"
+        )
+        conn.executemany(
+            mail,
+            [
+                (1, "delegation:p:ask", 1, "consumed", 1, t),
+                (2, "delegation:p:other-asker-gone", 1, "consumed", 1, t),
+                (3, "delegation:p:report", 0, "queued", None, t),
+                (4, None, 0, "queued", None, t),
+                (5, None, 0, "queued", None, t),
+            ],
+        )
+
+    migrate(path)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("select id, delegation_id, state, taken_by from mail order by id").fetchall() == [
+            (1, 1, "consumed", 1),
+            (2, None, "consumed", 1),
+            (3, 2, "queued", 2),
+            (4, None, "queued", 2),
+            (5, None, "queued", None),
+        ]
+        assert "correlation_settled" not in {r[1] for r in conn.execute("pragma table_info(mail)")}
+        assert "holder" not in {r[1] for r in conn.execute("pragma table_info(thread_calls)")}
+        assert conn.execute(
+            "select holder, thread_call_id, call_id from session_holds order by id"
+        ).fetchall() == [
+            (None, 1, "ask"),
+            (None, 2, None),
+            (None, None, None),
+            ("job:7", None, None),
+        ]
+        assert {p for (p,) in conn.execute("select payload from tasks")} == {"{}"}
+        assert conn.execute("select seq from sqlite_sequence where name = 'mail'").fetchone() == (5,)
+
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "c0fe84d4f804")
+    with sqlite3.connect(path) as conn:
+        assert conn.execute(
+            "select id, correlation, correlation_settled, consumed_by from mail order by id"
+        ).fetchall() == [
+            (1, "delegation:p:ask", 1, 1),
+            (2, None, 0, 1),
+            (3, "delegation:p:report", 0, None),
+            (4, None, 0, None),
+            (5, None, 0, None),
+        ]
+        assert conn.execute("select call_id, holder from thread_calls order by id").fetchall() == [
+            ("ask", "delegation:p:ask"),
+            ("report", "delegation:p:report"),
+            ("send", None),
+        ]
+        assert [h for (h,) in conn.execute("select holder from session_holds order by id")] == [
+            "delegation:p:ask",
+            "delegation:p:report",
+            "delegation:p:hold3",
+            "job:7",
+        ]
+        assert [json.loads(p) for (p,) in conn.execute("select payload from tasks order by id")] == [
+            {"through_mail_id": 2},
+            {"through_mail_id": 4},
+            {"through_mail_id": 0},
+        ]
+        assert conn.execute("select seq from sqlite_sequence where name = 'mail'").fetchone() == (5,)
+        # 还 active 却对不上行的委派占用：拒绝升级，什么都不改
+        conn.execute("update session_holds set status = 'active' where holder = 'delegation:p:hold3'")
+    with pytest.raises(RuntimeError, match="active delegation holds without their thread call"):
+        migrate(path)
+    with sqlite3.connect(path) as conn:
+        assert "consumed_by" in {r[1] for r in conn.execute("pragma table_info(mail)")}

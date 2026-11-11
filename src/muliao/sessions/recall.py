@@ -24,7 +24,7 @@ from muliao.sessions.origins import Origin
 from muliao.sessions.pending import call_result
 from muliao.sessions.questions import UserAnswered, late_answer_lines
 from muliao.sessions.runs import failure_of, runs_between_in
-from muliao.sessions.tables import Mail, MailKind
+from muliao.sessions.tables import Mail, MailKind, MailState
 from muliao.sessions.transcript import Item, to_items
 
 
@@ -170,8 +170,8 @@ class SessionRecall:
             rows = await transcript_rows_in(s, row.id, since=since)
             typed: dict[int | None, list[Mail]] = {}
             for m in await sent_by_in(s, [row.id], Origin.USER):
-                if m.kind == MailKind.MESSAGE:
-                    typed.setdefault(m.consumed_by, []).append(m)
+                if m.kind == MailKind.MESSAGE and m.state == MailState.CONSUMED:
+                    typed.setdefault(m.taken_by, []).append(m)
             info, parent = info_of(row), row.parent_session_id
         entries = []
         messages = load_messages(p for _, p, _, _ in rows)

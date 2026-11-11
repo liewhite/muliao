@@ -16,7 +16,7 @@ from muliao.platform.tasks import Commit, TaskQueue
 from muliao.sessions.events import RunEnded as RunEndedEvent
 from muliao.sessions.holds import has_active_in
 from muliao.sessions.loading import load_session
-from muliao.sessions.mailbox import queued_in, wake_in
+from muliao.sessions.mailbox import consumed_by_in, queued_in, wake_in
 from muliao.sessions.settlement import settle_finished_in
 from muliao.sessions.steps import RunState
 
@@ -73,6 +73,7 @@ class RunFinisher:
             session, agent = await load_session(s, state.session.id)
             if state.messages:
                 session.updated_at = utcnow()
+                handled = [*await consumed_by_in(s, session.id, state.run_id), *state.adopted]
                 # 推送由通知领域订阅（运行结束后随即投递）
                 self._messaging.publish_in(
                     s,
@@ -89,7 +90,7 @@ class RunFinisher:
                         paused=end.paused,
                         asked_user=end.asked_user,
                         needs_approval=bool(end.approvals),
-                        awaited=any(m.awaited for m in state.handled),
+                        awaited=any(m.awaited for m in handled),
                     ),
                 )
             if not end.stopped and not end.paused and await self._work_done(s, session.id):
