@@ -49,9 +49,9 @@ ANTHROPIC_CACHE_SETTINGS = AnthropicModelSettings(
 
 def model_settings(model: Model, thinking: Thinking) -> ModelSettings | None:
     """agent 的思考档位在这个模型上对应的运行级 model settings，两件事：
-    - 档位："default" 不传；其余原样交给 pydantic_ai 统一的 ModelSettings.thinking（False 或 effort 档位），由它换算成
+    - 档位："default" 不指定；其余原样交给 pydantic_ai 统一的 ModelSettings.thinking（False 或 effort 档位），由它换算成
       各 provider 的参数（Anthropic 的 adaptive + effort、OpenAI 兼容接口的 reasoning_effort 等），服务端不接受时如实报错。
-    - 要回思考的摘要（_thinking_shown）：会话页展示的思考就是它，不要的话提供方只回加密的思考块。"off" 不带。
+    - 要回思考的摘要（_thinking_shown）：会话页展示的思考就是它。"off" 不带。
     pydantic_ai 把运行级设置合并在模型自带的设置（ANTHROPIC_CACHE_SETTINGS）之上，键不重叠，互不覆盖。用之前先
     check_thinking。"""
     if thinking == "off":
@@ -61,18 +61,23 @@ def model_settings(model: Model, thinking: Thinking) -> ModelSettings | None:
 
 
 def _thinking_shown(profile: ModelProfile, thinking: Thinking) -> ModelSettings:
-    """让提供方在思考块里带上可读的摘要所需的设置（#603）；没有这种开关、或这次请求不思考的模型为空。原始的思考过程
-    哪家都不给，给的是摘要；计费不变（按完整的思考算）。按 pydantic_ai 推断的 profile 判断，与 check_thinking 同一个依据。
+    """让提供方在思考块里带上可读的摘要所需的设置（#603），平台唯一一处按厂商写的模型设置：pydantic_ai 统一的 thinking
+    设置里没有这一项。Claude 与 OpenAI 的推理模型不给原始的思考过程，给的是摘要，而且要主动要；计费不变（按完整的
+    思考算）。按 pydantic_ai 推断的 profile 判断（与 check_thinking 同一个依据）。
+
+    只在这次请求会思考时给：给了档位，或 "default" 而模型不传也在思考（thinking_enabled_by_default）；"default" 不去
+    打开默认不思考的模型。
     - Anthropic（https://platform.claude.com/docs/en/build-with-claude/thinking 「Controlling thinking display」）：
       Claude Opus 4.7 起的模型 display 默认是 omitted（正文为空、只有签名），要 summarized 才回摘要。display 只能写在
-      thinking 对象里，所以连 type 一起给：adaptive，只在 pydantic_ai 自己也会发 adaptive（给了档位）或不传时服务端
-      本来就按 adaptive 思考（thinking_enabled_by_default）的模型上给，不改变思考与否；effort 仍由统一的档位换算。
-      只支持 budget 的旧模型默认就回摘要，默认不思考的模型在 "default" 下不去打开它。
-    - OpenAI Responses 的推理模型：reasoning.summary 不给就没有摘要；Chat Completions 接口没有这个设置（不读这个键）。
-    - Google：给了档位时 pydantic_ai 已带 include_thoughts。"""
+      thinking 对象里，所以连 type 一起给 adaptive：给了档位时 pydantic_ai 自己发的也是它，不传时服务端按它思考，
+      所以不改变思考与否；effort 仍由统一的档位换算。只支持 budget 的旧模型默认就回摘要，不用给。
+    - OpenAI 的推理模型：Responses 接口不给 reasoning.summary 就没有摘要。profile 只按模型名推断、分不出接口，所以
+      Chat Completions 接法（type = "openai"）也拿到这个键：那个接口没有这项设置，pydantic_ai 不读它，请求里不出现。
+    - 其余为空。Google 给了档位时 pydantic_ai 自己带 include_thoughts，"default" 下不带、看不到思考（没接过，接入时
+      再定）；deepseek 的 profile 判为不思考。"""
+    if thinking == "default" and not profile.get("thinking_enabled_by_default", False):
+        return ModelSettings()
     if profile.get("anthropic_supports_adaptive_thinking", False):
-        if thinking == "default" and not profile.get("thinking_enabled_by_default", False):
-            return ModelSettings()
         return AnthropicModelSettings(anthropic_thinking={"type": "adaptive", "display": "summarized"})
     if profile.get("openai_supports_reasoning", False):
         return OpenAIResponsesModelSettings(openai_reasoning_summary="auto")
@@ -81,10 +86,12 @@ def _thinking_shown(profile: ModelProfile, thinking: Thinking) -> ModelSettings:
 
 class _AnthropicModel(AnthropicModel):
     """发给 Anthropic 的历史里不带它接不回去的思考：没有签名的（生成到一半被停止，sessions 把这半截原样存了库）和别家
-    模型的（会话中途换了模型）。思考块只能连签名原样传回；这两种 pydantic_ai 会改成一段 `<thinking>…</thinking>` 的
-    助手文字发出去，而 claude-fable-5-2 把历史里出现的这种文字当成套取推理过程，整次请求拒答（refusal_category
-    reasoning_extraction，11-11 实测 4/4；opus-5-5、sonnet-5-5 不拒）——那个会话此后每次请求都带着它、每次都被拒。
-    只改发出去的这一份：库里的历史与会话页照常保留这段思考。"""
+    模型的（会话中途换了模型）。Anthropic 的思考块只能连签名原样传回（带签名的本家思考、redacted_thinking 照常传，
+    条件与 pydantic_ai 映射思考块时的相同）；这两种 pydantic_ai 会改成一段 `<thinking>…</thinking>` 的助手文字发出去，
+    而 claude-fable-5-2 把历史里出现的这种文字当成套取推理过程，整次请求拒答（refusal_category reasoning_extraction，
+    11-11 实测 4/4；opus-5-5、sonnet-5-5 不拒）——那个会话此后每次请求都带着它、每次都被拒。
+    只改发出去的这一份：库里的历史与会话页照常保留这段思考。OpenAI 的两种接口照 pydantic_ai 的做法把别家的思考当文字
+    发出（11-11 实测 gpt-6.1-sol 带着 Claude 的摘要、带着自己没签名的半截思考都不拒），不处理。"""
 
     def prepare_messages(
         self, messages: list[ModelMessage], model_request_parameters: ModelRequestParameters | None = None

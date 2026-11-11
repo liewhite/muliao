@@ -155,7 +155,7 @@ def agents_toolset(
             allow: Extra rules `action:kind:name` (action use or write; kind tool, skill, mcp, secret or memory;
                 fnmatch wildcards), e.g. `use:skill:relay-host`, `use:secret:RELAY_*`, `*:memory:trading`.
             deny: Rules to deny; deny wins over every allow, e.g. `use:tool:trigger_*`.
-            thinking: Thinking/reasoning effort of its model: `default` sends nothing (the model's own default),
+            thinking: Thinking/reasoning effort of its model: `default` sets none (the model's own default),
                 `off` disables it, the others set the effort level.
             group: Group it belongs to, e.g. a batch of agents doing the same kind of job; `list_agents` lists
                 agents by group.

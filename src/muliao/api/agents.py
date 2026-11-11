@@ -37,7 +37,7 @@ class AgentCreate(BaseModel):
     roles: list[str] = []
     allow: list[str] = []
     deny: list[str] = []
-    # 思考档位："default" 不传，按模型与服务端的默认
+    # 思考档位："default" 不指定，按模型与服务端的默认
     thinking: Thinking = "default"
     # 分组名；null 或空串为不分组
     group: str | None = None
