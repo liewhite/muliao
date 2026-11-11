@@ -74,7 +74,7 @@ def _thinking_shown(profile: ModelProfile, thinking: Thinking) -> ModelSettings:
     - OpenAI 的推理模型：Responses 接口不给 reasoning.summary 就没有摘要。profile 只按模型名推断、分不出接口，所以
       Chat Completions 接法（type = "openai"）也拿到这个键：那个接口没有这项设置，pydantic_ai 不读它，请求里不出现。
     - 其余为空。Google 给了档位时 pydantic_ai 自己带 include_thoughts，"default" 下不带、看不到思考（没接过，接入时
-      再定）；deepseek 的 profile 判为不思考。"""
+      再定）；deepseek 的 profile 判为不思考，但它不用要就回原始推理文字（thinking_text）。"""
     thinks_unasked = profile.get("thinking_enabled_by_default", False) or profile.get(
         "thinking_always_enabled", False
     )
@@ -85,6 +85,17 @@ def _thinking_shown(profile: ModelProfile, thinking: Thinking) -> ModelSettings:
     if profile.get("openai_supports_reasoning", False):
         return OpenAIResponsesModelSettings(openai_reasoning_summary="auto")
     return ModelSettings()
+
+
+def thinking_text(part: ThinkingPart) -> str:
+    """思考块里给人看的文字，会话页的历史与实时展示都按它（#611）；没有时为空串（只有签名的思考块）。
+    - 正文（content）：提供方给的摘要（_thinking_shown）。
+    - 正文为空时是原始推理文字：开源推理模型（deepseek、gpt-oss）经 Responses 接口回 reasoning_text，pydantic_ai 不把它
+      放进正文，放在 provider_details["raw_content"]（按 content_index 排的字符串列表，回传给模型时也从这里取）。"""
+    if part.content:
+        return part.content
+    raw: list[str] = (part.provider_details or {}).get("raw_content", [])
+    return "\n\n".join(text for text in raw if text)
 
 
 class _AnthropicModel(AnthropicModel):

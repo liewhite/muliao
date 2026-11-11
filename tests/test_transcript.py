@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime, timedelta
 
-from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, ToolReturnPart
+from pydantic_ai.messages import ModelRequest, ModelResponse, ThinkingPart, ToolCallPart, ToolReturnPart
 
 from muliao.platform.tool_views import NO_RENDERS
 from muliao.sessions.history import interrupted_results, stopped_results
@@ -84,6 +84,20 @@ def test_the_live_snapshot_points_calls_at_their_threads():
     shown = _with_threads(live, {"ask": "th"})
     assert [e.item.threads for e in shown.events if isinstance(e, RunItemEvent)] == [["th"]]
     assert shown.events[0] == live.events[0] and live.events[1].item.threads == []
+
+
+def test_thinking_shows_the_summary_or_else_the_raw_reasoning():
+    """思考条目的文字（#611）：正文（摘要）；正文为空时是开源推理模型的原始推理文字，pydantic_ai 放在
+    provider_details["raw_content"]；只有签名、没有文字的思考块不出条目。"""
+
+    def shown(part: ThinkingPart) -> list[tuple[str, str]]:
+        return [(i.type, i.text) for i in to_items([ModelResponse(parts=[part])], NO_RENDERS)]
+
+    raw = {"raw_content": ["先看题目", "", "再算一遍"]}
+    assert shown(ThinkingPart("", id="rs_1", provider_details=raw)) == [("thinking", "先看题目\n\n再算一遍")]
+    assert shown(ThinkingPart("摘要", id="rs_1", provider_details=raw)) == [("thinking", "摘要")]
+    assert shown(ThinkingPart("摘要", signature="sig")) == [("thinking", "摘要")]
+    assert shown(ThinkingPart("", signature="sig", provider_details={"other": 1})) == []
 
 
 def test_event_sources_are_parsed_once_for_the_ui():

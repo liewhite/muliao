@@ -41,7 +41,7 @@ from pydantic_graph import End
 
 from muliao.agent_runtime.attachments import AttachmentsForModel, ToolImagesToFiles
 from muliao.agent_runtime.instructions import build_instructions, build_run_context
-from muliao.agent_runtime.llm import ModelResolver, check_thinking, model_settings
+from muliao.agent_runtime.llm import ModelResolver, check_thinking, model_settings, thinking_text
 from muliao.agent_runtime.outcome import Finished, Paused, deferred_tool_results, outcome_of
 from muliao.agent_runtime.redaction import redact_call, redact_retry, tool_input_kept_out_of_failures
 from muliao.agent_runtime.tool_errors import DomainErrorsAsRetry
@@ -395,27 +395,38 @@ def _result_ids(messages: Sequence[ModelMessage]) -> set[str]:
     }
 
 
+def _grown(before: str, after: str) -> str:
+    """一个思考块给人看的文字从 before 变成 after 时要追加展示的部分：通常是末尾新长出的一段。先回了原始推理、后来
+    才有摘要正文的思考块，给人看的文字从原始推理换成了摘要（thinking_text 正文优先），不是在原来的后面接着长：
+    把换成的文字整段追加，实时展示里先前的原始推理留着，保存后的历史里只有摘要。"""
+    return after[len(before) :] if after.startswith(before) else after
+
+
 async def _forward_events(
     stream: AsyncIterable[AgentStreamEvent], hooks: StepHooks, resumed: frozenset[str]
 ) -> None:
     """把一步里的流式事件报告给 hooks（会话页的实时展示）。续跑时 pydantic-ai 会把交回结果的挂起调用（resumed）再发
-    一遍调用与结果事件：它们已经在历史里，不报告。"""
+    一遍调用与结果事件：它们已经在历史里，不报告。
+
+    思考报告的是给人看的文字（llm.thinking_text）新长出来的那一段，和保存后历史里展示的同一个依据：它不一定是正文的
+    增量（原始推理文字的增量是对 provider_details 的一次更新，事件里没有那段文字），所以把这一步的思考块按序号跟着
+    累计，比较前后。"""
+    thoughts: dict[int, ThinkingPart] = {}
     async for event in stream:
         if isinstance(event, PartStartEvent) and isinstance(event.part, TextPart) and event.part.content:
             hooks.on_text("assistant", event.part.content)
         elif isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
             hooks.on_text("assistant", event.delta.content_delta)
-        elif (
-            isinstance(event, PartStartEvent) and isinstance(event.part, ThinkingPart) and event.part.content
-        ):
-            hooks.on_text("thinking", event.part.content)
-        # 只更新签名、没有新内容的增量（content_delta 为 None）不用展示
-        elif (
-            isinstance(event, PartDeltaEvent)
-            and isinstance(event.delta, ThinkingPartDelta)
-            and event.delta.content_delta
-        ):
-            hooks.on_text("thinking", event.delta.content_delta)
+        elif isinstance(event, PartStartEvent) and isinstance(event.part, ThinkingPart):
+            thoughts[event.index] = event.part
+            if shown := thinking_text(event.part):
+                hooks.on_text("thinking", shown)
+        elif isinstance(event, PartDeltaEvent) and isinstance(event.delta, ThinkingPartDelta):
+            before = thoughts[event.index]
+            after = thoughts[event.index] = event.delta.apply(before)
+            # 只更新签名的增量没有新文字，不报告
+            if grown := _grown(thinking_text(before), thinking_text(after)):
+                hooks.on_text("thinking", grown)
         elif isinstance(event, FunctionToolCallEvent | FunctionToolResultEvent) and (
             event.part.tool_call_id in resumed
         ):

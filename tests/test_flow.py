@@ -1,8 +1,10 @@
 """端到端：触发 → 任务队列 → agent 运行 → 持久化 → 通知 / 委派。"""
 
 import asyncio
+import json
 import re
 
+import httpx2
 import pytest
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import (
@@ -15,11 +17,14 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 from pydantic_ai.models.function import AgentInfo, DeltaThinkingPart, FunctionModel
+from pydantic_ai.models.openai import OpenAIResponsesModel
+from pydantic_ai.providers.openai import OpenAIProvider
 from sqlalchemy import select
 
 from muliao.notifications.push import DELIVER_TASK
 from muliao.notifications.webpush import WebPushDelivery
 from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
+from muliao.platform.tool_views import NO_RENDERS
 from muliao.platform.worker import Worker
 from muliao.sessions.api import Origin, UserMessage
 from muliao.sessions.codec import load_messages
@@ -28,6 +33,7 @@ from muliao.sessions.conventions import run_context_index
 from muliao.sessions.inbound import Inbound, NewSession, receive
 from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.tables import Mail, Message
+from muliao.sessions.transcript import to_items
 from tests.scripted import scripted
 
 
@@ -466,6 +472,114 @@ async def test_thinking_is_streamed_to_bus_before_the_answer(container, make_age
 
     run = [(e.item_type, e.text) for e in events if e.type == "run"]
     assert run == [("thinking", "先"), ("thinking", "想想"), ("assistant", "答案")]
+
+
+def _responses_stream_with_raw_reasoning(summary: str | None) -> str:
+    """OpenAI Responses 接口的一次流式回复（SSE）：先是原始推理文字（response.reasoning_text.delta，deepseek 经
+    这个接口回的就是它，没有摘要），给了 summary 的话同一个推理项接着回这段摘要，再是回答。"""
+    reasoning = {
+        "type": "reasoning",
+        "id": "rs_1",
+        "summary": [{"type": "summary_text", "text": summary}] if summary else [],
+        "content": [{"type": "reasoning_text", "text": "先想想"}],
+    }
+    summarized = {"item_id": "rs_1", "output_index": 0, "summary_index": 0}
+    summary_events = [
+        {
+            "type": "response.reasoning_summary_part.added",
+            **summarized,
+            "part": {"type": "summary_text", "text": ""},
+        },
+        {"type": "response.reasoning_summary_text.delta", **summarized, "delta": summary},
+    ]
+    text = {"type": "output_text", "text": "答案", "annotations": []}
+    message = {
+        "type": "message",
+        "id": "msg_1",
+        "role": "assistant",
+        "status": "completed",
+        "content": [text],
+    }
+
+    def response(status: str, output: list[dict]) -> dict:
+        return {
+            "id": "r1", "object": "response", "created_at": 0, "model": "deepseek-v4-flash", "status": status,
+            "output": output, "parallel_tool_calls": True, "tool_choice": "auto", "tools": [],
+            "usage": {
+                "input_tokens": 1, "input_tokens_details": {"cached_tokens": 0}, "output_tokens": 1,
+                "output_tokens_details": {"reasoning_tokens": 1}, "total_tokens": 2,
+            },
+        }  # fmt: skip
+
+    thought = {"item_id": "rs_1", "output_index": 0, "content_index": 0}
+    answer = {"item_id": "msg_1", "output_index": 1, "content_index": 0}
+    events = [
+        {"type": "response.created", "response": response("in_progress", [])},
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {**reasoning, "summary": [], "content": []},
+        },
+        {"type": "response.reasoning_text.delta", **thought, "delta": "先"},
+        {"type": "response.reasoning_text.delta", **thought, "delta": "想想"},
+        {"type": "response.reasoning_text.done", **thought, "text": "先想想"},
+        *(summary_events if summary else []),
+        {"type": "response.output_item.done", "output_index": 0, "item": reasoning},
+        {"type": "response.output_item.added", "output_index": 1, "item": {**message, "content": []}},
+        {"type": "response.content_part.added", **answer, "part": {**text, "text": ""}},
+        {"type": "response.output_text.delta", **answer, "delta": "答案", "logprobs": []},
+        {"type": "response.output_text.done", **answer, "text": "答案", "logprobs": []},
+        {"type": "response.content_part.done", **answer, "part": text},
+        {"type": "response.output_item.done", "output_index": 1, "item": message},
+        {"type": "response.completed", "response": response("completed", [reasoning, message])},
+    ]
+    return "".join(f"data: {json.dumps({**e, 'sequence_number': n})}\n\n" for n, e in enumerate(events))
+
+
+@pytest.mark.parametrize("summary", [None, "摘要"])
+async def test_raw_reasoning_is_streamed_and_shown_like_a_thinking_summary(
+    container, make_agent, models, summary
+):
+    """开源推理模型（deepseek）经 Responses 接口回的原始推理文字，pydantic_ai 不放进思考块的正文，放在
+    provider_details（流式增量是一次对它的更新，事件里没有文字）：用真实的 OpenAI SDK 与模型实现跑一遍，会话页
+    运行中逐段出字，保存后的历史里也有这个思考条目（#611）。同一个思考块后来又有了摘要的，展示的文字换成摘要：
+    运行中把摘要接在已经出的原始推理后面，历史里只有摘要。"""
+    alpha = (await make_agent("alpha", model="raw")).id
+    sse = _responses_stream_with_raw_reasoning(summary)
+    http = httpx2.AsyncClient(
+        transport=httpx2.MockTransport(
+            lambda _request: httpx2.Response(200, text=sse, headers={"content-type": "text/event-stream"})
+        )
+    )
+    models.models["raw"] = OpenAIResponsesModel(
+        "deepseek-v4-flash",
+        provider=OpenAIProvider(api_key="k", base_url="https://api.example/v1", http_client=http),
+    )
+    events = []
+
+    async def collect():
+        async with container.bus.subscribe() as sub:
+            async for e in sub:
+                events.append(e)
+
+    collector = asyncio.create_task(collect())
+    await asyncio.sleep(0)
+    session = await start(container, alpha, "q", origin=Origin.TRIGGER)
+    await drain(container)
+    collector.cancel()
+
+    run = [(e.item_type, e.text) for e in events if e.type == "run"]
+    assert run == [
+        ("thinking", "先"),
+        ("thinking", "想想"),
+        *([("thinking", summary)] if summary else []),
+        ("assistant", "答案"),
+    ]
+    saved = to_items(await history_of(container, session.id), NO_RENDERS)
+    assert [(i.type, i.text) for i in saved if i.type != "user"] == [
+        ("thinking", summary or "先想想"),
+        ("assistant", "答案"),
+    ]
 
 
 async def test_model_sees_agent_names_never_ids(container, make_agent, models):

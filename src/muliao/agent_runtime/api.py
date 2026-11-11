@@ -13,7 +13,7 @@ from muliao.agent_runtime.conventions import (
     tool_attachments,
 )
 from muliao.agent_runtime.instructions import memory_section, with_notices
-from muliao.agent_runtime.llm import ModelRegistry
+from muliao.agent_runtime.llm import ModelRegistry, thinking_text
 from muliao.agent_runtime.outcome import (
     Approval,
     Finished,
@@ -51,6 +51,7 @@ __all__ = [
     "references",
     "result_images",
     "shared_attachments",
+    "thinking_text",
     "tool_attachments",
     "with_notices",
 ]

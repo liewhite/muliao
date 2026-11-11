@@ -23,7 +23,13 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from muliao.agent_runtime.api import Attachment, attachment_of_ref, result_images, tool_attachments
+from muliao.agent_runtime.api import (
+    Attachment,
+    attachment_of_ref,
+    result_images,
+    thinking_text,
+    tool_attachments,
+)
 from muliao.platform.text_edit import truncate
 from muliao.platform.tool_views import ToolRenders, View
 from muliao.sessions.conventions import (
@@ -313,8 +319,8 @@ def to_items(
             for part in msg.parts:
                 if isinstance(part, TextPart) and part.content:
                     items.append(_item("assistant", part.content))
-                elif isinstance(part, ThinkingPart) and part.content:
-                    items.append(_item("thinking", part.content))
+                elif isinstance(part, ThinkingPart) and (thought := thinking_text(part)):
+                    items.append(_item("thinking", thought))
                 elif isinstance(part, ToolCallPart):
                     items.append(call_item(part, saved_at, renders))
         if is_stopped(msg):
