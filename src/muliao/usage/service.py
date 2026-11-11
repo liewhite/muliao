@@ -140,7 +140,7 @@ class UsageLog:
         return _summarize(rows, group_by, self._tz)
 
     async def session_totals(self, session_id: str) -> UsageTotals:
-        """这个会话名下全部运行（对话与压缩）的用量之和；还没有记过时各项为 0。"""
+        """这个会话名下全部行（不分运行类型）的用量之和；还没有记过时各项为 0。"""
         async with self._db.transaction() as s:
             row = (
                 await s.execute(

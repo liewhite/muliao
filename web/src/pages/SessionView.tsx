@@ -833,7 +833,7 @@ function UsageLine({ context, usage }: Pick<SessionDetail, 'context' | 'usage'>)
       <span title="发给模型的上下文：现在的大小 / 压缩阈值（超过就压缩）">
         上下文 {contextText(context.tokens, context.threshold_tokens)}
       </span>
-      <span title="这个会话累计花掉的 token（对话与压缩；正在进行的运行结束时才记上）">
+      <span title="这个会话累计花掉的 token（正在进行的运行结束时才记上）">
         累计 输入 {formatTokens(usage.input_tokens)} · 输出 {formatTokens(usage.output_tokens)} · 缓存命中{' '}
         {cacheHitPercent(usage.input_tokens, usage.cache_read_tokens)}% · {usage.requests} 次请求
       </span>

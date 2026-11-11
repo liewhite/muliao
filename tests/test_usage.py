@@ -159,7 +159,7 @@ async def test_a_failure_to_record_usage_does_not_fail_the_run(container, make_a
 
 
 async def test_session_detail_reports_the_sessions_own_running_total(client, container, make_agent, models):
-    """会话详情的累计 = model_usage 里这个会话各行之和（对话与压缩都算），不含别的会话；阈值是会话自己的。"""
+    """会话详情的累计 = model_usage 里这个会话各行之和（不分运行类型），不含别的会话；阈值是会话自己的。"""
     await login(client)
     alpha = await make_agent("alpha", model="m")
     models.models["m"] = answering()

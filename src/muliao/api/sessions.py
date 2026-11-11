@@ -177,7 +177,8 @@ async def wait_outs(c: Container, agent_id: str, waits: list[Wait]) -> list[Wait
 class ContextOut(BaseModel):
     """发给模型的上下文有多大、到多大会压缩（sessions.compaction）。"""
 
-    # 现在的大小：上一次模型请求的输入 token（含缓存读写）；还没有模型回复、或刚压缩过还没有新回复时为 null
+    # 现在的大小：上一次模型请求的输入 token（含缓存读写）；还没有模型回复、或刚压缩过还没有新回复时为 null；
+    # 0 表示模型没有报告用量（部分 OpenAI 兼容服务流式时如此，自动压缩对它失效）
     tokens: int | None
     # 这个会话的压缩阈值（自己的，没给就是全局默认）：上下文超过它就压缩
     threshold_tokens: int
@@ -202,7 +203,7 @@ class SessionDetail(BaseModel):
     # 在等的东西：后台任务、委派、到点唤醒、提问（与 state 同一条规则，没在运行、这里非空时 state 就是 waiting）
     waits: list[WaitOut]
     context: ContextOut
-    # 这个会话名下全部运行（对话与压缩）的累计用量；一次运行的用量在它结束（或中途停下压缩）时才记上
+    # 这个会话名下全部运行（不分类型）的累计用量；一次运行的用量在它结束（或中途停下压缩）时才记上
     usage: UsageCounts
 
 

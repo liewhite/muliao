@@ -38,7 +38,7 @@ class SessionContext:
     summary: str | None
     messages: list[ModelMessage]
     # 最近一次压缩写入之前就有的、报告了用量的模型回复条数（在 messages 里，conventions.measured_responses）：
-    # 它们报告的 token 数是压缩前的上下文大小，判断要不要再压缩只看之后的回复（sessions.compaction.Compactor.verdict）；没压缩过为 None
+    # 它们报告的 token 数是压缩前的上下文大小，上下文有多大只看之后的回复（sessions.compaction.context_tokens）；没压缩过为 None
     stale_responses: int | None
 
 
