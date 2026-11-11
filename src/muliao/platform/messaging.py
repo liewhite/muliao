@@ -58,6 +58,17 @@ class Delivery:
 type Handler[M: Message] = Callable[[M, Delivery], Awaitable[Commit]]
 
 
+def _concrete(base: type[Message]) -> list[type[Message]]:
+    """muliao 包里 base 的全部具体子类（自己定义了 TYPE 的）。测试里定义的消息不算：它们不经组合根登记。"""
+    found, todo = [], list(base.__subclasses__())
+    while todo:
+        cls = todo.pop()
+        todo += cls.__subclasses__()
+        if "TYPE" in vars(cls) and cls.__module__.startswith("muliao."):
+            found.append(cls)
+    return found
+
+
 @dataclass(frozen=True)
 class _Receiver:
     name: str
@@ -110,6 +121,21 @@ class Messaging:
         if command_type.TYPE in self._commands:
             raise RuntimeError(f"command {command_type.TYPE} already has a handler")
         self._commands[command_type.TYPE] = self._register(name, command_type, handler, lane, slow)
+
+    def check_wired(self) -> None:
+        """装配结束时调用一次：代码里（muliao 包下）定义的每条定向命令都有处理者、每个事件都至少有一个订阅者，缺了当场
+        报错。发布方不认识订阅方，漏登记时 publish_in 什么都不插、send_in 到发送时才报错，这里把它提前到启动。"""
+        missing = [
+            f"{cls.__module__}.{cls.__qualname__} ({cls.TYPE})"
+            for cls in _concrete(DomainEvent)
+            if cls.TYPE not in self._subscribers
+        ] + [
+            f"{cls.__module__}.{cls.__qualname__} ({cls.TYPE})"
+            for cls in _concrete(Command)
+            if cls.TYPE not in self._commands
+        ]
+        if missing:
+            raise RuntimeError(f"messages with no receiver registered: {', '.join(sorted(missing))}")
 
     def _register(
         self,

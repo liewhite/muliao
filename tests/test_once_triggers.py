@@ -39,7 +39,7 @@ async def _make_due(container, trigger_id: int) -> None:
 
 async def _fire_due(container, trigger_id: int) -> int:
     await _make_due(container, trigger_id)
-    return await container.trigger_domain.due.fire_due()
+    return await container.due.fire_due()
 
 
 def _workspace(container, agent_id: str):  # noqa: ANN202
@@ -53,7 +53,7 @@ async def test_once_fires_at_its_time_and_is_then_finished_with_its_session(cont
     trigger = await _once(container, alpha)
 
     assert await _fire_due(container, trigger.id) == 1
-    assert await container.trigger_domain.due.fire_due() == 0  # 结束之后不再扫描到它
+    assert await container.due.fire_due() == 0  # 结束之后不再扫描到它
 
     assert await container.triggers.list() == []
     [finished] = await container.triggers.list(finished=True)

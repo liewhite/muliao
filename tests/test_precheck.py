@@ -51,7 +51,7 @@ async def _schedule(container, agent_id: str, precheck: Precheck):
 async def _tick(container, trigger_id: int) -> None:
     """到点触发一次；告警是发给通知领域的命令，随后投递。"""
     await _make_due(container, trigger_id)
-    await container.trigger_domain.due.fire_due()
+    await container.due.fire_due()
     await deliver(container)
 
 
@@ -242,7 +242,7 @@ async def test_a_finished_once_trigger_whose_precheck_failed_tells_the_agent_its
     async with container.db.transaction() as s:
         due = await trigger_in(s, trigger.id)
         due.config = {"at": (datetime.now().astimezone() - timedelta(seconds=1)).isoformat()}
-    await container.trigger_domain.due.fire_due()
+    await container.due.fire_due()
     await deliver(container)
 
     [alert] = await _alerts(container)

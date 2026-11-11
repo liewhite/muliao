@@ -34,8 +34,8 @@ def assignee_name(assignee: str, names: AgentNames) -> str:
     return USER if assignee == USER else names[assignee]
 
 
-# issue 会话（Origin.ISSUE）在指令里的说明：怎么处理一个 issue（会话级、不变，进缓存前缀；信件里不重复）。组合根交给
-# 会话领域（sessions.api.OriginNotes）
+# issue 会话（Origin.ISSUE）在指令里的说明：怎么处理一个 issue（会话级、不变，进缓存前缀；信件里不重复）。经
+# IssueDomain.origin_notes 交给会话领域（sessions.api.OriginNotes）
 SESSION_NOTE = (
     "This conversation is dedicated to one issue on the muliao issue board that you work on or own, and is "
     "continued each time the issue needs you again: while it is `in_progress`, every change to it "

@@ -6,7 +6,7 @@
   配置（描述、模型、思考档位、分组）只在快照：AssetSource.snapshot().loaded_agent 给出 AgentDir，界面与 get_agent 用
   AgentService.view / find_view / list_views（AgentView：身份 + 配置 + 分发规则）；
   名称映射 AgentService.names / 事务内的 agent_names_in（AgentNames，已删除的 agent 也有展示名）；
-- 删除与归档 agent（AgentLifecycle）；
+- 删除与归档 agent（AgentLifecycle；别的领域拦下删除的检查 DeletionBlocker）；组合根经 AgentDomain.build 装配它与 agent 领域的工具、常驻循环；
 - AI 资源：种类（kinds：Kind / StoredKind），资源目录（AssetSource：当前快照与读树时发现的问题，改写资源文件的写入口 write 与它的结果 Written、拒绝 AssetRejected；讲怎么改资源文件的公共 skill 名 ASSETS_SKILL），记忆（MemoryStore、一次运行放进指令的 MemoryBlock、MemoryInfo）、skill 的索引、界面编辑与标准 .skill 文件的导入导出，MCP server 的配置（McpServer 等；把配置连接成工具在 agent_runtime）、secret（Vault：存取、加解密与 ${vault:KEY} 引用的解析 VAULT_REF / fill，对外不出密文）、资源池（AssetCatalog：全部资源与各自的详情 CatalogAsset.detail、删除、转移 owner）；
 - 分发（Distribution：角色的增删改、agent 的规则 AgentRules 与最终规则、能用的 Reach、预览），内置工具表（ToolTable：组合根装好工具集后 bind，
   ToolSpec）与 `action:kind:name` 规则（permissions）；AI 资产的规则在它的 access（能 use / write = 自己 own 的 ∪ 规则放行的）。
@@ -15,13 +15,14 @@
 from muliao.agents.access import Reach, Source, WriteScope
 from muliao.agents.active import AgentArchived, AgentNames, Availability, agent_names_in, availability_in
 from muliao.agents.agent_file import Thinking
+from muliao.agents.assembly import AgentDomain
 from muliao.agents.asset_files import SKILL as ASSETS_SKILL
 from muliao.agents.asset_files import AssetRejected
 from muliao.agents.assets import AgentDir, McpFile, MemoryText, SkillDir
 from muliao.agents.catalog import AssetCatalog, CatalogAsset, SecretDetail
 from muliao.agents.distribution import Distribution, RoleSpec, RoleView, UsedAsset
 from muliao.agents.kinds import Kind, StoredKind
-from muliao.agents.lifecycle import AgentLifecycle
+from muliao.agents.lifecycle import AgentLifecycle, DeletionBlocker
 from muliao.agents.mcp import McpRegistry
 from muliao.agents.mcp_config import McpConfig, McpServer, McpTransport, mcp_config
 from muliao.agents.memory import MemoryBlock, MemoryInfo, MemoryStore
@@ -51,6 +52,8 @@ __all__ = [
     "Availability",
     "availability_in",
     "AgentLifecycle",
+    "AgentDomain",
+    "DeletionBlocker",
     "McpConfig",
     "McpRegistry",
     "McpServer",

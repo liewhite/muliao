@@ -4,7 +4,7 @@ import asyncio
 import logging
 import os
 import signal
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +17,7 @@ from muliao.agent_runtime.api import AgentRuntime, ModelRegistry, Toolbox
 from muliao.agent_runtime.llm import ModelResolver
 from muliao.agent_runtime.mcp import McpConnector
 from muliao.agents.api import (
+    AgentDomain,
     AgentLifecycle,
     AgentService,
     AssetCatalog,
@@ -29,16 +30,12 @@ from muliao.agents.api import (
     ToolTable,
     Vault,
 )
-from muliao.agents.secret_tools import vault_toolset
 from muliao.agents.service import AgentDefaults
-from muliao.agents.tools import agents_toolset
 from muliao.config import RuntimeConfig, Settings
 from muliao.files.api import FileStore
 from muliao.history.api import HistoryLog
 from muliao.history.tools import history_toolset
-from muliao.issues.api import SESSION_NOTE as ISSUE_SESSION_NOTE
-from muliao.issues.api import IssueService
-from muliao.issues.tools import issues_toolset
+from muliao.issues.api import IssueDomain, IssueService
 from muliao.notifications.api import NotificationDomain, Notifications, PushSubscriptions, VapidKeys
 from muliao.platform.bus import EventBus, EventFeed
 from muliao.platform.checks import WorkWatcher
@@ -48,10 +45,10 @@ from muliao.platform.retention import TaskRetention
 from muliao.platform.sandbox import sandbox_for
 from muliao.platform.tables import EVENT_TASK
 from muliao.platform.tasks import Retries, RetryPolicy, TaskAdmin, TaskQueue
+from muliao.platform.wiring import Loop, Parts, Toolsets
 from muliao.platform.worker import RunNow, Worker, register_handlers
 from muliao.schema import ChangedEvent, changes_of
-from muliao.sessions.api import OWN_NOTES, Origin, OriginNotes, SessionDomain, SessionPorts, SessionService
-from muliao.sessions.ask_user import ask_user_toolset
+from muliao.sessions.api import OWN_NOTES, OriginNotes, SessionDomain, SessionPorts, SessionService
 from muliao.sessions.compaction import Compactor
 from muliao.sessions.consumer import Consumer
 from muliao.sessions.delegation import Delegations, ThreadChecks
@@ -61,8 +58,8 @@ from muliao.sessions.reconcile import MailReconciler
 from muliao.sessions.threads import Threads
 from muliao.sessions.wakeups import WakeUps
 from muliao.speech.api import Transcriber, build_transcriber
-from muliao.triggers.api import SESSION_NOTE as TRIGGER_SESSION_NOTE
 from muliao.triggers.api import TriggerDomain, TriggerService, Webhooks
+from muliao.triggers.due import DueRunner
 from muliao.usage.api import UsageLog
 from muliao.web.api import WebProvider, build_web_provider
 from muliao.web.tools import web_toolset
@@ -73,11 +70,10 @@ from muliao.workspace.api import (
     JobRunner,
     ScriptGrantAdmin,
     ScriptGrants,
-    ShellLimits,
     Sites,
+    WorkspaceDomain,
     WorkspaceFiles,
 )
-from muliao.workspace.tools import workspace_toolset
 
 log = logging.getLogger(__name__)
 
@@ -151,8 +147,8 @@ class Assembly:
     notifications: Notifications
     mcp: McpRegistry
     triggers: TriggerService
-    # 触发器领域：到期扫描与流式托管的循环（running 里起）
-    trigger_domain: TriggerDomain
+    # 定时与一次性触发器的到期扫描（测试自己驱动 fire_due）
+    due: DueRunner
     webhooks: Webhooks
     push_subscriptions: PushSubscriptions
     vapid: VapidKeys
@@ -167,8 +163,9 @@ class Assembly:
     commands: AgentCommands
     thread_checks: ThreadChecks
     wakeups: WakeUps
-    work: WorkWatcher
     retention: TaskRetention
+    # 服务的全部常驻循环（名字，入口）：平台自己的与各领域声明的（Parts.loops），running 里各自启动
+    loops: Sequence[tuple[str, Loop]]
     compactor: Compactor
     consumer: Consumer
     # 停止会话的命令（sessions.halt.SessionStopper）
@@ -222,13 +219,8 @@ class Assembly:
         try:
             await self._prepare()
             async with self.jobs.running(), anyio.create_task_group() as root:
-                root.start_soon(_loop, "worker", self.worker.run_forever)
-                for name, loop in self.trigger_domain.loops():
+                for name, loop in self.loops:
                     root.start_soon(_loop, name, loop)
-                root.start_soon(_loop, "mail", self.mail.run_forever)
-                root.start_soon(_loop, "checks", self.work.run_forever)
-                root.start_soon(_loop, "retention", self.retention.run_forever)
-                root.start_soon(_loop, "assets", self.assets.watch)
                 try:
                     yield
                 finally:
@@ -251,7 +243,7 @@ class Assembly:
         await self.worker.recover()
 
 
-async def _loop(name: str, run_forever: Callable[[], Awaitable[None]]) -> None:
+async def _loop(name: str, run_forever: Loop) -> None:
     """根任务组里的后台循环：意外退出属于 bug 或不可恢复的配置错误，停止进程，交给进程管理器重启并告警。
     不把异常抛给任务组：关停只走一条路径（SIGTERM → 服务器停止接收请求、排空连接 → lifespan 退出 → running
     的退出顺序），不另起一条从任务组内部炸开的关停。"""
@@ -298,8 +290,6 @@ def assemble(
         web = build_web_provider(settings.web, http)
     if transcriber is None and settings.transcription is not None:
         transcriber = build_transcriber(settings.transcription, http)
-    # 「配置了哪些可选能力」只在这里判断一次：没配置 [web] 就不注册网页工具，工具表里也就没有它们
-    web_tools = [] if web is None else [web_toolset(web, settings.runtime.tool_output_max_chars)]
     tz = ZoneInfo(settings.timezone)
     bus = EventBus()
 
@@ -357,11 +347,17 @@ def assemble(
     commands = AgentCommands(vault, agents.workspace, confiner)
     mcp = McpRegistry(assets, mcp_connector.probe)
     catalog = AssetCatalog(assets)
+    max_chars = settings.runtime.tool_output_max_chars
     # 会话领域先于消费者构造的端口（会话忙不忙、停止会话、委派、后台任务的占用），别的领域与工具集要用它们
-    ports = SessionPorts.build(db, queue, messaging, tz)
-    activity = ports.activity
-    agent_lifecycle = AgentLifecycle(
-        db, agents, assets, messaging, {"sessions": activity.blocks_agent_deletion_in}
+    ports = SessionPorts.build(db, queue, messaging, tz, agents, max_chars)
+    agent_domain = AgentDomain.build(
+        db=db,
+        agents=agents,
+        assets=assets,
+        vault=vault,
+        distribution=distribution,
+        messaging=messaging,
+        blockers=ports.deletion_blockers,
     )
     notification_domain = NotificationDomain.build(
         db=db,
@@ -370,17 +366,31 @@ def assemble(
         vapid_key_path=settings.vapid_key_path,
         vapid_subject=settings.push.vapid_subject,
     )
-    issues = IssueService(db, messaging, tz, activity, ports.stopper)
+    issue_domain = IssueDomain.build(
+        db=db, messaging=messaging, tz=tz, activity=ports.activity, stop_session=ports.stopper, agents=agents
+    )
     trigger_domain = TriggerDomain.build(
         db=db,
         tz=tz,
         messaging=messaging,
         commands=commands,
-        activity=activity,
+        activity=ports.activity,
+        agents=agents,
         public_url=settings.server.public_url,
         precheck_timeout_seconds=settings.runtime.precheck_timeout_seconds,
     )
-
+    workspace_domain = WorkspaceDomain.build(
+        db=db,
+        commands=commands,
+        confiner=confiner,
+        workspace_of=agents.workspace,
+        messaging=messaging,
+        work=ports.work,
+        files=files,
+        assets=assets,
+        skills=skills,
+        tool_output_max_chars=max_chars,
+    )
     usage = UsageLog(db, tz)
     history = HistoryLog(db, tz)
     runtime = AgentRuntime(
@@ -393,28 +403,24 @@ def assemble(
         files=files,
         usage=usage,
     )
-    jobs = JobRunner(db, commands, agents.workspace, messaging, ports.work)
-    script_grants = ScriptGrants(db)
-    limits = ShellLimits(settings.runtime.tool_output_max_chars)
-    # 运行可用的全部静态工具集；每个工具注册时自己声明读写、是否管理类等（platform.tooling.declared），一次运行开放哪些只按 agent 的分发规则算
-    # （Toolbox.profile），不随运行状态变（工具列表稳定才命中缓存）：如 ask_user 在没有用户会回答的运行里照样列出，
-    # 调用时被拒绝（sessions.ask_user）
-    static_toolsets = [
-        history_toolset(history, agents, ports.recall, issues, settings.runtime.tool_output_max_chars),
-        ask_user_toolset(),
-        workspace_toolset(commands, limits, files, jobs, confiner, assets, skills, script_grants),
-        ports.delegation_toolset(agents),
-        ports.wakeup_toolset(),
-        ports.recall_toolset(agents, settings.runtime.tool_output_max_chars),
-        notification_domain.toolset(),
-        vault_toolset(vault),
-        trigger_domain.toolset(agents),
-        issues_toolset(issues, agents),
-        *web_tools,
+    # 各领域交给组合根的部件（platform.wiring.Parts，docs/architecture.md 2.4 第 19 行）：下面每种部件遍历一次这个列表。
+    # 会话领域的第二段（消费者）要用组好的工具箱，所以最后加入；它的工具集在第一段（SessionPorts）
+    domains: list[Parts] = [
+        ports,
+        agent_domain,
+        workspace_domain,
+        notification_domain,
+        issue_domain,
+        trigger_domain,
+        Toolsets(history_toolset(history, agents, ports.recall, issue_domain.issues, max_chars)),
+        # 「配置了哪些可选能力」只在这里判断一次：没配置 [web] 就不注册网页工具，工具表里也就没有它们
+        *([] if web is None else [Toolsets(web_toolset(web, max_chars))]),
     ]
-    static_toolsets.append(agents_toolset(agents, distribution, agent_lifecycle))
+    # 一次运行开放哪些工具只按 agent 的分发规则算（Toolbox.profile；每个工具注册时自己声明读写、是否管理类等，
+    # platform.tooling.declared），不随运行状态变（工具列表稳定才命中缓存）：如 ask_user 在没有用户会回答的运行里照样列出，
+    # 调用时被拒绝（sessions.ask_user）
     toolbox = Toolbox(
-        toolsets=static_toolsets,
+        toolsets=[t for d in domains for t in d.toolsets()],
         mcp=lambda: mcp_connector.toolset(mcp.index),
         rules_of=distribution.rules,
     )
@@ -429,32 +435,33 @@ def assemble(
         toolbox=toolbox,
         files=files,
         agents=agents,
-        notes=OriginNotes(
-            {**OWN_NOTES, Origin.TRIGGER: TRIGGER_SESSION_NOTE, Origin.ISSUE: ISSUE_SESSION_NOTE}
-        ),
+        notes=OriginNotes({**OWN_NOTES, **trigger_domain.origin_notes, **issue_domain.origin_notes}),
         compaction_threshold_tokens=settings.runtime.compaction_threshold_tokens,
         compaction_keep_steps=settings.runtime.compaction_keep_steps,
     )
-    # 跨领域的反应：各领域的订阅与命令处理者（删除 agent 与会话时各领域清理自己的数据）
-    session_domain.subscribe(messaging)
-    jobs.subscribe(messaging)
-    script_grants.subscribe(messaging)
-    notification_domain.subscribe(messaging)
-    agent_lifecycle.subscribe(messaging)
-    trigger_domain.subscribe(messaging)
-    issues.subscribe(messaging)
-    # 各领域的任务种类在这里登记处理器；队列只接受登记过的种类（TaskQueue.accept）
+    if session_domain.toolsets():
+        raise RuntimeError("SessionDomain is built after the toolbox: its toolsets belong in SessionPorts")
+    domains.append(session_domain)
+    # 跨领域的反应：各领域的订阅与命令处理者（删除 agent 与会话时各领域清理自己的数据）；漏了的当场报错
+    for d in domains:
+        d.subscribe(messaging)
+    messaging.check_wired()
+    # 各领域的任务种类与处理器；队列只接受登记过的种类（TaskQueue.accept）
     worker = Worker(
         queue,
-        register_handlers(
-            (EVENT_TASK, messaging),
-            *session_domain.handlers(messaging),
-            *notification_domain.handlers(),
-        ),
+        register_handlers((EVENT_TASK, messaging), *(h for d in domains for h in d.handlers())),
         bus,
     )
     run_now.bind(worker)
     queue.accept(worker.kinds)
+    # 只清理处理它的领域声明了可删的任务（docs/architecture.md 3.2「保留」）
+    retention = TaskRetention(queue, prunable=worker.prunable_kinds)
+    loops: list[tuple[str, Loop]] = [
+        ("worker", worker.run_forever),
+        ("checks", WorkWatcher([c for d in domains for c in d.checks()]).run_forever),
+        ("retention", retention.run_forever),
+        *(loop for d in domains for loop in d.loops()),
+    ]
 
     return Assembly(
         settings=settings,
@@ -469,12 +476,12 @@ def assemble(
         agents=agents,
         distribution=distribution,
         catalog=catalog,
-        agent_lifecycle=agent_lifecycle,
+        agent_lifecycle=agent_domain.lifecycle,
         sessions=session_domain.sessions,
         notifications=notification_domain.notifications,
         mcp=mcp,
         triggers=trigger_domain.triggers,
-        trigger_domain=trigger_domain,
+        due=trigger_domain.due,
         webhooks=trigger_domain.webhooks,
         push_subscriptions=notification_domain.push_subscriptions,
         vapid=notification_domain.vapid,
@@ -483,22 +490,21 @@ def assemble(
         threads=ports.threads,
         delegations=ports.delegations,
         mail=session_domain.mail,
-        jobs=jobs,
-        script_grants=script_grants,
+        jobs=workspace_domain.jobs,
+        script_grants=workspace_domain.script_grants,
         confiner=confiner,
         commands=commands,
         thread_checks=ports.thread_checks,
         wakeups=ports.wakeups,
-        work=WorkWatcher([jobs, ports.thread_checks, ports.wakeups]),
-        # 只清理处理它的领域声明了可删的任务（docs/architecture.md 3.2「保留」）
-        retention=TaskRetention(queue, prunable=worker.prunable_kinds),
+        retention=retention,
+        loops=loops,
         compactor=session_domain.compactor,
         consumer=session_domain.consumer,
         stopper=ports.stopper,
         models=models,
         files=files,
         usage=usage,
-        issues=issues,
+        issues=issue_domain.issues,
         history=history,
         http=http,
         transcriber=transcriber,

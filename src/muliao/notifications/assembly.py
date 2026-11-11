@@ -1,5 +1,5 @@
 """通知领域的装配：收件箱写下通知、经推送把它推到设备（inbox → push → webpush）怎么接只在这里，组合根只给依赖与配置
-（同 sessions.assembly.SessionDomain）。"""
+（同 sessions.assembly.SessionDomain）；交给组合根的部件见 platform.wiring.Parts。"""
 
 from __future__ import annotations
 
@@ -18,11 +18,12 @@ from muliao.platform.db import Database
 from muliao.platform.messaging import Messaging
 from muliao.platform.tasks import TaskQueue
 from muliao.platform.tooling import RunScope
+from muliao.platform.wiring import Parts
 from muliao.platform.worker import TaskHandler
 
 
 @dataclass(frozen=True)
-class NotificationDomain:
+class NotificationDomain(Parts):
     # 通知的写入与查询（通知页、未读数）
     notifications: Notifications
     # 浏览器推送订阅
@@ -46,14 +47,14 @@ class NotificationDomain:
             ),
         )
 
-    def toolset(self) -> FunctionToolset[RunScope]:
+    def toolsets(self) -> Sequence[FunctionToolset[RunScope]]:
         """agent 通知用户的工具（notify_user）。"""
-        return notify_toolset(self.notifications)
+        return (notify_toolset(self.notifications),)
 
     def subscribe(self, messaging: Messaging) -> None:
         """写下通知的订阅与命令（运行结束、运行失败、Notify）、随会话已读与删除。"""
         self.notifications.subscribe(messaging)
 
     def handlers(self) -> Sequence[tuple[str, TaskHandler]]:
-        """推送的任务种类与处理器（组合根交给 worker 登记）。"""
+        """推送的任务种类与处理器。"""
         return ((DELIVER_TASK, self._handler),)

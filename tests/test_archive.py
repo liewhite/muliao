@@ -227,7 +227,7 @@ async def test_a_once_trigger_due_while_its_agent_is_archived_tells_the_user(con
     async with container.db.transaction() as s:
         due = await trigger_in(s, trigger.id)
         due.config = {"at": (datetime.now().astimezone() - timedelta(seconds=1)).isoformat()}
-    await container.trigger_domain.due.fire_due()
+    await container.due.fire_due()
     await deliver(container)
     [note] = await container.notifications.list(10)
     assert "later" in note.title and "归档" in note.title and "weekly report" in note.body

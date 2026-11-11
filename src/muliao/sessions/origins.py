@@ -5,7 +5,7 @@
 说明是会话级的稳定内容，进 instructions（缓存前缀）：会话领域把它作为文字交给 agent_runtime，运行时不认识来源。
 
 会话领域只写自己开出的来源的说明（OWN_NOTES：用户、委派）；触发器、issue 的说明含它们的规则（怎么处理一个 issue），
-由各自领域的 api 导出（SESSION_NOTE），组合根合成 OriginNotes 交给会话领域。"""
+由各自领域的装配对象声明（origin_notes），组合根合成 OriginNotes 交给会话领域。"""
 
 from collections.abc import Mapping
 from dataclasses import dataclass

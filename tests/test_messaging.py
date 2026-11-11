@@ -389,3 +389,21 @@ async def test_a_slow_receiver_is_left_to_the_worker(container):
 
     await run_worker(container, messaging)
     assert done == ["x"]
+
+
+async def test_assembly_refuses_a_command_without_handler_or_an_event_without_subscriber(container):
+    """漏登记（如漏放进组合根列表的领域）在装配时报错（Messaging.check_wired），不等到发送时或静默不投；测试里定义的
+    消息不算。组合根装配好的 messaging 已经过了这道检查。"""
+    container.messaging.check_wired()
+    bare = Messaging(container.queue, _left_to_the_worker)
+    with pytest.raises(RuntimeError) as e:
+        bare.check_wired()
+    assert "session.run_ended" in str(e.value) and "issues.post_event" in str(e.value)
+    assert "test.happened" not in str(e.value)
+
+
+async def test_the_service_runs_the_loops_the_domains_declare(container):
+    """常驻循环由各领域声明（platform.wiring.Parts.loops），组合根只遍历：服务启动的就是这些。"""
+    assert sorted(name for name, _ in container.loops) == sorted(
+        ["worker", "checks", "retention", "due", "streams", "mail", "assets"]
+    )

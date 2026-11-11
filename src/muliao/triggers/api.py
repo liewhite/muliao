@@ -12,7 +12,6 @@ from muliao.triggers.precheck import Precheck, PrecheckFailed
 from muliao.triggers.schedule import ScheduleConfig, ScheduleStatus
 from muliao.triggers.service import (
     EVENT_MAX_BYTES,
-    SESSION_NOTE,
     Fired,
     TriggerKind,
     TriggerKindName,
@@ -33,7 +32,6 @@ __all__ = [
     "OnceStatus",
     "Precheck",
     "PrecheckFailed",
-    "SESSION_NOTE",
     "ScheduleConfig",
     "ScheduleStatus",
     "StreamConfig",

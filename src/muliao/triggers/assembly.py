@@ -1,28 +1,32 @@
-"""触发器领域的装配：组合根只给出依赖与配置，领域自己决定内部对象怎么接（同 sessions.assembly.SessionDomain）。
+"""触发器领域的装配：组合根只给出依赖与配置，领域自己决定内部对象怎么接，并声明交给组合根的部件（platform.wiring.Parts）。
 
 触发方式在这里注册：新增一种（如消息队列）= 一个 TriggerKind + 它的激活机制，在 build 里注册，有常驻循环的加进 loops()；
-组合根不用改（它只把 loops() 的每个循环放进服务的根任务组）。
+组合根不用改。
 """
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
+from typing import ClassVar
 from zoneinfo import ZoneInfo
 
 from pydantic_ai import FunctionToolset
 
 from muliao.agents.api import AgentService
+from muliao.agents.events import AgentDeleting
 from muliao.platform.db import Database
 from muliao.platform.messaging import Messaging
 from muliao.platform.tooling import RunScope
-from muliao.sessions.api import SessionActivity
+from muliao.platform.wiring import Loop, Parts
+from muliao.sessions.api import Origin, SessionActivity
 from muliao.triggers.due import DueRunner
 from muliao.triggers.faults import Faults
 from muliao.triggers.once import OnceDue, OnceKind
 from muliao.triggers.precheck import PrecheckRunner
 from muliao.triggers.schedule import ScheduleDue, ScheduleKind
-from muliao.triggers.service import EVENT_MAX_BYTES, TriggerService
+from muliao.triggers.service import EVENT_MAX_BYTES, SESSION_NOTE, TriggerService
 from muliao.triggers.stream import StreamKind, StreamRunner
 from muliao.triggers.tools import triggers_toolset
 from muliao.triggers.webhook import WebhookKind, Webhooks
@@ -30,7 +34,7 @@ from muliao.workspace.api import AgentCommands
 
 
 @dataclass(frozen=True)
-class TriggerDomain:
+class TriggerDomain(Parts):
     # 管理与触发的入口（HTTP 与工具）
     triggers: TriggerService
     # 按到期时间触发的扫描循环（定时、一次性）
@@ -39,7 +43,7 @@ class TriggerDomain:
     streams: StreamRunner
     # webhook 的 HTTP 入口
     webhooks: Webhooks
-    _precheck_timeout_seconds: float
+    _tools: FunctionToolset[RunScope]
 
     @classmethod
     def build(
@@ -50,6 +54,7 @@ class TriggerDomain:
         messaging: Messaging,
         commands: AgentCommands,
         activity: SessionActivity,
+        agents: AgentService,
         public_url: str,
         precheck_timeout_seconds: float,
     ) -> TriggerDomain:
@@ -73,17 +78,17 @@ class TriggerDomain:
             due=DueRunner(db, triggers, [ScheduleDue(activity, schedule_kind, messaging), OnceDue()]),
             streams=StreamRunner(db, triggers, activity, commands, messaging, faults, EVENT_MAX_BYTES),
             webhooks=Webhooks(db, triggers),
-            _precheck_timeout_seconds=precheck_timeout_seconds,
+            _tools=triggers_toolset(triggers, agents, precheck_timeout_seconds),
         )
 
-    def loops(self) -> Sequence[tuple[str, Callable[[], Awaitable[None]]]]:
-        """触发器领域的常驻循环（名字，入口）：到期扫描与流式托管，由组合根在服务的根任务组里各自启动。"""
-        return (("due", self.due.run_forever), ("streams", self.streams.run_forever))
+    # 触发器开出的会话在指令里的说明（组合根合成 sessions.api.OriginNotes 交给会话领域）
+    origin_notes: ClassVar[Mapping[Origin, str]] = MappingProxyType({Origin.TRIGGER: SESSION_NOTE})
 
-    def toolset(self, agents: AgentService) -> FunctionToolset[RunScope]:
-        """agent 管理触发器的工具。"""
-        return triggers_toolset(self.triggers, agents, self._precheck_timeout_seconds)
+    def toolsets(self) -> Sequence[FunctionToolset[RunScope]]:
+        return (self._tools,)
 
     def subscribe(self, messaging: Messaging) -> None:
-        """触发器领域的订阅：删除 agent 时删掉它的触发器。"""
-        self.triggers.subscribe(messaging)
+        messaging.subscribe(AgentDeleting, "triggers.agent_deleting", self.triggers.on_agent_deleting)
+
+    def loops(self) -> Sequence[tuple[str, Loop]]:
+        return (("due", self.due.run_forever), ("streams", self.streams.run_forever))

@@ -1,6 +1,6 @@
 """触发器：具名、持久的事件来源，把外部刺激变成投进某个会话信箱的一封信件（见 models.Trigger）。
 
-触发方式是多态的，分两部分实现，新增一种方式（例如消息队列）只需各加一个实现并在组合根注册：
+触发方式是多态的，分两部分实现，新增一种方式（例如消息队列）只需各加一个实现并在 triggers.assembly.TriggerDomain.build 里注册：
 - TriggerKind：纯逻辑——校验配置、推导运行状态，注册给 TriggerService；
 - 激活机制：怎么被触发——到期扫描循环（due.DueRunner，定时与一次性共用）、流式托管（stream.StreamRunner）、HTTP 入口
   （webhook.Webhooks）……没有调用方等结果的调用 TriggerService.fire_activated，调用方在等结果的（webhook）调用 fire，
@@ -81,7 +81,7 @@ _NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 # 事件内容原样进入 prompt（webhook 请求体、前置检查的输出），过大的应由来源裁剪或改为传引用
 EVENT_MAX_BYTES = 256 * 1024
 
-# 触发器开出的会话（Origin.TRIGGER）在指令里的说明（会话级、不变）。组合根交给会话领域（sessions.api.OriginNotes）
+# 触发器开出的会话（Origin.TRIGGER）在指令里的说明（会话级、不变）。TriggerDomain.origin_notes 交给会话领域（sessions.api.OriginNotes）
 SESSION_NOTE = (
     "This run was started by a trigger (a schedule, or an external event shown inside <event>); nobody is "
     "watching. Each firing starts a fresh conversation unless its sender continues this one, so keep anything "
@@ -198,7 +198,7 @@ def route_address(trigger: Trigger, names: AgentNames) -> str:
     return describe(route_of(trigger), names)
 
 
-# 全部触发方式的名字（各方式模块的 KIND）；接口契约里的种类就是它，与组合根注册的方式一一对应（tests/test_triggers.py）
+# 全部触发方式的名字（各方式模块的 KIND）；接口契约里的种类就是它，与 TriggerDomain.build 注册的方式一一对应（tests/test_triggers.py）
 TriggerKindName = Literal["schedule", "once", "webhook", "stream"]
 
 
@@ -352,9 +352,6 @@ class TriggerService:
         self._clock = clock
         # 每个激活机制各自订阅变化通知（见 watch），互不清除对方的通知
         self._subscribers: list[asyncio.Event] = []
-
-    def subscribe(self, messaging: Messaging) -> None:
-        messaging.subscribe(AgentDeleting, "triggers.agent_deleting", self.on_agent_deleting)
 
     async def on_agent_deleting(self, event: AgentDeleting, _delivery: Delivery) -> Commit:
         """删除 agent 的流程：删除它的触发器。"""
