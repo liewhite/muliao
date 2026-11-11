@@ -2091,3 +2091,69 @@ def test_mail_records_its_run_and_delegations_are_referenced_by_row_and_downgrad
         migrate(path)
     with sqlite3.connect(path) as conn:
         assert "consumed_by" in {r[1] for r in conn.execute("pragma table_info(mail)")}
+
+
+def test_triggers_keep_the_last_recipient_handle_and_downgrade_keeps_only_session_ones(tmp_path):
+    """#631：last_session_id 换成 last_target（会话领域的句柄），旧值是一个会话的句柄；定时触发器连续跳过里挡路的会话同样
+    换成句柄。降级：一个会话的句柄取回 id，别的置空、跳过记录去掉。"""
+    import json
+
+    from alembic import command
+
+    from muliao.platform.db import _migration_engine
+
+    path = tmp_path / "m.db"
+    migrate(path, "e3a9c7b15d20")
+    cols = "name, agent_id, prompt, kind, config, state, enabled, created_at, faults, last_session_id"
+    skipped = {
+        "count": 2,
+        "since": "2026-01-01T00:00:00+00:00",
+        "previous_state": "waiting",
+        "session_id": "s1",
+        "notified": True,
+    }
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            f"insert into triggers ({cols}) values ('a', 'a1', 'p', 'schedule', '{{}}', ?, 1, "
+            "'2026-01-01 00:00:00', '[]', 's1')",
+            (json.dumps({"next_run_at": "x", "skipped": skipped}),),
+        )
+        conn.execute(
+            f"insert into triggers ({cols}) values ('b', 'a1', 'p', 'webhook', '{{}}', '{{}}', 1, "
+            "'2026-01-01 00:00:00', '[]', NULL)"
+        )
+    migrate(path)
+    with sqlite3.connect(path) as conn:
+        assert "last_session_id" not in {r[1] for r in conn.execute("pragma table_info(triggers)")}
+        rows = {
+            n: (t, json.loads(s)) for n, t, s in conn.execute("select name, last_target, state from triggers")
+        }
+    assert json.loads(rows["a"][0]) == {"to": "session", "session_id": "s1"}
+    assert rows["a"][1]["skipped"]["target"] == {"to": "session", "session_id": "s1"}
+    assert "session_id" not in rows["a"][1]["skipped"] and rows["a"][1]["next_run_at"] == "x"
+    assert rows["b"][0] is None
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "update triggers set last_target = ?, state = ? where name = 'b'",
+            (
+                json.dumps({"to": "sender", "origin": "issue", "origin_ref": "7"}),
+                json.dumps(
+                    {
+                        "skipped": {
+                            **skipped,
+                            "session_id": None,
+                            "target": {"to": "sender", "origin": "issue", "origin_ref": "7"},
+                        }
+                    }
+                ),
+            ),
+        )
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "e3a9c7b15d20")
+    with sqlite3.connect(path) as conn:
+        back = {
+            n: (sid, json.loads(s))
+            for n, sid, s in conn.execute("select name, last_session_id, state from triggers")
+        }
+    assert back["a"] == ("s1", {"next_run_at": "x", "skipped": skipped})
+    assert back["b"] == (None, {})

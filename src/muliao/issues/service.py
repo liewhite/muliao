@@ -177,11 +177,10 @@ def batch_item(size: int, n: int, key: str | None) -> Iterator[None]:
         raise type(e)(f"{batch_label(n, key)}: {e}") from None
 
 
-async def check_issue_in(s: AsyncSession, issue_id: int) -> None:
-    """issue 存在（别的领域要把事件投到它之前，在自己的事务里只读地确认；之后再被删除的由 PostIssueEvent 的处理丢弃）。
-    不存在时 NotFound。issue 只会从存在变为删除。"""
-    if await s.get(Issue, issue_id) is None:
-        raise NotFound(f"issue #{issue_id} not found")
+async def issue_exists_in(s: AsyncSession, issue_id: int) -> bool:
+    """issue 存在（别的领域要把事件投到它之前，在自己的事务里只读地确认，不在时自己决定怎么反应；之后再被删除的由
+    PostIssueEvent 的处理丢弃）。issue 只会从存在变为删除。"""
+    return await s.get(Issue, issue_id) is not None
 
 
 class IssueService:

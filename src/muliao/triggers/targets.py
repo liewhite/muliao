@@ -17,7 +17,6 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from muliao.agents.api import AgentNames
-from muliao.errors import InvalidInput
 
 
 class NewTo(BaseModel):
@@ -83,11 +82,11 @@ class Address(BaseModel):
 _ADDRESS = re.compile(r"^(?:(new)|(agent):(\S+)|(session)(?::(\S+))?|(issue):#?(\d+))$")
 
 
-def parse_address(text: str) -> Address:
-    """`new` / `agent:<名>` / `session[:<名>]` / `issue:<N>`，不合法时 InvalidInput。"""
+def parse_address(text: str) -> Address | None:
+    """`new` / `agent:<名>` / `session[:<名>]` / `issue:<N>`，不合法时 None（调用方把它当成写错的地址，router.resolve_in）。"""
     m = _ADDRESS.fullmatch(text.strip())
     if m is None:
-        raise InvalidInput(f"invalid route {text!r}; use one of: {ADDRESS_HELP}")
+        return None
     new, agent, agent_name, session, session_agent, issue, issue_id = m.groups()
     if new:
         return Address(to="new")

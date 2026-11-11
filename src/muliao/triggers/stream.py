@@ -15,7 +15,7 @@
   超过 1 MiB 就轮换一份 .1），agent 可以自己读。
 - 事件按 debounce 窗口合并：第一行到达后再等 debounce_seconds，期间到达的一起成为一次触发，事件内容是这些行
   （以换行分隔）。`@route` 行按到达顺序给之后的行定目标（跨批次保持，与把整条流当一段文本相同，_Pending），
-  分段与同一目标的合并在投递时做（router.plan_in）。上一次触发的会话还没做完（previous_fire_state_in，与定时触发同一个定义）时事件排队、不重叠，
+  分段与同一目标的合并在投递时做（router.plan_in）。上一次触发的收件方还没做完（previous_fire_state_in，与定时触发同一个定义）时事件排队、不重叠，
   它结束后合并投递；挡路的会话在等待（可能永远等不到，如没人回答的提问）时通知用户一次（这一份托管进程里每个挡路
   会话一次）。排队的事件以事件上限为界：排满了就不再读命令的输出，管道写满后命令自己阻塞——不丢、不重叠，内存与
   并行会话都有界。单行超过事件上限的丢弃并记日志。
@@ -107,8 +107,9 @@ class StreamKind:
         "killed when the trigger is disabled, deleted or reconfigured. To restart it (e.g. after editing the script "
         "it runs), disable and re-enable it; status.running_since is null until the new process has started. "
         "Lines arriving within debounce_seconds of "
-        "the first one fire together (one conversation, the lines are the event); while the conversation of the "
-        "previous firing is still busy, events queue and are delivered together once it is done. stderr goes to "
+        "the first one fire together (one conversation, the lines are the event); while the conversation the "
+        "previous firing went to (for an `issue:<N>` route, any agent's conversation on that issue) is still busy, "
+        "events queue and are delivered together once it is done. stderr goes to "
         f"{LOG_DIR}/<name>.stderr.log in the workspace. Queued events are lost on a restart, so the command handles "
         "reconnects, dedup and cursors itself; read skill triggers before writing one."
     )
@@ -418,23 +419,23 @@ class StreamRunner:
                 await anyio.sleep(self._busy_poll_seconds)
 
     async def _wait_previous(self, spec: _Spec, queued: int, notified: list[str]) -> None:
-        """上一次触发的会话还没做完时等着（事件继续排队，排满后命令阻塞）；挡路的会话在等待时通知用户一次。"""
+        """上一次触发的收件方还没做完时等着（事件继续排队，排满后命令阻塞）；挡路的会话在等待时通知用户一次。"""
         while True:
             async with self._db.transaction() as s:
                 trigger = await s.get(Trigger, spec.trigger_id)
                 if trigger is None:
                     return
-                state = await previous_fire_state_in(s, self._activity, trigger)
-                if state == WorkState.IDLE:
+                previous = await previous_fire_state_in(s, self._activity, trigger)
+                if previous.state == WorkState.IDLE:
                     return
-                blocking = trigger.last_session_id
-                if state == WorkState.WAITING and blocking is not None and blocking not in notified:
+                blocking = previous.session_id
+                if previous.state == WorkState.WAITING and blocking is not None and blocking not in notified:
                     notified[:] = [blocking]
-                    self._messaging.send_in(s, self._waiting_notice(trigger, queued))
+                    self._messaging.send_in(s, self._waiting_notice(trigger, queued, blocking))
             await anyio.sleep(self._busy_poll_seconds)
 
     @staticmethod
-    def _waiting_notice(trigger: Trigger, queued: int) -> Notify:
+    def _waiting_notice(trigger: Trigger, queued: int, session_id: str) -> Notify:
         return Notify(
             agent_id=trigger.agent_id,
             title=f"流式触发器 {trigger.name} 的事件在排队",
@@ -442,7 +443,7 @@ class StreamRunner:
                 f"上一次触发的会话在等待（后台任务、委派或你的回答），它结束前新事件都排着，现在有 {queued} 条。"
                 "点开看它在等什么。"
             ),
-            session_id=trigger.last_session_id,
+            session_id=session_id,
             issue_id=None,
         )
 

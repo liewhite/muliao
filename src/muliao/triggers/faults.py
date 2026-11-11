@@ -15,18 +15,18 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Sequence
 from enum import StrEnum
+from typing import assert_never
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.errors import DomainError
 from muliao.notifications.events import Notify
 from muliao.platform.db import utcnow
 from muliao.platform.messaging import Messaging
 from muliao.platform.tasks import Clock
 from muliao.platform.values import local_time
-from muliao.triggers.router import Sender, routed_in
+from muliao.triggers.router import Routed, Sender, Undeliverable, routed_in
 from muliao.triggers.tables import Trigger
 from muliao.triggers.targets import DEFAULT
 
@@ -129,26 +129,27 @@ class Faults:
     async def alert_in(
         self, s: AsyncSession, trigger: Trigger, *, title: str, letter: str, summary: str
     ) -> None:
-        """告诉触发器所属的 agent（新会话，letter 说明出了什么错、怎么处理）；投不进去时退回给用户推送（title 与 summary）。
-        不先查自己的 agent 是否可用：它已归档或正在删除时 routed_in 报错，靠的就是这个退给用户（如一次性触发器到点时 agent 已归档）。"""
+        """告诉触发器所属的 agent（新会话，letter 说明出了什么错、怎么处理）；投不进去（它已归档或正在删除，如一次性
+        触发器到点时 agent 已归档）时退回给用户推送（title 与 summary）：不论哪种原因，告警都不能静默丢掉。"""
         sender = Sender.of(trigger, f"{trigger.name} {title} · {local_time(self._clock(), self._tz)}")
-        try:
-            routed = await routed_in(s, sender, DEFAULT, letter)
-        except DomainError as e:
-            log.warning(
-                "trigger alert could not reach the agent, notifying the user: %s",
-                e,
-                extra={"trigger": trigger.name},
-            )
-            self._messaging.send_in(
-                s,
-                Notify(
-                    agent_id=None,
-                    title=f"触发器 {trigger.name} {title}",
-                    body=summary[:500],
-                    session_id=None,
-                    issue_id=None,
-                ),
-            )
-            return
-        self._messaging.send_in(s, routed.command)
+        match routed := await routed_in(s, sender, DEFAULT, letter):
+            case Routed(command=command):
+                self._messaging.send_in(s, command)
+            case Undeliverable(detail=detail):
+                log.warning(
+                    "trigger alert could not reach the agent, notifying the user: %s",
+                    detail,
+                    extra={"trigger": trigger.name, "problem": routed.problem},
+                )
+                self._messaging.send_in(
+                    s,
+                    Notify(
+                        agent_id=None,
+                        title=f"触发器 {trigger.name} {title}",
+                        body=summary[:500],
+                        session_id=None,
+                        issue_id=None,
+                    ),
+                )
+            case other:
+                assert_never(other)

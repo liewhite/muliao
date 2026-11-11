@@ -10,7 +10,6 @@ from muliao.issues.api import IssueStatus
 from muliao.sessions.api import NewChat, Origin, UserMessage
 from muliao.sessions.tables import Session
 from muliao.triggers.api import Precheck
-from muliao.triggers.service import TriggerAgentArchived
 from tests.conftest import login
 from tests.test_flow import deliver, drain
 from tests.test_precheck import precheck_error
@@ -115,10 +114,7 @@ async def test_mail_validated_before_archiving_is_dropped_on_delivery(container,
         name="h", agent_id=alpha.id, kind="webhook", prompt="p", config={}
     )
     # 触发记下了、投信的定向命令还在排队（只校验了来信，会话还没建，agent 不忙）
-    async with container.db.transaction() as s:
-        fired = await container.triggers._deliver_in(  # noqa: SLF001
-            s, await s.get(type(trigger), trigger.id), None, None, False
-        )
+    fired = await container.triggers.fire(trigger.id)
     assert fired is not None
     await container.agent_lifecycle.set_archived(alpha.id, True)
     await deliver(container)
@@ -141,7 +137,7 @@ async def test_triggers_of_an_archived_agent_neither_run_their_precheck_nor_fire
     )
     await container.agent_lifecycle.set_archived(alpha.id, True)
 
-    with pytest.raises(TriggerAgentArchived):
+    with pytest.raises(AgentArchived):
         await container.triggers.fire(trigger.id)
     # 激活机制：只跳过，不停用、不记失败
     await container.triggers.fire_activated(trigger.id)
@@ -167,7 +163,7 @@ async def test_issues_cannot_go_to_an_archived_agent_and_its_old_ones_stay_quiet
     with pytest.raises(AgentArchived):
         await container.issues.create(USER, owner=beta.id, title="t2", description="")
 
-    # 已指派给它的 issue：它归档后，用户的改动与评论照常记下，只是不投递
+    # 已指派给它的 issue：它归档后，用户的改动与评论照常记下，只是不投递；没投出去要让用户知道（推送，点开是 issue）
     await container.agent_lifecycle.set_archived(alpha.id, True)
     await container.issues.update(USER, issue.id, status=PROGRESS)
     await container.issues.comment(USER, issue.id, "still there?")
@@ -176,6 +172,8 @@ async def test_issues_cannot_go_to_an_archived_agent_and_its_old_ones_stay_quiet
         assert (await s.scalars(select(Session).where(Session.origin == Origin.ISSUE))).all() == []
     activities = (await container.issues.get(issue.id)).activities
     assert any(a.body == "still there?" for a in activities)
+    notices = await container.notifications.list(10)
+    assert notices and all(n.issue_id == issue.id and "已归档" in n.title for n in notices)
 
 
 async def test_archive_over_http_marks_the_agent_and_conversations_get_409(client):

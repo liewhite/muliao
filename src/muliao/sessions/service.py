@@ -5,10 +5,10 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import assert_never
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agents.api import AgentArchived
 from muliao.errors import NotFound
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
@@ -23,13 +23,15 @@ from muliao.sessions.events import Receive, SessionRead, StopThread
 from muliao.sessions.halt import Halted, StopSession
 from muliao.sessions.history import compactions_in, context_of, transcript_rows_in
 from muliao.sessions.inbound import (
+    Checked,
     Received,
+    Refused,
     UserMessage,
+    check_in,
     inbound_of,
     receive,
     receive_into,
     receive_lane_of,
-    target_in,
 )
 from muliao.sessions.live import LiveSegment, LiveSegments, RunItemEvent
 from muliao.sessions.mailbox import open_asks_in, visible_in
@@ -252,20 +254,23 @@ class SessionService:
         inbound = inbound_of(command)
 
         async def commit(s: AsyncSession) -> None:
-            try:
-                target = await target_in(s, inbound)
-            except (NotFound, AgentArchived) as e:
-                # 发送方校验之后会话或 agent 被删除、agent 被归档：契约内的变化，这封信不再有收件人
-                log.info(
-                    "inbound mail dropped: its session or agent is gone or archived",
-                    extra={
-                        "message_id": delivery.message_id,
-                        "origin": command.mail.origin,
-                        "reason": str(e),
-                    },
-                )
-                return
-            await receive_into(s, self._queue, inbound, *target)
+            match checked := await check_in(s, inbound):
+                case Checked():
+                    await receive_into(s, self._queue, inbound, checked)
+                case Refused(reason=reason, detail=detail):
+                    # 发送方校验之后会话或 agent 被删除、agent 被归档：契约内的变化，这封信不再有收件人（续写的会话
+                    # 不是它开的这一点不会变，发送方校验时就已拒绝；哪种原因都一样丢弃，记下原因）
+                    log.info(
+                        "inbound mail dropped: %s",
+                        reason,
+                        extra={
+                            "message_id": delivery.message_id,
+                            "origin": command.mail.origin,
+                            "reason": detail,
+                        },
+                    )
+                case other:
+                    assert_never(other)
 
         return commit
 

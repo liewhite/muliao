@@ -97,15 +97,13 @@ async def current_in(s: AsyncSession, trigger_id: int, checked: dict[str, Any]) 
     return trigger
 
 
-def passed(trigger: Trigger, precheck: Precheck, output: str, max_bytes: int, now: datetime) -> Decision:
-    """检查正常结束（current_in 取到的触发器）：判定这次触发不触发（decide），记下检查时间、清掉检查的出错，changed
-    检查存下这次的输出作基线。判定本身失败（差异过大）时抛 PrecheckFailed、不改状态，由调用方在另一个事务里记失败。"""
-    decision = decide(precheck, output, trigger.precheck_output, max_bytes)
+def passed(trigger: Trigger, precheck: Precheck, output: str, now: datetime) -> None:
+    """检查正常结束、判定也成功（decide 没报错）且这次要认账（current_in 取到的触发器；触发了却整次投不进的不认账）：
+    记下检查时间、清掉检查的出错，changed 检查存下这次的输出作基线。"""
     trigger.last_checked_at = now
     recovered(trigger, FaultSource.PRECHECK)
     if precheck.fire_when == "changed":
         trigger.precheck_output = output
-    return decision
 
 
 def failed(trigger: Trigger, now: datetime) -> None:

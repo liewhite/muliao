@@ -1,6 +1,7 @@
 """会话忙不忙：别的领域与删除规则问的两个不同问题（docs/architecture.md 第 7 节）。
 
-- 工作状态（SessionActivity.work_state_in：running / waiting / idle，唯一规则）：会话列表、issue 看板、触发器避免重叠触发都看它；
+- 工作状态（SessionActivity.work_state_in：running / waiting / idle，唯一规则）：会话列表、issue 看板都看它；触发器避免重叠触发
+  问投递时拿到的句柄（recipient_in，归属表第 7 行）；
 - 删除会不会打断工作（blocking_deletion_in 及按 agent 的版本）：删除会话、删除 agent 的检查。
 
 看哪些 lane、哪些占用是会话领域的实现细节：别的领域经 SessionActivity 问，不拿任务队列。
@@ -9,11 +10,13 @@
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import assert_never
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.platform.tasks import TaskQueue
-from muliao.sessions.directory import keyed_among, of_agent_in
+from muliao.sessions.directory import keyed_among, keyed_rows_among, of_agent_in
+from muliao.sessions.events import Recipient, ToKeyed, ToSender, ToSession
 from muliao.sessions.holds import active_among, with_active_among
 from muliao.sessions.info import keyed_sessions_among
 from muliao.sessions.lanes import keyed_receive_lane, receive_lane, session_lane
@@ -95,6 +98,18 @@ async def sessions_blocking_agent_deletion_in(s: AsyncSession, queue: TaskQueue,
     return await blocking_deletion_in(s, queue, {x.id: x for x in await of_agent_in(s, agent_id)})
 
 
+@dataclass(frozen=True)
+class RecipientState:
+    """一个收件方（events.Recipient）现在的工作状态，和它对应的会话：一个会话的、按 key 定位的是它现在的那个会话（还没建出来、
+    已删除为 None）；一个发送方全部会话的，是不空闲的那个（先取 running），全都空闲为 None。防重叠只看 state；session_id 给通知与界面指到会话。
+
+    一个发送方全部会话的算不上「投给还没建出来的会话、还在路上的来信」：不知道投给哪个 agent，按 key 的 lane 无从问起；那只是
+    投递前的毫秒级窗口。"""
+
+    state: WorkState
+    session_id: str | None
+
+
 class SessionActivity:
     """别的领域问「会话忙不忙」的查询（只读，在调用方的事务里）：看哪些 lane、哪些占用是会话领域的实现细节，不交给
     调用方。两个问题不同：工作状态（会话列表、issue 看板、触发器避免重叠触发），删除会不会打断工作（删除 agent 的
@@ -105,6 +120,28 @@ class SessionActivity:
 
     async def work_state_in(self, s: AsyncSession, session_id: str) -> WorkState:
         return (await work_states_in(s, self._queue, [session_id]))[session_id]
+
+    async def recipient_in(self, s: AsyncSession, recipient: Recipient) -> RecipientState:
+        """投递时拿到的句柄（inbound.Accepted.recipient）现在忙不忙，以及它对应的会话（见 RecipientState）。"""
+        match recipient:
+            case ToSession(session_id=session_id):
+                state = await self.work_state_in(s, session_id)
+                exists = await s.get(Session, session_id) is not None
+                return RecipientState(state, session_id if exists else None)
+            case ToKeyed(origin=origin, origin_ref=ref, agent_id=agent_id):
+                key = (ref, agent_id)
+                state = (await self.keyed_work_states_in(s, origin, [key]))[key]
+                session = (await keyed_rows_among(s, origin, [ref], agent_id)).get(key)
+                return RecipientState(state or WorkState.IDLE, None if session is None else session.id)
+            case ToSender(origin=origin, origin_ref=ref):
+                ids = [x.id for x in (await keyed_rows_among(s, origin, [ref])).values()]
+                states = await work_states_in(s, self._queue, ids)
+                for wanted in (WorkState.RUNNING, WorkState.WAITING):
+                    if busy := [x for x in ids if states[x] == wanted]:
+                        return RecipientState(wanted, busy[0])
+                return RecipientState(WorkState.IDLE, None)
+            case other:
+                assert_never(other)
 
     async def keyed_work_states_in(
         self, s: AsyncSession, origin: Origin, keys: Collection[tuple[str, str]]

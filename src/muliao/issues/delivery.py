@@ -4,11 +4,12 @@ Messaging 马上执行）。信投进这个 agent 在这个 issue 上唯一的�
 
 import logging
 from collections.abc import Sequence
+from typing import assert_never
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agents.api import AgentArchived, agent_names_in
+from muliao.agents.api import agent_names_in
 from muliao.issues import conversation
 from muliao.issues.graph import links_in, snapshot
 from muliao.issues.render import delivery_message, issue_view
@@ -16,7 +17,7 @@ from muliao.issues.rules import agent_actor, from_outside, handed_to_user, recip
 from muliao.issues.tables import Issue, IssueActivity
 from muliao.notifications.events import Notify
 from muliao.platform.messaging import Messaging
-from muliao.sessions.api import receive_command_in
+from muliao.sessions.api import Accepted, Refusal, Refused, receive_command_in
 
 log = logging.getLogger(__name__)
 
@@ -61,20 +62,39 @@ class IssueDelivery:
             )
         if to is None:
             return
+        names = await agent_names_in(s)
         # 信里只有摘要和这次的动态：只渲染 happened，不读整条时间线
-        letter = issue_view(issue, happened, links, await agent_names_in(s), self._tz)
+        letter = issue_view(issue, happened, links, names, self._tz)
         inbound = conversation.mail(issue.id, to, f"#{issue.id} {issue.title}", delivery_message(letter))
-        try:
-            command = await receive_command_in(s, inbound)
-        except AgentArchived:
-            # 已有 issue 的指派人或 owner 后来被归档：动态照常记进时间线，不投递（否则用户在这类 issue 上的评论、改动
-            # 都会报错）；取消归档后由 agent 自己 issue_show 看
-            log.info(
-                "issue activity not delivered: agent archived", extra={"issue_id": issue.id, "agent": to}
-            )
-            return
-        self._messaging.send_in(s, command)
-        log.info("issue activity delivered", extra={"issue_id": issue.id, "agent": to, "actor": actor})
+        match result := await receive_command_in(s, inbound):
+            case Accepted(command=command):
+                self._messaging.send_in(s, command)
+                log.info(
+                    "issue activity delivered", extra={"issue_id": issue.id, "agent": to, "actor": actor}
+                )
+            case Refused(reason=Refusal.ARCHIVED):
+                # 已有 issue 的指派人或 owner 后来被归档：动态照常记进时间线（不让用户在这类 issue 上的评论、改动报错），
+                # 不投递，但要让用户知道：只有他能取消归档或改指派，否则 issue 一直停在那里没人接
+                self._messaging.send_in(
+                    s,
+                    Notify(
+                        agent_id=to,
+                        title=f"#{issue.id} 的动态没交给 {names[to]}：它已归档",
+                        body="取消归档后它用 issue_show 能看到这些动态；也可以把 issue 改指派给别的 agent。",
+                        session_id=None,
+                        issue_id=issue.id,
+                    ),
+                )
+                log.info("issue activity not delivered: %s", result.detail, extra={"issue_id": issue.id})
+            case Refused(reason=Refusal.GONE):
+                # agent 正在删除：删除流程会清理它在 issue 上的指派与 owner（on_agent_deleting），不投
+                log.info("issue activity not delivered: %s", result.detail, extra={"issue_id": issue.id})
+            case Refused(reason=Refusal.NOT_YOURS):
+                raise RuntimeError(
+                    f"issue #{issue.id}: mail to the agent's own issue session was refused as not ours: {result.detail}"
+                )
+            case Refused(reason=other):
+                assert_never(other)
 
 
 async def _from_its_session_in(

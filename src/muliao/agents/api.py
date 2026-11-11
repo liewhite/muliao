@@ -2,7 +2,7 @@
 资源三个子域（docs/architecture.md 2.1）；AI 资源都是资源目录里的文件（agents.assets），AssetSource 给出当前快照。
 
 - 查询：AgentService 的 get / get_active / find_by_name / list，事务内的 agent_in / active_agent_in / runnable_agent_in（归档的报
-  AgentArchived），返回 AgentInfo（身份）；
+  AgentArchived），返回 AgentInfo（身份）；要按情况分别处理、不想接异常的投递方用 availability_in（Availability）；
   配置（描述、模型、思考档位、分组）只在快照：AssetSource.snapshot().loaded_agent 给出 AgentDir，界面与 get_agent 用
   AgentService.view / find_view / list_views（AgentView：身份 + 配置 + 分发规则）；
   名称映射 AgentService.names / 事务内的 agent_names_in（AgentNames，已删除的 agent 也有展示名）；
@@ -13,7 +13,7 @@
 """
 
 from muliao.agents.access import Reach, Source, WriteScope
-from muliao.agents.active import AgentArchived, AgentNames, agent_names_in
+from muliao.agents.active import AgentArchived, AgentNames, Availability, agent_names_in, availability_in
 from muliao.agents.agent_file import Thinking
 from muliao.agents.asset_files import SKILL as ASSETS_SKILL
 from muliao.agents.asset_files import AssetRejected
@@ -48,6 +48,8 @@ __all__ = [
     "WriteScope",
     "UsedAsset",
     "AgentArchived",
+    "Availability",
+    "availability_in",
     "AgentLifecycle",
     "McpConfig",
     "McpRegistry",

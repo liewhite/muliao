@@ -156,7 +156,7 @@ async def test_continued_event_still_splits_route_lines(client, container, make_
 async def test_returned_session_is_the_first_one_opened_even_when_the_first_part_goes_to_an_issue(
     client, container, make_agent
 ):
-    """返回的 session_id 与触发器的 last_session_id 是同一个（Fired.session_id）：跳过投进 issue 的那段；带它能续写。"""
+    """返回的 session_id 与触发器的 last_session_id 是同一个（Fired.session_id 那次投递的收件方）：跳过投进 issue 的那段；带它能续写。"""
     alpha = (await make_agent("alpha")).id
     await login(client)
     _, token = await _create(client, alpha)
@@ -183,13 +183,14 @@ async def test_returned_session_is_the_first_one_opened_even_when_the_first_part
         "<event>\nrecovered\n</event>"
     )
 
-    # 整次只投进了 issue：没有会话可回，触发器记的上一次会话不变
+    # 整次只投进了 issue：没有会话可回；上一次的收件方是这个 issue 上的会话，都空闲时界面上没有会话可指
     only_issue = await client.post(
         "/api/hooks/github", content=f"@route issue:{issue.id}\nfixed", headers=_bearer(token)
     )
     assert only_issue.status_code == 202 and only_issue.json() == {"fired": True, "session_id": None}
+    await drain(container)
     [listed] = (await client.get("/api/triggers")).json()
-    assert listed["last_session_id"] == session.session.id
+    assert listed["last_session_id"] is None
 
 
 async def test_event_cannot_write_into_sessions_it_did_not_start(client, container, make_agent):

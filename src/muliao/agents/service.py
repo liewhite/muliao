@@ -25,6 +25,7 @@ from muliao.agents.active import (
     agent_names_in,
     listed_in,
     named_row_in,
+    named_row_or_none_in,
     runnable_row_in,
 )
 from muliao.agents.agent_file import AGENT_FILE, CONFIG_FIELDS, AgentFile, Thinking
@@ -147,9 +148,11 @@ async def runnable_agent_in(s: AsyncSession, agent_id: str) -> AgentInfo:
     return info_of(await runnable_row_in(s, agent_id))
 
 
-async def named_agent_in(s: AsyncSession, name: str) -> AgentInfo:
-    """按名称找还可用的 agent（模型与脚本按名称指代 agent，不接触 id；名称唯一）。没有时 NotFound，列出可用的名称。"""
-    return info_of(await named_row_in(s, name))
+async def named_agent_in(s: AsyncSession, name: str) -> AgentInfo | None:
+    """按名称找还可用的 agent（模型与脚本按名称指代 agent，不接触 id；名称唯一），没有时 None：调用方自己决定怎么反应
+    （触发器把它当成写错的投递地址）。要当场报错的用 AgentService.find_by_name。"""
+    agent = await named_row_or_none_in(s, name)
+    return None if agent is None else info_of(agent)
 
 
 async def agent_in(s: AsyncSession, agent_id: str) -> AgentInfo:
@@ -384,7 +387,7 @@ class AgentService:
     async def find_by_name(self, name: str) -> AgentInfo:
         """模型按名称指代 agent（不接触 id）：在工具层把名称解析为 agent。名称唯一。"""
         async with self._db.transaction() as s:
-            return await named_agent_in(s, name)
+            return info_of(await named_row_in(s, name))
 
     async def find_view(self, name: str) -> AgentView:
         """按名称找到的 agent 加上它的配置与分发规则（get_agent 工具）。"""

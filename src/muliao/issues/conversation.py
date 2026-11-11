@@ -12,6 +12,7 @@ from muliao.sessions.api import (
     SessionActivity,
     SessionInfo,
     SessionKey,
+    ToSender,
     WorkState,
     keyed_session_in,
     keyed_sessions_among,
@@ -38,6 +39,12 @@ def mail(issue_id: int, agent_id: str, title: str, content: str) -> SenderMail:
         content=content,
         session=SessionKey(agent_id=agent_id, title=title),
     )
+
+
+def recipient(issue_id: int) -> ToSender:
+    """投进这个 issue 的事件之后问忙不忙的句柄（触发器防重叠用）：投给哪个 agent 由 issue 的规则在处理事件时才定，所以是
+    这个 issue 上全部的 agent 会话：有一个不空闲就算忙。"""
+    return ToSender(origin=Origin.ISSUE, origin_ref=str(issue_id))
 
 
 async def session_in(s: AsyncSession, issue_id: int, agent_id: str) -> SessionInfo | None:

@@ -4,11 +4,12 @@ import pytest
 from sqlalchemy import select
 
 from muliao.agents.api import USER, AgentArchived
-from muliao.errors import InvalidInput
+from muliao.errors import Conflict, InvalidInput
 from muliao.issues.api import ActivityKind, IssueStatus
-from muliao.sessions.api import Origin
+from muliao.sessions.api import Origin, SessionActivity, WorkState
 from muliao.sessions.tables import Mail, Session
 from muliao.triggers.api import FaultSource, route_address
+from muliao.triggers.service import previous_fire_state_in
 from muliao.triggers.targets import parse_address, split_routed
 from tests.test_flow import deliver
 
@@ -57,8 +58,7 @@ def test_addresses_parse(text, to, agent, issue_id):
 
 @pytest.mark.parametrize("text", ["", "agent", "agent:", "issue:x", "slack:C123", "new:beta"])
 def test_bad_addresses_are_rejected(text):
-    with pytest.raises(InvalidInput, match="invalid route"):
-        parse_address(text)
+    assert parse_address(text) is None
 
 
 async def _sessions(container, origin: Origin = Origin.TRIGGER) -> list[Session]:
@@ -74,7 +74,7 @@ async def _mail(container, session_id: str) -> list[str]:
 
 
 async def _route_faults(container, name: str = "feed") -> dict[str, str]:
-    view = container.triggers.view(await container.triggers.get_by_name(name))
+    view = await container.triggers.view(await container.triggers.get_by_name(name))
     return {f.address: f.error for f in view.faults if f.source == FaultSource.ROUTE}
 
 
@@ -115,7 +115,11 @@ async def test_naming_the_triggers_own_agent_is_the_same_target_as_new(container
     assert await _mail(container, session.id) == ["Handle it.\n\n<event>\na\nb\nc\n</event>"]
 
 
-async def test_last_session_is_kept_when_a_firing_only_went_to_an_issue(container, make_agent):
+async def test_a_firing_that_only_went_to_an_issue_is_busy_while_the_issue_conversation_is(
+    container, make_agent
+):
+    """投进 issue 的触发也防重叠（用户 11-11 定，#627）：上一次的收件方是这个 issue 上的会话，它不空闲就算忙；界面上的
+    last_session_id 指到它。"""
     alpha = await make_agent("alpha")
     issue = await container.issues.create(USER, owner=alpha.id, title="t")
     trigger = await _webhook(container, alpha.id)
@@ -123,7 +127,13 @@ async def test_last_session_is_kept_when_a_firing_only_went_to_an_issue(containe
     assert first is not None
 
     await container.triggers.fire(trigger.id, f"@route issue:{issue.id}\ny")
-    assert (await container.triggers.get_by_name("feed")).last_session_id == first.sessions[0]
+    await deliver(container)
+    [issue_session] = await _sessions(container, Origin.ISSUE)
+    feed = await container.triggers.get_by_name("feed")
+    assert (await container.triggers.view(feed)).last_session_id == issue_session.id
+    async with container.db.transaction() as s:
+        previous = await previous_fire_state_in(s, SessionActivity(container.queue), feed)
+    assert previous.state != WorkState.IDLE and previous.session_id == issue_session.id
 
 
 async def test_session_route_continues_the_latest_conversation_of_the_trigger(container, make_agent):
@@ -231,7 +241,6 @@ async def test_a_part_whose_target_refuses_it_is_dropped_but_a_bad_default_targe
     container, make_agent, monkeypatch
 ):
     """地址解析得了、投递时目标不接受：内容里的地址只丢那段；和默认目标合并的段或默认目标本身不接受仍是触发器配置的问题。"""
-    from muliao.errors import Forbidden
     from muliao.triggers import router
     from muliao.triggers.targets import NewTo
 
@@ -240,7 +249,7 @@ async def test_a_part_whose_target_refuses_it_is_dropped_but_a_bad_default_targe
 
     async def refusing(s, sender, target, content):
         if target == NewTo(agent_id=beta.id):
-            raise Forbidden("beta refuses")
+            return router.Undeliverable(router.Problem.NOT_YOURS, "beta refuses")
         return await real(s, sender, target, content)
 
     monkeypatch.setattr(router, "routed_in", refusing)
@@ -273,13 +282,13 @@ async def test_the_default_route_is_checked_when_set_and_again_when_its_target_i
 
     trigger = await container.triggers.update(trigger.id, route=f"issue:{issue.id}")
     await container.issues.delete(issue.id)
-    with pytest.raises(InvalidInput, match="route target not found or gone"):
+    with pytest.raises(InvalidInput, match=f"issue #{issue.id} not found"):
         await container.triggers.fire(trigger.id, "x")
 
     # 内容全被 `@route` 分走、没有一段落到默认目标，默认目标照样校验（#602）：激活时停用并记原因
     await container.triggers.fire_activated(trigger.id, "@route agent:alpha\nfor alpha")
     after = await container.triggers.get_by_name("feed")
-    assert not after.enabled and "route target not found or gone" in (after.disabled_reason or "")
+    assert not after.enabled and f"issue #{issue.id} not found" in (after.disabled_reason or "")
     assert await _sessions(container) == []
 
 
@@ -303,9 +312,11 @@ async def test_a_route_to_an_archived_agent_is_a_bad_target_not_the_trigger_bein
     stored = await _webhook(container, alpha.id, route="agent:beta")
     await container.agent_lifecycle.set_archived(beta.id, True)
 
-    with pytest.raises(AgentArchived, match="beta.*archived"):
+    # 目标归档按原因报 Conflict（HTTP 409），与触发器自己的 agent 归档（AgentArchived）分开
+    with pytest.raises(Conflict, match="beta.*archived") as fired:
         await container.triggers.fire(stored.id, "x")
-    with pytest.raises(InvalidInput, match="invalid route 'session:beta'.*archived"):
+    assert not isinstance(fired.value, AgentArchived)
+    with pytest.raises(Conflict, match="beta.*archived"):
         await container.triggers.update(stored.id, route="session:beta")
 
     await container.triggers.fire_activated(stored.id, "x")
@@ -320,19 +331,19 @@ async def test_a_route_to_an_archived_agent_is_a_bad_target_not_the_trigger_bein
 
 
 async def test_each_target_of_a_firing_is_checked_once(container, make_agent, monkeypatch):
-    """默认目标有内容时只校验一次（#613：以前先单独校验一次、投递时再校验一次，白分配一个会话 id）。"""
+    """每个目标只问一次投不投得进（#613 默认目标；#631 内容里的地址：解析只换名字，不再先单独查 agent 能不能运行）。"""
     from muliao.triggers import router
 
     alpha, _beta = await make_agent("alpha"), await make_agent("beta")
     trigger = await _webhook(container, alpha.id)
     checked = []
-    real = router._routed_in
+    real = router.receive_command_in
 
-    async def counting(s, sender, target, content):
-        checked.append(target)
-        return await real(s, sender, target, content)
+    async def counting(s, mail):
+        checked.append(mail.session.agent_id)
+        return await real(s, mail)
 
-    monkeypatch.setattr(router, "_routed_in", counting)
+    monkeypatch.setattr(router, "receive_command_in", counting)
     await container.triggers.fire(trigger.id, "mine\n@route agent:beta\nfor beta")
     assert len(checked) == 2 and len(set(checked)) == 2
     # 默认目标没有内容时也照样校验一次

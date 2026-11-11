@@ -3,6 +3,7 @@
 import pytest
 
 from muliao.sessions.api import (
+    Accepted,
     NewConversation,
     Origin,
     SenderMail,
@@ -28,7 +29,9 @@ def _keyed(agent_id: str, ref: str, text: str, origin: Origin = Origin.ISSUE) ->
 
 async def _send(container, inbound: SenderMail) -> None:
     async with container.db.transaction() as s:
-        container.messaging.send_in(s, await receive_command_in(s, inbound))
+        accepted = await receive_command_in(s, inbound)
+        assert isinstance(accepted, Accepted)
+        container.messaging.send_in(s, accepted.command)
 
 
 async def _keyed_sessions(container, ref: str):
@@ -75,7 +78,9 @@ async def test_a_keyed_receive_command_round_trips(container, make_agent):
     alpha = (await make_agent()).id
     inbound = _keyed(alpha, "7", "hello")
     async with container.db.transaction() as s:
-        command = await receive_command_in(s, inbound)
+        accepted = await receive_command_in(s, inbound)
+    assert isinstance(accepted, Accepted)
+    command = accepted.command
     # 定向命令存进投递任务再读回来，目标不变
     assert type(command).model_validate_json(command.model_dump_json()) == command
     assert inbound_of(command).session == inbound.session

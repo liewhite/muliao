@@ -342,9 +342,16 @@ async def test_a_domain_and_the_task_table_may_be_written_together(container):
 # 写自己的数据（runnable_agent_in 是双向变化、只用来拒绝的例外，理由见 2.2）；否则（SessionActivity 的两个查询）只能
 # 先查后写。新增一个这样的函数要先确认它只读，再登记到这里。
 READ_ONLY_IN_CALLER_TRANSACTION = {
-    "agents": {"active_agent_in", "agent_in", "agent_names_in", "named_agent_in", "runnable_agent_in"},
+    "agents": {
+        "active_agent_in",
+        "agent_in",
+        "agent_names_in",
+        "availability_in",
+        "named_agent_in",
+        "runnable_agent_in",
+    },
     "files": {"load_metas"},
-    "issues": {"check_issue_in"},
+    "issues": {"issue_exists_in"},
     "sessions": {
         "session_in",
         "receive_command_in",
@@ -352,6 +359,7 @@ READ_ONLY_IN_CALLER_TRANSACTION = {
         "keyed_sessions_among",
         "hold_registered_in",
         "SessionActivity.work_state_in",
+        "SessionActivity.recipient_in",
         "SessionActivity.keyed_work_states_in",
         "SessionActivity.blocks_agent_deletion_in",
     },

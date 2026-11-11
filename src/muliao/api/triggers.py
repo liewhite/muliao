@@ -161,7 +161,7 @@ class FiredOut(BaseModel):
 
 
 async def _out(c: C, t: Trigger) -> TriggerOut:
-    return _out_of(c.triggers.view(t), await c.agents.names())
+    return _out_of(await c.triggers.view(t), await c.agents.names())
 
 
 def _out_of(view: TriggerView, names: AgentNames) -> TriggerOut:
@@ -180,7 +180,7 @@ def _out_of(view: TriggerView, names: AgentNames) -> TriggerOut:
             route=route_address(t, names),
             last_checked_at=t.last_checked_at,
             last_fired_at=t.last_fired_at,
-            last_session_id=t.last_session_id,
+            last_session_id=view.last_session_id,
             disabled_reason=t.disabled_reason,
             faults=view.faults,
             finished_at=t.finished_at,
@@ -203,7 +203,7 @@ async def list_triggers(
     c: C, finished: bool = Query(False, description="列已结束的（跑完的一次性触发器）而不是还会触发的")
 ) -> list[TriggerOut]:
     names = await c.agents.names()
-    return [_out_of(c.triggers.view(t), names) for t in await c.triggers.list(finished=finished)]
+    return [_out_of(view, names) for view in await c.triggers.views(await c.triggers.list(finished=finished))]
 
 
 @router.post("/triggers", status_code=201)

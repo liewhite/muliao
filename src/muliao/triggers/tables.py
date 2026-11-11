@@ -30,7 +30,9 @@ class Trigger(Base):
     state: Mapped[dict[str, Any]] = mapped_column(JSON)
     enabled: Mapped[bool] = mapped_column(default=True)
     last_fired_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
-    last_session_id: Mapped[str | None] = mapped_column(String(36))
+    # 上一次触发的收件方：会话领域给的句柄（sessions.api.Recipient 的 JSON），防重叠时原样交回去问它忙不忙；从没触发过为 None。
+    # 对应的会话不存（会话可能还没建出来、后来被删），要展示时问会话领域（TriggerService.views）
+    last_target: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     # 事件的默认投递目标（triggers.targets.Target 的 JSON）；None 是新开这个 agent 的会话。事件内容里的 `@route` 行可以按段另指目标
     route: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     # 触发前的前置检查（triggers.precheck.Precheck），所有触发方式共用；None 表示每次都交给 agent

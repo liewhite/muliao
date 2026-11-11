@@ -65,6 +65,7 @@ class TriggerDomain:
             precheck,
             messaging,
             faults,
+            activity,
         )
         return cls(
             triggers=triggers,

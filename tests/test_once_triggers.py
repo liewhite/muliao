@@ -61,7 +61,7 @@ async def test_once_fires_at_its_time_and_is_then_finished_with_its_session(cont
     sessions = await container.sessions.list(
         agent_id=None, origins=[Origin.TRIGGER], origin_ref=str(trigger.id), limit=10, offset=0
     )
-    assert [s.session.id for s in sessions] == [finished.last_session_id]
+    assert [s.session.id for s in sessions] == [(await container.triggers.view(finished)).last_session_id]
 
 
 async def test_a_once_trigger_in_the_past_is_refused_at_creation(container, make_agent):
@@ -131,7 +131,7 @@ async def test_a_once_trigger_is_finished_even_when_its_precheck_finds_nothing_t
     await _fire_due(container, trigger.id)
 
     finished = (await container.triggers.list(finished=True))[0]
-    assert finished.finished_at is not None and finished.last_session_id is None
+    assert finished.finished_at is not None and finished.last_target is None
 
 
 async def test_a_once_trigger_whose_precheck_fails_is_finished_with_the_error(container, make_agent):
@@ -147,16 +147,15 @@ async def test_a_once_trigger_whose_precheck_fails_is_finished_with_the_error(co
 
 
 async def test_a_once_trigger_that_cannot_fire_is_finished_with_the_reason(container, make_agent):
-    alpha = (await make_agent()).id
-    trigger = await _once(container, alpha)
-    async with container.db.transaction() as s:
-        (await trigger_in(s, trigger.id)).prompt = "   "  # 模拟绕过校验写入的坏数据
+    alpha, beta = (await make_agent("alpha")).id, (await make_agent("beta")).id
+    trigger = await _once(container, alpha, route="agent:beta")
+    await container.agent_lifecycle.set_archived(beta, True)
 
     await _fire_due(container, trigger.id)
 
     finished = (await container.triggers.list(finished=True))[0]
     assert finished.finished_at is not None and not finished.enabled
-    assert "message must not be empty" in finished.disabled_reason
+    assert "is archived" in finished.disabled_reason
 
 
 async def test_running_a_once_trigger_by_hand_does_not_use_up_its_firing(container, make_agent):
@@ -168,11 +167,17 @@ async def test_running_a_once_trigger_by_hand_does_not_use_up_its_firing(contain
     assert (await container.triggers.get_by_name("remind")).finished_at is None
     assert await _fire_due(container, trigger.id) == 1
     finished = (await container.triggers.list(finished=True))[0]
-    assert finished.finished_at is not None and finished.last_session_id != manual
+    assert (
+        finished.finished_at is not None
+        and (await container.triggers.view(finished)).last_session_id != manual
+    )
     history = await container.sessions.list(
         agent_id=None, origins=[Origin.TRIGGER], origin_ref=str(trigger.id), limit=10, offset=0
     )
-    assert {s.session.id for s in history} == {manual, finished.last_session_id}
+    assert {s.session.id for s in history} == {
+        manual,
+        (await container.triggers.view(finished)).last_session_id,
+    }
 
 
 async def test_the_api_lists_the_finished_ones_separately_with_the_sessions_they_started(
@@ -228,7 +233,10 @@ async def test_the_agent_creates_a_once_trigger_and_later_looks_up_what_came_of_
     assert "run_at" in created[0]
     assert listed == "[]"  # 跑完就不在列表里了
     assert "remind" in finished and "finished_at" in finished
-    assert str((await container.triggers.list(finished=True))[0].last_session_id) in finished
+    assert (
+        str((await container.triggers.views(await container.triggers.list(finished=True)))[0].last_session_id)
+        in finished
+    )
     # 归档的按名称指不了，但错误说清楚是跑完归档了，不是找不到
     assert "has finished" in rerun
     # 按名称删除同样指不到归档的；提示不能自相矛盾地说「可以删除」

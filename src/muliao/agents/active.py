@@ -11,11 +11,12 @@ agent 只会从可用变为正在删除、再变为不存在。为某个 agent �
 """
 
 from dataclasses import dataclass
+from enum import StrEnum
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agents.naming import normalize_agent_name
+from muliao.agents.naming import nfc, normalize_agent_name
 from muliao.agents.tables import Agent
 from muliao.errors import Conflict, NotFound
 
@@ -35,6 +36,24 @@ class AgentArchived(Conflict):
     """agent 已归档：不接受来信、不能委派、不能被指派、它的触发器不触发，取消归档后恢复。"""
 
 
+class Availability(StrEnum):
+    """agent 现在能不能接新工作（不报错的查询，给要按情况分别处理的投递方：sessions.inbound、触发器自己的 agent）。"""
+
+    RUNNABLE = "runnable"
+    # 已归档：取消归档后恢复
+    ARCHIVED = "archived"
+    # 不存在或正在删除
+    GONE = "gone"
+
+
+async def availability_in(s: AsyncSession, agent_id: str) -> Availability:
+    """与 runnable_row_in 同一条规则，按结果返回而不报错。"""
+    agent = await s.scalar(select(Agent).where(Agent.id == agent_id, LIVE))
+    if agent is None:
+        return Availability.GONE
+    return Availability.RUNNABLE if agent.archived_at is None else Availability.ARCHIVED
+
+
 async def runnable_row_in(s: AsyncSession, agent_id: str) -> Agent:
     """能运行的 agent：还可用且没有归档。归档是可以来回切换的状态，由用户或 agent 显式切换且只在 agent 空闲时归档
     （AgentLifecycle.set_archived），所以别的领域在自己的事务里按它拒绝新工作即可；校验之后、投递之前被归档的来信在投递时
@@ -45,10 +64,15 @@ async def runnable_row_in(s: AsyncSession, agent_id: str) -> Agent:
     return agent
 
 
+async def named_row_or_none_in(s: AsyncSession, name: str) -> Agent | None:
+    """按名称找还可用的 agent（名称唯一），没有时 None。只做和存名字时一样的 NFC 与去空白：不合名称规则的名字不会存在，
+    查不到就是 None，不报错。"""
+    return await s.scalar(select(Agent).where(Agent.name == nfc(name).strip(), LIVE))
+
+
 async def named_row_in(s: AsyncSession, name: str) -> Agent:
-    """按名称找还可用的 agent（名称唯一）。没有时 NotFound，列出可用的名称。"""
-    name = normalize_agent_name(name)
-    agent = await s.scalar(select(Agent).where(Agent.name == name, LIVE))
+    """按名称找还可用的 agent（名称唯一）。名称不合规则时 InvalidInput；没有时 NotFound，列出可用的名称。"""
+    agent = await named_row_or_none_in(s, normalize_agent_name(name))
     if agent is None:
         names = [a.name for a in await listed_in(s)]
         raise NotFound(f"no agent named {name!r}; available agents: {names}")

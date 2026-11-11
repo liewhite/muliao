@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 from muliao.platform.messaging import Command, DomainEvent
 from muliao.sessions.origins import RULES, Origin
@@ -143,6 +143,39 @@ class SessionKey(BaseModel):
 
 # 别的领域的来信投到哪个会话：已有会话的 id（在其中续写）、新建的会话、按发送方定位的会话
 type MailTarget = str | Annotated[NewConversation | SessionKey, Field(discriminator="to")]
+
+
+class ToSession(BaseModel):
+    """收件方是这一个会话（续写的、或新建时预先分配了 id 的）。"""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    to: Literal["session"] = "session"
+    session_id: str
+
+
+class ToKeyed(BaseModel):
+    """收件方是按发送方定位的会话（SessionKey）：会话可能还没建出来，按 key 问才算得上还没投递的来信。"""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    to: Literal["keyed"] = "keyed"
+    origin: Origin
+    origin_ref: str
+    agent_id: str
+
+
+class ToSender(BaseModel):
+    """收件方是这个发送方开出的全部按 key 定位的会话（不分 agent）：发送方只知道投给谁由别的领域再定的时候用（触发器投进
+    issue，issue 领域再定投给哪个 agent）。"""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    to: Literal["sender"] = "sender"
+    origin: Origin
+    origin_ref: str
+
+
+# 投递之后能问「忙不忙」的句柄（归属表第 7 行）：形状由会话领域定，发送方原样存下、原样交回 SessionActivity.recipient_in
+type Recipient = Annotated[ToSession | ToKeyed | ToSender, Field(discriminator="to")]
+RECIPIENT: TypeAdapter[Recipient] = TypeAdapter(Recipient)
 
 
 class SenderMail(BaseModel):

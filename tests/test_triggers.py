@@ -7,11 +7,12 @@ import pytest
 
 from muliao.agents.api import AgentPatch, McpTransport, RoleSpec, mcp_config
 from muliao.api.triggers import TriggerCreate, TriggerOut
-from muliao.errors import Conflict, InvalidInput
+from muliao.errors import InvalidInput
 from muliao.sessions.api import Origin, SessionActivity, WorkState
 from muliao.sessions.mailbox import queued_in
 from muliao.sessions.tables import MailKind
 from muliao.triggers.api import ADDRESS_HELP, TriggerKindName
+from muliao.triggers.router import Problem, Undeliverable
 from muliao.triggers.service import previous_fire_state_in, set_state, trigger_in
 from tests.conftest import login, owned, share
 from tests.test_flow import drain, history_of, start
@@ -48,7 +49,7 @@ async def test_schedule_fires_new_session_without_notifying_and_schedules_next(c
     # 定时触发的消息没有人在等回答：处理它的运行结束时不推送
     assert (mail.kind, mail.content, mail.awaited) == (MailKind.MESSAGE, "check slack", False)
     trigger = await triggers.get_by_name("slack")
-    assert trigger.last_session_id == sessions[0].session.id
+    assert (await triggers.view(trigger)).last_session_id == sessions[0].session.id
     assert datetime.fromisoformat(trigger.state["next_run_at"]) > datetime.now().astimezone()
 
 
@@ -84,7 +85,9 @@ async def test_skipped_fires_show_in_status_and_clear_when_it_fires_again(contai
         await _make_due(container, trigger.id)
         await schedules.fire_due()
 
-    skipped = triggers.view(await triggers.get_by_name("slack")).status.model_dump(mode="json")["skipped"]
+    skipped = (await triggers.view(await triggers.get_by_name("slack"))).status.model_dump(mode="json")[
+        "skipped"
+    ]
     assert (skipped["count"], skipped["previous_state"]) == (2, "running")
     assert datetime.fromisoformat(skipped["since"]) <= datetime.now().astimezone()
     await drain(container)
@@ -92,9 +95,9 @@ async def test_skipped_fires_show_in_status_and_clear_when_it_fires_again(contai
 
     await _make_due(container, trigger.id)
     await schedules.fire_due()
-    assert (
-        triggers.view(await triggers.get_by_name("slack")).status.model_dump(mode="json")["skipped"] is None
-    )
+    assert (await triggers.view(await triggers.get_by_name("slack"))).status.model_dump(mode="json")[
+        "skipped"
+    ] is None
     assert len(await container.sessions.list(agent_id=alpha, origins=None, limit=10, offset=0)) == 2
 
 
@@ -113,7 +116,7 @@ async def test_skipping_behind_a_waiting_session_notifies_the_user_once_per_stre
         await _make_due(container, trigger.id)
         await schedules.fire_due()
         await drain(container)
-        session_id = (await triggers.get_by_name("slack")).last_session_id
+        session_id = (await triggers.view(await triggers.get_by_name("slack"))).last_session_id
         async with container.db.transaction() as s:
             await hold_in(s, session_id, holder, awaited=False)
         return session_id
@@ -127,7 +130,9 @@ async def test_skipping_behind_a_waiting_session_notifies_the_user_once_per_stre
     first = await fire_and_wait("job:1")
     await skip_twice()
 
-    skipped = triggers.view(await triggers.get_by_name("slack")).status.model_dump(mode="json")["skipped"]
+    skipped = (await triggers.view(await triggers.get_by_name("slack"))).status.model_dump(mode="json")[
+        "skipped"
+    ]
     assert (skipped["count"], skipped["previous_state"]) == (2, "waiting")
     assert set(skipped) == {"count", "since", "previous_state"}
     notes = await container.notifications.list(10)
@@ -156,7 +161,7 @@ async def test_a_streak_that_turns_from_running_to_waiting_notifies_then(contain
     await schedules.fire_due()  # 第一次的 turn 仍是 pending：在运行，不通知
     await drain(container)
     assert await container.notifications.list(10) == []
-    session_id = (await triggers.get_by_name("slack")).last_session_id
+    session_id = (await triggers.view(await triggers.get_by_name("slack"))).last_session_id
     async with container.db.transaction() as s:
         await hold_in(s, session_id, "job:1", awaited=False)
 
@@ -165,7 +170,9 @@ async def test_a_streak_that_turns_from_running_to_waiting_notifies_then(contain
         await schedules.fire_due()
     await drain(container)
 
-    skipped = triggers.view(await triggers.get_by_name("slack")).status.model_dump(mode="json")["skipped"]
+    skipped = (await triggers.view(await triggers.get_by_name("slack"))).status.model_dump(mode="json")[
+        "skipped"
+    ]
     assert (skipped["count"], skipped["previous_state"]) == (3, "waiting")
     assert [n.session_id for n in await container.notifications.list(10)] == [session_id]
 
@@ -188,7 +195,9 @@ async def test_a_new_blocking_session_or_reenabling_starts_a_new_streak(containe
         await _make_due(container, trigger.id)
         await schedules.fire_due()
         await drain(container)
-        return triggers.view(await triggers.get_by_name("slack")).status.model_dump(mode="json")["skipped"]
+        return (await triggers.view(await triggers.get_by_name("slack"))).status.model_dump(mode="json")[
+            "skipped"
+        ]
 
     first = (await triggers.run(trigger.id)).sessions[0]
     await drain(container)
@@ -203,9 +212,9 @@ async def test_a_new_blocking_session_or_reenabling_starts_a_new_streak(containe
 
     await triggers.update(trigger.id, enabled=False)
     await triggers.update(trigger.id, enabled=True)
-    assert (
-        triggers.view(await triggers.get_by_name("slack")).status.model_dump(mode="json")["skipped"] is None
-    )
+    assert (await triggers.view(await triggers.get_by_name("slack"))).status.model_dump(mode="json")[
+        "skipped"
+    ] is None
 
 
 async def test_broken_schedule_trigger_is_disabled_without_blocking_others(container, make_agent):
@@ -220,16 +229,16 @@ async def test_broken_schedule_trigger_is_disabled_without_blocking_others(conta
     for trigger_id in (bad.id, good.id):
         await _make_due(container, trigger_id)
     async with container.db.transaction() as s:
-        (await trigger_in(s, bad.id)).prompt = "   "  # 模拟绕过校验写入的坏数据
+        (await trigger_in(s, bad.id)).config = {}  # 模拟绕过校验写入的坏数据
     changed = triggers.watch()
 
     await schedules.fire_due()
 
     bad, good = await triggers.get_by_name("bad"), await triggers.get_by_name("good")
-    assert not bad.enabled and "message must not be empty" in bad.disabled_reason
+    assert not bad.enabled and bad.disabled_reason.startswith("CorruptState")
     # 停用经 TriggerService，和别的修改一样通知监听者
     assert changed.is_set()
-    assert good.last_session_id is not None
+    assert good.last_target is not None
 
 
 async def test_trigger_deleted_or_paused_after_being_listed_is_skipped(container, make_agent):
@@ -259,7 +268,7 @@ async def test_trigger_deleted_or_paused_after_being_listed_is_skipped(container
         triggers.list = real_list  # type: ignore[method-assign]
 
     paused = await triggers.get_by_name("paused")
-    assert not paused.enabled and paused.disabled_reason is None and paused.last_session_id is None
+    assert not paused.enabled and paused.disabled_reason is None and paused.last_target is None
     assert await container.sessions.list(agent_id=alpha, origins=None, limit=10, offset=0) == []
 
 
@@ -349,7 +358,7 @@ async def test_a_trigger_with_corrupt_stored_data_is_disabled_and_the_scan_goes_
 
     bad, good = await triggers.get_by_name("bad"), await triggers.get_by_name("good")
     assert not bad.enabled and bad.disabled_reason.startswith(f"CorruptState: trigger {bad.id} (bad)")
-    assert good.last_session_id is not None
+    assert good.last_target is not None
 
 
 async def test_a_trigger_corrupted_after_being_listed_is_disabled_when_it_fires(container, make_agent):
@@ -368,7 +377,7 @@ async def test_a_trigger_corrupted_after_being_listed_is_disabled_when_it_fires(
     assert not trigger.enabled and trigger.disabled_reason.startswith(
         f"CorruptState: trigger {trigger.id} (bad)"
     )
-    assert trigger.last_session_id is None
+    assert trigger.last_target is None
 
 
 async def test_an_unexpected_failure_of_one_due_trigger_is_logged_without_disabling_or_stopping_others(
@@ -439,23 +448,23 @@ async def test_a_slow_due_fire_does_not_hold_up_the_next_scan(container, make_ag
     assert fired == [slow.id, quick.id]
 
 
-async def test_an_activated_fire_rejected_with_a_conflict_disables_the_trigger(
+async def test_an_activated_fire_whose_default_target_refuses_it_disables_the_trigger(
     container, make_agent, monkeypatch
 ):
-    """只有触发器自己被停用、删除才算跳过；别的 Conflict / NotFound（如来信被拒绝）同其余领域错误一样停用并记原因。"""
+    """只有触发器自己被停用、删除、归档才算跳过；默认目标投不进（不论哪种原因）停用并记原因。"""
     alpha = (await make_agent()).id
     triggers, _ = _schedule(container)
     trigger = await triggers.create(
         name="t", agent_id=alpha, kind="schedule", prompt="x", config={"cron": "* * * * *"}
     )
 
-    async def rejected(*_args):  # noqa: ANN002, ANN202
-        raise Conflict("letter rejected")
+    async def refused(*_args):  # noqa: ANN002, ANN202
+        return Undeliverable(Problem.NOT_YOURS, "letter rejected")
 
-    monkeypatch.setattr(triggers, "_fire", rejected)
+    monkeypatch.setattr(triggers, "_fire", refused)
     await triggers.fire_activated(trigger.id)
     after = await triggers.get_by_name("t")
-    assert not after.enabled and after.disabled_reason == "Conflict: letter rejected"
+    assert not after.enabled and after.disabled_reason == "route target not_yours: letter rejected"
 
 
 @pytest.mark.parametrize(
@@ -1032,8 +1041,13 @@ async def test_a_fire_not_yet_delivered_counts_as_busy_so_the_schedule_does_not_
     )
     await container.triggers.fire(trigger.id)
     async with container.db.transaction() as s:
-        assert WorkState.IDLE != await previous_fire_state_in(
-            s, SessionActivity(container.queue), await trigger_in(s, trigger.id)
+        assert (
+            WorkState.IDLE
+            != (
+                await previous_fire_state_in(
+                    s, SessionActivity(container.queue), await trigger_in(s, trigger.id)
+                )
+            ).state
         )
 
 
@@ -1050,8 +1064,13 @@ async def test_a_previous_fire_waiting_on_a_background_job_counts_as_busy(contai
 
     async def busy() -> bool:
         async with container.db.transaction() as s:
-            return WorkState.IDLE != await previous_fire_state_in(
-                s, SessionActivity(container.queue), await trigger_in(s, trigger.id)
+            return (
+                WorkState.IDLE
+                != (
+                    await previous_fire_state_in(
+                        s, SessionActivity(container.queue), await trigger_in(s, trigger.id)
+                    )
+                ).state
             )
 
     assert not await busy()

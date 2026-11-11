@@ -15,8 +15,7 @@ from muliao.platform.tooling import TOOL_MAX_RETRIES, Access, RunScope, declared
 from muliao.platform.values import KEEP
 from muliao.triggers.faults import TriggerFault
 from muliao.triggers.precheck import Precheck
-from muliao.triggers.service import TriggerService, route_address
-from muliao.triggers.tables import Trigger
+from muliao.triggers.service import TriggerService, TriggerView, route_address
 from muliao.triggers.targets import ADDRESS_HELP
 
 
@@ -84,8 +83,8 @@ def triggers_toolset(
     """precheck_timeout：前置检查的时限（runtime.precheck_timeout_seconds），写进工具说明，agent 写检查脚本时要知道。"""
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
-    async def info(t: Trigger, names: AgentNames) -> TriggerInfo:
-        view = triggers.view(t)
+    def info(view: TriggerView, names: AgentNames) -> TriggerInfo:
+        t = view.trigger
         return TriggerInfo(
             name=t.name,
             kind=t.kind,
@@ -98,7 +97,7 @@ def triggers_toolset(
             precheck=view.precheck,
             disabled_reason=t.disabled_reason,
             faults=view.faults,
-            last_session_id=t.last_session_id,
+            last_session_id=view.last_session_id,
             finished_at=t.finished_at,
         )
 
@@ -121,7 +120,7 @@ def triggers_toolset(
                 look up what came of a one-off task.
         """
         names = await agents.names()
-        return [await info(t, names) for t in await triggers.list(finished=finished)]
+        return [info(view, names) for view in await triggers.views(await triggers.list(finished=finished))]
 
     @ts.tool(
         description=_CREATE_DESCRIPTION.format(timeout=precheck_timeout, address_help=ADDRESS_HELP),
@@ -162,7 +161,7 @@ def triggers_toolset(
         )
         return (
             f"created {trigger.kind} trigger {trigger.name}; route: {route_address(trigger, await agents.names())}; "
-            f"status: {triggers.view(trigger).status.model_dump_json()}"
+            f"status: {(await triggers.view(trigger)).status.model_dump_json()}"
         )
 
     @ts.tool_plain(metadata=declared(Access.WRITE))
@@ -200,7 +199,7 @@ def triggers_toolset(
         route = route_address(trigger, await agents.names())
         return (
             f"updated trigger {name} ({'enabled' if trigger.enabled else 'paused'}); route: {route}; "
-            f"status: {triggers.view(trigger).status.model_dump_json()}"
+            f"status: {(await triggers.view(trigger)).status.model_dump_json()}"
         )
 
     @ts.tool_plain(metadata=declared(Access.WRITE))

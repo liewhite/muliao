@@ -94,13 +94,16 @@ def test_precheck_state_keeps_a_baseline_and_clears_its_fault_when_it_passes():
     set_precheck(trigger, p)
 
     # 第一次 changed 检查只记基线
-    assert passed(trigger, p, "a", 100, now).baseline and trigger.precheck_output == "a"
+    assert decide(p, "a", trigger.precheck_output, 100).baseline
+    passed(trigger, p, "a", now)
+    assert trigger.precheck_output == "a"
     record(trigger, [TriggerFault(source=FaultSource.PRECHECK, error="boom")])
-    assert passed(trigger, p, "b", 1000, now).event is not None
+    assert decide(p, "b", trigger.precheck_output, 1000).event is not None
+    passed(trigger, p, "b", now)
     assert precheck_error(trigger) is None and trigger.last_checked_at == now
-    # 判定本身失败（差异超出上限）不改状态
+    # 判定本身失败（差异超出上限）：调用方不认账，状态不变
     with pytest.raises(PrecheckFailed):
-        passed(trigger, p, "c" * 200, 100, now)
+        decide(p, "c" * 200, trigger.precheck_output, 100)
     assert trigger.precheck_output == "b"
     # 换检查：从新基线开始
     set_precheck(trigger, Precheck(command="y"))
@@ -116,7 +119,7 @@ async def test_schedule_runs_the_agent_only_when_the_precheck_has_output(contain
     await _tick(container, trigger.id)
     assert await tasks_of(container, RUN_TASK) == []
     checked = await container.triggers.get_by_name("watch")
-    assert checked.last_checked_at is not None and checked.last_session_id is None
+    assert checked.last_checked_at is not None and checked.last_target is None
 
     (workspace / "inbox.txt").write_text("alice: deploy is broken\n")
     await _tick(container, trigger.id)
@@ -185,7 +188,7 @@ async def test_a_failing_precheck_is_handed_to_the_agent_once_per_streak_not_to_
     sessions = await container.sessions.list(agent_id=alpha, origins=[Origin.TRIGGER], limit=10, offset=0)
     assert [x.session.origin_ref for x in sessions] == [str(trigger.id)]
     # 告警会话不算这个触发器的一次触发
-    assert failed.last_session_id is None
+    assert failed.last_target is None
 
     (workspace / "ok").write_text("")
     await _tick(container, trigger.id)
