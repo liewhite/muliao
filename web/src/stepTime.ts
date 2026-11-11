@@ -27,7 +27,8 @@ export function toolSpan(tool: ToolView, live: boolean): Span | null {
   const start = Date.parse(tool.startedAt)
   if (toolStatus(tool, live) === 'running') return { start, spent: 0, runningSince: [start], endUnknown: false }
   if (tool.result === null || tool.finishedAt === null) return { start, spent: 0, runningSince: [], endUnknown: true }
-  return { start, spent: Date.parse(tool.finishedAt) - start, runningSince: [], endUnknown: false }
+  // 保存时间与结果时间偶有倒序（10-20 之前一整轮结束才提交，之后偶有毫秒级），耗时不显示负数
+  return { start, spent: Math.max(0, Date.parse(tool.finishedAt) - start), runningSince: [], endUnknown: false }
 }
 
 /** 一组步骤：从最早开始的工具算起，耗时为各工具耗时之和，与展开后各行相加一致 */
