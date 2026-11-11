@@ -83,7 +83,7 @@ class Container:
     """HTTP 层看到的组合根：各领域的门面（类型都由领域的 api 模块导出）、平台的展示事件流与「任务」页的操作，以及
     服务的生命周期。HTTP 层只经这些调用领域，拿不到领域内部的对象（消费者、队列的排任务与领取、
     总线的发布……）：窄接口（TaskAdmin、EventFeed）是只转发窄方法的包装对象，运行时
-    也拿不到背后的完整对象。tests/test_boundaries 检查字段的声明类型，以及运行时的值恰好是声明的类型。"""
+    也拿不到背后的完整对象。"""
 
     # SSE：进程内的展示事件（只订阅）
     bus: EventFeed
@@ -395,7 +395,7 @@ def assemble(
         files=files,
         usage=usage,
     )
-    # 各领域交给组合根的部件（platform.wiring.Parts，docs/architecture.md 2.4 第 17 行）：下面每种部件遍历一次这个列表。
+    # 各领域交给组合根的部件（platform.wiring.Parts）：下面每种部件遍历一次这个列表。
     # 会话领域的第二段（消费者）要用组好的工具箱，所以最后加入；它的工具集在第一段（SessionPorts）
     domains: list[Parts] = [
         ports,

@@ -184,7 +184,7 @@ def recipient(issue: Snapshot, *, from_outside: bool, from_its_session: str | No
 
 def stalled(issue: Snapshot, assignee_state: WorkState | None) -> bool:
     """该有人做却没人在做：in_progress、不在等上游、指派给 agent，它在这个 issue 上的会话空闲或不存在。会话在等
-    （后台任务、委派、到点唤醒、提问的回答）不算：等到了会接着做。界面与早报共用。"""
+    （后台任务、委派、到点唤醒、提问的回答）不算：等到了会接着做。界面与 issue_list 共用。"""
     return _assignee_recipient(issue) is not None and assignee_state in (None, WorkState.IDLE)
 
 

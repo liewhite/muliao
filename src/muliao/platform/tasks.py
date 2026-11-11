@@ -272,7 +272,7 @@ class TaskQueue:
                     f"task {task_id} is not running, cannot complete it (status={task and task.status})"
                 )
             # 先记为完成再执行 commit（同一个事务）：commit 里查队列时看到的已经是它做完之后的样子，处理器不必把自己
-            # 排除在外（「任务做完没有」只由队列判定，docs/architecture.md 2.4 第 5 行）
+            # 排除在外（「任务做完没有」只由队列判定）
             task.status = TaskStatus.DONE
             task.error = None
             task.finished_at = self._clock()

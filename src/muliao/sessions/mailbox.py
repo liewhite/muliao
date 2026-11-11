@@ -3,7 +3,7 @@
 
 - 投信（post_in）：用户消息、对挂起调用的回答（用户回答提问、被问的 agent 交回结局）、触发器事件、委派来的任务、
   后台任务与 thread 的事件、运行中检查。
-- 一封信件交给了哪次运行记在信上（mail.taken_by，写处只有 give_in 与 consume_in，归属见 docs/architecture.md 2.4 第 3 行）：投递运行时信箱里
+- 一封信件交给了哪次运行记在信上（mail.taken_by，写处只有 give_in 与 consume_in）：投递运行时信箱里
   已有的（wake_in）、运行开头取走的（sessions.consumer）、交给模型的那一步保存时——这时同时记为已处理（consume_in，与
   那一步的消息同一个事务）。运行、结清只查信。
 - 用户停止会话时信箱清空（discard_in）：没交给模型的信件记为被丢弃，留着记录；对仍挂着的提问的回答在此之前
@@ -224,7 +224,7 @@ async def wake_in(s: AsyncSession, queue: TaskQueue, session: Session) -> bool:
 
 
 async def give_in(s: AsyncSession, ids: Sequence[int], run_id: int) -> None:
-    """这些排着的信件交给这次运行（mail.taken_by 的写处之一，另一处是 consume_in，归属见 docs/architecture.md 2.4 第 3 行）：投递它时信箱里已有的
+    """这些排着的信件交给这次运行（mail.taken_by 的写处之一，另一处是 consume_in）：投递它时信箱里已有的
     （wake_in）、它开头取走的（sessions.consumer）。交给模型那一步保存时由 consume_in 同时记下。已经不在排队的信件不动。"""
     if ids:
         await s.execute(

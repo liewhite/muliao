@@ -1,7 +1,7 @@
 """会话忙不忙：别的领域与删除规则问的两个不同问题（docs/architecture.md 第 7 节）。
 
 - 工作状态（SessionActivity.work_state_in：running / waiting / idle，唯一规则）：会话列表、issue 看板都看它；触发器避免重叠触发
-  问投递时拿到的句柄（recipient_in，归属表第 7 行）；
+  问投递时拿到的句柄（recipient_in）；
 - 删除会不会打断工作（blocking_deletion_in 及按 agent 的版本）：删除会话、删除 agent 的检查。
 
 看哪些 lane、哪些占用是会话领域的实现细节：别的领域经 SessionActivity 问，不拿任务队列。

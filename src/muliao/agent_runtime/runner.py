@@ -107,8 +107,7 @@ class _Meter:
 class StepHooks:
     """逐步运行（AgentRuntime.run_steps）时消费者在每一步的两个点上介入（sessions.consumer）。
 
-    运行新增的每条消息恰好交出一次，交出之后归消费者保存（「一次运行新产生了哪些消息」只由 runner 判定，
-    docs/architecture.md 2.4 第 1 行）：每次请求之前交出这时新增的（took）、再交出要发出的这次请求（took_request，第一次
+    运行新增的每条消息恰好交出一次，交出之后归消费者保存（「一次运行新产生了哪些消息」只由 runner 判定）：每次请求之前交出这时新增的（took）、再交出要发出的这次请求（took_request，第一次
     是带着 prompt 的那条）、再回调 before_request，每次回复之后交出这时新增的，驱动以任何方式结束（跑完、停在挂起的
     调用上、失败、被用户停止而取消）时交出其余的（其中可能有 pydantic-ai 补上的工具结果请求，不带 prompt，走 took）。两个
     交出回调都是同步的，与运行记下「交出到哪」之间没有挂起点，被取消时不会有消息两边都不认。交进来的历史（run_steps 的 history）已经

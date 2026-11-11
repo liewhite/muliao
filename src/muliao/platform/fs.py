@@ -1,7 +1,7 @@
 """文件系统的小工具（各领域共用）：路径的身份（real，判断两个路径是不是同一个、在不在某目录下只经它），文本读写
 （read_text / write_text / write_atomic），目录内的相对路径解析。
 
-路径的身份只在这里算（tests/test_boundaries 禁止别处 `.resolve()` / `os.path.realpath`）：macOS 的 APFS 默认不分
+路径的身份只在这里算（tests/test_boundaries.py 禁止别处 `.resolve()` / `os.path.realpath`）：macOS 的 APFS 默认不分
 大小写、不分 Unicode 正规化形式，`~/.MULIAO/CONFIG.toml` 与 `~/.muliao/config.toml` 是同一个文件，而 realpath
 不纠正大小写，按字符串比就会绕过读写边界与审批。"""
 

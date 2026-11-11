@@ -95,7 +95,7 @@ class Notifications:
         return commit
 
     async def on_run_ended(self, event: RunEnded, _delivery: Delivery) -> Commit:
-        """推送一次运行的回答（推送规则只在这里，归属表第 9 行）。"""
+        """推送一次运行的回答（推送规则只在这里）。"""
         if not _worth_pushing(event):
             return no_commit
 

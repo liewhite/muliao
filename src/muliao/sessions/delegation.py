@@ -1,6 +1,6 @@
 """委派：会话交给另一个 agent、要交回结局的工作（ask_agent，delegate_task(report_back)）。整个生命周期在会话领域里，
-由两个对称的事务完成（docs/architecture.md 第 8 节）。委派的唯一主体是发出它的调用记下的那一行（sessions.thread_calls，归属见
-docs/architecture.md 2.4 第 4 行），别处只引用它的 id：
+由两个对称的事务完成（docs/architecture.md 第 8 节）。委派的唯一主体是发出它的调用记下的那一行（sessions.thread_calls），
+别处只引用它的 id：
 
 - 发出（Delegations.dispatch）：一个事务里记下委派行（按发起会话与工具调用 id 幂等），在发起方登记引用它的占用（带 call_id
   与「用户是否在等发起方」），往 thread 投一封引用它的信件。

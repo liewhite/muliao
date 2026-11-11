@@ -243,7 +243,7 @@ async def _resolve_answers(
 
 
 class Refusal(StrEnum):
-    """一封来信投不进的原因（归属表第 6 行：只有收信入口判断，发送方按原因决定自己怎么反应）。"""
+    """一封来信投不进的原因（只有收信入口判断，发送方按原因决定自己怎么反应）。"""
 
     # 目标 agent 已归档：取消归档后又能投
     ARCHIVED = "archived"
@@ -358,7 +358,7 @@ class Accepted:
 
 
 async def receive_command_in(s: AsyncSession, mail: SenderMail) -> Accepted | Refused:
-    """别的领域投信的唯一入口（只读，归属表第 6、7 行）：在发送方的事务里校验这封来信，投不进的返回 Refused（原因由这里判断，
+    """别的领域投信的唯一入口（只读）：在发送方的事务里校验这封来信，投不进的返回 Refused（原因由这里判断，
     发送方只决定自己怎么反应），投得进的返回定向命令 Receive 与句柄。发送方在同一事务里 send_in 命令，由会话领域在自己的
     事务里投进信箱——发送方记下的状态与投信一起提交，投递恰好一次；提交后由 Messaging 马上执行投递。校验读的都是只会
     单向变化或不变的事实（会话与 agent 是否还在、会话的发起方）与由用户显式切换的归档，投递时再查一次

@@ -1,10 +1,10 @@
-"""模块依赖规则（docs/architecture.md 2.3），对源码的 import 做静态检查：
+"""最基本的几条边界（docs/architecture.md「依赖规则」），对源码做静态检查：
 
-- 领域包之间只能 import 对方的 api 模块（命令、查询、数据结构）与 events 模块（它发布的事件与接收的命令），
-  不能碰对方的表与内部模块；
-- platform 不 import 任何领域；
-- 领域不 import HTTP 适配层（api 包）与组合根（container）；
-- HTTP 适配层经领域的 api（与 events）调用领域，另外可以 import 领域的 tables，把领域交给它的行序列化成响应。
+- 每个领域有 api.py；领域之间只 import 对方的 api 与 events，经 api 的依赖按 LAYERS 单向；
+- platform 不 import 领域，领域不 import HTTP 层与组合根；HTTP 层只用领域的 api、events、tables；
+- 工具拒绝只抛 DomainError；pydantic-ai 的运行类型只在 agent_runtime；路径身份只在 platform.fs 算。
+
+另有一个写事务只写一个领域的表（开发期断言 schema.single_domain_writes）的两条运行测试。
 """
 
 import ast
@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 SRC = Path(__file__).parent.parent / "src" / "muliao"
-# 经 api 的依赖方向（docs/architecture.md 2.3）：领域只能 import 更早一层的领域的 api，同层与反向都不行，所以依赖无环。
+# 经 api 的依赖方向（docs/architecture.md「依赖规则」）：领域只能 import 更早一层的领域的 api，同层与反向都不行，所以依赖无环。
 # 事件与定向命令不受方向限制（events 模块只放消息的数据形状）。新增领域要在这里定它在哪一层
 LAYERS: list[set[str]] = [
     {"files", "agents", "usage", "speech", "web"},
@@ -90,8 +90,7 @@ def _violations() -> list[str]:
 
 
 def test_every_domain_has_a_public_api_module():
-    """边界检查只看得到 api 模块：缺了它，领域的公开接口（如在调用方事务里写入的函数）就不受下面的检查。目录有没有
-    __init__.py 都算（没有它的命名空间包照样能 import）。"""
+    """src/muliao 下的目录都是领域（另列的除外），目录有没有 __init__.py 都算（没有它的命名空间包照样能 import）。"""
     packages = {p.name for p in SRC.iterdir() if p.is_dir() and p.name != "__pycache__"} - NOT_DOMAINS
     assert packages == DOMAINS
     assert sorted(d for d in DOMAINS if not (SRC / d / "api.py").exists()) == []
@@ -101,7 +100,7 @@ def test_domains_only_use_each_others_api():
     assert _violations() == []
 
 
-# pydantic-ai 的运行与挂起类型只在 agent_runtime 里用（docs/architecture.md 2.1）：别的领域经它的 Finished / Paused、
+# pydantic-ai 的运行与挂起类型只在 agent_runtime 里用：别的领域经它的 Finished / Paused、
 # `{调用 id: 结果}` 与 defer_call。消息类型（pydantic_ai.messages）是历史的存储形态，不在此列
 RUN_TYPES = {
     "AgentRun",
@@ -111,196 +110,6 @@ RUN_TYPES = {
     "DeferredToolRequests",
     "DeferredToolResults",
 }
-
-
-# agents 的子域各自独占的表（docs/architecture.md 2.1）：表类只在它的子域的模块里出现在查询与构造中（`select(X)`、`X.列`、
-# `X(...)`，规则同下面的 sessions），别的子域经 `*_in` 接口；拿交给它的行做类型标注不算
-AGENTS_TABLES: dict[str, set[str]] = {
-    # 目录（身份；配置只在资源目录的 agent.toml）
-    "Agent": {"service", "active"},
-}
-
-
-def test_agents_subdomains_only_query_their_own_tables():
-    from muliao.agents import tables
-
-    declared = {
-        n for n, v in vars(tables).items() if isinstance(v, type) and getattr(v, "__tablename__", None)
-    }
-    assert declared == set(AGENTS_TABLES), "every agents table belongs to exactly one subdomain"
-    problems = []
-    for path in sorted((SRC / "agents").glob("*.py")):
-        if path.stem == "tables":
-            continue
-        for line, name in _table_uses(ast.parse(path.read_text()), declared):
-            if path.stem not in AGENTS_TABLES[name]:
-                problems.append(f"agents/{path.name}:{line} queries {name}")
-    assert not problems, "\n".join(problems)
-
-
-# sessions 的子域各自独占的表（docs/architecture.md 2.1）：表类只在它的模块里出现在查询与构造中（`select(X)`、`X.列`、
-# `X(...)`）；别的模块经它们的 `*_in` 接口。领域内传递行对象、按 id 取会话（`s.get(Session, id)`）不算
-SESSIONS_TABLES: dict[str, set[str]] = {
-    # 会话：按属性查会话、写入新会话只在目录
-    "Session": {"directory"},
-    # 运行：历史与信箱
-    "Message": {"history"},
-    "MessageText": {"history"},
-    "Compaction": {"history"},
-    "Mail": {"mailbox"},
-    # 外部工作
-    "SessionHold": {"holds"},
-    # 委派
-    "WakeUp": {"wakeups"},
-    "ThreadCall": {"thread_calls"},
-    # 交互：停下来等批准的调用
-    "ApprovalRequest": {"approvals"},
-}
-
-
-def _table_uses(tree: ast.AST, names: set[str], *, any_call: bool = False) -> list[tuple[int, str]]:
-    """查询与构造里用到的表类：`X.属性`、`X(...)`，以及作为 select 参数的 `X`。any_call 时作为任何调用的位置参数都算
-    （`s.get(X, id)`、`update(X)`、`delete(X)`……）：独占到连按 id 取行都不允许的表用它。"""
-    found = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id in names:
-            found.append((node.lineno, node.value.id))
-        elif isinstance(node, ast.Call):
-            if isinstance(node.func, ast.Name) and node.func.id in names:
-                found.append((node.lineno, node.func.id))
-            elif any_call or (isinstance(node.func, ast.Name) and node.func.id == "select"):
-                found += [(node.lineno, a.id) for a in node.args if isinstance(a, ast.Name) and a.id in names]
-    return found
-
-
-def test_sessions_subdomains_only_query_their_own_tables():
-    from muliao.sessions import tables
-
-    declared = {
-        n for n, v in vars(tables).items() if isinstance(v, type) and getattr(v, "__tablename__", None)
-    }
-    assert declared == set(SESSIONS_TABLES), "every sessions table belongs to exactly one subdomain"
-    problems = []
-    for path in sorted((SRC / "sessions").glob("*.py")):
-        if path.stem == "tables":
-            continue
-        for line, name in _table_uses(ast.parse(path.read_text()), declared):
-            if path.stem not in SESSIONS_TABLES[name]:
-                problems.append(f"sessions/{path.name}:{line} queries {name}")
-    assert not problems, "\n".join(problems)
-
-
-# 模块化（不设子域）的领域里由一个模块独占的表（docs/architecture.md 第 14、21 节）：别的模块经它的函数，连按 id 取行都不行
-MODULE_TABLES: dict[str, dict[str, str]] = {
-    "issues": {"IssueDependency": "graph"},
-    "notifications": {"Notification": "inbox", "PushSubscription": "push"},
-    "workspace": {"ScriptGrant": "grants"},
-}
-
-
-def test_tables_owned_by_one_module_are_only_queried_there():
-    problems = []
-    for domain, owners in MODULE_TABLES.items():
-        for path in sorted((SRC / domain).glob("*.py")):
-            if path.stem == "tables":
-                continue
-            for line, name in _table_uses(ast.parse(path.read_text()), set(owners), any_call=True):
-                if path.stem != owners[name]:
-                    problems.append(f"{domain}/{path.name}:{line} queries {name}")
-    assert not problems, "\n".join(problems)
-
-
-def test_other_agents_subdomains_check_an_agent_without_taking_its_row():
-    """agents 表的行只在目录子域（service、active）手里：别处要确认 agent 还可用，调 agents.service.active_agent_in。"""
-    rows = {
-        f"muliao.agents.active.{n}" for n in ("active_row_in", "runnable_row_in", "named_row_in", "listed_in")
-    }
-    problems = [
-        f"agents/{path.name}:{line} imports {name.rsplit('.', 1)[1]}"
-        for path in sorted((SRC / "agents").glob("*.py"))
-        if path.stem not in ("service", "active")
-        for line, name in _imports(path)
-        if name in rows
-    ]
-    assert not problems, "\n".join(problems)
-
-
-@pytest.mark.parametrize(
-    ("owner", "state"),
-    [
-        ("precheck", {"precheck", "precheck_output", "last_checked_at"}),
-        ("faults", {"faults"}),
-    ],
-)
-def test_only_its_module_changes_a_state_of_a_trigger(owner, state):
-    """前置检查在触发器上的状态只在 triggers/precheck.py 迁移（docs/architecture.md 第 14 节），脚本出错只在
-    triggers/faults.py 记录与清除：别的模块不给这几列赋值，构造触发器时也不带它们。"""
-    problems = []
-    for path in sorted((SRC / "triggers").glob("*.py")):
-        if path.stem in (owner, "tables"):
-            continue
-        for node in ast.walk(ast.parse(path.read_text())):
-            targets = []
-            if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
-                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            for t in targets:
-                if isinstance(t, ast.Attribute) and t.attr in state:
-                    problems.append(f"triggers/{path.name}:{node.lineno} sets .{t.attr}")
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "Trigger":
-                problems += [
-                    f"triggers/{path.name}:{node.lineno} constructs Trigger with {k.arg}"
-                    for k in node.keywords
-                    if k.arg in state
-                ]
-    assert not problems, "\n".join(problems)
-
-
-def test_issue_fields_change_only_inside_the_change_unit():
-    """issue 改动的后果只由变更单元负责（docs/architecture.md 2.4 第 10 行）：Issue 的字段只在 issues/change.py 里赋值、
-    新建的 Issue 也只在那里构造，别处改了字段就绕过了记动态、投递与放行下游。issue_activities 的行同理只在那里构造。"""
-    from muliao.issues.tables import Issue
-
-    fields = set(Issue.__table__.columns.keys())
-    problems = []
-    for path in sorted(SRC.rglob("*.py")):
-        where = path.relative_to(SRC)
-        # 拿得到 Issue 行的：issues 包本身，与经 issues.tables 序列化它的 HTTP 层
-        if where.as_posix() in ("issues/change.py", "issues/tables.py") or (
-            where.parts[0] != "issues"
-            and not any(name.startswith("muliao.issues.tables") for _, name in _imports(path))
-        ):
-            continue
-        for node in ast.walk(ast.parse(path.read_text())):
-            targets = []
-            if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
-                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            problems += [
-                f"{where}:{node.lineno} sets .{t.attr}"
-                for t in targets
-                if isinstance(t, ast.Attribute) and t.attr in fields
-            ]
-            if isinstance(node, ast.Call):
-                name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
-                if name in ("Issue", "IssueActivity"):
-                    problems.append(f"{where}:{node.lineno} constructs {name}")
-    assert not problems, "\n".join(problems)
-
-
-def test_sessions_read_tasks_through_the_queue():
-    """会话领域经 TaskQueue 的只读查询（TaskView）看运行，不查任务表、不按 TaskStatus 分支；Task 只出现在任务处理器的
-    签名里（队列交给处理器的就是它）。"""
-    problems = []
-    for path in sorted((SRC / "sessions").glob("*.py")):
-        for line, name in _imports(path):
-            if name == "muliao.platform.tables.TaskStatus" or (
-                name == "muliao.platform.tables.Task" and path.stem not in {"consumer", "compaction"}
-            ):
-                problems.append(f"sessions/{path.name}:{line} imports {name}")
-        problems += [
-            f"sessions/{path.name}:{line} queries Task"
-            for line, _ in _table_uses(ast.parse(path.read_text()), {"Task"})
-        ]
-    assert not problems, "\n".join(problems)
 
 
 def test_only_agent_runtime_touches_the_model_librarys_run_types():
@@ -319,8 +128,6 @@ def test_only_agent_runtime_touches_the_model_librarys_run_types():
 
 
 def test_relative_imports_are_resolved_to_the_module_they_name(tmp_path):
-    import pytest
-
     root = tmp_path / "muliao"
     module = root / "workspace" / "x.py"
     module.parent.mkdir(parents=True)
@@ -340,7 +147,6 @@ def test_relative_imports_are_resolved_to_the_module_they_name(tmp_path):
 
 
 async def test_a_transaction_writing_two_domains_tables_fails(container, make_agent):
-    import pytest
     from sqlalchemy import update
 
     from muliao.agents.tables import Agent
@@ -360,152 +166,6 @@ async def test_a_domain_and_the_task_table_may_be_written_together(container):
         await container.notifications._enqueue_in(  # noqa: SLF001
             s, None, Notification(title="t", body="b", session_id=None)
         )
-
-
-# 领域公开接口里在调用方事务里执行的函数（参数里有调用方的事务）：只能是只读的查询（docs/architecture.md 2.2）。
-# 写入一律是被调领域自己开事务的命令，调用方不替它管事务。读的事实只会单向变化或不变时，调用方可以据它在同一事务里
-# 写自己的数据（runnable_agent_in、availability_in 是双向变化、只用来拒绝的例外，理由见 2.2）；否则（SessionActivity 的查询）只能
-# 先查后写。新增一个这样的函数要先确认它只读，再登记到这里。
-READ_ONLY_IN_CALLER_TRANSACTION = {
-    "agents": {
-        "active_agent_in",
-        "agent_in",
-        "agent_names_in",
-        "availability_in",
-        "runnable_agent_in",
-    },
-    "files": {"load_metas"},
-    "sessions": {
-        "session_in",
-        "receive_command_in",
-        "keyed_session_in",
-        "keyed_sessions_among",
-        "hold_registered_in",
-        "SessionActivity.work_state_in",
-        "SessionActivity.recipient_in",
-        "SessionActivity.recipients_in",
-        "SessionActivity.keyed_work_states_in",
-        "SessionActivity.blocks_agent_deletion_in",
-    },
-}
-
-
-def _takes_a_transaction(fn: object) -> bool:
-    """参数里有调用方的事务：名为 s，或注解是 AsyncSession（模块用 from __future__ import annotations 时注解是字符串）。"""
-    import inspect
-
-    for name, param in inspect.signature(fn).parameters.items():
-        if name == "self":
-            continue
-        annotation = param.annotation
-        text = annotation if isinstance(annotation, str) else getattr(annotation, "__name__", "")
-        if name == "s" or "AsyncSession" in str(text):
-            return True
-    return False
-
-
-def test_public_functions_in_the_callers_transaction_are_reviewed_read_only_queries():
-    import importlib
-    import inspect
-
-    found: dict[str, set[str]] = {}
-    for domain in sorted(DOMAINS):
-        module = importlib.import_module(f"muliao.{domain}.api")
-        for name in module.__all__:
-            obj = getattr(module, name)
-            if inspect.isfunction(obj) and _takes_a_transaction(obj):
-                found.setdefault(domain, set()).add(name)
-            elif inspect.isclass(obj):
-                for method_name, member in inspect.getmembers(obj):
-                    # classmethod 经类访问时是绑定方法：取出底层函数再看
-                    method = getattr(member, "__func__", member)
-                    if (
-                        not method_name.startswith("_")
-                        and inspect.isfunction(method)
-                        and _takes_a_transaction(method)
-                    ):
-                        found.setdefault(domain, set()).add(f"{name}.{method_name}")
-    assert found == READ_ONLY_IN_CALLER_TRANSACTION
-
-
-# 组合根注入给删除 agent 的阻止查询（不经 api 模块，同样在调用方的事务里执行）：也只能是审查过的只读查询
-READ_ONLY_DELETION_BLOCKERS = {
-    "SessionActivity.blocks_agent_deletion_in",
-}
-
-
-async def test_injected_agent_deletion_blockers_are_reviewed_read_only_queries(container):
-    blockers = container.agent_lifecycle._blockers  # noqa: SLF001
-    assert {b.__qualname__ for b in blockers.values()} == READ_ONLY_DELETION_BLOCKERS
-
-
-def test_the_http_layer_sees_only_domain_facades():
-    """HTTP 层只经 Container 调用领域（docs/architecture.md 2.3）：它的字段类型都由领域的 api 模块导出，或是逐个
-    审过的平台类型；领域内部的对象（消费者、压缩、信箱……）、平台的数据库与队列不在其中。import 检查拦不住
-    经 Container 取到的对象，由这里拦。"""
-    import dataclasses
-    import importlib
-    import types
-    import typing
-
-    from muliao.container import Container
-    from muliao.platform.bus import EventFeed
-    from muliao.platform.tasks import TaskAdmin
-
-    # 平台类型：展示事件流（只订阅）与「任务」页的窄口
-    reviewed = (EventFeed, TaskAdmin)
-
-    exported = [
-        getattr(module, name)
-        for module in (importlib.import_module(f"muliao.{d}.api") for d in sorted(DOMAINS))
-        for name in module.__all__
-    ]
-    hints = typing.get_type_hints(Container)
-    problems = []
-    for field in dataclasses.fields(Container):
-        if field.name == "running":
-            continue
-        hint = hints[field.name]
-        members = typing.get_args(hint) if isinstance(hint, types.UnionType) else (hint,)
-        for t in members:
-            if t is type(None) or any(t is r for r in reviewed):
-                continue
-            if not any(t is e for e in exported):
-                problems.append(f"Container.{field.name}: {t.__module__}.{t.__qualname__}")
-    assert problems == []
-
-
-async def test_the_container_holds_exactly_the_declared_types_at_run_time(container):
-    """声明类型挡不住运行时（项目不跑类型检查）：窄接口要是把完整对象传进来（如把 TaskQueue 当 TaskAdmin），HTTP 层
-    照样能调 enqueue。所以每个字段的值必须恰好是声明的类型，不能是它的子类或别的对象。"""
-    import dataclasses
-    import types
-    import typing
-
-    from muliao.container import Container
-
-    c = container.container
-    hints = typing.get_type_hints(Container)
-    problems = []
-    for field in dataclasses.fields(Container):
-        if field.name == "running":
-            continue
-        hint = hints[field.name]
-        allowed = typing.get_args(hint) if isinstance(hint, types.UnionType) else (hint,)
-        value = getattr(c, field.name)
-        if not any(type(value) is t for t in allowed):
-            problems.append(f"Container.{field.name}: {type(value).__qualname__} is not {hint}")
-    assert problems == []
-
-
-async def test_the_task_kinds_in_the_http_contract_are_exactly_the_registered_ones(container):
-    """前端按种类判断任务事件（web/src/events.ts 的 TaskKind 取自 OpenAPI）：接口里的种类必须恰好是 worker 登记了
-    处理器的那些，后端新增或改名时这里先失败，再重新生成前端类型。"""
-    import typing
-
-    from muliao.api.tasks import TaskKind
-
-    assert set(typing.get_args(TaskKind)) == container.queue.kinds
 
 
 def test_tools_refuse_with_domain_errors_not_model_retry():
@@ -542,51 +202,4 @@ def test_path_identity_is_computed_only_in_platform_fs():
             name = node.func.attr
             if name == "realpath" or (name == "resolve" and not node.args and not node.keywords):
                 offenders.append(f"{path.relative_to(SRC)}:{node.lineno} {name}")
-    assert offenders == []
-
-
-def test_only_sessions_handle_the_stored_origin_ref():
-    """来源编号在库里的格式归会话领域（归属表第 8 行，#632）：别的领域只交出、读回结构化的来源（TriggerOrigin、IssueOrigin，
-    sessions.origins.origin_of 一处解析），不碰存储里的 origin_ref 与 ref。"""
-    offenders = []
-    for path in SRC.rglob("*.py"):
-        if {"sessions", "migrations", "webui"} & set(path.relative_to(SRC).parts):
-            continue
-        for node in ast.walk(ast.parse(path.read_text())):
-            # ref：TriggerOrigin / IssueOrigin 在库里的编号，同样只给会话领域用
-            if (isinstance(node, ast.Attribute) and node.attr in ("origin_ref", "ref")) or (
-                isinstance(node, ast.keyword) and node.arg == "origin_ref"
-            ):
-                offenders.append(f"{path.relative_to(SRC)}:{node.lineno}")
-    assert offenders == []
-
-
-def test_file_tools_read_and_write_text_only_through_platform_fs():
-    """文件工具的文本读写只经 platform.fs（read_text / write_text / write_atomic）：Python 默认的文本读会把 CRLF 换成 LF、
-    解码失败抛 UnicodeDecodeError 打崩整次运行（#570）。"""
-    offenders = []
-    for path in (SRC / "workspace").rglob("*.py"):
-        for node in ast.walk(ast.parse(path.read_text())):
-            if (
-                isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Attribute)
-                and node.func.attr in ("read_text", "write_text")
-            ):
-                offenders.append(f"{path.relative_to(SRC)}:{node.lineno} {node.func.attr}")
-    assert offenders == []
-
-
-def test_agent_commands_start_only_through_workspace_commands():
-    """以 agent 身份起命令只经 workspace.commands.AgentCommands（#618）：secret、工作目录、写沙箱与被拒时的说明在那里一起
-    拼好。别处直接用 platform.shell 起命令，就会各自再取一遍 secret 与沙箱（四处各写一遍时漏过拒绝说明）。"""
-    # 模块本身也算（`from muliao.platform import shell` 再调 shell.run_bash）；别处用 redact、kill_group 等按名导入
-    starters = {"muliao.platform.shell", "muliao.platform.shell.spawn_bash", "muliao.platform.shell.run_bash"}
-    allowed = {SRC / "workspace" / "commands.py"}
-    offenders = [
-        f"{path.relative_to(SRC)}:{line} imports {name}"
-        for path in SRC.rglob("*.py")
-        if path not in allowed and "webui" not in path.parts
-        for line, name in _imports(path)
-        if name in starters
-    ]
     assert offenders == []

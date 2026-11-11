@@ -12,7 +12,7 @@ agent_runtime 的 defer_call；或工具执行前要用户批准（require_appro
   结果（skipped）、调用结束后才到的回答怎么写（late_lines）。
 - 会话停在哪（position，纯函数，唯一的判断）：空闲、新开、从历史续跑、被打断、等回答。由历史、交出去的永久事实
   （HandedOut）与信箱推导，不另存状态；消费者、唤醒（mailbox.wake_in）、停止（closing_on_stop）、等用户的调用（open_asks_of）、
-  交回结局（work.deliver_in）都 match 它的结果（docs/architecture.md 2.4 第 2 行）。
+  交回结局（work.deliver_in）都 match 它的结果。
 - 什么时候继续（Paused.ready）：用户发了新消息（跳过还没回答的），或挂起的调用都有了回答；事件留在信箱里
   等它们一起交给模型。
 """
@@ -135,7 +135,7 @@ def kind_of(call: ToolCallPart, approvals: AbstractSet[str]) -> DeferredKind | N
     return tool
 
 
-# ---- 会话停在哪（docs/architecture.md 2.4 第 2 行）：唯一的判断是 position，各处 match 它的结果 ----
+# ---- 会话停在哪：唯一的判断是 position，各处 match 它的结果 ----
 
 
 @dataclass(frozen=True)

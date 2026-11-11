@@ -1,4 +1,4 @@
-"""会话领域的表：会话、消息、信箱、压缩、占用、委派、到点唤醒、调用开出的 thread。各子域独占自己的表（docs/architecture.md 2.1）。"""
+"""会话领域的表：会话、消息、信箱、压缩、占用、委派、到点唤醒、调用开出的 thread。"""
 
 from datetime import datetime
 from enum import StrEnum
@@ -126,7 +126,7 @@ class Mail(Base):
     answers: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     # 用户是否在等它的回答：一次运行处理过的信件里有一封是，结束时就把回答推送给用户
     awaited: Mapped[bool] = mapped_column(default=False)
-    # 委派来的信件：是哪项委派（thread_calls 行，归属见 docs/architecture.md 2.4 第 4 行）。会话做完时结清它，结局在
+    # 委派来的信件：是哪项委派（thread_calls 行）。会话做完时结清它，结局在
     # 同一事务里交回发起方（sessions.settlement、sessions.delegation）；结清没有只看发起方的占用是否还 active。
     # 发起会话删除时行随之删除，这里置空（结局没有收件人）
     delegation_id: Mapped[int | None] = mapped_column(
@@ -135,7 +135,7 @@ class Mail(Base):
     # 幂等键：带同一个键的投信只投一次（命令按键去重，docs/architecture.md 3.4）
     dedupe_key: Mapped[str | None] = mapped_column(String(200))
     state: Mapped[MailState] = mapped_column(StrEnumType(MailState), default=MailState.QUEUED)
-    # 交给了哪次运行（归属见 docs/architecture.md 2.4 第 3 行，只经 sessions.mailbox.give_in / consume_in 写）：投递运行时信箱里已有的、
+    # 交给了哪次运行（只经 sessions.mailbox.give_in / consume_in 写）：投递运行时信箱里已有的、
     # 运行开头取走的、交给模型那一步保存的（这时 state 记为 consumed）。排着的信件之后被更新的运行取走时改指那次运行
     taken_by: Mapped[int | None] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"))
     # 索引：按日查各会话收到的信件（sessions.recall）
@@ -240,7 +240,7 @@ class ThreadCall(Base):
     """哪次工具调用开出或续写了哪个 thread（sessions.thread_calls）：在开出/续写 thread 的同一个事务里记下，是界面把
     thread 显示在调用处的唯一来源，与调用有没有结果、结果是谁补的无关。续写同一个 thread 时每次调用各一行；随发起会话
     或 thread 删除。要交回结局的调用（ask_agent、delegate_task(report_back)）就是一项委派，发起方有一个引用这一行的占用，
-    行上再记心跳间隔（#546 前另存在 delegations 表）：行是委派的唯一主体（docs/architecture.md 2.4 第 4 行），发起方的占用
+    行上再记心跳间隔（#546 前另存在 delegations 表）：行是委派的唯一主体，发起方的占用
     （session_holds.thread_call_id）与 thread 的信件（mail.delegation_id）都只引用它的 id；结清没有看占用是否还
     active。"""
 

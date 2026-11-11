@@ -15,7 +15,7 @@ type Waiting = Literal["ask_user", "ask_agent", "approval"]
 
 class RunEnded(DomainEvent):
     """一次运行结束了（完成、停在挂起的调用上、被停止）；没有可交给模型的空闲收尾不发。只带事实，要不要推送、要不要认领
-    由订阅方按自己的规则判断（归属表第 9 行）。"""
+    由订阅方按自己的规则判断。"""
 
     TYPE = "session.run_ended"
     session_id: str
@@ -149,7 +149,7 @@ class ToKeyed(BaseModel):
     agent_id: str
 
 
-# 投递之后能问「忙不忙」的句柄（归属表第 7 行）：形状由会话领域定，发送方原样存下、原样交回 SessionActivity.recipient_in
+# 投递之后能问「忙不忙」的句柄：形状由会话领域定，发送方原样存下、原样交回 SessionActivity.recipient_in
 type Recipient = Annotated[ToSession | ToKeyed, Field(discriminator="to")]
 
 

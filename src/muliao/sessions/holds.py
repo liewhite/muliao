@@ -3,7 +3,7 @@
 sessions.thread_calls）。会话只知道「有人替我在外面做事」，不知道是什么事。设计见 docs/architecture.md 第 7 节。
 
 - 有 active 占用：会话的工作还没做完，交给它的委派不结清（sessions.finish、sessions.settlement）。委派的占用还 active 就是
-  这项委派还没结清（唯一的判断，归属见 docs/architecture.md 2.4 第 4 行）。
+  这项委派还没结清（唯一的判断）。
 - 带 call_id 的占用：这次挂起调用（ask_agent）已经交出去了。不论状态都算，是永久事实（sessions.pending）。
 - 结局交回时释放（和一封信件同一事务）；会话被停止、或自己放弃（abandon）时清掉（之后的结局不再投）。行永久保留。
 """

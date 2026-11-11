@@ -1,5 +1,4 @@
-"""issue 的变更单元：一次修改带出的全部后果（记动态、投递、通知、放行下游）只在这里发生（归属见 docs/architecture.md
-2.4 第 10 行）。
+"""issue 的变更单元：一次修改带出的全部后果（记动态、投递、通知、放行下游）只在这里发生。
 
 修改入口（IssueService 的各个命令、事件处理）只描述改了什么：在调用方的事务里 `async with changes.open_in(...)` 取到
 issue 行，期间只经单元改字段（`set_*` / `apply`）、记动态（`record`）；正常退出时统一结算：
@@ -10,7 +9,7 @@ issue 行，期间只经单元改字段（`set_*` / `apply`）、记动态（`re
   DependencyFinished，按同一条规则投递——不再等别的上游时，这就是让它开工的那封信。
 
 出异常时不结算（事务随之回滚）。一次修改什么都没改（没记动态）时什么都不发。Issue 的字段只在本模块赋值（新建也是
-`new_issue_in`），由 tests/test_boundaries.py 守住。
+`new_issue_in`）。
 """
 
 from __future__ import annotations

@@ -1,6 +1,6 @@
 """会话来源（Origin）：会话创建时定下、整个会话不变（存在 sessions.origin），以及每种来源在指令里怎么向 agent 说明。
 
-来源编号的格式归这里（归属表第 8 行）：库里存两个字符串（sessions.origin、origin_ref），对外只有结构化的来源 SessionOrigin，
+来源编号的格式归这里：库里存两个字符串（sessions.origin、origin_ref），对外只有结构化的来源 SessionOrigin，
 发送方交出自己的 id（TriggerOrigin、IssueOrigin），读回经 origin_of 一处解析，别的领域不拼、不解这个字符串。
 说明是会话级的稳定内容，进 instructions（缓存前缀）：会话领域把它作为文字交给 agent_runtime，运行时不认识来源。
 

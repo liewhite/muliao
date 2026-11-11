@@ -1,5 +1,5 @@
 """issue 会话的身份：每个 (issue, agent) 唯一的一个会话（#43），不存会话 id，由会话领域按发送方（IssueOrigin）与 agent
-定位（sessions.api.SessionKey）。issue 只交出自己的 id，来源编号的格式归会话领域（归属表第 8 行）。"""
+定位（sessions.api.SessionKey）。issue 只交出自己的 id，来源编号的格式归会话领域。"""
 
 from collections.abc import Collection
 

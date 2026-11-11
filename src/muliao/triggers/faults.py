@@ -7,7 +7,7 @@
   重新启用）清全部（reset，TriggerService.update）。
 - 告警去向（alert_in）：交给触发器所属的 agent 开一个新会话，由它修脚本，自己解决不了时通知用户；这封信投不进去
   （agent 已归档、正在删除）时退回给用户推送，不静默吞掉。
-faults 列只在这里赋值（tests/test_boundaries.py）。
+faults 列只在这里赋值。
 """
 
 from __future__ import annotations

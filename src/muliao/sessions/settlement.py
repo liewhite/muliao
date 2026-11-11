@@ -3,8 +3,8 @@
 （sessions.finish）、运行最终失败（sessions.consumer.RunHandler.failed_in）、停止（sessions.halt）、删除
 （sessions.deletion.delete_sessions）。
 
-一项委派结清没有只看发起方引用它的占用是否还 active（sessions.thread_calls.owed_in，归属见 docs/architecture.md 2.4
-第 4 行）：交回结局就释放占用，所以每项委派只交回一次；发起方已被停止（占用 cleared）或已删除（行随之删除、信上的
+一项委派结清没有只看发起方引用它的占用是否还 active（sessions.thread_calls.owed_in）：
+交回结局就释放占用，所以每项委派只交回一次；发起方已被停止（占用 cleared）或已删除（行随之删除、信上的
 引用置空）时没有可交回的。
 """
 

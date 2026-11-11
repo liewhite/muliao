@@ -1,7 +1,7 @@
 """会话历史：发给模型的上下文（最新摘要 + 压缩切点之后的原始消息）。原始消息不删除，压缩只决定从哪里开始发。
 
 messages、message_texts 与 compactions 只在这里读写（保存一步、停止时补齐、压缩、会话页的展示都经下面的函数），信箱的 mail 表只在
-sessions.mailbox；tests/test_boundaries.py 核对。"""
+sessions.mailbox。"""
 
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass, replace

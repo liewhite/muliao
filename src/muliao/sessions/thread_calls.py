@@ -1,8 +1,8 @@
 """调用开出的 thread（thread_calls 表的唯一读写处）：哪次工具调用开出或续写了哪个 thread。开出/续写 thread 的事务里
 记下（sessions.threads），会话接口按调用 id 把 thread 挂在调用条目上（sessions.service），不看调用的结果。
 
-要交回结局的调用（ask_agent、delegate_task(report_back)）就是一项委派，这一行是委派的唯一主体（docs/architecture.md
-2.4 第 4 行）：发起方的占用（sessions.holds）与 thread 的信件（mail.delegation_id）只引用它的 id，行上再记心跳间隔。
+要交回结局的调用（ask_agent、delegate_task(report_back)）就是一项委派，这一行是委派的唯一主体：
+发起方的占用（sessions.holds）与 thread 的信件（mail.delegation_id）只引用它的 id，行上再记心跳间隔。
 委派结清没有只看引用它的占用是否还 active；流程在 sessions.delegation / sessions.settlement。"""
 
 from __future__ import annotations
