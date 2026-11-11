@@ -20,7 +20,6 @@ export const READS = {
   '/api/assets/skill/{name}': ['agents'],
   '/api/assets/skill/{name}/files': ['agents'],
   '/api/assets/skill/{name}/file': ['agents'],
-  '/api/assets/skill/{name}/package': ['agents'],
   '/api/assets/mcp/{name}': ['agents'],
   '/api/assets/secret/{name}': ['agents'],
   '/api/push/vapid': [],

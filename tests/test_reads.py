@@ -73,7 +73,6 @@ async def test_get_endpoints_read_only_what_they_declare(client, container):
         "/api/assets/skill/{name}": "/api/assets/skill/sk",
         "/api/assets/skill/{name}/files": "/api/assets/skill/sk/files",
         "/api/assets/skill/{name}/file": "/api/assets/skill/sk/file?path=f.txt",
-        "/api/assets/skill/{name}/package": "/api/assets/skill/sk/package",
         "/api/assets/mcp/{name}": "/api/assets/mcp/srv",
         "/api/assets/secret/{name}": "/api/assets/secret/KEY",
         "/api/sessions/{session_id}": f"/api/sessions/{session}",

@@ -16,7 +16,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo
 
 from muliao.agents.kinds import StoredKind
-from muliao.agents.skill_package import parse_frontmatter
+from muliao.agents.skill_file import parse_frontmatter
 from muliao.errors import InvalidInput
 from muliao.platform.tables import Task, TaskStatus
 from muliao.sessions.api import Origin

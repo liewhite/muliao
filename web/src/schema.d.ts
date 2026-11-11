@@ -732,48 +732,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/assets/skill/{name}/package": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Export Skill
-         * @description 下载标准 .skill 文件（zip：`<name>/SKILL.md` 与附件）；没打进包的文件同导入一样逐个列出（响应头 X-Skipped-Files）。
-         */
-        get: operations["export_skill_api_assets_skill__name__package_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/assets/skill": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Import Skill
-         * @description 请求体是一个标准 .skill 文件，导入为 skill（名字取自包；新建的归 owner，缺省为平台），一次提交、改的人 user。同名
-         *     skill 已存在时 409，replace=true 覆盖。包的结构不对（路径越界、符号链接、顶层目录不唯一、名字与目录不一致……）422，
-         *     超限 413。
-         */
-        post: operations["import_skill_api_assets_skill_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/assets/mcp/{name}": {
         parameters: {
             query?: never;
@@ -3381,12 +3339,6 @@ export interface components {
             /** Version */
             version: string;
         };
-        /** SkillImportOut */
-        SkillImportOut: {
-            skill: components["schemas"]["SkillOut"];
-            /** Skipped */
-            skipped: components["schemas"]["SkippedOut"][];
-        };
         /** SkillIn */
         SkillIn: {
             /** Owner */
@@ -3417,13 +3369,6 @@ export interface components {
              */
             since: string;
             previous_state: components["schemas"]["WorkState"];
-        };
-        /** SkippedOut */
-        SkippedOut: {
-            /** Path */
-            path: string;
-            /** Reason */
-            reason: string;
         };
         /** StartIn */
         StartIn: {
@@ -5440,71 +5385,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    export_skill_api_assets_skill__name__package_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description <name>.skill */
-            200: {
-                headers: {
-                    /** @description 没打进包的文件（二进制等）：JSON 数组，每项 {path, reason} */
-                    "X-Skipped-Files"?: string;
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/zip": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    import_skill_api_assets_skill_post: {
-        parameters: {
-            query?: {
-                owner?: string | null;
-                replace?: boolean;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SkillImportOut"];
                 };
             };
             /** @description Validation Error */

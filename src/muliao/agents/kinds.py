@@ -4,7 +4,7 @@
   agents.permissions.ToolTable），归平台、没有内容；path 是本机上的目录，不是资源；其余四种是资源目录里的文件（agents.assets）。
 - StoredKind：存成文件的四种，可以新建、改、删、转移 owner（记忆不转移，agents.catalog）。每种的名字、放在哪、名字规则、说明在公共 skill 哪一节，以及
   它的文件怎么读（load）、写之前怎么校验（vet）都在它的 KindSpec（spec_of）：后两项由各种类的格式模块（memory_file、
-  skill_package、mcp_config、secrets_format）提供、在这里登记，读树（agents.assets）与写入口（agents.asset_files）只按
+  skill_file、mcp_config、secrets_format）提供、在这里登记，读树（agents.assets）与写入口（agents.asset_files）只按
   登记分派，不列举种类。
 
 两者的值相同处一一对应（tests/test_permissions.py 核对），互相转换只用这里的函数。
@@ -18,13 +18,13 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Literal, get_args
 
-from muliao.agents import mcp_config, memory_file, secrets_format, skill_package
+from muliao.agents import mcp_config, memory_file, secrets_format, skill_file
 from muliao.agents.formats import Draft, Loaded
 from muliao.agents.mcp_config import McpFile
 from muliao.agents.memory_file import MemoryText
 from muliao.agents.naming import validate_slug
 from muliao.agents.secrets_format import SecretFile, validate_key
-from muliao.agents.skill_package import SkillDir
+from muliao.agents.skill_file import SkillDir
 
 
 class Kind(StrEnum):
@@ -83,7 +83,7 @@ class KindSpec:
 
 _SPECS: dict[StoredKind, KindSpec] = {
     StoredKind.SKILL: KindSpec(
-        "skill", "skills", "", True, "Skills", validate_slug, skill_package.load, skill_package.vet
+        "skill", "skills", "", True, "Skills", validate_slug, skill_file.load, skill_file.vet
     ),
     StoredKind.MCP: KindSpec(
         "MCP server", "mcp", ".json", False, "MCP servers", validate_slug, mcp_config.load, mcp_config.vet

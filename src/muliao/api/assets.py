@@ -1,21 +1,19 @@
 """AI 资源（内置工具、skill、MCP server、secret、记忆）的接口，按统一模型：`/assets` 列出全部资源（每种带自己的详情），
 `/assets/{kind}/{name}` 读、写、删一个资源，`/owner` 对存成文件的资源通用（挪到另一个 owner 的目录），各种类专有的操作
-在自己的子路径（MCP 的启停与测试连接、skill 包的导入导出）。资源都是资源目录里的文件（agents.assets），这里读写的就是它们。
+在自己的子路径（MCP 的启停与测试连接、skill 目录里文件的浏览）。资源都是资源目录里的文件（agents.assets），这里读写的就是它们。
 
 这里的写入都是用户在界面上做的；新建的资源归请求给出的 owner（缺省为平台），已有的 owner 不变。
 """
 
-import json
 from datetime import datetime
 from typing import Annotated, Literal
 
 import anyio
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from muliao.agents.api import (
-    MAX_PACKAGE_BYTES,
     USER,
     CatalogAsset,
     McpConfig,
@@ -26,13 +24,12 @@ from muliao.agents.api import (
     MemoryText,
     SecretDetail,
     SkillDir,
-    SkillImport,
     SkillMeta,
     StoredKind,
     ToolSpec,
     mcp_config,
 )
-from muliao.api.deps import C, read_limited, reads
+from muliao.api.deps import C, reads
 from muliao.api.workspace import EntryOut, file_response
 from muliao.workspace.api import file_in, list_dir
 
@@ -293,73 +290,6 @@ async def read_skill_file(c: C, name: str, path: str) -> FileResponse:
     """skill 目录里一个文件的内容（同工作目录浏览：图片 inline，其余作为附件）。"""
     root = await c.skills.directory(name)
     return file_response(await anyio.to_thread.run_sync(file_in, root, path))
-
-
-SKILL_PACKAGE_TYPE = "application/zip"
-# 导出时没打进包的文件：JSON 数组（元素同 SkippedOut，非 ASCII 转义），没有时为 []
-SKIPPED_HEADER = "X-Skipped-Files"
-
-
-class SkippedOut(BaseModel):
-    # 包里的路径（相对 skill 目录；macOS 元数据是包里的完整路径）
-    path: str
-    reason: str
-
-
-@router.get(
-    "/assets/skill/{name}/package",
-    response_class=Response,
-    openapi_extra=reads("agents"),
-    responses={
-        200: {
-            "content": {SKILL_PACKAGE_TYPE: {}},
-            "description": "<name>.skill",
-            "headers": {
-                SKIPPED_HEADER: {
-                    "description": "没打进包的文件（二进制等）：JSON 数组，每项 {path, reason}",
-                    "schema": {"type": "string"},
-                }
-            },
-        }
-    },
-)
-async def export_skill(c: C, name: str) -> Response:
-    """下载标准 .skill 文件（zip：`<name>/SKILL.md` 与附件）；没打进包的文件同导入一样逐个列出（响应头 X-Skipped-Files）。"""
-    exported = await c.skills.export(name)
-    skipped = [SkippedOut(path=s.path, reason=s.reason).model_dump() for s in exported.skipped]
-    return Response(
-        exported.package,
-        media_type=SKILL_PACKAGE_TYPE,
-        headers={
-            "Content-Disposition": f'attachment; filename="{name}.skill"',
-            # 头只能是 latin-1：json.dumps 默认把非 ASCII 字符转义
-            SKIPPED_HEADER: json.dumps(skipped),
-        },
-    )
-
-
-class SkillImportOut(BaseModel):
-    skill: SkillOut
-    # 没有导入的文件（二进制、不在后缀白名单里、超过单文件上限、不是 UTF-8 文本……）
-    skipped: list[SkippedOut]
-
-    @classmethod
-    def of(cls, result: SkillImport) -> "SkillImportOut":
-        return cls(
-            skill=SkillOut.of(result.meta),
-            skipped=[SkippedOut(path=s.path, reason=s.reason) for s in result.skipped],
-        )
-
-
-@router.post("/assets/skill")
-async def import_skill(
-    c: C, request: Request, owner: str | None = None, replace: bool = False
-) -> SkillImportOut:
-    """请求体是一个标准 .skill 文件，导入为 skill（名字取自包；新建的归 owner，缺省为平台），一次提交、改的人 user。同名
-    skill 已存在时 409，replace=true 覆盖。包的结构不对（路径越界、符号链接、顶层目录不唯一、名字与目录不一致……）422，
-    超限 413。"""
-    package = await read_limited(request, MAX_PACKAGE_BYTES)
-    return SkillImportOut.of(await c.skills.import_package(package, owner=owner, replace=replace))
 
 
 # ---- MCP server ----

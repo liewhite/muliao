@@ -2062,110 +2062,6 @@
         ]
       }
     },
-    "/api/assets/skill/{name}/package": {
-      "get": {
-        "summary": "Export Skill",
-        "description": "下载标准 .skill 文件（zip：`<name>/SKILL.md` 与附件）；没打进包的文件同导入一样逐个列出（响应头 X-Skipped-Files）。",
-        "operationId": "export_skill_api_assets_skill__name__package_get",
-        "parameters": [
-          {
-            "name": "name",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Name"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "<name>.skill",
-            "content": {
-              "application/zip": {}
-            },
-            "headers": {
-              "X-Skipped-Files": {
-                "description": "没打进包的文件（二进制等）：JSON 数组，每项 {path, reason}",
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        },
-        "x-reads": [
-          "agents"
-        ]
-      }
-    },
-    "/api/assets/skill": {
-      "post": {
-        "summary": "Import Skill",
-        "description": "请求体是一个标准 .skill 文件，导入为 skill（名字取自包；新建的归 owner，缺省为平台），一次提交、改的人 user。同名\nskill 已存在时 409，replace=true 覆盖。包的结构不对（路径越界、符号链接、顶层目录不唯一、名字与目录不一致……）422，\n超限 413。",
-        "operationId": "import_skill_api_assets_skill_post",
-        "parameters": [
-          {
-            "name": "owner",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Owner"
-            }
-          },
-          {
-            "name": "replace",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "boolean",
-              "default": false,
-              "title": "Replace"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SkillImportOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/assets/mcp/{name}": {
       "get": {
         "summary": "Get Mcp",
@@ -9573,26 +9469,6 @@
         ],
         "title": "SkillDetail"
       },
-      "SkillImportOut": {
-        "properties": {
-          "skill": {
-            "$ref": "#/components/schemas/SkillOut"
-          },
-          "skipped": {
-            "items": {
-              "$ref": "#/components/schemas/SkippedOut"
-            },
-            "type": "array",
-            "title": "Skipped"
-          }
-        },
-        "type": "object",
-        "required": [
-          "skill",
-          "skipped"
-        ],
-        "title": "SkillImportOut"
-      },
       "SkillIn": {
         "properties": {
           "owner": {
@@ -9687,24 +9563,6 @@
           "previous_state"
         ],
         "title": "SkippedFires"
-      },
-      "SkippedOut": {
-        "properties": {
-          "path": {
-            "type": "string",
-            "title": "Path"
-          },
-          "reason": {
-            "type": "string",
-            "title": "Reason"
-          }
-        },
-        "type": "object",
-        "required": [
-          "path",
-          "reason"
-        ],
-        "title": "SkippedOut"
       },
       "StartIn": {
         "properties": {
