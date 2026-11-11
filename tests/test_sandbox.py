@@ -63,6 +63,30 @@ def test_paths_are_judged_where_they_really_point(tmp_path):
     assert WritablePaths.of([(True, tmp_path / "link")], "x").permits(tmp_path / "real/f")
 
 
+def test_a_rule_whose_path_cannot_be_resolved_is_taken_as_written_and_the_others_still_apply(
+    tmp_path, monkeypatch, caplog
+):
+    import muliao.platform.sandbox as sandbox
+
+    broken = tmp_path / "icloud"
+    resolve = sandbox.real
+
+    def real(p, **kw):
+        if Path(p) == broken:
+            raise PermissionError(1, "Operation not permitted", str(p))
+        return resolve(p, **kw)
+
+    monkeypatch.setattr(sandbox, "real", real)
+    paths = WritablePaths.of([(True, tmp_path / "a"), (True, broken), (False, tmp_path / "a/b")], "x")
+    assert paths.permits(tmp_path / "a/f")
+    assert not paths.permits(tmp_path / "a/b/f")
+    assert (True, broken) in paths.rules
+    # 收回的规则也按字面写法收回
+    assert not WritablePaths.of([(True, tmp_path), (False, broken)], "x").permits(broken / "f")
+    assert real_forms(broken) == (broken,)
+    assert "cannot resolve" in caplog.text
+
+
 # ---- 适配器（每个系统同一组用例） ----
 
 

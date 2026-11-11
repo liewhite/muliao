@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+import logging
+import os
 import sys
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
@@ -16,6 +18,8 @@ from pathlib import Path
 from typing import Literal, Protocol
 
 from muliao.platform.fs import real
+
+log = logging.getLogger(__name__)
 
 # 越界的写：enforce 拒绝；report 放行但由适配器记进系统日志（上线前试跑，统计漏掉的路径）
 Mode = Literal["enforce", "report"]
@@ -47,8 +51,16 @@ def expand(path: str, home: Path) -> Path:
 
 def real_forms(path: Path) -> tuple[Path, ...]:
     """路径在文件系统里的身份（platform.fs.real）：链接本身的，以及它指向的。系统按真实路径判断，而 /tmp 这类
-    上级是链接的路径、本身是链接的路径两种都会被写到。"""
-    return tuple(dict.fromkeys([real(path, follow=False), real(path)]))
+    上级是链接的路径、本身是链接的路径两种都会被写到。
+
+    认不出（系统拒绝打开路径上的某一级，如 iCloud 目录间歇报 EPERM）时记 warning、退回字面的绝对路径：一条规则的
+    路径出问题只影响这一条（按字面写法放开或收回；写法与盘上不一致或经过符号链接时对不上），不让整组规则、每个 agent 的每次运行跟着失败（#624）。"""
+    try:
+        return tuple(dict.fromkeys([real(path, follow=False), real(path)]))
+    except OSError as e:
+        literal = Path(os.path.abspath(path))
+        log.warning("cannot resolve %s on disk, using it as written: %s", literal, e)
+        return (literal,)
 
 
 def covers(paths: Iterable[Path], path: Path) -> bool:
