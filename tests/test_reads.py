@@ -47,7 +47,9 @@ async def test_get_endpoints_read_only_what_they_declare(client, container):
     await login(client)
     agent = (await client.post("/api/agents", json={"name": "alpha", "description": "d"})).json()["id"]
     session = (await client.post("/api/sessions", json={"agent_id": agent, "prompt": "hi"})).json()["id"]
-    issue = (await client.post("/api/issues", json={"title": "t", "owner": agent})).json()["id"]
+    # 指派给 agent、在进行：issue 的工作状态要去查它的会话与任务
+    body = {"title": "t", "owner": agent, "assignee": agent, "status": "in_progress"}
+    issue = (await client.post("/api/issues", json=body)).json()["id"]
     skill = {"owner": None, "description": "d", "body": "steps", "version": None}
     assert (await client.put("/api/assets/skill/sk", json=skill)).status_code == 200
     mcp = {"owner": None, "transport": "http", "url": "https://example.com/mcp", "probe": False}

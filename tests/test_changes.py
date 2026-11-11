@@ -5,9 +5,11 @@ from typing import get_args
 import anyio
 import pytest
 
+from muliao.agents.source import visible_change
 from muliao.notifications.push import DELIVER_TASK
 from muliao.notifications.tables import Notification
 from muliao.platform.bus import Subscriber
+from muliao.platform.fs import write_atomic
 from muliao.schema import ChangedEvent, Domain, _domains
 
 
@@ -54,6 +56,7 @@ async def test_queued_tasks_announce_tasks(container):
 
 async def test_any_change_to_asset_files_announces_agents(container):
     """不管谁改的（平台的写入口、agent 的 shell、用户在别处），资源文件变了就以 agents 发。"""
+    # 平台自己的写入口是原子写（隐藏的临时文件 rename 过去），也要报出来
     notes = container.settings.assets_dir / "platform" / "memory" / "notes.md"
     async with container.bus.subscribe() as sub, anyio.create_task_group() as tg:
         tg.start_soon(container.assets.watch)
@@ -61,8 +64,15 @@ async def test_any_change_to_asset_files_announces_agents(container):
         # 监听什么时候开始生效看不到：一直改到收到为止
         with anyio.fail_after(20):
             while not seen:
-                notes.write_text(f"- fact {len(seen)}")
+                write_atomic(notes, "- fact")
                 await anyio.sleep(0.3)
                 seen = _changed(sub)
         assert set(seen) == {"agents"}
         tg.cancel_scope.cancel()
+
+
+def test_hidden_files_are_not_asset_changes(tmp_path):
+    assert visible_change(tmp_path, str(tmp_path / "platform" / "memory" / "notes.md"))
+    assert not visible_change(tmp_path, str(tmp_path / "platform" / "memory" / ".notes.md.tmp1"))
+    assert not visible_change(tmp_path, str(tmp_path / "platform" / "skills" / "s" / ".venv" / "x.py"))
+    assert visible_change(tmp_path, "/elsewhere/x")

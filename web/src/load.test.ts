@@ -83,6 +83,7 @@ describe('Loader', () => {
     const stop = loader.subscribe(() => {})
     await settle()
     emit({ type: 'changed', resource: 'agents' })
+    emit({ type: 'connected' })
     await settle()
     expect(count('/api/features')).toBe(1)
     expect(loader.live()).toBe(false)
@@ -100,6 +101,27 @@ describe('Loader', () => {
     emit({ type: 'saved', session_id: 's1' })
     await settle()
     expect(count('/api/issues')).toBe(2)
+    stop()
+  })
+
+  it('retries after connecting even when its first load failed', async () => {
+    let fail = true
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        requests.push(url)
+        if (fail) throw new TypeError('network down')
+        return new Response('[]', { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }),
+    )
+    const loader = new Loader(() => api.tasks())
+    const stop = loader.subscribe(() => {})
+    await settle()
+    expect(loader.snapshot().error).toBe('network down')
+    fail = false
+    emit({ type: 'connected' })
+    await settle()
+    expect(loader.snapshot()).toEqual({ data: [], error: null, loading: false })
     stop()
   })
 

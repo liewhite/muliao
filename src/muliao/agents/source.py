@@ -158,15 +158,18 @@ class AssetSource:
                 self._key = None
 
     async def watch(self) -> None:
-        """常驻：资源目录里的文件有改动（隐藏的文件与目录除外，同 fingerprint）就通知一次，密集的改动合成一批。"""
-        # 文件系统报的是真实路径（如 macOS 的 /private/var）；报来不在其下的不按隐藏筛，多通知一次无害
+        """常驻：资源目录里的文件有改动（visible_change）就通知一次，密集的改动合成一批。awatch 在线程里等文件系统事件，
+        常驻占 anyio 默认线程池的一个。"""
+        # 文件系统报的是真实路径（如 macOS 的 /private/var）
         root = real(self.root)
-
-        def visible(_change: object, path: str) -> bool:
-            p = Path(path)
-            return not p.is_relative_to(root) or not any(
-                part.startswith(".") for part in p.relative_to(root).parts
-            )
-
-        async for _batch in awatch(root, watch_filter=visible, debounce=200, step=50):
+        async for _batch in awatch(
+            root, watch_filter=lambda _c, path: visible_change(root, path), debounce=200, step=50
+        ):
             self._changed()
+
+
+def visible_change(root: Path, path: str) -> bool:
+    """资源目录 root 下 path 的改动算不算资源文件变了：隐藏的文件与目录（及其中的）不算，同 fingerprint；原子写入的临时
+    文件也是隐藏的，rename 到的目标照常算。报来不在 root 下的照算（多通知一次无害）。"""
+    p = Path(path)
+    return not p.is_relative_to(root) or not any(part.startswith(".") for part in p.relative_to(root).parts)

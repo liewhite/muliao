@@ -480,6 +480,7 @@ export default function Issues() {
   const [moving, setMoving] = useState<ReadonlyMap<number, PendingMove>>(new Map())
   const issues = loaded.data && moveIssues(loaded.data, moving)
   // 拖拽：失败用 toast 提示（连着拖几张时各自报，不互相冲掉）；成功后等看板重新拉取落下才撤掉本地挪动
+  // 几张同时拖时共用它：busy 会被最先结束的那次清掉，不拿它禁用拖拽
   const move = useAction()
   const [graphScope, changeGraphScope] = useStoredState(GRAPH_SCOPE_KEY, oneOf<GraphScope>(['open', 'all'], 'open'))
   const onMove = (id: number, status: IssueStatus) => {

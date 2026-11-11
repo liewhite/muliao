@@ -89,3 +89,5 @@ def setup_logging(
         _DropPolledAccess()
     ]
     quiet_http_clients()
+    # 资源目录的监听（agents.source.AssetSource.watch）每批改动一条 INFO「N changes detected」，没有排查价值
+    logging.getLogger("watchfiles").setLevel(logging.WARNING)

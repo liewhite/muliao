@@ -153,8 +153,10 @@ function withQuery(path: string, query?: Query): string {
 // 401 时通知应用跳转登录页
 export const unauthorizedEvent = new EventTarget()
 
-// 请求的时限：服务端或网络卡住时报错，而不是让等它的操作（按钮）一直转。传文件（上传、录音、导入导出、预览）按大小与网速可能很久
-export const REQUEST_TIMEOUT_MS = 30_000
+// 请求的时限：服务端或网络卡住时报错，而不是让等它的操作（按钮）一直转。要大于服务端单个操作的上限，否则服务端随后
+// 成功或报出的真正原因被换成「超时」：最长的是探测 MCP server（连接 30 秒，agent_runtime/mcp.py 的 _CONNECT_TIMEOUT，再列工具）。
+// 传文件（上传、录音、导入导出、预览）按大小与网速可能很久
+export const REQUEST_TIMEOUT_MS = 120_000
 const FILE_TIMEOUT_MS = 600_000
 
 /** 所有请求的唯一出口：统一的时限、401 处理与错误信息 */
@@ -266,14 +268,14 @@ let starting: Set<Resource> | null = null
  */
 export async function collectReads<T>(load: () => Promise<T>, into: Set<Resource>): Promise<T> {
   collecting.add(into)
-  let loading: Promise<T>
-  starting = into
   try {
-    loading = load()
-  } finally {
-    starting = null
-  }
-  try {
+    let loading: Promise<T>
+    starting = into
+    try {
+      loading = load()
+    } finally {
+      starting = null
+    }
     return await loading
   } finally {
     collecting.delete(into)

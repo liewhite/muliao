@@ -23,13 +23,14 @@ export interface Loaded<T> extends LoadState<T> {
 }
 
 /**
- * 哪些事件要重新拉取。默认按读过的类别：连上了（之前可能丢了事件），或读过的某类数据变了。按更细的事件刷新的页面自己给
+ * 哪些事件要重新拉取。默认按读过的类别：连上了（之前可能丢了事件），或读过的某类数据变了；什么都没读的（可选模型、配置、
+ * 文件预览）不随服务端变化，连上了也不重拉。按更细的事件刷新的页面自己给
  * （会话页：整份历史几 MB，只按这个会话的事件；通知页：只在新通知时，留住这次的未读标记）。
  */
 export type RefetchOn = (e: PageEvent, reads: ReadonlySet<Resource>) => boolean
 
 export const byReads: RefetchOn = (e, reads) =>
-  e.type === 'connected' || (e.type === 'changed' && reads.has(e.resource))
+  reads.size > 0 && (e.type === 'connected' || (e.type === 'changed' && reads.has(e.resource)))
 
 // 有人在看、随服务端数据变化的 Loader：用户的操作成功后立即一起重新拉取（refreshShown）
 const shown = new Set<Loader<unknown>>()
@@ -90,7 +91,8 @@ export class Loader<T> {
     }
     if (id !== this.latest) return
     this.state = next
-    this.reads = reads
+    // 失败时显示的还是上次的数据：订阅照上次的，加上这次已经发出的（第一次就失败的也能在连上、变了时重试）
+    this.reads = next.error === null ? reads : new Set([...this.reads, ...reads])
     this.subscribers.forEach((s) => s())
   }
 
@@ -98,7 +100,7 @@ export class Loader<T> {
     return new Set([this.reads, ...this.inflight].flatMap((r) => [...r]))
   }
 
-  /** 随服务端数据变化（读过某类数据，或按自己的事件刷新）：操作之后要一起重新拉取 */
+  /** 随服务端数据变化（读过某类数据，或按自己的事件刷新）：操作之后要一起重新拉取。与 byReads 同一个判断 */
   live(): boolean {
     return this.refetchOn !== null || this.readsNow().size > 0
   }

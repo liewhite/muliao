@@ -38,7 +38,7 @@ describe('send decodes responses by HTTP status and type', () => {
       throw new DOMException('timed out', 'TimeoutError')
     })
     vi.stubGlobal('fetch', fetch)
-    await expect(api.issues()).rejects.toThrow(/请求超时（30 秒没有响应）：GET \/api\/issues/)
+    await expect(api.issues()).rejects.toThrow(/请求超时（120 秒没有响应）：GET \/api\/issues/)
   })
 
   it('fails when a response without a declared body has one', async () => {
