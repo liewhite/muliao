@@ -1,4 +1,4 @@
-"""run_bash：run_shell 工具与前置检查共用的命令执行。"""
+"""run_bash：run_shell 工具与前置检查（经 AgentShell.run）共用的命令执行。"""
 
 from pathlib import Path
 

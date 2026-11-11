@@ -11,20 +11,21 @@ import shlex
 from pydantic_ai import FunctionToolset, RunContext
 
 from muliao.agent_runtime.api import always_allow_requested, approved_pin, is_approved, require_approval
-from muliao.agents.api import AssetSource, SkillScripts, SkillStore, Vault
+from muliao.agents.api import AssetSource, SkillScripts, SkillStore
 from muliao.errors import InvalidInput, NotFound
 from muliao.files.api import FileStore
 from muliao.platform.fs import real, resolve_within
-from muliao.platform.shell import LEFT_RUNNING_NOTE, run_bash
+from muliao.platform.shell import LEFT_RUNNING_NOTE
 from muliao.platform.text_edit import truncate
 from muliao.platform.tool_views import TerminalBlock, ToolRender, ViewBlock
 from muliao.platform.tooling import Access, RunScope, declared
 from muliao.sessions.api import check_interval
+from muliao.workspace.commands import AgentCommands
 from muliao.workspace.file_tools import ShellLimits, file_toolset
 from muliao.workspace.grants import GRANTED_NOTE, ScriptCall, ScriptGrants
 from muliao.workspace.runner import JobRunner
 from muliao.workspace.tables import JobStatus
-from muliao.workspace.writable import Confiner, denial_note
+from muliao.workspace.writable import Confiner
 
 _SHELL_DESCRIPTION = (
     "Run a shell command (bash) in your workspace and return its exit code and combined output. "
@@ -91,7 +92,7 @@ def _script_command(
 
 
 def workspace_toolset(
-    vault: Vault,
+    commands: AgentCommands,
     limits: ShellLimits,
     files: FileStore,
     jobs: JobRunner,
@@ -208,7 +209,7 @@ def workspace_toolset(
                 )
             if approval_pin is not None:
                 require_approval(approval_pin)
-            return await _run_foreground(vault, limits, confiner, scope, command, timeout, secrets, shell)
+            return await _run_foreground(commands, limits, scope, command, timeout, secrets, shell)
         if timeout is not None:
             raise InvalidInput(
                 "background jobs have no timeout; leave `timeout` out (set `heartbeat_seconds` for how often "
@@ -263,9 +264,8 @@ def workspace_toolset(
 
 
 async def _run_foreground(
-    vault: Vault,
+    commands: AgentCommands,
     limits: ShellLimits,
-    confiner: Confiner,
     scope: RunScope,
     command: str,
     timeout: float,  # noqa: ASYNC109  run_shell 的参数原样传入（前台命令必填）
@@ -274,23 +274,15 @@ async def _run_foreground(
 ) -> str:
     if not timeout > 0:  # 也拒绝 NaN
         raise InvalidInput("timeout must be greater than 0 seconds")
-    secret_values = await vault.resolve_many(scope.agent_id, list(secrets), shell=shell)
-    confinement = await confiner.of(scope.agent_id)
-    result = await run_bash(
-        command,
-        cwd=scope.workspace,
-        secrets=secret_values,
-        timeout=timeout,
-        confinement=confinement,
-        merge_stderr=True,
-    )
+    agent_shell = await commands.prepare(scope.agent_id, secrets, shell=shell)
+    result = await agent_shell.run(command, timeout=timeout, merge_stderr=True)
     status = (
         f"{_EXIT_CODE} {result.exit_code}"
         if result.exit_code is not None
         else f"{_KILLED} {timeout}s timeout"
     )
     output = truncate(result.stdout, limits.max_output_chars)
-    if (note := denial_note(confinement, result.stdout)) is not None:
+    if (note := agent_shell.refusal(result.stdout)) is not None:
         # 紧接在系统报错之后：输出以换行结尾就不再空一行
         output += note if output.endswith("\n") else f"\n{note}"
     if result.left_running:

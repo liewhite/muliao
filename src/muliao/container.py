@@ -79,6 +79,7 @@ from muliao.usage.api import UsageLog
 from muliao.web.api import WebProvider, build_web_provider
 from muliao.web.tools import web_toolset
 from muliao.workspace.api import (
+    AgentCommands,
     Confiner,
     JobAdmin,
     JobRunner,
@@ -175,6 +176,7 @@ class Assembly:
     jobs: JobRunner
     script_grants: ScriptGrants
     confiner: Confiner
+    commands: AgentCommands
     thread_checks: ThreadChecks
     wakeups: WakeUps
     work: WorkWatcher
@@ -362,6 +364,8 @@ def assemble(
     # MCP 的配置归 agent 领域，连接归运行时：新增时的连接验证注入给配置，运行时按 agent 可用的 server 连接；
     # stdio server 的进程与 agent 的命令关在同一个写沙箱里（#499）
     mcp_connector = McpConnector(vault, confiner.of)
+    # 以 agent 身份起命令的唯一入口：run_shell、后台任务、前置检查与 stream 共用
+    commands = AgentCommands(vault, agents.workspace, confiner)
     mcp = McpRegistry(assets, mcp_connector.probe)
     catalog = AssetCatalog(assets)
     # 会话领域先于消费者构造的端口（会话忙不忙、停止会话、委派、后台任务的占用），别的领域与工具集要用它们
@@ -374,9 +378,7 @@ def assemble(
     push_subscriptions = PushSubscriptions(db)
     schedule_kind, once_kind = ScheduleKind(tz), OnceKind(tz)
     # 触发方式在这里注册：新增一种（如消息队列）= 一个 TriggerKind + 它的激活机制
-    precheck = PrecheckRunner(
-        vault, agents.workspace, confiner.of, settings.runtime.precheck_timeout_seconds, EVENT_MAX_BYTES
-    )
+    precheck = PrecheckRunner(commands, settings.runtime.precheck_timeout_seconds, EVENT_MAX_BYTES)
     issues = IssueService(db, messaging, tz, activity, ports.stopper)
     # 触发器脚本出错的记录与告警，触发与流式托管共用
     faults = Faults(messaging, tz)
@@ -394,9 +396,7 @@ def assemble(
     )
     # 按到期时间触发的方式共用一个扫描循环，各自给出到期时间与这次到期被用掉之后这一行怎么变
     due_triggers = DueRunner(db, triggers, [ScheduleDue(activity, schedule_kind, messaging), OnceDue()])
-    streams = StreamRunner(
-        db, triggers, activity, vault, agents.workspace, confiner.of, messaging, faults, EVENT_MAX_BYTES
-    )
+    streams = StreamRunner(db, triggers, activity, commands, messaging, faults, EVENT_MAX_BYTES)
     webhooks = Webhooks(db, triggers)
     vapid = VapidKeys(settings.vapid_key_path)
 
@@ -414,14 +414,7 @@ def assemble(
         files=files,
         usage=usage,
     )
-    jobs = JobRunner(
-        db,
-        vault,
-        agents.workspace,
-        confiner,
-        messaging,
-        ports.work,
-    )
+    jobs = JobRunner(db, commands, agents.workspace, messaging, ports.work)
     script_grants = ScriptGrants(db)
     limits = ShellLimits(settings.runtime.tool_output_max_chars)
     # 运行可用的全部静态工具集；每个工具注册时自己声明读写、是否管理类等（platform.tooling.declared），一次运行开放哪些只按 agent 的分发规则算
@@ -430,7 +423,7 @@ def assemble(
     static_toolsets = [
         history_toolset(history, agents, ports.recall, issues, settings.runtime.tool_output_max_chars),
         ask_user_toolset(),
-        workspace_toolset(vault, limits, files, jobs, confiner, assets, skills, script_grants),
+        workspace_toolset(commands, limits, files, jobs, confiner, assets, skills, script_grants),
         ports.delegation_toolset(agents),
         ports.wakeup_toolset(),
         ports.recall_toolset(agents, settings.runtime.tool_output_max_chars),
@@ -514,6 +507,7 @@ def assemble(
         jobs=jobs,
         script_grants=script_grants,
         confiner=confiner,
+        commands=commands,
         thread_checks=ports.thread_checks,
         wakeups=ports.wakeups,
         work=WorkWatcher([jobs, ports.thread_checks, ports.wakeups]),

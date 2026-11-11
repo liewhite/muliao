@@ -376,7 +376,7 @@ async def test_a_job_whose_process_cannot_start_is_reported_interrupted(containe
     async def broken_spawn(*_args, **_kwargs):
         raise OSError("bash missing")
 
-    monkeypatch.setattr("muliao.workspace.runner.spawn_bash", broken_spawn)
+    monkeypatch.setattr("muliao.workspace.commands.spawn_bash", broken_spawn)
     with pytest.raises(OSError, match="bash missing"):
         await container.jobs.start(
             session_id=session.id,
@@ -401,7 +401,7 @@ async def test_a_job_whose_pid_cannot_be_recorded_kills_its_process_and_is_repor
 ):
     session, agent = await _session_for_jobs(container, make_agent)
     spawned = []
-    real_spawn = __import__("muliao.workspace.runner", fromlist=["spawn_bash"]).spawn_bash
+    real_spawn = __import__("muliao.workspace.commands", fromlist=["spawn_bash"]).spawn_bash
 
     async def recording_spawn(*args, **kwargs):
         proc = await real_spawn(*args, **kwargs)
@@ -411,7 +411,7 @@ async def test_a_job_whose_pid_cannot_be_recorded_kills_its_process_and_is_repor
     async def broken_record(_self, _job, _pid):
         raise RuntimeError("database unavailable")
 
-    monkeypatch.setattr("muliao.workspace.runner.spawn_bash", recording_spawn)
+    monkeypatch.setattr("muliao.workspace.commands.spawn_bash", recording_spawn)
     monkeypatch.setattr("muliao.workspace.runner.JobRunner._record_pid", broken_record)
     with pytest.raises(RuntimeError, match="database unavailable"):
         await container.jobs.start(
@@ -441,7 +441,7 @@ async def test_a_start_whose_cleanup_times_out_is_reconciled_as_interrupted(
     async def stuck_close(_self, _job_id, _reason):
         await asyncio.sleep(60)
 
-    monkeypatch.setattr("muliao.workspace.runner.spawn_bash", broken_spawn)
+    monkeypatch.setattr("muliao.workspace.commands.spawn_bash", broken_spawn)
     monkeypatch.setattr("muliao.workspace.runner.JobRunner._close_unstarted", stuck_close)
     monkeypatch.setattr("muliao.workspace.runner._CLEANUP_SECONDS", 0.1)
     with pytest.raises(OSError):

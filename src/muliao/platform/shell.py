@@ -1,4 +1,5 @@
-"""在 agent 工作目录里执行一条 bash 命令：run_shell 工具与触发器的前置检查共用这一份实现。
+"""起一条 bash 命令、读它的输出、杀它的进程组的底层。以 agent 的身份起命令（哪些 secret、哪个目录、哪个沙箱）只经
+workspace.commands.AgentCommands，这里只按传入的做。
 
 只继承少量环境变量，按 key 注入 secret，输出里的 secret 明文替换为 [secret:KEY]；超时杀掉整个进程组。
 命令关在写沙箱里（platform.sandbox）：只能写给它的可写路径；读、网络不限（防误操作，见架构文档「安全边界」）。
@@ -132,7 +133,7 @@ async def spawn_bash(
     pipefail: bool = False,
 ) -> asyncio.subprocess.Process:
     """在 cwd 里启动 bash -c command：只继承少量环境变量、注入 secret、关在 confinement 的写沙箱里、自成进程组（kill_group
-    能杀掉它的整棵进程树）。run_bash（等它结束）与后台任务（workspace.runner）、stream 触发器共用。"""
+    能杀掉它的整棵进程树）。run_bash（等它结束）与 AgentShell.spawn（后台任务、stream 触发器）共用。"""
     env = {k: os.environ[k] for k in _INHERITED_ENV if k in os.environ} | dict(secrets)
     await asyncio.to_thread(cwd.mkdir, parents=True, exist_ok=True)
     argv = confinement.wrap(["bash", *(["-o", "pipefail"] if pipefail else []), "-c", command])

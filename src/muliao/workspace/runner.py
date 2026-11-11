@@ -4,7 +4,7 @@
 
 - 输出（stdout 与 stderr 合并）逐块脱敏后写进 agent 工作目录的 jobs/<id>.log，agent 用 read_file 读完整输出；
   事件里只带最后几行。
-- 进程自成进程组（shell.spawn_bash），job_kill 与关停杀掉整棵进程树。
+- 进程以 agent 的身份起（workspace.commands.AgentCommands，自成进程组），job_kill 与关停杀掉整棵进程树。
 - 结束与投递完成事件在同一个事务里：任务记为结束，事件就一定在信箱里（会话被停止时除外：结局照记，不投信）。
 - 以进程退出为准（不是输出管道关闭）：退出后在有限时间内读完剩余输出，后台孙进程一直占着管道也不会让任务结束不了。
 - 不再有人监督的任务一律记为被中断并告诉 agent，同一条路径（_interrupt_in）：正常关停时杀掉进程后；服务意外退出
@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -30,13 +30,11 @@ from anyio.abc import TaskGroup
 from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agents.api import Vault
 from muliao.errors import Conflict, NotFound
 from muliao.platform.db import Database, utcnow
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.output import tail
-from muliao.platform.sandbox import Confinement
-from muliao.platform.shell import DRAIN_SECONDS, LEFT_RUNNING_NOTE, kill_group, read_until_exit, spawn_bash
+from muliao.platform.shell import DRAIN_SECONDS, LEFT_RUNNING_NOTE, kill_group, read_until_exit
 from muliao.platform.tasks import Clock, Commit, no_commit
 from muliao.sessions.api import (
     CheckBeats,
@@ -47,9 +45,9 @@ from muliao.sessions.api import (
     session_in,
 )
 from muliao.sessions.events import SessionStopped, WorkCheckIn, WorkEnded
+from muliao.workspace.commands import AgentCommands, AgentShell
 from muliao.workspace.process import Recorder
 from muliao.workspace.tables import Job, JobStatus
-from muliao.workspace.writable import Confiner, denial_note
 
 log = logging.getLogger(__name__)
 
@@ -81,8 +79,8 @@ class JobInfo:
 @dataclass
 class _Running:
     proc: asyncio.subprocess.Process
-    # 它被关在哪些可写路径里：结束时按它判断输出里被拒的写要不要补说明
-    confinement: Confinement
+    # 它以什么环境起的：记输出时按它的 secret 脱敏，结束时按它的沙箱判断被拒的写要不要补说明
+    shell: AgentShell
     # job_kill 设置：进程结束后记为 KILLED 而不是 EXITED
     killed: bool = False
     # 监督者自己的取消作用域：只取消这一个监督者（启动时记录写不进去）；关停取消的是整个任务组
@@ -100,18 +98,16 @@ class JobRunner:
     def __init__(
         self,
         db: Database,
-        vault: Vault,
+        commands: AgentCommands,
         workspace_of: Callable[[str], Path],
-        confiner: Confiner,
         messaging: Messaging,
         sessions: SessionWork,
         clock: Clock = utcnow,
     ):
-        self._confiner = confiner
+        self._commands = commands
         self._db = db
         self._sessions = sessions
         self._messaging = messaging
-        self._vault = vault
         self._workspace_of = workspace_of
         self._clock = clock
         self._running: dict[int, _Running] = {}
@@ -151,8 +147,8 @@ class JobRunner:
         group = self._group
         if group is None:
             raise RuntimeError("background jobs can only start while the job runner is running")
-        # vault 自己开事务，不能放进下面的事务
-        values = await self._vault.resolve_many(agent_id, secrets, shell=shell)
+        # vault 自己开事务，不能放进下面的事务；secret 不可用时什么都还没写
+        agent_shell = await self._commands.prepare(agent_id, secrets, shell=shell)
         job: Job | None = None
         try:
             async with self._db.transaction() as s:
@@ -178,33 +174,29 @@ class JobRunner:
                 self._starting.discard(job.id)
             raise
         try:
-            await self._launch(job, values, group, awaited)
+            await self._launch(job, agent_shell, group, awaited)
         finally:
             self._starting.discard(job.id)
         log.info("background job started", extra={"job_id": job.id, "session_id": session_id, "pid": job.pid})
         return job
 
-    async def _launch(self, job: Job, values: Mapping[str, str], group: TaskGroup, awaited: bool) -> None:
+    async def _launch(self, job: Job, agent_shell: AgentShell, group: TaskGroup, awaited: bool) -> None:
         """起进程与监督者并记下 pid。任何一步失败或被取消（这次运行被停止）都不能留下没人能结束的进程：清理在
         屏蔽作用域里做完；清理超时则记 error，这一行留在 running，下一次检查的对账把它记为被中断并告诉 agent。"""
-        workspace = self._workspace_of(job.agent_id)
-        log_file = workspace / job.log_path
+        log_file = self._log_file(job)
         try:
             # 先在会话上登记占用（会话据此知道工作还没做完；用户是否在等结局记在占用上），再起进程
             await self._sessions.hold(job.session_id, job_holder(job.id), awaited=awaited)
             await asyncio.to_thread(log_file.parent.mkdir, parents=True, exist_ok=True)
-            confinement = await self._confiner.of(job.agent_id)
-            proc = await spawn_bash(
-                job.command, cwd=workspace, secrets=values, confinement=confinement, merge_stderr=True
-            )
+            proc = await agent_shell.spawn(job.command, merge_stderr=True)
         except BaseException as e:
             await self._cleanup(job.id, "spawn", self._close_unstarted(job.id, _start_failure(e)))
             raise
-        handle = _Running(proc, confinement)
+        handle = _Running(proc, agent_shell)
         try:
             # 进程一起来就有人管：先登记、起监督者，再记 pid
             self._running[job.id] = handle
-            group.start_soon(self._supervise, job.id, handle, log_file, values, name=f"job-{job.id}")
+            group.start_soon(self._supervise, job.id, handle, log_file, name=f"job-{job.id}")
             await self._record_pid(job, proc.pid)
         except BaseException:
             # 取消监督者会杀掉进程组；监督者没起来（任务组已关闭）时在这里杀
@@ -282,18 +274,16 @@ class JobRunner:
                 extra={"job_id": job_id, "stage": stage},
             )
 
-    async def _supervise(
-        self, job_id: int, handle: _Running, log_file: Path, secrets: Mapping[str, str]
-    ) -> None:
+    async def _supervise(self, job_id: int, handle: _Running, log_file: Path) -> None:
         """看着进程直到结局写进库。「有人监督」（_running）一直保持到结局写完（成功、失败或被取消），
         对账才不会把正在记结局的任务当成没人管的。这是每个监督者的异常边界：意外异常只记日志，这一行停在
         running，由 check 的对账记为被中断并告诉 agent，不影响别的监督者与运行。"""
         handle.started = True
         try:
             with handle.scope:
-                status, exit_code, note = await self._watch(job_id, handle, log_file, secrets)
+                status, exit_code, note = await self._watch(job_id, handle, log_file)
                 # 写结局失败（如数据库暂时不可用）时这一行停在 running；撤销登记后由 check 的对账收敛
-                await self._finish(job_id, log_file, status, exit_code, note, handle.confinement)
+                await self._finish(job_id, log_file, status, exit_code, note, handle.shell)
         except Exception:
             log.exception("background job supervisor crashed", extra={"job_id": job_id})
         finally:
@@ -301,12 +291,12 @@ class JobRunner:
             handle.finished.set()
 
     async def _watch(
-        self, job_id: int, handle: _Running, log_file: Path, secrets: Mapping[str, str]
+        self, job_id: int, handle: _Running, log_file: Path
     ) -> tuple[JobStatus, int | None, str | None]:
         """以进程退出为准：退出后在有限时间内把管道里剩下的输出读完（脱离进程组的后代可能一直持有管道）。
         返回结局（状态、退出码、补充说明或被中断的原因）。"""
         proc = handle.proc
-        recorder = Recorder(proc, log_file, secrets)
+        recorder = Recorder(proc, log_file, handle.shell.secrets)
         try:
             exit_code, drained = await read_until_exit(proc, [recorder.run])
         except BaseException:
@@ -331,11 +321,11 @@ class JobRunner:
         status: JobStatus,
         exit_code: int | None,
         note: str | None,
-        confinement: Confinement,
+        agent_shell: AgentShell,
     ) -> None:
         # 事务里不做文件 IO：进程已经结束，先读好输出的最后几行
         last = await asyncio.to_thread(tail, log_file)
-        refused = denial_note(confinement, last)
+        refused = agent_shell.refusal(last)
         async with self._db.transaction() as s:
             job = await s.get(Job, job_id)
             if job is None:

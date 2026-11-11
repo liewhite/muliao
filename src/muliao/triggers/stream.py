@@ -41,14 +41,12 @@ from typing import Any
 import anyio
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from muliao.agents.api import Vault
 from muliao.errors import InvalidInput, NotFound
 from muliao.notifications.events import Notify
 from muliao.platform.db import Database, utcnow
 from muliao.platform.messaging import Messaging
 from muliao.platform.output import CHUNK, record_output, tail
-from muliao.platform.sandbox import Confinement
-from muliao.platform.shell import DRAIN_SECONDS, kill_group, redact, spawn_bash, wait_exit_code
+from muliao.platform.shell import DRAIN_SECONDS, kill_group, redact, wait_exit_code
 from muliao.platform.tasks import Clock
 from muliao.routing.api import route_header, route_line
 from muliao.sessions.api import SessionActivity, WorkState
@@ -60,7 +58,7 @@ from muliao.triggers.service import (
     set_state,
 )
 from muliao.triggers.tables import Trigger
-from muliao.workspace.api import denial_note
+from muliao.workspace.api import AgentCommands
 
 log = logging.getLogger(__name__)
 
@@ -225,10 +223,7 @@ class StreamRunner:
         db: Database,
         triggers: TriggerService,
         activity: SessionActivity,
-        vault: Vault,
-        workspace_of: Callable[[str], Path],
-        # agent 的命令关在什么限制里（workspace.writable.Confiner.of）
-        confine: Callable[[str], Awaitable[Confinement]],
+        commands: AgentCommands,
         messaging: Messaging,
         faults: Faults,
         max_bytes: int,
@@ -240,9 +235,7 @@ class StreamRunner:
         self._db = db
         self._triggers = triggers
         self._activity = activity
-        self._vault = vault
-        self._workspace_of = workspace_of
-        self._confine = confine
+        self._commands = commands
         self._messaging = messaging
         self._faults = faults
         self._max_bytes = max_bytes
@@ -322,17 +315,14 @@ class StreamRunner:
     ) -> str:
         """起一次进程并跑到它退出，返回退出的原因。"""
         try:
-            secrets = await self._vault.resolve_many(spec.agent_id, config.secrets, shell=True)
+            agent_shell = await self._commands.prepare(spec.agent_id, config.secrets, shell=True)
         except (NotFound, InvalidInput) as e:
             return f"stream secrets unavailable: {e}"
-        cwd = self._workspace_of(spec.agent_id)
-        log_file = cwd / stderr_log(spec.name)
+        secrets = agent_shell.secrets
+        log_file = agent_shell.cwd / stderr_log(spec.name)
         started = f"--- started {self._clock().isoformat()} ---"
         await anyio.to_thread.run_sync(_prepare_log, log_file, f"{started}\n")
-        confinement = await self._confine(spec.agent_id)
-        proc = await spawn_bash(
-            config.command, cwd=cwd, secrets=secrets, confinement=confinement, pipefail=True
-        )
+        proc = await agent_shell.spawn(config.command, pipefail=True)
         # spawn 之后的任何一步（包括在这里被取消）都要杀掉进程组，所以紧接着进 try
         try:
             log.info("stream started", extra={"trigger": spec.name, "pid": proc.pid})
@@ -359,7 +349,7 @@ class StreamRunner:
         logged = await anyio.to_thread.run_sync(tail, log_file)
         # 日志是追加的，末尾几行里可能有前几次启动（甚至改配置前那条命令）的报错：补说明只看这次的分隔行之后的整行
         # （分隔行已不在末尾几行里时，整段都是这次的）
-        refused = denial_note(confinement, logged.rpartition(started)[2])
+        refused = agent_shell.refusal(logged.rpartition(started)[2])
         stderr_tail = logged[-_ERROR_TAIL_CHARS:].strip()
         return f"stream command exited with {code}: {stderr_tail}" + (
             "" if refused is None else f"\n{refused}"

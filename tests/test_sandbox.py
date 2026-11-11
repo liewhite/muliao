@@ -480,7 +480,7 @@ async def test_a_precheck_refused_a_write_gets_the_note_after_its_error(containe
     blocked.mkdir()
     me = await make_agent("watcher")
     await container.agents.update(me.id, AgentPatch(deny=[f"write:path:{blocked}"]), actor="user")
-    runner = PrecheckRunner(container.vault, container.agents.workspace, container.confiner.of, 30, 1000)
+    runner = PrecheckRunner(container.commands, 30, 1000)
     with pytest.raises(PrecheckFailed, match=r"Operation not permitted\n\[.*is outside"):
         await runner.run(me.id, Precheck(command=f"echo x > {blocked}/state"), None)
     assert await runner.run(me.id, Precheck(command="echo x > state && cat state"), None) == "x\n"
@@ -560,7 +560,7 @@ async def test_a_precheck_cannot_read_a_private_file(container, make_agent):
     config = container.settings.data_dir.parent / "config.toml"
     config.write_text("password = 'hunter22'\n")
     me = await make_agent("watcher")
-    runner = PrecheckRunner(container.vault, container.agents.workspace, container.confiner.of, 30, 1000)
+    runner = PrecheckRunner(container.commands, 30, 1000)
     with pytest.raises(PrecheckFailed, match=r"Operation not permitted\n\[.*private files"):
         await runner.run(me.id, Precheck(command=f"cat {config}"), None)
 
