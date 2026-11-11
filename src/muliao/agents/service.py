@@ -20,8 +20,8 @@ from tomlkit.toml_document import TOMLDocument
 
 from muliao.agents import access_file, agent_file, assets
 from muliao.agents.active import AgentNames, active_row_in, agent_names_in, runnable_row_in
-from muliao.agents.agent_file import AGENT_FILE, AgentFile
-from muliao.agents.assets import PLATFORM, PRIVATE_MEMORY_FILE, AgentDir, Snapshot
+from muliao.agents.agent_file import AGENT_FILE, AgentFile, Thinking
+from muliao.agents.assets import PRIVATE_MEMORY_FILE, AgentDir, Snapshot
 from muliao.agents.distribution import check_agent_rules
 from muliao.agents.ids import new_agent_id
 from muliao.agents.kinds import StoredKind
@@ -29,24 +29,18 @@ from muliao.agents.naming import new_agent_name, normalize_agent_name
 from muliao.agents.permissions import AgentRules
 from muliao.agents.source import AssetSource
 from muliao.agents.tables import Agent
-from muliao.agents.thinking import THINKING_LEVELS, Thinking
-from muliao.errors import Conflict, InvalidInput, NotFound
+from muliao.errors import Conflict, NotFound
 from muliao.platform.db import Database, utcnow
 from muliao.platform.fs import write_atomic
 
 log = logging.getLogger(__name__)
 
-__all__ = ["THINKING_LEVELS", "Thinking"]
-
-GROUP_MAX = 64
+__all__ = ["Thinking"]
 
 
-def normalize_group(group: str) -> str | None:
-    """分组名去掉首尾空白；空串即不分组（None）。"""
-    group = group.strip()
-    if len(group) > GROUP_MAX:
-        raise InvalidInput(f"agent group must be at most {GROUP_MAX} characters, got {len(group)}")
-    return group or None
+def group_input(group: str) -> str | None:
+    """界面与工具给的分组名：去掉首尾空白，空串即不分组（None）；其余规则在 AgentFile。"""
+    return group.strip() or None
 
 
 @dataclass(frozen=True)
@@ -67,7 +61,7 @@ class AgentSpec:
     allow: Sequence[str] = ()
     deny: Sequence[str] = ()
     thinking: Thinking = "default"
-    # 分组名（normalize_group：空串与 None 都是不分组）
+    # 分组名（group_input：空串与 None 都是不分组）
     group: str | None = None
 
 
@@ -288,7 +282,7 @@ class AgentService:
             raise Conflict(f"agent name {name!r} is already taken by another agent")
         taken = {p.name.casefold() for p in snapshot.root.iterdir()} if snapshot.root.is_dir() else set()
         own = snapshot.agents.get(agent_id) if agent_id else None
-        if name.casefold() in taken - ({own.path.name.casefold()} if own else set()) or name == PLATFORM:
+        if name.casefold() in taken - ({own.path.name.casefold()} if own else set()):
             raise Conflict(f"agent name {name!r} is already taken by a directory in {snapshot.root}")
         # 私有记忆名就是 agent 名：任何别的同名记忆（含共享、全局记忆，以及磁盘上没加载的）都占着这个名字
         memory = snapshot.get(StoredKind.MEMORY, name)
@@ -308,7 +302,7 @@ class AgentService:
             spec.description,
             self.defaults.model if spec.model is None else spec.model,
             spec.thinking,
-            None if spec.group is None else normalize_group(spec.group),
+            None if spec.group is None else group_input(spec.group),
         )
         name = fields.name
         rules = AgentRules.of(spec.roles, spec.allow, spec.deny)
@@ -393,7 +387,7 @@ class AgentService:
             config.description if patch.description is None else patch.description,
             config.model if patch.model is None else patch.model,
             config.thinking if patch.thinking is None else patch.thinking,
-            config.group if patch.group is None else normalize_group(patch.group),
+            config.group if patch.group is None else group_input(patch.group),
         )
 
     async def get_active(self, agent_id: str) -> AgentInfo:

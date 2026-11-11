@@ -4,8 +4,8 @@ from muliao.platform.messaging import DomainEvent
 
 
 class AgentDeleting(DomainEvent):
-    """agent 正在删除：各领域清理自己引用它的数据（会话、触发器、它 own 的 secret）；会话全部删除后 agent 领域删除
-    这一行与资源目录（AgentSessionsCleared）。"""
+    """agent 正在删除：订阅它的领域各自清理自己引用它的数据；会话领域删完它的会话后发布 AgentSessionsCleared，agent
+    领域再删除这一行与资源目录。"""
 
     TYPE = "agent.deleting"
     agent_id: str

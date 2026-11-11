@@ -27,8 +27,8 @@ def normalize_agent_name(value: str) -> str:
     return name
 
 
-# 资源目录里平台的目录名（agents.assets.PLATFORM）：agent 不能取
-PLATFORM_DIR = "platform"
+# 资源目录里平台的目录名（唯一的定义处，agents.assets 用它）：agent 不能取
+PLATFORM = "platform"
 
 
 def new_agent_name(value: str) -> str:
@@ -43,9 +43,9 @@ def new_agent_name(value: str) -> str:
 
 def file_name(kind: str, name: str) -> str:
     """能当资源目录里一个文件或目录名的名字（agent 名、私有记忆挪到平台后的记忆名）。"""
-    if "/" in name or "\\" in name or name.startswith(".") or name == PLATFORM_DIR:
+    if "/" in name or "\\" in name or name.startswith(".") or name == PLATFORM:
         raise InvalidInput(
-            f"{kind} name {name!r} must not contain '/' or '\\', start with '.', or be {PLATFORM_DIR!r}: it is a "
+            f"{kind} name {name!r} must not contain '/' or '\\', start with '.', or be {PLATFORM!r}: it is a "
             "directory name in the asset tree"
         )
     return name

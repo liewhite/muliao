@@ -19,6 +19,8 @@ from muliao.platform.db import Database, utcnow
 TRIGRAM = 3
 MAX_TITLE = 200
 IMPORTANCE = range(1, 4)
+# 检索时不给 min_importance 的默认：全部条目（工具 history_search 与界面的接口共用）
+MIN_IMPORTANCE = IMPORTANCE.start
 # 检索条数：不给时的默认与上限（工具 history_search 与界面的接口共用）
 DEFAULT_LIMIT = 20
 MAX_LIMIT = 200
@@ -140,7 +142,7 @@ class HistoryLog:
         query: str | None = None,
         since: date | None = None,
         until: date | None = None,
-        min_importance: int = 1,
+        min_importance: int = MIN_IMPORTANCE,
         limit: int = DEFAULT_LIMIT,
     ) -> list[HistoryRecord]:
         """检索历史。agent_ids 为 None 表示全部 agent；since / until 是含两端的日期。

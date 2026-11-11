@@ -88,6 +88,6 @@ async def page_root(request: Request, agent_id: str, page: str, sig: str) -> Red
 @public_router.get(SITES_PATH + "/{agent_id}/{page}/{sig}/{path:path}", include_in_schema=False)
 async def page_file(request: Request, c: C, agent_id: str, page: str, sig: str, path: str) -> FileResponse:
     _check(request, agent_id, page, sig)
-    await c.agents.get(agent_id)
+    await c.agents.get_active(agent_id)
     f = await anyio.to_thread.run_sync(c.sites.file, agent_id, page, path)
     return FileResponse(f.path, media_type=f.media_type, headers=_PAGE_HEADERS)

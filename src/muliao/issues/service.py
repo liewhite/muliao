@@ -29,7 +29,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.api import agent_names_in, runnable_agent_in
 from muliao.agents.events import AgentDeleting
-from muliao.errors import Conflict, CorruptState, InvalidInput, NotFound
+from muliao.errors import Conflict, InvalidInput, NotFound
+from muliao.issues import conversation
 from muliao.issues.delivery import IssueDelivery
 from muliao.issues.events import PostIssueEvent
 from muliao.issues.graph import (
@@ -73,8 +74,6 @@ from muliao.sessions.api import (
     SessionActivity,
     StopSession,
     WorkState,
-    keyed_session_in,
-    keyed_sessions_among,
     session_in,
 )
 from muliao.sessions.events import RunEnded, RunFailed, SessionDeleted
@@ -88,13 +87,6 @@ def _session_events_lane(event: RunFailed | SessionDeleted) -> str:
     """同一个会话的事件在同一条 lane 上按发布顺序处理：RunFailed 一定先于 SessionDeleted 发布（会话忙时不能删除），
     它记下的动态（带这个会话）一定在删除的置空之前。RunEnded 不在这里：它在提交事务里确认会话还是那个 issue 会话才记。"""
     return f"issues:{event.session_id}"
-
-
-def _issue_of(session_id: str, origin_ref: str | None) -> int:
-    """issue 会话的 origin_ref 是 issue 号（建会话时写入）：缺了是存下的数据坏了，不当成别的来源静默跳过。"""
-    if origin_ref is None:
-        raise CorruptState(f"issue session {session_id} has no issue number (origin_ref)")
-    return int(origin_ref)
 
 
 @dataclass(frozen=True)
@@ -239,19 +231,18 @@ class IssueService:
         （信箱里还有信、在等后台任务）时不算停滞，不问。其他来源的会话、已被删除的 issue 不处理。"""
         if event.origin != Origin.ISSUE or event.stopped or event.paused:
             return no_commit
-        issue_id = _issue_of(event.session_id, event.origin_ref)
+        issue_id = conversation.issue_of(event.session_id, event.origin_ref)
 
         async def commit(s: AsyncSession) -> None:
             issue = await s.get(Issue, issue_id)
             if issue is None:
                 return
-            ref = str(issue_id)
-            current = await keyed_session_in(s, Origin.ISSUE, ref, event.agent_id)
+            current = await conversation.session_in(s, issue_id, event.agent_id)
             if current is None or current.id != event.session_id:
                 # 事件迟到（人工重试）时会话已被删除或换了新的：那次运行已不是它在这个 issue 上的会话，不问
                 return
-            key = (ref, event.agent_id)
-            state = (await self._activity.keyed_work_states_in(s, Origin.ISSUE, [key]))[key]
+            key = (issue_id, event.agent_id)
+            state = (await conversation.work_states_in(self._activity, s, [key]))[key]
             snap = snapshot(issue, (await links_in(s, [issue_id]))[issue_id])
             if not ask_to_settle(snap, event.agent_id, state):
                 return
@@ -291,7 +282,7 @@ class IssueService:
         之后有新动态时照常投递、唤醒它。其他来源的会话、已被删除的 issue 不处理。"""
         if event.origin != Origin.ISSUE:
             return no_commit
-        issue_id = _issue_of(event.session_id, event.origin_ref)
+        issue_id = conversation.issue_of(event.session_id, event.origin_ref)
 
         async def commit(s: AsyncSession) -> None:
             issue = await s.get(Issue, issue_id)
@@ -358,18 +349,16 @@ class IssueService:
         """每个 issue 上谁在做事：各 agent 的 issue 会话、被指派 agent 的会话在跑 / 在等外面的结果 / 空闲，是否停滞，
         以及它的上游、下游与还在等的上游。查询次数与 issue 数无关。"""
         async with self._db.transaction() as s:
-            keyed = await keyed_sessions_among(s, Origin.ISSUE, [str(i.id) for i in issues])
-            keys = {
-                i.id: (str(i.id), agent) for i in issues if (agent := agent_assignee(i.assignee)) is not None
-            }
-            states = await self._activity.keyed_work_states_in(s, Origin.ISSUE, list(keys.values()))
+            keyed = await conversation.sessions_among(s, [i.id for i in issues])
+            keys = {i.id: (i.id, agent) for i in issues if (agent := agent_assignee(i.assignee)) is not None}
+            states = await conversation.work_states_in(self._activity, s, list(keys.values()))
             links = await links_in(s, [i.id for i in issues])
         work = {}
         for i in issues:
             state = states[keys[i.id]] if i.id in keys else None
             snap = snapshot(i, links[i.id])
             work[i.id] = IssueWork(
-                sessions={agent: info.id for agent, info in keyed[str(i.id)].items()},
+                sessions={agent: info.id for agent, info in keyed[i.id].items()},
                 assignee_state=state,
                 stalled=stalled(snap, state),
                 depends_on=links[i.id].depends_on,
@@ -618,7 +607,7 @@ class IssueService:
                     f"issue #{issue_id} is not assigned to an agent: there is no conversation to stop "
                     "(use issue_update to change it)"
                 )
-            target = await keyed_session_in(s, Origin.ISSUE, str(issue_id), agent)
+            target = await conversation.session_in(s, issue_id, agent)
         if target is not None and target.id == session_id:
             raise InvalidInput(
                 f"this is the conversation of issue #{issue_id} itself: change the issue with issue_update instead"

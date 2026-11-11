@@ -15,12 +15,12 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import Select, delete, event, func, select
+from sqlalchemy import Select, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from muliao.errors import Conflict, InvalidInput, NotFound, ServiceUnavailable, TransientError
-from muliao.platform.db import Database, utcnow
+from muliao.platform.db import Database, utcnow, when_committed_in
 from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
 
 log = logging.getLogger(__name__)
@@ -200,7 +200,11 @@ class TaskQueue:
 
     def _wake_after_commit(self, s: AsyncSession) -> None:
         """这个事务提交后唤醒 worker（新的可领取 task 在提交前对它不可见）。"""
-        event.listen(s.sync_session, "after_commit", lambda _s: self.wake.set(), once=True)
+
+        async def wake() -> None:
+            self.wake.set()
+
+        when_committed_in(s, wake)
 
     def enqueue(
         self,

@@ -36,19 +36,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from muliao.agents import access_file, agent_file, memory_file
-from muliao.agents.agent_file import AGENT_FILE
+from muliao.agents.agent_file import AGENT_FILE, Thinking
 from muliao.agents.kinds import StoredKind, label
 from muliao.agents.mcp_config import McpConfig, parse_mcp_file
-from muliao.agents.naming import file_name, nfc, validate_slug
+from muliao.agents.naming import PLATFORM, file_name, nfc, validate_slug
 from muliao.agents.permissions import ADMIN, AgentRules, Role
 from muliao.agents.secrets_format import SecretFile, parse_secret_file, validate_key
 from muliao.agents.skill_package import SKILL_FILE, approval_scripts, parse_frontmatter
-from muliao.agents.thinking import Thinking
 from muliao.errors import Conflict, InvalidInput, NotFound
 
 log = logging.getLogger(__name__)
 
-PLATFORM = "platform"
 ACCESS_FILE = "access.toml"
 PRIVATE_MEMORY_FILE = "memory.md"
 MEMORY_DIR = "memory"

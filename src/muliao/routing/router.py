@@ -115,10 +115,9 @@ async def plan_in(
     每个都解析（后面有没有内容都一样），解析不了或目标不接受的连同那段记在 rejected，要不要整次拒绝由发送方定。"""
     if payload is None:
         return Plan(routed=[await routed_in(s, sender, default, compose(None))], rejected=[])
-    # 先只校验默认目标、命令丢弃：不管有没有内容落到它、内容里的地址会不会解析成同一个目标，它不合法都是发送方的问题
-    await _command_in(s, sender, default, compose(""))
-    # 每个目标：合并的内容、给它定目标的第一个地址（来自默认目标就是 None：投不进去时是默认目标的问题，不是内容的）
-    planned: dict[Destination, tuple[list[str], str | None]] = {}
+    # 每个目标：合并的内容、给它定目标的第一个地址（来自默认目标就是 None：投不进去时是默认目标的问题，不是内容的）。
+    # 默认目标先占第一项：不管有没有内容落到它、内容里的地址会不会解析成同一个目标，它都在下面校验一次
+    planned: dict[Destination, tuple[list[str], str | None]] = {default: ([], None)}
     rejected: list[Rejected] = []
     for address, body in split_routed(payload):
         if address is None:
@@ -134,6 +133,10 @@ async def plan_in(
             planned[target] = ([*bodies, body], None if address is None else first)
     routed: list[Routed] = []
     for target, (bodies, address) in planned.items():
+        if not bodies:
+            # 只有没内容的默认目标会这样：只校验、命令丢弃
+            await _command_in(s, sender, target, compose(""))
+            continue
         body = "\n".join(bodies)
         try:
             routed.append(await routed_in(s, sender, target, compose(body)))

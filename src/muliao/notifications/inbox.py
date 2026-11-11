@@ -12,14 +12,14 @@ SessionRead）与删除（订阅 SessionDeleted）。同一会话的事件在同
 import logging
 from collections.abc import Sequence
 
-from sqlalchemy import delete, event, func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.notifications.events import NotificationEvent, Notify
 from muliao.notifications.push import PushMessage, schedule_in
 from muliao.notifications.tables import Notification
 from muliao.platform.bus import EventBus
-from muliao.platform.db import Database
+from muliao.platform.db import Database, when_committed_in
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tasks import Commit, TaskQueue, no_commit
 from muliao.sessions.api import SessionInfo, session_in
@@ -46,7 +46,11 @@ class Notifications:
         s.add(notification)
         await s.flush()
         created = NotificationEvent(notification_id=notification.id, session_id=notification.session_id)
-        event.listen(s.sync_session, "after_commit", lambda _s: self._bus.publish(created), once=True)
+
+        async def publish() -> None:
+            self._bus.publish(created)
+
+        when_committed_in(s, publish)
         await schedule_in(s, self._queue, notification.id, notification.session_id, agent_id)
 
     def subscribe(self, messaging: Messaging) -> None:

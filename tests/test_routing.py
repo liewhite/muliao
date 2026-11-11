@@ -317,3 +317,39 @@ async def test_a_route_to_an_archived_agent_is_a_bad_target_not_the_trigger_bein
     after = await container.triggers.get_by_name("later")
     assert after.enabled and "archived" in (await _route_faults(container, "later"))["agent:beta"]
     assert {s.agent_id for s in await _sessions(container)} == {alpha.id}  # 自己那段与告警
+
+
+async def test_each_target_of_a_firing_is_checked_once(container, make_agent, monkeypatch):
+    """默认目标有内容时只校验一次（#613：以前先单独校验一次、投递时再校验一次，白分配一个会话 id）。"""
+    from muliao.routing import router
+
+    alpha, _beta = await make_agent("alpha"), await make_agent("beta")
+    trigger = await _webhook(container, alpha.id)
+    checked = []
+    real = router._routed_in
+
+    async def counting(s, sender, target, content):
+        checked.append(target)
+        return await real(s, sender, target, content)
+
+    monkeypatch.setattr(router, "_routed_in", counting)
+    await container.triggers.fire(trigger.id, "mine\n@route agent:beta\nfor beta")
+    assert len(checked) == 2 and len(set(checked)) == 2
+    # 默认目标没有内容时也照样校验一次
+    checked.clear()
+    await container.triggers.fire(trigger.id, "@route agent:beta\nfor beta")
+    assert len(checked) == 2 and len(set(checked)) == 2
+
+
+def test_only_a_route_fault_carries_an_address():
+    """#613：写错的投递地址必带地址，别的来源必不带，由类型当场守住，不靠人记。"""
+    from pydantic import ValidationError
+
+    from muliao.triggers.faults import TriggerFault
+
+    TriggerFault(source=FaultSource.ROUTE, error="e", address="agent:x")
+    TriggerFault(source=FaultSource.PRECHECK, error="e")
+    with pytest.raises(ValidationError):
+        TriggerFault(source=FaultSource.ROUTE, error="e")
+    with pytest.raises(ValidationError):
+        TriggerFault(source=FaultSource.STREAM, error="e", address="agent:x")

@@ -6,15 +6,22 @@ from __future__ import annotations
 import tomllib
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Literal
 
 import tomlkit
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
-from muliao.agents.thinking import Thinking
 from muliao.errors import InvalidInput
 from muliao.platform.values import validation_reason
 
 AGENT_FILE = "agent.toml"
+
+# agent 的思考档位，运行时交给 pydantic_ai 的 ModelSettings.thinking（agent_runtime.llm.model_settings）："default" 不指定
+# 档位，按模型与服务端的默认；"off" 关闭；其余是 effort 档位。各 provider 怎么换算、模型不支持时怎么处理都由 pydantic_ai
+# 与服务端决定，这里不映射。档位之外，运行时在会思考的请求上还要回思考的摘要（llm._thinking_shown），"default" 也带。
+Thinking = Literal["default", "off", "low", "medium", "high", "xhigh"]
+
+GROUP_MAX = 64
 
 
 class AgentFile(BaseModel):
@@ -31,6 +38,16 @@ class AgentFile(BaseModel):
     def _described(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("description must not be empty")
+        return value
+
+    @field_validator("group")
+    @classmethod
+    def _group(cls, value: str | None) -> str | None:
+        """不分组就是没有这个键；有就是去过首尾空白、非空、不超过 GROUP_MAX 个字符的名字。"""
+        if value is not None and (not value or value != value.strip() or len(value) > GROUP_MAX):
+            raise ValueError(
+                f"group must be 1-{GROUP_MAX} characters without leading or trailing whitespace, got {value!r}"
+            )
         return value
 
 

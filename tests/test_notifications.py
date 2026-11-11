@@ -123,7 +123,10 @@ async def test_without_devices_the_notification_is_kept_but_nothing_is_delivered
     async with container.bus.subscribe() as sub:
         await container.notifications.notify(None, "t", "b", None)
         # 前端靠这个事件刷新通知页与未读数，不靠投递任务：没开推送的浏览器也要看到新通知
+        # 和「数据变了」的事件谁先谁后不作约定（都在提交之后）
         created = await asyncio.wait_for(sub.next(), 1)
+        while created.type != "notification":
+            created = await asyncio.wait_for(sub.next(), 1)
     [note] = await container.notifications.list(10)
     assert (created.type, created.notification_id, created.session_id) == ("notification", note.id, None)
     assert note.title == "t"

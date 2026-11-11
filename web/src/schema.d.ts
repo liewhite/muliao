@@ -3504,7 +3504,7 @@ export interface components {
         };
         /**
          * TriggerFault
-         * @description 一条出错：来源、原因；写错的投递地址还带着那个地址（每个地址各一条）。
+         * @description 一条出错：来源、原因；写错的投递地址（且只有它）带着那个地址（每个地址各一条）。
          */
         TriggerFault: {
             source: components["schemas"]["FaultSource"];

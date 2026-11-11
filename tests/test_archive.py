@@ -37,7 +37,7 @@ async def test_group_is_trimmed_kept_on_other_changes_and_cleared_by_an_empty_st
     assert await _group(container, agent.id) == "jobs"
     await container.agents.update(agent.id, AgentPatch(group="   "), actor="user")
     assert await _group(container, agent.id) is None
-    with pytest.raises(InvalidInput, match="at most 64"):
+    with pytest.raises(InvalidInput, match="group must be 1-64"):
         await container.agents.update(agent.id, AgentPatch(group="g" * 65), actor="user")
 
 

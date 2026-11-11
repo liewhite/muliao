@@ -17,7 +17,7 @@ from collections.abc import Callable, Sequence
 from enum import StrEnum
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.errors import DomainError
@@ -50,12 +50,18 @@ _TITLES = {
 
 
 class TriggerFault(BaseModel):
-    """一条出错：来源、原因；写错的投递地址还带着那个地址（每个地址各一条）。"""
+    """一条出错：来源、原因；写错的投递地址（且只有它）带着那个地址（每个地址各一条）。"""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
     source: FaultSource
     error: str
     address: str | None = None
+
+    @model_validator(mode="after")
+    def _address_iff_route(self) -> TriggerFault:
+        if (self.source == FaultSource.ROUTE) != (self.address is not None):
+            raise ValueError(f"a {self.source} fault {'needs' if self.address is None else 'has no'} address")
+        return self
 
 
 _FAULTS = TypeAdapter(list[TriggerFault])

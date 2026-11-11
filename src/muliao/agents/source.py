@@ -22,11 +22,10 @@ from pathlib import Path
 
 from muliao.agents import asset_files
 from muliao.agents.active import agent_names_in
-from muliao.agents.agent_file import AGENT_FILE, AgentFile
+from muliao.agents.agent_file import AGENT_FILE, AgentFile, Thinking
 from muliao.agents.assets import Problem, Snapshot, fingerprint, load_tree
 from muliao.agents.kinds import StoredKind
 from muliao.agents.permissions import GLOBAL_MEMORY
-from muliao.agents.thinking import Thinking
 from muliao.errors import InvalidInput
 from muliao.platform.db import Database
 from muliao.platform.fs import write_atomic

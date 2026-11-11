@@ -9,7 +9,14 @@ from pydantic_ai import FunctionToolset, RunContext
 
 from muliao.agents.api import AgentNames, AgentService
 from muliao.errors import InvalidInput
-from muliao.history.service import DEFAULT_LIMIT, MAX_LIMIT, HistoryEntry, HistoryLog, HistoryRecord
+from muliao.history.service import (
+    DEFAULT_LIMIT,
+    MAX_LIMIT,
+    MIN_IMPORTANCE,
+    HistoryEntry,
+    HistoryLog,
+    HistoryRecord,
+)
 from muliao.issues.api import IssueService, UserActions
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 from muliao.sessions.api import SESSION_READ, Activity, SessionRecall, indented, place
@@ -177,7 +184,7 @@ def history_toolset(
         since: date | None = None,
         until: date | None = None,
         agent: str | None = None,
-        min_importance: int = 1,
+        min_importance: int = MIN_IMPORTANCE,
         limit: int = DEFAULT_LIMIT,
     ) -> list[HistoryFound]:
         """Search the work history (what was done, when, with which issues/commits). Returns a JSON array of

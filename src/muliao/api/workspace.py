@@ -40,7 +40,8 @@ class EntryOut(BaseModel):
 @router.get("/agents/{agent_id}/workspace")
 async def list_workspace(c: C, agent_id: str, path: str = "") -> list[EntryOut]:
     """列出工作目录里 path（相对工作目录，空为根）这一层：目录在前，各自按名称排序。"""
-    await c.agents.get(agent_id)
+    # 正在删除的 agent 按不存在处理（与别的按 agent 读数据的接口同一条规则）
+    await c.agents.get_active(agent_id)
     entries = await anyio.to_thread.run_sync(c.workspace_files.list, agent_id, path)
     return [EntryOut.of(e) for e in entries]
 
@@ -48,7 +49,8 @@ async def list_workspace(c: C, agent_id: str, path: str = "") -> list[EntryOut]:
 @router.get("/agents/{agent_id}/workspace/file")
 async def read_workspace_file(c: C, agent_id: str, path: str) -> FileResponse:
     """工作目录里一个文件的内容。"""
-    await c.agents.get(agent_id)
+    # 正在删除的 agent 按不存在处理（与别的按 agent 读数据的接口同一条规则）
+    await c.agents.get_active(agent_id)
     return file_response(await anyio.to_thread.run_sync(c.workspace_files.file, agent_id, path))
 
 

@@ -6,7 +6,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from muliao.api.deps import C
-from muliao.history.api import DEFAULT_LIMIT, HistoryRecord
+from muliao.history.api import DEFAULT_LIMIT, MIN_IMPORTANCE, HistoryRecord
 
 router = APIRouter()
 
@@ -42,7 +42,7 @@ async def agent_history(
     query: str | None = None,
     since: date | None = None,
     until: date | None = None,
-    min_importance: int = 1,
+    min_importance: int = MIN_IMPORTANCE,
     limit: int = DEFAULT_LIMIT,
 ) -> list[HistoryOut]:
     """agent 的工作历史：没给 query 按日期倒序；给了按关键词检索（规则同工具 history_search）。since / until 含两端。"""

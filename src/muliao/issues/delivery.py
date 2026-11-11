@@ -1,6 +1,5 @@
 """issue 动态的投递：按 rules.recipient 判定这次的动态投给谁，在调用方的事务里发出定向命令 Receive（提交后由
-Messaging 马上执行）。信投进这个 agent 在这个 issue 上唯一的会话：会话领域按发送方（Origin.ISSUE，origin_ref 为
-issue id）与 agent 定位，没有就新建（sessions.api.SessionKey）；这里不存会话 id。这次的动态里 agent 把 issue 交给了
+Messaging 马上执行）。信投进这个 agent 在这个 issue 上唯一的会话：身份见 issues.conversation，没有就新建；这里不存会话 id。这次的动态里 agent 把 issue 交给了
 用户（rules.handed_to_user）时同一事务发通知（Notify）。"""
 
 import logging
@@ -10,13 +9,14 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.api import AgentArchived, agent_names_in
+from muliao.issues import conversation
 from muliao.issues.graph import links_in, snapshot
 from muliao.issues.render import delivery_message, issue_view
 from muliao.issues.rules import agent_actor, from_outside, handed_to_user, recipient
 from muliao.issues.tables import Issue, IssueActivity
 from muliao.notifications.events import Notify
 from muliao.platform.messaging import Messaging
-from muliao.sessions.api import Origin, SenderMail, SessionKey, keyed_session_in, receive_command_in
+from muliao.sessions.api import receive_command_in
 
 log = logging.getLogger(__name__)
 
@@ -63,12 +63,7 @@ class IssueDelivery:
             return
         # 信里只有摘要和这次的动态：只渲染 happened，不读整条时间线
         letter = issue_view(issue, happened, links, await agent_names_in(s), self._tz)
-        inbound = SenderMail(
-            origin=Origin.ISSUE,
-            origin_ref=str(issue.id),
-            content=delivery_message(letter),
-            session=SessionKey(agent_id=to, title=f"#{issue.id} {issue.title}"),
-        )
+        inbound = conversation.mail(issue.id, to, f"#{issue.id} {issue.title}", delivery_message(letter))
         try:
             command = await receive_command_in(s, inbound)
         except AgentArchived:
@@ -88,5 +83,5 @@ async def _from_its_session_in(
     """动作是不是 agent 在它自己这个 issue 会话里做的：是则返回它（这次动态不投回那里）。"""
     if agent_actor(actor) is None or session_id is None:
         return None
-    its_session = await keyed_session_in(s, Origin.ISSUE, str(issue.id), actor)
+    its_session = await conversation.session_in(s, issue.id, actor)
     return actor if its_session is not None and its_session.id == session_id else None

@@ -4,8 +4,8 @@
 1. delete：它的会话有忙的，就拒绝（与删除会话同一条规则）；否则把 agent 标为正在删除
    （不再出现在列表与名称解析里，各领域的写入口按不存在处理，见 agents.service.active_agent_in），同一事务发布
    AgentDeleting。
-2. 各领域订阅 AgentDeleting 清理自己引用它的数据：会话领域删除它的全部会话（标记之后它的会话不会再收到
-   来信），然后发布 AgentSessionsCleared；触发器各自删除。
+2. 各领域订阅 AgentDeleting 清理自己引用它的数据（这里不列举是谁）；其中会话领域删除它的全部会话（标记之后它的
+   会话不会再收到来信），然后发布 AgentSessionsCleared。
 3. 收到 AgentSessionsCleared：删除工作目录与它的资源目录（`assets/<名>/`）和 access.toml 里它的那一节，再删除这一行；
    它名下分发出去的资源（agents.access.Sharing.shared）先挪到平台目录（别的 agent 还在用）。
 
