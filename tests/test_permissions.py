@@ -282,7 +282,7 @@ async def test_an_item_rule_survives_its_item_being_removed(container):
     spec = mcp_config(transport=McpTransport.HTTP, url="http://x")
     await container.mcp.add("echo", spec, owner=None, probe=False)
     await container.distribution.create(RoleSpec("echoer", "echo", ["use:mcp:echo"], []))
-    await container.mcp.remove("echo")
+    await container.catalog.delete(StoredKind.MCP, "echo")
     # 已有的规则不查是否匹配现有资产：改描述照常
     await container.distribution.patch("echoer", description="new", allow=["use:mcp:echo"])
     with pytest.raises(InvalidInput, match="no existing"):

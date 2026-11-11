@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import Literal, get_args
 
 from muliao.agents import access_file, agent_file, memory_file
 from muliao.agents.agent_file import AgentFile
@@ -21,10 +20,9 @@ from muliao.agents.assets import (
     Misplaced,
     Shelf,
     Snapshot,
-    is_directory,
     place_of,
 )
-from muliao.agents.kinds import StoredKind, label
+from muliao.agents.kinds import Section, StoredKind, label, spec_of
 from muliao.agents.mcp_config import parse_mcp_file
 from muliao.agents.naming import validate_slug
 from muliao.agents.secrets_format import parse_secret_file
@@ -32,12 +30,8 @@ from muliao.agents.skill_package import SKILL_FILE, approval_scripts, parse_fron
 from muliao.errors import Conflict, InvalidInput
 from muliao.platform.fs import real
 
-# 讲资源目录怎么改的公共 skill（#501）；报错里指向它的小节，小节标题（`## <名>`）与 Section 逐字一致，改这里要同步改 skill
+# 讲资源目录怎么改的公共 skill（#501）；报错里指向它的小节（kinds.Section，小节标题与它逐字一致）
 SKILL = "assets-files"
-Section = Literal[
-    "Layout", "Memory", "Skills", "MCP servers", "Secrets", "agent.toml", "Roles and permissions"
-]
-SECTIONS: tuple[Section, ...] = get_args(Section)
 
 
 class _Rejected(Exception):
@@ -92,15 +86,6 @@ def vet(
         raise AssetRejected(e.reason, e.section, path, whose, snapshot.root) from e
 
 
-# 每种资源的说明在公共 skill 的哪一节
-_SECTIONS: dict[StoredKind, Section] = {
-    StoredKind.MEMORY: "Memory",
-    StoredKind.SKILL: "Skills",
-    StoredKind.MCP: "MCP servers",
-    StoredKind.SECRET: "Secrets",
-}
-
-
 def _check(
     snapshot: Snapshot,
     rel: tuple[str, ...],
@@ -121,7 +106,7 @@ def _check(
     try:
         place = place_of(rest, None if platform else head)
     except Misplaced as e:
-        raise _Rejected(str(e), "Layout" if e.kind is None else _SECTIONS[e.kind]) from e
+        raise _Rejected(str(e), "Layout" if e.kind is None else spec_of(e.kind).section) from e
     match place:
         case Config():
             if platform:
@@ -130,10 +115,10 @@ def _check(
                 assert owner is not None
                 _agent(owner, text, check_agent)
             return text
-        case Shelf(kind=kind) | Entry(kind=kind, inner=()) if is_directory(kind):
-            raise _Rejected(f"{'/'.join(rest)} is a directory, not a file", _SECTIONS[kind])
+        case Shelf(kind=kind) | Entry(kind=kind, inner=()) if spec_of(kind).is_directory:
+            raise _Rejected(f"{'/'.join(rest)} is a directory, not a file", spec_of(kind).section)
         case Entry(kind=kind, name=name, inner=inner):
-            section = _SECTIONS[kind]
+            section = spec_of(kind).section
             item = snapshot.root / head / Path(*rest[: len(rest) - len(inner)])
             _new(snapshot, kind, name, item, platform, section)
             try:

@@ -68,7 +68,9 @@ class AgentConfigOut(BaseModel):
 
     @classmethod
     def of(cls, d: AgentDir) -> "AgentConfigOut":
-        return cls(description=d.description, model=d.model, thinking=d.thinking, group=d.group)
+        return cls(
+            description=d.file.description, model=d.file.model, thinking=d.file.thinking, group=d.file.group
+        )
 
 
 class AgentOut(BaseModel):

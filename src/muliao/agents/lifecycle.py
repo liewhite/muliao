@@ -76,9 +76,9 @@ class AgentLifecycle:
         if blocking:
             log.info("agent deletion refused: busy", extra={"agent": agent_id, "blocked_by": blocking})
             raise Conflict(f"agent {agent.name!r} is working right now; stop its sessions first, then delete")
-        # 删除最后要改 access.toml（_retire_assets）：它不合法时先拒绝，不让 agent 停在正在删除、一直重放
+        # 删除最后要改 access.toml（_retire_assets）：同样的改动现在就算一遍，不合法时先拒绝，不让 agent 停在正在删除、一直重放
         snapshot = await self._source.snapshot()
-        await asyncio.to_thread(access_file.check_valid, snapshot.access_path, snapshot.tools)
+        await asyncio.to_thread(_plan_retire, snapshot, agent.name)
         async with self._db.transaction() as s:
             await mark_deleting_in(s, agent_id, actor)
             self._messaging.publish_in(s, AgentDeleting(agent_id=agent_id))
@@ -150,7 +150,12 @@ def _retire_assets(snapshot: Snapshot, agent_id: str) -> None:
                     "asset moved to the platform with its agent deleted",
                     extra={"kind": kind, "asset": a.name},
                 )
-    access_file.edit(
-        snapshot.access_path, snapshot.tools, lambda doc: access_file.remove_agent(doc, directory.name)
-    )
+    _plan_retire(snapshot, directory.name).apply()
     assets.remove(directory)
+
+
+def _plan_retire(snapshot: Snapshot, name: str) -> access_file.AccessEdit:
+    """去掉 access.toml 里名为 name 的 agent 那一节的改动（还没写）。"""
+    return access_file.plan(
+        snapshot.access_path, snapshot.tools, lambda doc: access_file.remove_agent(doc, name)
+    )

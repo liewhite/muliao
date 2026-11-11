@@ -1,5 +1,6 @@
-"""AI 资源池（AssetCatalog）：跨种类看资源——全部资源与收录它们的角色（界面的资源页）、转移 owner（把文件或目录挪到新 owner
-的目录下）。各种类自己的内容与写入在各 store（skills、mcp、secrets、memory）；能用、能改的规则是分发子域的（agents.access）。"""
+"""AI 资源池（AssetCatalog）：跨种类看资源——全部资源与收录它们的角色（界面的资源页）——与各种类通用的写：删除、转移
+owner（把文件或目录挪到新 owner 的目录下）。各种类自己的内容与写入在各 store（skills、mcp、secrets、memory）；能用、能改的
+规则是分发子域的（agents.access）。"""
 
 from __future__ import annotations
 
@@ -11,13 +12,25 @@ from pathlib import Path
 
 from muliao.agents import assets
 from muliao.agents.access import sharing_of
+from muliao.agents.assets import McpFile, MemoryText, SkillDir
 from muliao.agents.kinds import Kind, StoredKind, as_kind, label
-from muliao.agents.mcp import McpServer, server_of
-from muliao.agents.permissions import ToolSpec
+from muliao.agents.permissions import GLOBAL_MEMORY, ToolSpec
+from muliao.agents.secrets_format import SecretFile
 from muliao.agents.source import AssetSource
 from muliao.errors import Conflict, InvalidInput, NotFound
 
 log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class SecretDetail:
+    """资源池里 secret 的详情：只有 allow_shell（agents.secrets），密文不出 agent 领域。"""
+
+    allow_shell: bool
+
+
+# 种类专有的详情：内置工具的读写与是否管理类；存成文件的是它的内容（agents.assets.Content），secret 换成 SecretDetail
+Detail = ToolSpec | MemoryText | SkillDir | McpFile | SecretDetail
 
 
 @dataclass(frozen=True)
@@ -34,13 +47,8 @@ class CatalogAsset:
     # 分发出去了（agents.access.Sharing.shared）：否则只有 owner 能用（归平台的就没有 agent 能用）
     shared: bool
     # 文件或目录的位置；内置工具为 None
-    path: Path | None = None
-    # 内置工具的读写与是否管理类；别的种类为 None
-    tool: ToolSpec | None = None
-    # MCP server 的配置与启用状态；别的种类为 None
-    mcp: McpServer | None = None
-    # secret 的 allow_shell（agents.secrets）；别的种类为 None
-    allow_shell: bool | None = None
+    path: Path | None
+    detail: Detail
 
 
 class AssetCatalog:
@@ -60,7 +68,8 @@ class AssetCatalog:
                 None,
                 sharing.including(Kind.TOOL, t.name),
                 sharing.shared(Kind.TOOL, t.name, None),
-                tool=t,
+                None,
+                t,
             )
             for t in snapshot.tools.specs
         ]
@@ -73,13 +82,22 @@ class AssetCatalog:
                 a.updated_at,
                 sharing.including(as_kind(kind), a.name),
                 sharing.shared(as_kind(kind), a.name, a.owner),
-                path=a.path,
-                mcp=server_of(a) if kind == StoredKind.MCP else None,
-                allow_shell=a.secret.allow_shell if a.secret is not None else None,
+                a.path,
+                SecretDetail(a.content.allow_shell) if isinstance(a.content, SecretFile) else a.content,
             )
             for kind in sorted(StoredKind, key=lambda k: k.value)
             for a in snapshot.of_kind(kind)
         ]
+
+    async def delete(self, kind: StoredKind, name: str) -> None:
+        """删掉这项资源的文件或目录（用户在界面上删）。全局记忆不能删（base 固定收录它）。收录它的规则留着：同名的再建
+        时分发不丢（distribution._check_new）。"""
+        if kind == StoredKind.MEMORY and name == GLOBAL_MEMORY:
+            raise InvalidInput(f"the global memory {GLOBAL_MEMORY!r} cannot be deleted")
+        async with self._source.writing() as snapshot:
+            asset = snapshot.asset(kind, name)
+            await asyncio.to_thread(assets.remove, asset.path)
+        log.info("asset deleted", extra={"kind": kind, "asset": name})
 
     async def transfer(self, kind: StoredKind, name: str, owner: str | None) -> None:
         """把资源挪到 owner（agent 的 id；None 归平台）的目录下（用户在界面上转）。内容不变；谁能用随

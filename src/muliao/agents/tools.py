@@ -73,8 +73,8 @@ def agent_directory(agents: Iterable[AgentView]) -> list[AgentGroup]:
     groups: dict[str | None, list[AgentEntry]] = {}
     for a in agents:
         if not a.info.archived and a.config is not None:
-            groups.setdefault(a.config.group, []).append(
-                AgentEntry(name=a.info.name, description=a.config.description)
+            groups.setdefault(a.config.file.group, []).append(
+                AgentEntry(name=a.info.name, description=a.config.file.description)
             )
     order = sorted(groups, key=lambda g: (g is not None, g or ""))
     return [AgentGroup(group=g, agents=groups[g]) for g in order]
@@ -117,11 +117,11 @@ def agents_toolset(
         reach = await distribution.reach(target.id)
         return AgentDetail(
             name=target.name,
-            description=config.description,
-            group=config.group,
+            description=config.file.description,
+            group=config.file.group,
             archived=target.archived,
-            model=config.model,
-            thinking=config.thinking,
+            model=config.file.model,
+            thinking=config.file.thinking,
             roles=list(rules.roles),
             allow=list(rules.allow),
             deny=list(rules.deny),

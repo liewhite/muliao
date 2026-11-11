@@ -94,7 +94,7 @@ class AssetSource:
         problems = []
         for a in snapshot.agents.values():
             try:
-                self._check_model(a.model, a.thinking)
+                self._check_model(a.file.model, a.file.thinking)
             except InvalidInput as e:
                 problems.append(
                     Problem(a.path / AGENT_FILE, f"{e}; the agent cannot run until this is fixed", a.id)

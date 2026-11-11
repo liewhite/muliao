@@ -247,7 +247,7 @@ function SkillDraft({ latest }: { latest: Skill }) {
 
   async function remove() {
     const ok = await confirm({ title: `删除 skill「${name}」？`, confirmLabel: '删除', danger: true })
-    if (ok && (await action.run(() => api.deleteSkill(name)))) navigate(SKILLS)
+    if (ok && (await action.run(() => api.deleteAsset('skill', name)))) navigate(SKILLS)
   }
 
   return (

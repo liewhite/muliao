@@ -1,12 +1,13 @@
-"""`platform/access.toml`（角色定义、各 agent 的角色与 allow / deny）的格式：读（read / parse）与平台自己写（edit 加各项
+"""`platform/access.toml`（角色定义、各 agent 的角色与 allow / deny）的格式：读（read / parse）与平台自己写（plan 加各项
 改动）都在这一处。
 
 读：语法、字段、规则格式任何一处不合法，整份都不合法（readable 为 False，只剩内置角色的固定部分，没有任何 agent 的
 规则），由读树的一方决定沿用什么（agents.assets，#550）——跳过写坏的一条（尤其 deny 或带 deny 的角色）等于放宽权限
 （#573）。只引用了不存在的东西（没加载的 agent 目录、未知角色）只收窄：跳过那个引用、记一条问题，其余照常。
 纯函数，问题交给调用方（读树的 agents.assets、写前校验的 agents.asset_files）。
-写：界面上的角色与 agent 规则、建 / 改名 / 删 agent，用 tomlkit 读改写，人手写的注释与排版保留；现在的文件不合法时
-拒绝（Conflict，先修好它）；调用方在 AssetSource.writing() 里串行调用。"""
+写：界面上的角色与 agent 规则、建 / 改名 / 删 agent，都经 plan：先校验（现在的文件不合法时 Conflict，先修好它；改完
+不合法时 InvalidInput）、算出新内容，什么都不写；AccessEdit.apply 才写入并返回改回去的函数。用 tomlkit 读改写，人手写的注释与
+排版保留；调用方在 AssetSource.writing() 里串行调用。"""
 
 from __future__ import annotations
 
@@ -217,9 +218,31 @@ class _Parser:
 # ---- 写 ----
 
 
-def edit(path: Path, tools: ToolTable, change: Callable[[TOMLDocument], None]) -> None:
-    """读出 path（不存在就是空文档）、交给 change 改、原子写回；现在的文件不合法（与读树同一套规则）时 Conflict，不写。
-    tools 只因读法（parse）要算内置角色的固定规则而传，不影响合法与否。同步 IO。"""
+@dataclass(frozen=True)
+class AccessEdit:
+    """对 access.toml 的一次改动：已校验、还没写（plan）。before 是改之前的内容（没有文件为 None）。"""
+
+    path: Path
+    before: str | None
+    after: str
+
+    def apply(self) -> Callable[[], None]:
+        """原子写入，返回把文件改回 before 的函数（调用方后面的步骤失败时用，仍在同一个 writing() 里）。同步 IO。"""
+        write_atomic(self.path, self.after)
+
+        def undo() -> None:
+            if self.before is None:
+                self.path.unlink(missing_ok=True)
+            else:
+                write_atomic(self.path, self.before)
+
+        return undo
+
+
+def plan(path: Path, tools: ToolTable, change: Callable[[TOMLDocument], None]) -> AccessEdit:
+    """平台改 access.toml 的唯一入口：读出 path（不存在就是空文档）、交给 change 改，返回还没写的改动。现在的文件不合法
+    （与读树同一套规则）时 Conflict，由 admin 先修好它；改完不合法时 InvalidInput。要先写别的文件的调用方（建、改名 agent）
+    先 plan 再动手：不合法时什么都没写。tools 只因读法（parse）要算内置角色的固定规则而传，不影响合法与否。同步 IO。"""
     text = _valid_text(path, tools)
     doc = tomlkit.parse(text) if text is not None else tomlkit.document()
     change(doc)
@@ -229,12 +252,7 @@ def edit(path: Path, tools: ToolTable, change: Callable[[TOMLDocument], None]) -
     after = parse(out, {}, tools)
     if not after.readable:
         raise InvalidInput("; ".join(p.reason for p in after.problems))
-    write_atomic(path, out)
-
-
-def check_valid(path: Path, tools: ToolTable) -> None:
-    """path 现在的内容整份合法，否则 Conflict：平台不在不合法的文件上改（与读树同一套规则），由 admin 先修好它。同步 IO。"""
-    _valid_text(path, tools)
+    return AccessEdit(path, text, out)
 
 
 def _valid_text(path: Path, tools: ToolTable) -> str | None:

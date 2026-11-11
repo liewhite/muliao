@@ -10,7 +10,7 @@ import anyio
 import pytest
 from pydantic_ai.messages import UserPromptPart
 
-from muliao.agents.api import AgentPatch
+from muliao.agents.api import AgentPatch, StoredKind
 from muliao.errors import InvalidInput, NotFound
 from muliao.sessions.api import Origin, SessionActivity
 from muliao.sessions.mailbox import queued_in
@@ -340,7 +340,7 @@ async def test_unusable_secrets_are_refused_when_the_config_changes_or_it_is_ree
         await container.triggers.update(trigger.id, config={"command": "sleep 30", "secrets": ["NOPE"]})
 
     await container.triggers.update(trigger.id, enabled=False)
-    await container.vault.delete("TOKEN")
+    await container.catalog.delete(StoredKind.SECRET, "TOKEN")
     # 只改说明时界面带着原配置：配置没变，不核对
     renamed = await container.triggers.update(
         trigger.id, prompt="new", config={"command": "sleep 30", "secrets": ["TOKEN"]}
@@ -355,7 +355,7 @@ async def test_a_secret_gone_after_creation_is_recorded_as_the_error(container, 
     alpha = (await make_agent()).id
     await container.vault.set("NOPE", "v", "", actor="user", owner=alpha)
     await _create(container, alpha, "sleep 30", secrets=["NOPE"])
-    await container.vault.delete("NOPE")
+    await container.catalog.delete(StoredKind.SECRET, "NOPE")
 
     async with _running(_runner(container)):
 

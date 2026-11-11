@@ -10,7 +10,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -18,7 +17,6 @@ from pathlib import Path
 from muliao.agents import assets, memory_file
 from muliao.agents.access import grants_for, usable_by
 from muliao.agents.kinds import Kind, StoredKind, label
-from muliao.agents.permissions import GLOBAL_MEMORY
 from muliao.agents.source import AssetSource
 from muliao.errors import InvalidInput
 
@@ -51,6 +49,10 @@ class MemoryInfo:
     version: str
 
 
+def _text(a: assets.Asset) -> str:
+    return assets.content_of(a, assets.MemoryText).text
+
+
 class MemoryStore:
     def __init__(self, source: AssetSource):
         self._source = source
@@ -62,7 +64,8 @@ class MemoryStore:
 
     async def read(self, name: str) -> MemoryInfo:
         a = (await self._source.snapshot()).asset(_KIND, name)
-        return MemoryInfo(a.name, a.owner, a.text, a.updated_at, a.path, assets.version_of(a.text))
+        text = _text(a)
+        return MemoryInfo(a.name, a.owner, text, a.updated_at, a.path, assets.version_of(text))
 
     async def for_run(self, agent_id: str) -> list[MemoryBlock]:
         """组装一次运行的指令时读：这个 agent 能用的每一块（自己的与规则分来的），按名字。"""
@@ -70,7 +73,7 @@ class MemoryStore:
         grants = grants_for(snapshot, agent_id)
         return [
             MemoryBlock(
-                a.name, a.text, grants.writes(Kind.MEMORY, a.name, a.owner), a.owner == agent_id, a.path
+                a.name, _text(a), grants.writes(Kind.MEMORY, a.name, a.owner), a.owner == agent_id, a.path
             )
             for a in usable_by(snapshot, _KIND, grants)
         ]
@@ -102,11 +105,3 @@ class MemoryStore:
                     "other memories belong to the platform"
                 )
         return snapshot.path_of(_KIND, name, owner)
-
-    async def delete(self, name: str) -> None:
-        """全局记忆不能删（base 固定收录它）。"""
-        if name == GLOBAL_MEMORY:
-            raise InvalidInput(f"the global memory {GLOBAL_MEMORY!r} cannot be deleted")
-        async with self._source.writing() as snapshot:
-            asset = snapshot.asset(_KIND, name)
-            await asyncio.to_thread(assets.remove, asset.path)

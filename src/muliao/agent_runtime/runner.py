@@ -179,7 +179,7 @@ class AgentRuntime:
         return build_instructions(
             agent_id=agent.id,
             agent_name=agent.name,
-            agent_description=agent.description,
+            agent_description=agent.file.description,
             workspace=scope.workspace,
             asset_dir=agent.path,
             origin_note=origin_note,
@@ -240,13 +240,13 @@ class AgentRuntime:
         ctx = {
             "agent": scope.agent_id,
             "session_id": scope.session_id,
-            "model": config.model,
-            "thinking": config.thinking,
+            "model": config.file.model,
+            "thinking": config.file.thinking,
             "workspace": str(scope.workspace),
         }
-        resolved, settings = self._model(config.model, config.thinking)
+        resolved, settings = self._model(config.file.model, config.file.thinking)
         async with self._billed(
-            RunKind.RUN, scope.agent_id, config.model, scope.session_id, ctx, len(history)
+            RunKind.RUN, scope.agent_id, config.file.model, scope.session_id, ctx, len(history)
         ) as meter:
             with tool_input_kept_out_of_failures():
                 async with self._pai.iter(
@@ -284,11 +284,11 @@ class AgentRuntime:
         ctx = {
             "agent": config.id,
             "session_id": session_id,
-            "model": config.model,
-            "thinking": config.thinking,
+            "model": config.file.model,
+            "thinking": config.file.thinking,
         }
-        resolved, settings = self._model(config.model, config.thinking)
-        async with self._billed(RunKind.COMPACTION, config.id, config.model, session_id, ctx) as meter:
+        resolved, settings = self._model(config.file.model, config.file.thinking)
+        async with self._billed(RunKind.COMPACTION, config.id, config.file.model, session_id, ctx) as meter:
             result = await self._pai.run(
                 prompt,
                 model=resolved,

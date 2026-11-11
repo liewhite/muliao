@@ -18,13 +18,18 @@ from muliao.agents.api import (
     MAX_PACKAGE_BYTES,
     USER,
     CatalogAsset,
-    Kind,
+    McpConfig,
+    McpFile,
     McpServer,
     McpTransport,
     MemoryInfo,
+    MemoryText,
+    SecretDetail,
+    SkillDir,
     SkillImport,
     SkillMeta,
     StoredKind,
+    ToolSpec,
     mcp_config,
 )
 from muliao.api.deps import C, read_limited
@@ -83,15 +88,15 @@ class McpConfigOut(BaseModel):
     enabled: bool
 
     @classmethod
-    def fields_of(cls, m: McpServer) -> dict:
+    def fields_of(cls, config: McpConfig, enabled: bool) -> dict:
         return {
-            "transport": m.transport,
-            "command": m.config.command,
-            "args": m.config.args,
-            "url": m.config.url,
-            "env": m.config.env,
-            "headers": m.config.headers,
-            "enabled": m.enabled,
+            "transport": config.transport,
+            "command": config.command,
+            "args": config.args,
+            "url": config.url,
+            "env": config.env,
+            "headers": config.headers,
+            "enabled": enabled,
         }
 
 
@@ -131,20 +136,16 @@ def _asset_out(
         "shared": e.shared,
     }
     stored = {**common, "path": str(e.path)}
-    match e.kind:
-        case Kind.TOOL:
-            tool = e.tool
-            assert tool is not None
+    match e.detail:
+        case ToolSpec() as tool:
             return CatalogToolOut(kind="tool", access=tool.access.value, admin=tool.admin, **common)
-        case Kind.SKILL:
+        case SkillDir():
             return CatalogSkillOut(kind="skill", **stored)
-        case Kind.MCP:
-            assert e.mcp is not None
-            return CatalogMcpOut(kind="mcp", **stored, **McpConfigOut.fields_of(e.mcp))
-        case Kind.SECRET:
-            assert e.allow_shell is not None
-            return CatalogSecretOut(kind="secret", allow_shell=e.allow_shell, **stored)
-        case Kind.MEMORY:
+        case McpFile(config=config, enabled=enabled):
+            return CatalogMcpOut(kind="mcp", **stored, **McpConfigOut.fields_of(config, enabled))
+        case SecretDetail(allow_shell=allow_shell):
+            return CatalogSecretOut(kind="secret", allow_shell=allow_shell, **stored)
+        case MemoryText():
             return CatalogMemoryOut(kind="memory", **stored)
 
 
@@ -155,7 +156,13 @@ async def list_assets(c: C) -> list[CatalogAssetOut]:
     return [_asset_out(e) for e in await c.catalog.catalog()]
 
 
-# ---- 存成文件的资源通用：owner ----
+# ---- 存成文件的资源通用：删除、owner ----
+
+
+@router.delete("/assets/{kind}/{name}", status_code=204)
+async def delete_asset(c: C, kind: StoredKind, name: str) -> None:
+    """删掉文件（skill 是整个目录）。全局记忆不能删（422）；内置工具不在这里（kind 不接受 tool）。"""
+    await c.catalog.delete(kind, name)
 
 
 class OwnerIn(BaseModel):
@@ -216,12 +223,6 @@ async def put_memory(c: C, name: str, body: MemoryIn) -> MemoryOut:
     return _memory_out(c, await c.memory.put(name, body.content, version=body.version, owner=body.owner))
 
 
-@router.delete("/assets/memory/{name}", status_code=204)
-async def delete_memory(c: C, name: str) -> None:
-    """全局记忆不能删（422）。"""
-    await c.memory.delete(name)
-
-
 # ---- skill ----
 
 
@@ -264,11 +265,6 @@ async def put_skill(c: C, name: str, body: SkillIn) -> SkillOut:
     """新建的归 owner；已有的整体改写正文与描述（附件不变），owner 不变。"""
     meta = await c.skills.write(name, body.description, body.body, owner=body.owner, version=body.version)
     return SkillOut.of(meta)
-
-
-@router.delete("/assets/skill/{name}", status_code=204)
-async def delete_skill(c: C, name: str) -> None:
-    await c.skills.delete(name)
 
 
 @router.get("/assets/skill/{name}/files")
@@ -374,7 +370,9 @@ class McpOut(McpConfigOut):
 
     @classmethod
     def of(cls, m: McpServer, tools: list[str] | None = None) -> "McpOut":
-        return cls(owner=m.owner, name=m.name, tools=tools or [], **McpConfigOut.fields_of(m))
+        return cls(
+            owner=m.owner, name=m.name, tools=tools or [], **McpConfigOut.fields_of(m.config, m.enabled)
+        )
 
 
 class EnabledIn(BaseModel):
@@ -399,11 +397,6 @@ async def add_mcp(c: C, name: str, body: McpIn) -> McpOut:
     )
     server, tools = await c.mcp.add(name, config, owner=body.owner, probe=body.probe)
     return McpOut.of(server, tools)
-
-
-@router.delete("/assets/mcp/{name}", status_code=204)
-async def delete_mcp(c: C, name: str) -> None:
-    await c.mcp.remove(name)
 
 
 @router.put("/assets/mcp/{name}/enabled")
@@ -456,8 +449,3 @@ async def set_secret(c: C, name: str, body: SecretIn) -> None:
     await c.vault.set(
         name, body.value, body.description, actor=USER, owner=body.owner, allow_shell=body.allow_shell
     )
-
-
-@router.delete("/assets/secret/{name}", status_code=204)
-async def delete_secret(c: C, name: str) -> None:
-    await c.vault.delete(name)

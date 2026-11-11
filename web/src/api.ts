@@ -280,6 +280,9 @@ export const api = {
   /** 全部 AI 资源：内置工具在前，资源文件按种类、名称 */
   assets: () => branded<CatalogAsset[]>(call('get', '/api/assets')),
   /** 把 skill / MCP server / secret / 记忆挪到另一个 owner（null 归平台）的目录下；内容与收录它的角色不变 */
+  /** 删掉 skill（整个目录）/ MCP server / secret / 记忆的文件；全局记忆不能删 */
+  deleteAsset: (kind: StoredKind, name: string) =>
+    call('delete', '/api/assets/{kind}/{name}', { path: { kind, name } }),
   transferAsset: (kind: StoredKind, name: string, owner: AgentId | null) =>
     call('put', '/api/assets/{kind}/{name}/owner', { path: { kind, name }, body: { owner } }),
   /** agent 的工作历史：不给 query 按日期倒序；给了按关键词检索 */
@@ -325,12 +328,10 @@ export const api = {
   /** 新建的归 owner（缺省为平台）；已有的整体改写正文，owner 不变。version 是打开时的版本（新建为 null），期间被别处改过 409 */
   saveMemory: (name: string, body: WithAgentId<Schemas['MemoryIn'], 'owner'>) =>
     branded<Memory>(call('put', '/api/assets/memory/{name}', { path: { name }, body })),
-  deleteMemory: (name: string) => call('delete', '/api/assets/memory/{name}', { path: { name } }),
 
   skill: (name: string) => call('get', '/api/assets/skill/{name}', { path: { name } }),
   /** 新建的归 owner；已有的整体改写正文与描述，owner 不变。version 同 saveMemory */
   saveSkill: (name: string, body: Schemas['SkillIn']) => call('put', '/api/assets/skill/{name}', { path: { name }, body }),
-  deleteSkill: (name: string) => call('delete', '/api/assets/skill/{name}', { path: { name } }),
   /** skill 目录里 path（相对 skill 目录，空为根）这一层，同工作目录浏览 */
   skillFiles: (name: string, path: string) =>
     call('get', '/api/assets/skill/{name}/files', { path: { name }, query: { path } }),
@@ -436,7 +437,6 @@ export const api = {
   probeMcp: (name: string) => call('post', '/api/assets/mcp/{name}/tools', { path: { name } }),
   setMcpEnabled: (name: string, enabled: boolean) =>
     branded<McpServer>(call('put', '/api/assets/mcp/{name}/enabled', { path: { name }, body: { enabled } })),
-  deleteMcp: (name: string) => call('delete', '/api/assets/mcp/{name}', { path: { name } }),
 
   /** 新建的归 owner（null 为平台）；已有的改值与描述，owner 不变；allowShell 为 null：已有的保持原值，新建的允许 */
   setSecret: (owner: AgentId | null, key: string, value: string, description: string, allowShell: boolean | null) =>
@@ -444,7 +444,6 @@ export const api = {
       path: { name: key },
       body: { owner, value, description, allow_shell: allowShell },
     }),
-  deleteSecret: (key: string) => call('delete', '/api/assets/secret/{name}', { path: { name: key } }),
 
   /** owner 给出时只列这个项目（agent）负责的 issue */
   issues: (owner?: string) => call('get', '/api/issues', { query: { owner } }),

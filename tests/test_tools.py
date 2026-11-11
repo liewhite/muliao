@@ -992,4 +992,4 @@ async def test_thinking_the_model_would_silently_drop_is_rejected(container, mak
     await container.agents.update(me.id, AgentPatch(thinking="medium"), actor="user")
     with pytest.raises(InvalidInput, match="does not take a thinking setting"):
         await container.agents.update(me.id, AgentPatch(model="no-thinking"), actor="user")
-    assert (await container.agents.view(me.id)).config.model == "always"
+    assert (await container.agents.view(me.id)).config.file.model == "always"

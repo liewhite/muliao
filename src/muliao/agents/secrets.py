@@ -50,8 +50,7 @@ class SecretInfo:
 
 
 def _file(a: assets.Asset) -> SecretFile:
-    assert a.secret is not None, "a secret asset always carries its file content"
-    return a.secret
+    return assets.content_of(a, SecretFile)
 
 
 def _info(a: assets.Asset) -> SecretInfo:
@@ -89,13 +88,6 @@ class Vault:
         # 别的 agent 可能依赖它：记录谁改了哪个 key（不记值）
         log.info("secret set", extra={"owner": owner, "key": key, "actor": actor})
         return allow_shell
-
-    async def delete(self, key: str) -> None:
-        """用户在界面上删。"""
-        async with self._source.writing() as snapshot:
-            asset = snapshot.asset(_KIND, key)
-            await asyncio.to_thread(assets.remove, asset.path)
-        log.info("secret deleted", extra={"key": key})
 
     async def get(self, key: str) -> SecretInfo:
         """一个 secret 的信息（不含值）。"""

@@ -161,7 +161,7 @@ class SkillStore:
         found = {a.name: a for a in usable(await self._source.snapshot(), _KIND, agent)}
         if name not in found:
             raise NotFound(f"skill {name!r} not found among the skills you can use (see your skill index)")
-        return SkillScripts(found[name].path, found[name].approval)
+        return SkillScripts(found[name].path, assets.content_of(found[name], assets.SkillDir).approval)
 
     async def read(self, name: str) -> Skill:
         asset = (await self._source.snapshot()).asset(_KIND, name)
@@ -218,8 +218,3 @@ class SkillStore:
             await asyncio.to_thread(_replace_dir, directory, package.files)
         meta = _meta((await self._source.snapshot()).asset(_KIND, name))
         return SkillImport(meta, package.skipped)
-
-    async def delete(self, name: str) -> None:
-        async with self._source.writing() as snapshot:
-            asset = snapshot.asset(_KIND, name)
-            await asyncio.to_thread(assets.remove, asset.path)

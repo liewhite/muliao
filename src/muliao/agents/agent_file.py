@@ -51,6 +51,10 @@ class AgentFile(BaseModel):
         return value
 
 
+# 能改的配置字段（id 把目录与 agent 绑在一起，不改）：新建与修改 agent 时按名字取（agents.service）
+CONFIG_FIELDS: tuple[str, ...] = tuple(f for f in AgentFile.model_fields if f != "id")
+
+
 def parse(text: str) -> AgentFile:
     """不合格式时 InvalidInput。"""
     try:

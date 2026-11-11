@@ -25,7 +25,7 @@ def _new_session(agent_id: str) -> UserMessage:
 async def _group(container, agent_id: str) -> str | None:
     config = (await container.agents.view(agent_id)).config
     assert config is not None
-    return config.group
+    return config.file.group
 
 
 async def test_group_is_trimmed_kept_on_other_changes_and_cleared_by_an_empty_string(container):

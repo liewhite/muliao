@@ -121,7 +121,7 @@ function MemoryItem({ item, onChange }: { item: AssetOf<'memory'>; onChange: () 
       confirmLabel: '删除',
       danger: true,
     })
-    if (ok) await action.run(() => api.deleteMemory(item.name).then(onChange))
+    if (ok) await action.run(() => api.deleteAsset('memory', item.name).then(onChange))
   }
 
   return (

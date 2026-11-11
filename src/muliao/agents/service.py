@@ -6,10 +6,9 @@ agents.lifecycle，它对 agents 表的写入用这里的 `*_in`。"""
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import logging
 import shutil
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -19,14 +18,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from tomlkit.toml_document import TOMLDocument
 
 from muliao.agents import access_file, agent_file, assets
-from muliao.agents.active import AgentNames, active_row_in, agent_names_in, runnable_row_in
-from muliao.agents.agent_file import AGENT_FILE, AgentFile, Thinking
+from muliao.agents.access_file import AccessEdit
+from muliao.agents.active import (
+    AgentNames,
+    active_row_in,
+    agent_names_in,
+    listed_in,
+    named_row_in,
+    runnable_row_in,
+)
+from muliao.agents.agent_file import AGENT_FILE, CONFIG_FIELDS, AgentFile, Thinking
 from muliao.agents.assets import PRIVATE_MEMORY_FILE, AgentDir, Snapshot
 from muliao.agents.distribution import check_agent_rules
-from muliao.agents.ids import new_agent_id
 from muliao.agents.kinds import StoredKind
-from muliao.agents.naming import new_agent_name, normalize_agent_name
-from muliao.agents.permissions import AgentRules, ToolTable
+from muliao.agents.naming import new_agent_id, new_agent_name
+from muliao.agents.permissions import AgentRules
 from muliao.agents.source import AssetSource
 from muliao.agents.tables import Agent
 from muliao.errors import Conflict, NotFound
@@ -77,17 +83,13 @@ class AgentPatch:
     thinking: Thinking | None = None
     group: str | None = None
 
-    def given(self) -> frozenset[str]:
-        """给出了（要改）的字段名。"""
-        return frozenset(f.name for f in dataclasses.fields(self) if getattr(self, f.name) is not None)
 
-
-@dataclass(frozen=True)
-class _AgentFields:
-    """agent 的可修改字段合并 patch 之后的值（AgentService._fields）：名字（只认数据库、也是目录名）与 agent.toml 的内容。"""
-
-    name: str
-    file: AgentFile
+def _config_given(fields: AgentSpec | AgentPatch) -> dict[str, object]:
+    """新建或修改里给出了的 agent.toml 字段（agent_file.CONFIG_FIELDS；None 为没给），分组名经 group_input。"""
+    given = {f: getattr(fields, f) for f in CONFIG_FIELDS if getattr(fields, f) is not None}
+    if "group" in given:
+        given["group"] = group_input(str(given["group"]))
+    return given
 
 
 @dataclass(frozen=True)
@@ -147,18 +149,7 @@ async def runnable_agent_in(s: AsyncSession, agent_id: str) -> AgentInfo:
 
 async def named_agent_in(s: AsyncSession, name: str) -> AgentInfo:
     """按名称找还可用的 agent（模型与脚本按名称指代 agent，不接触 id；名称唯一）。没有时 NotFound，列出可用的名称。"""
-    return info_of(await _named_row_in(s, name))
-
-
-async def _named_row_in(s: AsyncSession, name: str) -> Agent:
-    name = normalize_agent_name(name)
-    agent = await s.scalar(select(Agent).where(Agent.name == name, Agent.deleting_by.is_(None)))
-    if agent is None:
-        names = (
-            await s.scalars(select(Agent.name).where(Agent.deleting_by.is_(None)).order_by(Agent.name))
-        ).all()
-        raise NotFound(f"no agent named {name!r}; available agents: {list(names)}")
-    return agent
+    return info_of(await named_row_in(s, name))
 
 
 async def agent_in(s: AsyncSession, agent_id: str) -> AgentInfo:
@@ -175,26 +166,24 @@ async def _row_in(s: AsyncSession, agent_id: str) -> Agent:
     return agent
 
 
-async def _listed_in(s: AsyncSession) -> list[Agent]:
-    """列表里的 agent（正在删除的不列出），按名称。"""
-    return list(await s.scalars(select(Agent).where(Agent.deleting_by.is_(None)).order_by(Agent.name)))
-
-
 # ---- 删除与归档（agents.lifecycle 编排）对 agents 表的写入 ----
+
+
+async def _deletable_row_in(s: AsyncSession, agent_id: str) -> Agent:
+    agent = await _row_in(s, agent_id)
+    if agent.deleting_by is not None:
+        raise Conflict(f"agent {agent.name!r} is already being deleted")
+    return agent
 
 
 async def deletable_in(s: AsyncSession, agent_id: str) -> AgentInfo:
     """可以开始删除的 agent：存在且不在删除中（否则 NotFound / Conflict）。"""
-    agent = await _row_in(s, agent_id)
-    if agent.deleting_by is not None:
-        raise Conflict(f"agent {agent.name!r} is already being deleted")
-    return info_of(agent)
+    return info_of(await _deletable_row_in(s, agent_id))
 
 
 async def mark_deleting_in(s: AsyncSession, agent_id: str, actor: str) -> None:
     """标为正在删除（改的人 actor）：之后不出现在列表与名称解析里，各领域的写入口按不存在处理。"""
-    await deletable_in(s, agent_id)
-    (await _row_in(s, agent_id)).deleting_by = actor
+    (await _deletable_row_in(s, agent_id)).deleting_by = actor
 
 
 async def deletion_actor_in(s: AsyncSession, agent_id: str) -> str | None:
@@ -260,16 +249,12 @@ class AgentService:
         if leftovers:
             log.warning("workspaces of deleted agents remain", extra={"agent_ids": leftovers})
 
-    def _fields(
-        self, agent_id: str, name: str, description: str, model: str, thinking: Thinking, group: str | None
-    ) -> _AgentFields:
-        """校验过的字段（不合规则时 InvalidInput）：agent.toml 的规则在 AgentFile 与 AssetSource.check_agent，与文件工具改
-        它时同一套；分发规则在写入时按快照校验（distribution.check_agent_rules）。"""
-        file = agent_file.of(
-            {"id": agent_id, "description": description, "model": model, "thinking": thinking, "group": group}
-        )
+    def _config(self, agent_id: str, current: Mapping[str, object], given: Mapping[str, object]) -> AgentFile:
+        """current（现在的配置，新建时是默认值）加上 given 之后的 agent.toml 内容，校验过（不合规则时 InvalidInput）：规则在
+        AgentFile 与 AssetSource.check_agent，与文件工具改它时同一套；分发规则在写入时按快照校验（distribution.check_agent_rules）。"""
+        file = agent_file.of({**current, **given, "id": agent_id})
         self._source.check_agent(file)
-        return _AgentFields(name, file)
+        return file
 
     @staticmethod
     async def _check_name_free(s: AsyncSession, snapshot: Snapshot, name: str, agent_id: str | None) -> None:
@@ -294,27 +279,22 @@ class AgentService:
     async def create(self, spec: AgentSpec, *, actor: str) -> AgentInfo:
         """actor：创建者，"user" 或创建它的 agent 的 id。建资源目录（agent.toml、空的私有记忆）、写它的规则、插行、建工作目录。"""
         agent_id = new_agent_id()
-        fields = self._fields(
-            agent_id,
-            new_agent_name(spec.name),
-            spec.description,
-            self.defaults.model if spec.model is None else spec.model,
-            spec.thinking,
-            None if spec.group is None else group_input(spec.group),
-        )
-        name = fields.name
+        name = new_agent_name(spec.name)
+        file = self._config(agent_id, {"model": self.defaults.model}, _config_given(spec))
         rules = AgentRules.of(spec.roles, spec.allow, spec.deny)
         async with self._source.writing() as snapshot:
             check_agent_rules(snapshot, rules)
             async with self._db.transaction() as s:
                 await self._check_name_free(s, snapshot, name, None)
-            directory = snapshot.root / name
-            # 先查 access.toml：不合法时什么都不写（否则写到一半，撤回时改它又失败）
-            await asyncio.to_thread(access_file.check_valid, snapshot.access_path, snapshot.tools)
+            # access.toml 的改动先算好：它不合法时什么都不写
+            access = await asyncio.to_thread(
+                access_file.plan,
+                snapshot.access_path,
+                snapshot.tools,
+                lambda doc: access_file.set_agent_rules(doc, name, rules),
+            )
+            undo = await asyncio.to_thread(_write_new_agent, snapshot.root / name, file, access)
             try:
-                await asyncio.to_thread(
-                    _write_new_agent, directory, snapshot.access_path, snapshot.tools, fields, rules
-                )
                 async with self._db.transaction() as s:
                     # description / model 是待 #503 删的旧镜像列（NOT NULL），只填空串：配置只在 agent.toml
                     agent = Agent(id=agent_id, name=name, description="", model="")
@@ -323,9 +303,7 @@ class AgentService:
                     self.workspace(agent_id).mkdir(parents=True, exist_ok=True)
                     info = info_of(agent)
             except BaseException:
-                await asyncio.to_thread(
-                    _undo_new_agent, directory, snapshot.access_path, snapshot.tools, name
-                )
+                await asyncio.to_thread(undo)
                 raise
         log.info("agent created", extra={"agent": agent_id, "agent_name": name, "actor": actor})
         return info
@@ -338,8 +316,10 @@ class AgentService:
             async with self._db.transaction() as s:
                 agent = await active_row_in(s, agent_id)
                 directory = snapshot.loaded_agent(agent_id)
-                fields = self._validated(agent_id, agent.name, directory, patch)
-                await self._check_name_free(s, snapshot, fields.name, agent_id)
+                # 名字认数据库，配置认 agent.toml
+                name = agent.name if patch.name is None else new_agent_name(patch.name)
+                file = self._config(agent_id, directory.file.model_dump(), _config_given(patch))
+                await self._check_name_free(s, snapshot, name, agent_id)
             before = snapshot.rules_of(agent_id)
             rules = AgentRules.of(
                 before.roles if patch.roles is None else patch.roles,
@@ -347,21 +327,19 @@ class AgentService:
                 before.deny if patch.deny is None else patch.deny,
             )
             check_agent_rules(snapshot, rules, before)
-            # 与建 agent 同：access.toml 不合法时先拒绝，不动目录
-            await asyncio.to_thread(access_file.check_valid, snapshot.access_path, snapshot.tools)
-            undo = await asyncio.to_thread(
-                _write_agent_update,
-                directory.path,
-                snapshot.access_path,
-                snapshot.tools,
-                directory.name,
-                fields,
-                rules,
-            )
+
+            def change(doc: TOMLDocument) -> None:
+                if name != directory.name:
+                    access_file.rename_agent(doc, directory.name, name)
+                access_file.set_agent_rules(doc, name, rules)
+
+            # 与建 agent 同：access.toml 的改动先算好，不合法时不动目录
+            access = await asyncio.to_thread(access_file.plan, snapshot.access_path, snapshot.tools, change)
+            undo = await asyncio.to_thread(_write_agent_update, directory, name, file, access)
             try:
                 async with self._db.transaction() as s:
                     row = await active_row_in(s, agent_id)
-                    row.name = fields.name
+                    row.name = name
                     await s.flush()
                     return info_of(row)
             except BaseException:
@@ -380,18 +358,6 @@ class AgentService:
             agent.is_default = is_default
             await s.flush()
             return info_of(agent)
-
-    def _validated(self, agent_id: str, name: str, config: AgentDir, patch: AgentPatch) -> _AgentFields:
-        """patch 合并到 agent 当前值（名字认数据库，配置认 agent.toml）之后的字段（分发规则之外），校验过（不合法时报
-        InvalidInput）。"""
-        return self._fields(
-            agent_id,
-            name if patch.name is None else new_agent_name(patch.name),
-            config.description if patch.description is None else patch.description,
-            config.model if patch.model is None else patch.model,
-            config.thinking if patch.thinking is None else patch.thinking,
-            config.group if patch.group is None else group_input(patch.group),
-        )
 
     async def get_active(self, agent_id: str) -> AgentInfo:
         """还可用的 agent：正在删除的按不存在处理（例如读它的记忆、资产时）。为它写数据的检查在写入的地方：数据库数据在
@@ -425,7 +391,7 @@ class AgentService:
 
     async def list(self) -> list[AgentInfo]:
         async with self._db.transaction() as s:
-            return [info_of(a) for a in await _listed_in(s)]
+            return [info_of(a) for a in await listed_in(s)]
 
     async def list_views(self) -> list[AgentView]:
         """list 加上各自的配置与分发规则。"""
@@ -453,50 +419,48 @@ class AgentService:
                 )
 
 
-def _write_new_agent(
-    directory: Path, access: Path, tools: ToolTable, fields: _AgentFields, rules: AgentRules
-) -> None:
+def _write_new_agent(directory: Path, file: AgentFile, access: AccessEdit) -> Callable[[], None]:
+    """建 agent 的目录（agent.toml、空的私有记忆）并写入 access.toml 的改动，返回把它们都撤掉的函数；中途失败当场撤掉再报错。"""
     directory.mkdir(parents=True)
-    write_atomic(directory / AGENT_FILE, agent_file.dump(directory / AGENT_FILE, fields.file))
-    write_atomic(directory / PRIVATE_MEMORY_FILE, "")
-    access_file.edit(access, tools, lambda doc: access_file.set_agent_rules(doc, fields.name, rules))
+    undo_access: Callable[[], None] | None = None
 
+    def undo() -> None:
+        if undo_access is not None:
+            undo_access()
+        assets.remove(directory)
 
-def _undo_new_agent(directory: Path, access: Path, tools: ToolTable, name: str) -> None:
-    assets.remove(directory)
-    access_file.edit(access, tools, lambda doc: access_file.remove_agent(doc, name))
+    try:
+        write_atomic(directory / AGENT_FILE, agent_file.dump(directory / AGENT_FILE, file))
+        write_atomic(directory / PRIVATE_MEMORY_FILE, "")
+        undo_access = access.apply()
+    except BaseException:
+        undo()
+        raise
+    return undo
 
 
 def _write_agent_update(
-    directory: Path, access: Path, tools: ToolTable, old_name: str, fields: _AgentFields, rules: AgentRules
+    directory: AgentDir, name: str, file: AgentFile, access: AccessEdit
 ) -> Callable[[], None]:
-    """改 agent 的文件，返回把它们改回去的函数。改名先挪目录（挪不了就什么都没改），再改 agent.toml 与 access.toml；后面
+    """改 agent 的文件，返回把它们改回去的函数。改名先挪目录（挪不了就什么都没改），再写 agent.toml 与 access.toml 的改动；后面
     任何一步失败都当场改回去再报错。"""
-    agent_toml = directory / AGENT_FILE
-    old_toml = agent_toml.read_text(encoding="utf-8")
-    old_access = access.read_text(encoding="utf-8") if access.is_file() else None
-    target = directory.parent / fields.name
-    if fields.name != old_name:
-        assets.move(directory, target)
+    source = directory.path
+    old_toml = (source / AGENT_FILE).read_text(encoding="utf-8")
+    target = source.parent / name
+    if name != directory.name:
+        assets.move(source, target)
+    undo_access: Callable[[], None] | None = None
 
     def undo() -> None:
-        if old_access is None:
-            access.unlink(missing_ok=True)
-        else:
-            write_atomic(access, old_access)
+        if undo_access is not None:
+            undo_access()
         write_atomic(target / AGENT_FILE, old_toml)
-        if target != directory:
-            target.rename(directory)
+        if target != source:
+            target.rename(source)
 
     try:
-        write_atomic(target / AGENT_FILE, agent_file.dump(target / AGENT_FILE, fields.file))
-
-        def change(doc: TOMLDocument) -> None:
-            if fields.name != old_name:
-                access_file.rename_agent(doc, old_name, fields.name)
-            access_file.set_agent_rules(doc, fields.name, rules)
-
-        access_file.edit(access, tools, change)
+        write_atomic(target / AGENT_FILE, agent_file.dump(target / AGENT_FILE, file))
+        undo_access = access.apply()
     except BaseException:
         undo()
         raise

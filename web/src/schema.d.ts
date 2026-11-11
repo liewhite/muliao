@@ -582,6 +582,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/assets/{kind}/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Asset
+         * @description 删掉文件（skill 是整个目录）。全局记忆不能删（422）；内置工具不在这里（kind 不接受 tool）。
+         */
+        delete: operations["delete_asset_api_assets__kind___name__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/assets/{kind}/{name}/owner": {
         parameters: {
             query?: never;
@@ -618,11 +638,7 @@ export interface paths {
          */
         put: operations["put_memory_api_assets_memory__name__put"];
         post?: never;
-        /**
-         * Delete Memory
-         * @description 全局记忆不能删（422）。
-         */
-        delete: operations["delete_memory_api_assets_memory__name__delete"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -643,8 +659,7 @@ export interface paths {
          */
         put: operations["put_skill_api_assets_skill__name__put"];
         post?: never;
-        /** Delete Skill */
-        delete: operations["delete_skill_api_assets_skill__name__delete"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -747,8 +762,7 @@ export interface paths {
          */
         put: operations["add_mcp_api_assets_mcp__name__put"];
         post?: never;
-        /** Delete Mcp */
-        delete: operations["delete_mcp_api_assets_mcp__name__delete"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -809,8 +823,7 @@ export interface paths {
          */
         put: operations["set_secret_api_assets_secret__name__put"];
         post?: never;
-        /** Delete Secret */
-        delete: operations["delete_secret_api_assets_secret__name__delete"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -4850,6 +4863,36 @@ export interface operations {
             };
         };
     };
+    delete_asset_api_assets__kind___name__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                kind: components["schemas"]["StoredKind"];
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     transfer_asset_api_assets__kind___name__owner_put: {
         parameters: {
             query?: never;
@@ -4950,35 +4993,6 @@ export interface operations {
             };
         };
     };
-    delete_memory_api_assets_memory__name__delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_skill_api_assets_skill__name__get: {
         parameters: {
             query?: never;
@@ -5033,35 +5047,6 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["SkillOut"];
                 };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_skill_api_assets_skill__name__delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
             };
             /** @description Validation Error */
             422: {
@@ -5271,35 +5256,6 @@ export interface operations {
             };
         };
     };
-    delete_mcp_api_assets_mcp__name__delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     set_mcp_enabled_api_assets_mcp__name__enabled_put: {
         parameters: {
             query?: never;
@@ -5411,35 +5367,6 @@ export interface operations {
                 "application/json": components["schemas"]["SecretIn"];
             };
         };
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_secret_api_assets_secret__name__delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
         responses: {
             /** @description Successful Response */
             204: {

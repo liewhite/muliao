@@ -12,7 +12,7 @@ from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo
 
 from muliao.agents.api import McpTransport, RoleSpec, StoredKind, ToolTable, mcp_config
-from muliao.agents.assets import load_tree
+from muliao.agents.assets import MemoryText, content_of, load_tree
 from muliao.agents.service import AgentPatch, AgentSpec
 from muliao.errors import Conflict, Forbidden, InvalidInput, NotFound
 from muliao.platform.tables import TaskStatus
@@ -54,7 +54,7 @@ async def test_assets_belong_to_the_directory_they_are_in(container, make_agent)
     snapshot = await container.assets.snapshot()
     assert snapshot.asset(StoredKind.SKILL, "mine").owner == alpha.id
     assert snapshot.asset(StoredKind.SKILL, "shared").owner is None
-    assert snapshot.asset(StoredKind.MEMORY, "alpha").text == "- likes tea"
+    assert snapshot.asset(StoredKind.MEMORY, "alpha").content == MemoryText("- likes tea")
     assert snapshot.asset(StoredKind.MEMORY, "trading").owner is None
     server = await container.mcp.get("docs")
     assert (server.owner, server.enabled, server.config.url) == (alpha.id, True, "https://x/mcp")
@@ -212,10 +212,10 @@ async def test_a_failed_rename_puts_the_files_back(container, make_agent, monkey
     access = r / "platform" / "access.toml"
     before = access.read_text() if access.exists() else None
 
-    def broken(path, tools, change):  # noqa: ANN001, ANN202
+    def broken(self):  # noqa: ANN001, ANN202
         raise OSError("disk full")
 
-    monkeypatch.setattr(access_file, "edit", broken)
+    monkeypatch.setattr(access_file.AccessEdit, "apply", broken)
     with pytest.raises(OSError):
         await container.agents.update(agent.id, AgentPatch(name="gamma", description="x"), actor="user")
     assert (r / "alpha" / "agent.toml").exists() and not (r / "gamma").exists()
@@ -240,7 +240,7 @@ async def test_editing_agent_toml_takes_effect_and_a_broken_one_fails_the_run(co
     path = root(container) / "alpha" / "agent.toml"
     write(path, path.read_text().replace('description = "test agent"', 'description = "new role"'))
     view = await container.agents.view(alpha.id)
-    assert view.config is not None and view.config.description == "new role"
+    assert view.config is not None and view.config.file.description == "new role"
 
     write(path, path.read_text().replace('thinking = "default"', 'thinking = "extreme"'))
     snapshot = await container.assets.snapshot()
@@ -396,7 +396,10 @@ async def test_memory_over_the_limit_is_loaded_but_reported(container, make_agen
     await make_agent("alpha")
     write(root(container) / "alpha" / "memory.md", "x" * (container.memory.max_chars + 1))
     snapshot = await container.assets.snapshot()
-    assert len(snapshot.asset(StoredKind.MEMORY, "alpha").text) == container.memory.max_chars + 1
+    assert (
+        len(content_of(snapshot.asset(StoredKind.MEMORY, "alpha"), MemoryText).text)
+        == container.memory.max_chars + 1
+    )
     assert any("over the limit" in p.reason for p in snapshot.problems)
 
 
@@ -539,7 +542,7 @@ async def test_skills_are_written_imported_exported_and_deleted_as_directories(c
     assert "license: MIT" in text and "New." in text
     assert (directory / "scripts" / "run.sh").exists()
     package = (await container.skills.export("digest")).package
-    await container.skills.delete("digest")
+    await container.catalog.delete(StoredKind.SKILL, "digest")
     assert not directory.exists()
     imported = await container.skills.import_package(package, owner=None, replace=False)
     assert imported.meta.owner is None
@@ -561,7 +564,7 @@ async def test_mcp_servers_are_files(container, make_agent):
     await container.mcp.set_enabled("docs", False)
     assert json.loads(path.read_text())["enabled"] is False
     assert await container.mcp.index(alpha.id) == []
-    await container.mcp.remove("docs")
+    await container.catalog.delete(StoredKind.MCP, "docs")
     assert not path.exists()
 
 
@@ -579,7 +582,7 @@ async def test_secrets_are_encrypted_files(container, make_agent):
     write(path, 'description = "slack"\nciphertext = "gAAAAbroken"\n')
     with pytest.raises(InvalidInput, match="cannot be decrypted"):
         await container.vault.resolve_many(alpha.id, ["TOKEN"], shell=False)
-    await container.vault.delete("TOKEN")
+    await container.catalog.delete(StoredKind.SECRET, "TOKEN")
     assert not path.exists()
 
 
@@ -631,7 +634,7 @@ async def test_creating_and_renaming_an_agent_writes_its_directory_and_rules(con
         agent.id, AgentPatch(name="beta", description="new"), actor="user"
     )
     view = await container.agents.view(agent.id)
-    assert view.config is not None and (updated.name, view.config.description) == ("beta", "new")
+    assert view.config is not None and (updated.name, view.config.file.description) == ("beta", "new")
     assert not (r / "alpha").exists()
     assert (r / "beta" / "agent.toml").read_text().startswith("# keep me\n")
     access = (r / "platform" / "access.toml").read_text()

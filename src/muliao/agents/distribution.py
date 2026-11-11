@@ -194,14 +194,15 @@ class Distribution:
 
     async def _write_role(self, snapshot: Snapshot, spec: RoleSpec, before: Rules) -> None:
         check_rules(snapshot, Rules(tuple(spec.allow), tuple(spec.deny)), before)
-        await asyncio.to_thread(
-            access_file.edit,
+        edit = await asyncio.to_thread(
+            access_file.plan,
             snapshot.access_path,
             snapshot.tools,
             lambda doc: access_file.set_role(
                 doc, spec.name, spec.description, list(spec.allow), list(spec.deny)
             ),
         )
+        await asyncio.to_thread(edit.apply)
 
     async def delete(self, name: str) -> None:
         if name in BUILTIN_ROLES:
@@ -213,12 +214,13 @@ class Distribution:
                 raise Conflict(
                     f"role {name!r} is used by agents {[snapshot.agents[a].name for a in holders]}"
                 )
-            await asyncio.to_thread(
-                access_file.edit,
+            edit = await asyncio.to_thread(
+                access_file.plan,
                 snapshot.access_path,
                 snapshot.tools,
                 lambda doc: access_file.delete_role(doc, name),
             )
+            await asyncio.to_thread(edit.apply)
 
     async def views(self) -> list[RoleView]:
         """全部角色的 RoleView（顺序同 list）。"""

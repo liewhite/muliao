@@ -146,7 +146,7 @@ function McpItem({ server, onChange }: { server: AssetOf<'mcp'>; onChange: () =>
 
   async function remove() {
     const ok = await confirm({ title: `删除 MCP server「${server.name}」？`, confirmLabel: '删除', danger: true })
-    if (ok) await action.run(() => api.deleteMcp(server.name).then(onChange))
+    if (ok) await action.run(() => api.deleteAsset('mcp', server.name).then(onChange))
   }
 
   return (

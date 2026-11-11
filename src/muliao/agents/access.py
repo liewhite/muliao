@@ -21,8 +21,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from muliao.agents.assets import ACCESS_FILE, PLATFORM, Asset, Snapshot
-from muliao.agents.ids import USER
 from muliao.agents.kinds import Kind, StoredKind, as_kind, label
+from muliao.agents.naming import USER
 from muliao.agents.permissions import (
     BASE,
     Action,

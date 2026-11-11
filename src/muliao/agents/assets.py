@@ -36,12 +36,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from muliao.agents import access_file, agent_file, memory_file
-from muliao.agents.agent_file import AGENT_FILE, Thinking
-from muliao.agents.kinds import StoredKind, label
+from muliao.agents.agent_file import AGENT_FILE, AgentFile
+from muliao.agents.kinds import StoredKind, label, spec_of
 from muliao.agents.mcp_config import McpConfig, parse_mcp_file
-from muliao.agents.naming import PLATFORM, file_name, nfc, validate_slug
+from muliao.agents.naming import PLATFORM, nfc
 from muliao.agents.permissions import ADMIN, AgentRules, Role, ToolTable
-from muliao.agents.secrets_format import SecretFile, parse_secret_file, validate_key
+from muliao.agents.secrets_format import SecretFile, parse_secret_file
 from muliao.agents.skill_package import SKILL_FILE, approval_scripts, parse_frontmatter
 from muliao.errors import Conflict, InvalidInput, NotFound
 
@@ -49,22 +49,11 @@ log = logging.getLogger(__name__)
 
 ACCESS_FILE = "access.toml"
 PRIVATE_MEMORY_FILE = "memory.md"
-MEMORY_DIR = "memory"
-SKILLS_DIR = "skills"
-MCP_DIR = "mcp"
-SECRETS_DIR = "secrets"
 
 
 # ---- 布局：owner 目录里的相对路径 ↔ 它是什么（读树、写前校验、平台新建与转移都只问这里） ----
-
-# 每种资源放在 owner 目录下哪个子目录、一项是 `<名><后缀>` 的文件（skill 是 `<名>/` 目录）。私有记忆例外：agent 目录里的
-# memory.md，名字是 agent 名
-_SHELVES: dict[StoredKind, tuple[str, str]] = {
-    StoredKind.MEMORY: (MEMORY_DIR, ".md"),
-    StoredKind.SKILL: (SKILLS_DIR, ""),
-    StoredKind.MCP: (MCP_DIR, ".json"),
-    StoredKind.SECRET: (SECRETS_DIR, ".toml"),
-}
+# 每种资源放在 owner 目录下哪个子目录、文件后缀、是不是目录，都在它的 KindSpec（kinds.spec_of）。私有记忆例外：agent
+# 目录里的 memory.md，名字是 agent 名
 
 
 @dataclass(frozen=True)
@@ -101,11 +90,6 @@ class Misplaced(InvalidInput):
         self.kind = kind
 
 
-def is_directory(kind: StoredKind) -> bool:
-    """一项资源是目录（skill）还是一个文件。"""
-    return kind == StoredKind.SKILL
-
-
 def place_of(rel: tuple[str, ...], agent: str | None) -> Place:
     """owner 目录里的相对路径 rel 是什么（rel_of 的反向）：agent 是这个 agent 目录的 agent 名，平台目录为 None。不该有的
     路径、不合规则的名字（skill、MCP 是 slug，secret 是 key，平台的记忆能当文件名）是 Misplaced。"""
@@ -115,33 +99,24 @@ def place_of(rel: tuple[str, ...], agent: str | None) -> Place:
         return Config(config)
     if agent is not None and rel == (PRIVATE_MEMORY_FILE,):
         return Entry(StoredKind.MEMORY, agent)
-    shelves = {d: (k, s) for k, (d, s) in _SHELVES.items() if agent is None or k != StoredKind.MEMORY}
+    shelves = {spec_of(k).shelf: k for k in StoredKind if agent is None or k != StoredKind.MEMORY}
     if head not in shelves:
         expected = sorted([config, *shelves, *([PRIVATE_MEMORY_FILE] if agent is not None else [])])
         raise Misplaced(f"{'/'.join(rel)} is not a place for an asset file here (expected {expected})")
-    kind, suffix = shelves[head]
+    kind = shelves[head]
+    spec = spec_of(kind)
     if not rest:
         return Shelf(kind)
     entry, inner = rest[0], rest[1:]
-    if not entry.endswith(suffix) or (inner and not is_directory(kind)):
-        what = "skill directories" if is_directory(kind) else f"*{suffix} files"
+    if not entry.endswith(spec.suffix) or (inner and not spec.is_directory):
+        what = f"{spec.label} directories" if spec.is_directory else f"*{spec.suffix} files"
         raise Misplaced(f"{'/'.join(rel)}: expected only {what} in {head}/")
-    name = entry.removesuffix(suffix) if suffix else entry
+    name = entry.removesuffix(spec.suffix) if spec.suffix else entry
     try:
-        _check_name(kind, name)
+        spec.check_name(name)
     except InvalidInput as e:
         raise Misplaced(str(e), kind) from e
     return Entry(kind, name, inner)
-
-
-def _check_name(kind: StoredKind, name: str) -> None:
-    if kind == StoredKind.MEMORY:
-        # 平台的记忆：agent 删除或转移时挪来的私有记忆带着 agent 名（可以是中文），能当文件名就行
-        file_name(label(kind), name)
-    elif kind == StoredKind.SECRET:
-        validate_key(name)
-    else:
-        validate_slug(label(kind), name)
 
 
 def rel_of(kind: StoredKind, name: str, private: bool) -> tuple[str, ...]:
@@ -149,40 +124,80 @@ def rel_of(kind: StoredKind, name: str, private: bool) -> tuple[str, ...]:
     资源的规则时 InvalidInput。"""
     if kind == StoredKind.MEMORY and private:
         return (PRIVATE_MEMORY_FILE,)
-    _check_name(kind, name)
-    directory, suffix = _SHELVES[kind]
-    return (directory, f"{name}{suffix}")
+    spec = spec_of(kind)
+    spec.check_name(name)
+    return (spec.shelf, f"{name}{spec.suffix}")
 
 
 @dataclass(frozen=True)
 class AgentDir:
-    """一个加载成功的 agent 目录。"""
+    """一个加载成功的 agent 目录：名字（目录名，只认数据库）与它的 agent.toml（配置的唯一来源）。"""
 
-    id: str
     name: str
-    description: str
-    model: str
-    thinking: Thinking
-    group: str | None
     path: Path
+    file: AgentFile
+
+    @property
+    def id(self) -> str:
+        return self.file.id
+
+
+@dataclass(frozen=True)
+class MemoryText:
+    """记忆的内容：正文。"""
+
+    text: str
+
+
+@dataclass(frozen=True)
+class SkillDir:
+    """skill 的内容：描述与执行前要批准的脚本（frontmatter 里列的，读树时已换成目录里存在的文件的身份，
+    skill_package.approval_scripts）。"""
+
+    description: str
+    approval: tuple[Path, ...]
+
+
+@dataclass(frozen=True)
+class McpFile:
+    """MCP server 的内容：配置与是否启用。"""
+
+    config: McpConfig
+    enabled: bool
+
+
+# 各种类专有的内容；secret 的是它的文件内容（描述、密文与 allow_shell）
+Content = MemoryText | SkillDir | McpFile | SecretFile
 
 
 @dataclass(frozen=True)
 class Asset:
-    """一项资源。path：记忆、MCP、secret 是那个文件，skill 是它的目录。description：skill 与 secret 的描述（记忆、MCP
-    为空）。种类专有的内容：记忆的正文 text，MCP 的 mcp（配置与是否启用），secret 的文件内容 secret（密文与 allow_shell），
-    skill 执行前要批准的脚本 approval（frontmatter 里列的，读树时已换成目录里存在的文件的身份，skill_package.approval_scripts）。"""
+    """一项资源。path：记忆、MCP、secret 是那个文件，skill 是它的目录。content 的类型由 kind 定（load）。"""
 
     kind: StoredKind
     name: str
     owner: str | None
     path: Path
-    description: str
     updated_at: datetime
-    text: str = ""
-    mcp: tuple[McpConfig, bool] | None = None
-    secret: SecretFile | None = None
-    approval: tuple[Path, ...] = ()
+    content: Content
+
+    @property
+    def description(self) -> str:
+        """skill 与 secret 的描述（记忆、MCP 为空）。"""
+        match self.content:
+            case SkillDir(description=d) | SecretFile(description=d):
+                return d
+            case MemoryText() | McpFile():
+                return ""
+
+
+def content_of[C: Content](asset: Asset, cls: type[C]) -> C:
+    """按种类取一项资源的内容（调用方按 kind 已知它是哪种）。"""
+    if not isinstance(asset.content, cls):
+        raise TypeError(
+            f"{label(asset.kind)} {asset.name!r} carries {type(asset.content).__name__}, not {cls.__name__}"
+        )
+    return asset.content
 
 
 @dataclass(frozen=True)
@@ -460,7 +475,7 @@ class _Reader:
             copy.owner,
         )
         self.problem(
-            self.root / PLATFORM / MEMORY_DIR / f"{name}.md",
+            self.root / PLATFORM / Path(*rel_of(StoredKind.MEMORY, name, False)),
             f"memory {name!r} has the name of agent {name!r}, whose private memory is therefore not loaded: rename "
             "it, or move it into that agent's directory if it is that agent's memory",
             None,
@@ -489,7 +504,7 @@ class _Reader:
                 data.id,
             )
             return None
-        return AgentDir(data.id, name, data.description, data.model, data.thinking, data.group, path)
+        return AgentDir(name, path, data)
 
     def owner_assets(self, base: Path, owner: str | None, agent_name: str | None) -> None:
         """owner 目录里的每一项，按布局（place_of）认出是什么再读；配置文件（agent.toml、access.toml）另外读。"""
@@ -513,8 +528,9 @@ class _Reader:
                 for child in _visible(list(path.iterdir())):
                     self.visit(base, (*rel, child.name), owner, agent_name)
             case Entry(kind=kind, name=name):
-                if path.is_dir() != is_directory(kind):
-                    self.problem(path, f"expected a {'directory' if is_directory(kind) else 'file'}", owner)
+                directory = spec_of(kind).is_directory
+                if path.is_dir() != directory:
+                    self.problem(path, f"expected a {'directory' if directory else 'file'}", owner)
                     return
                 self.guarded(kind, name, path, owner)
 
@@ -534,20 +550,20 @@ class _Reader:
                 if problem := memory_file.over_limit(text, self.memory_max_chars):
                     # 照常加载（截断更糟），但要让它缩短
                     self.problem(path, problem, owner)
-                return Asset(kind, name, owner, path, "", updated(path), text=text)
+                return Asset(kind, name, owner, path, updated(path), MemoryText(text))
             case StoredKind.SKILL:
                 md = path / SKILL_FILE
                 if not md.is_file():
                     raise InvalidInput(f"skill directory has no {SKILL_FILE}")
                 fm = parse_frontmatter(md.read_text(encoding="utf-8"), name)
-                approval = approval_scripts(path, fm.approval)
-                return Asset(kind, name, owner, path, fm.description, updated(md), approval=approval)
+                skill = SkillDir(fm.description, approval_scripts(path, fm.approval))
+                return Asset(kind, name, owner, path, updated(md), skill)
             case StoredKind.MCP:
                 config, enabled = parse_mcp_file(path.read_text(encoding="utf-8"))
-                return Asset(kind, name, owner, path, "", updated(path), mcp=(config, enabled))
+                return Asset(kind, name, owner, path, updated(path), McpFile(config, enabled))
             case StoredKind.SECRET:
                 secret = parse_secret_file(name, path.read_text(encoding="utf-8"))
-                return Asset(kind, name, owner, path, secret.description, updated(path), secret=secret)
+                return Asset(kind, name, owner, path, updated(path), secret)
 
 
 def load_tree(

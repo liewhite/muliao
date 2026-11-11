@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import select
 
 import muliao.agents.service
+from muliao.agents.api import StoredKind
 from muliao.agents.tables import Agent
 from muliao.errors import Conflict, NotFound
 from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
@@ -397,7 +398,7 @@ async def test_agent_names_cover_agents_being_deleted_and_label_deleted_ones(con
 
 async def test_agent_whose_private_memory_was_deleted_can_still_be_deleted(container, make_agent):
     agent = await make_agent("alpha")
-    await container.memory.delete("alpha")
+    await container.catalog.delete(StoredKind.MEMORY, "alpha")
 
     await container.agent_lifecycle.delete(agent.id, actor="user")
     # 删除的清理经事件完成

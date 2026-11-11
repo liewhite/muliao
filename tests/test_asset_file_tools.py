@@ -122,7 +122,7 @@ async def test_agent_toml_keeps_its_id(container, make_agent, models):
     assert outputs[2].startswith("edited ")
     assert toml.read_text() == before.replace("test agent", "new job")
     await container.assets.snapshot()  # 运行开始时读树，同步进 agent 的配置
-    assert (await container.agents.view(me.id)).config.description == "new job"
+    assert (await container.agents.view(me.id)).config.file.description == "new job"
 
 
 async def test_access_toml_is_checked_like_the_tree_reads_it(container, make_agent, models):
@@ -261,11 +261,11 @@ async def test_a_write_landing_while_the_check_runs_is_not_overwritten(
 
 def test_every_rejection_names_a_section_of_the_assets_skill():
     """报错里的 `section '<名>'` 必须是公共 skill assets-files 的小节标题（Section）：源码里传给 _Rejected / _new 的与各种资源
-    的（_SECTIONS）小节名合起来就是 SECTIONS；SECTIONS 变了，要同步改 skill 的 `## <名>` 标题（#501）。"""
+    的（KindSpec.section）小节名合起来就是 SECTIONS；SECTIONS 变了，要同步改 skill 的 `## <名>` 标题（#501）。"""
     import ast
     import inspect
 
-    from muliao.agents import asset_files
+    from muliao.agents import asset_files, kinds
 
     tree = ast.parse(inspect.getsource(asset_files))
     used = {
@@ -277,8 +277,8 @@ def test_every_rejection_names_a_section_of_the_assets_skill():
         and call.args
         and isinstance(call.args[-1], ast.Constant)
     }
-    assert used | set(asset_files._SECTIONS.values()) == set(asset_files.SECTIONS)
-    assert asset_files.SECTIONS == (
+    assert used | {kinds.spec_of(k).section for k in kinds.StoredKind} == set(kinds.SECTIONS)
+    assert kinds.SECTIONS == (
         "Layout",
         "Memory",
         "Skills",

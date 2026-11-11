@@ -1,8 +1,22 @@
+"""agent 的标识与各种名字的规则：agent id 的格式、指代用户的 USER、agent 名、slug，以及资源目录里平台的目录名。"""
+
 import re
 import unicodedata
+import uuid
 
-from muliao.agents.ids import USER
 from muliao.errors import InvalidInput
+
+# agent id：12 位小写十六进制，短到模型能可靠复制，用作主键、目录名与工具参数
+_ID_LENGTH = 12
+
+
+def new_agent_id() -> str:
+    return uuid.uuid4().hex[:_ID_LENGTH]
+
+
+# 全系统指代用户的那个值（agents 目录定义）：做事的人（actor，如 issue 时间线）、issue 的指派人等处与 agent
+# id 并列出现。不是 12 位十六进制，不会与 agent id 相同；agent 名称也不能取它（new_agent_name）
+USER = "user"
 
 # skill 与 MCP server 名称：会出现在目录名和工具名前缀里（agent 用 id 标识，名称规则见 normalize_agent_name）
 _SLUG = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")

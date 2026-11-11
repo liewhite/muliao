@@ -7,16 +7,15 @@ server：它能用的（自己的与分发给它的，agents.access）、已启�
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from muliao.agents import assets
 from muliao.agents.access import usable
-from muliao.agents.ids import USER
 from muliao.agents.kinds import StoredKind, label
 from muliao.agents.mcp_config import McpConfig, McpServer, McpTransport, mcp_config, mcp_file, parse_mcp_file
+from muliao.agents.naming import USER
 from muliao.agents.source import AssetSource
 from muliao.errors import Conflict
 
@@ -28,9 +27,8 @@ _KIND = StoredKind.MCP
 
 
 def server_of(a: assets.Asset) -> McpServer:
-    assert a.mcp is not None, "an MCP asset always carries its config"
-    config, enabled = a.mcp
-    return McpServer(a.owner, a.name, config, enabled)
+    file = assets.content_of(a, assets.McpFile)
+    return McpServer(a.owner, a.name, file.config, file.enabled)
 
 
 # 实际连接 server 并列出工具名，${vault:KEY} 按第二个参数（agent 的 id 或 USER）能用的 secret 解析；连不上是
@@ -76,11 +74,6 @@ class McpRegistry:
         await self._source.write({path: mcp_file(config, True)}, new)
         log.info("mcp server added", extra={"owner": owner, "mcp": name, "tools": len(tools)})
         return server, tools
-
-    async def remove(self, name: str) -> None:
-        async with self._source.writing() as snapshot:
-            asset = snapshot.asset(_KIND, name)
-            await asyncio.to_thread(assets.remove, asset.path)
 
     async def set_enabled(self, name: str, enabled: bool) -> McpServer:
         asset = (await self._source.snapshot()).asset(_KIND, name)

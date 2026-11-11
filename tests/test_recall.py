@@ -5,7 +5,7 @@ from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, TextPart, UserPromptPart
 from pydantic_ai.models.function import AgentInfo
 
-from muliao.agents.ids import USER
+from muliao.agents.naming import USER
 from muliao.history.service import HistoryEntry
 from muliao.sessions.api import Origin
 from tests.scripted import scripted

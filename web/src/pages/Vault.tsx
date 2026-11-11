@@ -73,7 +73,7 @@ function SecretItem({ item, onChange }: { item: AssetOf<'secret'>; onChange: () 
       confirmLabel: '删除',
       danger: true,
     })
-    if (ok) await action.run(() => api.deleteSecret(item.name).then(onChange))
+    if (ok) await action.run(() => api.deleteAsset('secret', item.name).then(onChange))
   }
 
   return (
