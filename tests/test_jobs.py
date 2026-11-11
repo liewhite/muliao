@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+from datetime import timedelta
 
 import pytest
 from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart
@@ -9,6 +10,7 @@ from pydantic_ai.models.function import AgentInfo
 from sqlalchemy import select
 
 from muliao.errors import Conflict
+from muliao.platform.db import utcnow
 from muliao.platform.tool_views import NO_RENDERS
 from muliao.sessions.api import Origin
 from muliao.sessions.holds import has_active_in, hold_in
@@ -31,6 +33,15 @@ async def wait_until_done(container, job_id: int, seconds: float = 10) -> Job:
             return job
         await asyncio.sleep(0.05)
     raise AssertionError(f"job {job_id} still running")
+
+
+async def wait_for_output(container, job: Job, text: str, seconds: float = 10) -> None:
+    log_file = container.agents.workspace(job.agent_id) / job.log_path
+    for _ in range(int(seconds / 0.05)):
+        if log_file.exists() and text in log_file.read_text():
+            return
+        await asyncio.sleep(0.05)
+    raise AssertionError(f"job {job.id} never wrote {text!r}")
 
 
 async def queued_events(container, session_id: str) -> list[Mail]:
@@ -92,15 +103,19 @@ async def test_secrets_never_reach_the_log(container, make_agent, models):
 
 
 async def test_running_jobs_get_check_events_without_piling_up_and_can_be_killed(
-    container, make_agent, models
+    container, make_agent, models, monkeypatch
 ):
     session, job, recorder, _agent = await start_job(container, make_agent, models, "echo started; sleep 30")
 
     # 输出写进日志之后再检查
-    await asyncio.sleep(0.3)
+    await wait_for_output(container, job, "started")
+    # 每次检查前由测试把时钟拨过一个间隔，不靠两次 check 之间的真实耗时（#610）
+    now = utcnow() + timedelta(seconds=1)
+    monkeypatch.setattr(container.jobs, "_clock", lambda: now)
     assert await container.jobs.check() == 1
     await deliver(container)
     # 上一条检查还在信箱里（还没交给模型）：会话领域不再堆一条
+    now += timedelta(seconds=1)
     assert await container.jobs.check() == 1
     await deliver(container)
     checks = [m for m in await queued_events(container, session.id) if m.source == f"job:{job.id}"]
@@ -478,8 +493,11 @@ async def test_leaving_the_running_service_interrupts_jobs_after_the_runs_have_s
         os.killpg(job.pid, 0)
 
 
-async def test_each_job_is_checked_at_its_own_interval(container, make_agent):
+async def test_each_job_is_checked_at_its_own_interval(container, make_agent, monkeypatch):
     session, agent = await _session_for_jobs(container, make_agent)
+    # 间隔按注入的时钟算，测试自己拨时间：不靠真实 sleep 卡间隔（机器忙时两次 check 之间就可能超过间隔，#610）
+    now = utcnow()
+    monkeypatch.setattr(container.jobs, "_clock", lambda: now)
     fast = await container.jobs.start(
         session_id=session.id,
         agent_id=agent.id,
@@ -487,7 +505,7 @@ async def test_each_job_is_checked_at_its_own_interval(container, make_agent):
         secrets=[],
         shell=True,
         awaited=False,
-        check_seconds=0.2,
+        check_seconds=60,
     )
     slow = await container.jobs.start(
         session_id=session.id,
@@ -499,11 +517,13 @@ async def test_each_job_is_checked_at_its_own_interval(container, make_agent):
         check_seconds=3600,
     )
     try:
-        await asyncio.sleep(0.25)
+        # 刚开始：都还没到自己的间隔
+        assert await container.jobs.check() == 0
+        now += timedelta(seconds=60)
         assert await container.jobs.check() == 1
         # 刚检查过：fast 要再过一个间隔，slow 还远
         assert await container.jobs.check() == 0
-        await asyncio.sleep(0.25)
+        now += timedelta(seconds=60)
         assert await container.jobs.check() == 1
         await deliver(container)
         checks = [m.source for m in await queued_events(container, session.id) if m.check_in]
@@ -600,7 +620,7 @@ async def test_a_job_that_ends_while_a_check_is_being_prepared_gets_no_check(con
     runner_module.tail = slow_tail
     try:
         check = asyncio.create_task(container.jobs.check())
-        await asyncio.to_thread(entered.wait, 5)
+        assert await asyncio.to_thread(entered.wait, 5)
         await container.jobs.kill(job.id, job.agent_id)
         await wait_until_done(container, job.id)
         gate.set()
