@@ -7,9 +7,10 @@
 - 用户停止会话时信箱清空（discard_in）：没交给模型的信件记为被丢弃，留着记录；对仍挂着的提问的回答在此之前
   已由停止写进历史、记为已处理（sessions.halt.close_history_in）。
 - 唤醒（wake_in，唯一规则）：会话里有排队的信件、没有排队或运行中的运行，并且有信件在最近一次运行之后才到；
-  会话停在挂起的调用上时按 sessions.pending.waiting 等回答或新消息，事件等它们一起交给模型。调用方：投信时、运行
-  结束时（含最终失败，RunHandler.failed_in 结清之后）、定期对账（MailReconciler，兜住投递时事务失败与重启）。
-  「最近一次运行之后才到」保证最终失败的运行不会因为同一批信件被无限重新投递：它被重试、或新信件到达时再处理。
+  会话停在挂起的调用上、还不能继续时（sessions.pending.position 的 Paused.ready）等回答或新消息，事件等它们一起
+  交给模型。调用方：投信时、运行结束时（含最终失败，RunHandler.failed_in 结清之后）、定期对账（MailReconciler，兜住投递时
+  事务失败与重启）。「最近一次运行之后才到」保证最终失败的运行不会因为同一批信件被无限重新投递：它被重试、或新信件
+  到达时再处理。
 """
 
 from __future__ import annotations
@@ -25,11 +26,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from muliao.errors import NotFound
 from muliao.platform.tasks import TaskQueue
 from muliao.platform.tooling import Audience
-from muliao.sessions.approvals import requested_among, requested_in
 from muliao.sessions.history import since_last_response, since_last_response_among
 from muliao.sessions.lanes import RUN_TASK, session_lane
 from muliao.sessions.origins import Origin
-from muliao.sessions.pending import OpenAsks, handed_out_in, open_asks_of, waiting
+from muliao.sessions.pending import (
+    Interrupted,
+    OpenAsks,
+    Paused,
+    Position,
+    handed_out_among,
+    handed_out_in,
+    open_asks_of,
+    position,
+)
 from muliao.sessions.runs import RunPayload, handed_to, latest_run, run_unfinished_in
 from muliao.sessions.tables import Mail, MailKind, MailState, Session
 
@@ -174,28 +183,33 @@ async def queued_among(s: AsyncSession, session_ids: Collection[str]) -> dict[st
     return queued
 
 
-async def wake_in(
-    s: AsyncSession, queue: TaskQueue, session: Session, *, finished: int | None = None
-) -> bool:
-    """信箱需要消费时投递一次运行（规则见模块说明）；返回是否投递了。
+async def position_in(s: AsyncSession, session_id: str) -> Position:
+    """会话现在停在哪（规则在 pending.position）。没出结果的调用只可能在最后一条模型回复里，不加载整段上下文。"""
+    return position(
+        await since_last_response(s, session_id),
+        await handed_out_in(s, session_id),
+        await queued_in(s, session_id),
+    )
 
-    finished：刚正常结束的那次运行（在它的收尾事务里调用时）。队列在同一个事务里稍后才把它记为完成，此刻它还是
-    running，不能因此判定会话忙；它也不是「失败待重试」，剩下的信件（它没取走的，如从历史续跑、只重发了一条请求
-    就结束）一定要有下一次运行，所以不做「之后才到」的判断。"""
+
+async def wake_in(s: AsyncSession, queue: TaskQueue, session: Session) -> bool:
+    """信箱需要消费时投递一次运行（规则见模块说明）；返回是否投递了。在运行的收尾里调用时，它已经记为完成
+    （TaskQueue.complete），不算忙。"""
     queued = await queued_in(s, session.id)
     if not queued:
         return False
-    if await run_unfinished_in(s, queue, session.id, excluding=finished):
+    if await run_unfinished_in(s, queue, session.id):
         # 排队的运行开始时、运行中的那次每一步都会取走新信件；它结束时会再来这里
         return False
     latest = await latest_run(s, queue, session.id)
-    if finished is None and latest is not None and all(handed_to(m.id, latest) for m in queued):
-        # 都已经交给过一次运行（它失败了、等重试）：由它或之后新信件唤醒的运行处理，不重复投递
+    if latest is not None and latest.failed and all(handed_to(m.id, latest) for m in queued):
+        # 都已经交给过一次最终失败的运行：由它被重试、或之后新信件唤醒的运行处理，不重复投递。正常结束的运行没取走的
+        # 信件（如从历史续跑、只重发了一条请求就结束）一定要有下一次运行
         return False
-    if waiting(await since_last_response(s, session.id), queued, await handed_out_in(s, session.id)):
-        # 停在挂起的调用上：等回答或新消息（跳过），事件到时一起交给模型。挂起的调用只可能在最后一条模型回复里，
-        # 不加载整段上下文
-        return False
+    match position(await since_last_response(s, session.id), await handed_out_in(s, session.id), queued):
+        case Paused(ready=False) | Interrupted(after=Paused(ready=False)):
+            # 停在挂起的调用上：等回答或新消息（跳过），事件到时一起交给模型
+            return False
     queue.enqueue(
         s,
         kind=RUN_TASK,
@@ -322,16 +336,14 @@ async def has_queued_from(s: AsyncSession, session_id: str, source: str) -> bool
 
 async def open_asks_in(s: AsyncSession, session_id: str) -> OpenAsks:
     """会话还没有结果、等用户的挂起调用：提问与等批准的调用（规则在 pending.open_asks_of）。"""
-    return open_asks_of(
-        await since_last_response(s, session_id),
-        await queued_in(s, session_id),
-        await requested_in(s, session_id),
-    )
+    queued = await queued_in(s, session_id)
+    at = position(await since_last_response(s, session_id), await handed_out_in(s, session_id), queued)
+    return open_asks_of(at, queued)
 
 
 async def open_asks_among(s: AsyncSession, session_ids: Collection[str]) -> dict[str, OpenAsks]:
     """open_asks_in 的批量版本（会话列表的工作状态），同一条规则。"""
     tails = await since_last_response_among(s, session_ids)
     queued = await queued_among(s, session_ids)
-    requested = await requested_among(s, session_ids)
-    return {x: open_asks_of(tails[x], queued[x], requested[x]) for x in session_ids}
+    handed = await handed_out_among(s, session_ids)
+    return {x: open_asks_of(position(tails[x], handed[x], queued[x]), queued[x]) for x in session_ids}

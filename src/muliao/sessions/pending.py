@@ -10,27 +10,28 @@ agent_runtime 的 defer_call；或工具执行前要用户批准（require_appro
 - 每种的回答信封（回答信件 mail.answers 的值，questions.UserAnswered、answers.AgentAnswered、
   approvals.ApprovalAnswered）带着种类名（tool 字段），自己给出：交给模型的结果（tool_return）、没等到回答就继续时的
   结果（skipped）、调用结束后才到的回答怎么写（late_lines）。
-- 哪些调用还挂着由历史推导（pending_calls），只加上交出去的永久事实（HandedOut），不另存状态。
-- 什么时候继续（waiting，唯一规则）：用户发了新消息（跳过还没回答的），或挂起的调用都有了回答；事件留在信箱里
-  等它们一起交给模型。唤醒（mailbox.wake_in）与消费者开头共用这一条。
+- 会话停在哪（position，纯函数，唯一的判断）：空闲、新开、从历史续跑、被打断、等回答。由历史、交出去的永久事实
+  （HandedOut）与信箱推导，不另存状态；消费者、唤醒（mailbox.wake_in）、停止（closing_on_stop）、等用户的调用（open_asks_of）、
+  交回结局（work.deliver_in）都 match 它的结果（docs/architecture.md 2.4 第 2 行）。
+- 什么时候继续（Paused.ready）：用户发了新消息（跳过还没回答的），或挂起的调用都有了回答；事件留在信箱里
+  等它们一起交给模型。
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from typing import Annotated, Final, get_args
 
 from pydantic import Field, TypeAdapter
-from pydantic_ai.messages import ModelMessage, ToolCallPart, ToolReturn
+from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, ToolCallPart, ToolReturn
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.sessions.answers import AgentAnswered
-from muliao.sessions.approvals import ApprovalAnswered, requested_in
-from muliao.sessions.conventions import unanswered_calls
-from muliao.sessions.history import since_last_response
-from muliao.sessions.holds import called_in
+from muliao.sessions.approvals import ApprovalAnswered, requested_among, requested_in
+from muliao.sessions.conventions import is_stopped, unanswered_calls
+from muliao.sessions.holds import called_among, called_in
 from muliao.sessions.questions import Question, UserAnswered, questions_of
 from muliao.sessions.tables import Mail, MailKind
 
@@ -114,13 +115,11 @@ async def handed_out_in(s: AsyncSession, session_id: str) -> HandedOut:
     return HandedOut(await called_in(s, session_id), await requested_in(s, session_id))
 
 
-def pending_calls(history: Sequence[ModelMessage], handed: HandedOut) -> dict[str, ToolCallPart]:
-    """还在等回信的调用，按出现顺序：没有结果的挂起工具调用（参数被拒绝、交还模型重试的有结果，不算）；要占用的
-    （ask_agent，DeferredKind.needs_hold）只算已经交出去的。没有占用的 ask_agent 不是在等回信：工具还没执行完
-    （回复保存后、投递提交前失败），它是待执行的调用，续跑时再执行（Delegations.dispatch 按调用 id 幂等；这一步里
-    还有别的没出结果的调用时整步都不重放，见 sessions.consumer.interrupted_calls）。其他工具的调用记过等批准的（
-    HandedOut.approvals）在等批准；没记过的是执行到一半被打断的。"""
-    return {c.tool_call_id: c for c in unanswered_calls(history) if _is_pending(c, handed)}
+async def handed_out_among(s: AsyncSession, session_ids: Collection[str]) -> dict[str, HandedOut]:
+    """handed_out_in 的批量版本（查询次数与会话数无关）。"""
+    called = await called_among(s, session_ids)
+    requested = await requested_among(s, session_ids)
+    return {x: HandedOut(called[x], requested[x]) for x in session_ids}
 
 
 def kind_of(call: ToolCallPart, approvals: AbstractSet[str]) -> DeferredKind | None:
@@ -136,22 +135,127 @@ def kind_of(call: ToolCallPart, approvals: AbstractSet[str]) -> DeferredKind | N
     return tool
 
 
-def _is_pending(call: ToolCallPart, handed: HandedOut) -> bool:
-    kind = kind_of(call, handed.approvals)
-    return kind is not None and (not kind.needs_hold or call.tool_call_id in handed.delegated)
+# ---- 会话停在哪（docs/architecture.md 2.4 第 2 行）：唯一的判断是 position，各处 match 它的结果 ----
 
 
-def replayable(call: ToolCallPart, handed: HandedOut) -> bool:
-    """没挂起、也没结果的这次调用可以原样重新执行（DeferredKind.replayable，按 kind_of 认）。"""
+@dataclass(frozen=True)
+class PendingCall:
+    """一个挂起的调用与它是哪一种（kind_of 认出的）。"""
+
+    call: ToolCallPart
+    kind: DeferredKind
+
+
+@dataclass(frozen=True)
+class Idle:
+    """空闲：没有挂起的调用、没有要续跑的，信箱也空了。"""
+
+
+@dataclass(frozen=True)
+class Fresh:
+    """新开：没有挂起的调用、没有要续跑的，信箱里有信——作为下一次运行的开头交给模型。"""
+
+
+@dataclass(frozen=True)
+class Resend:
+    """从历史续跑（pydantic-ai 的续跑语义）：历史停在一条没得到回复、没标停止的请求上（重发它，replays 为空），或最后
+    的回复里没出结果的调用都能原样重新执行（replays：还没交出去的 ask_agent，按调用 id 幂等，DeferredKind.replayable）。"""
+
+    replays: list[ToolCallPart]
+
+
+@dataclass(frozen=True)
+class Paused:
+    """等回答：停在挂起的调用上（pending，按出现顺序）。answers 是信箱里对它们的回答（answer_mail 是带着这些回答的
+    信件），ready 是现在能不能继续：用户发了新消息（跳过还没回答的），或挂起的调用都有了回答；否则等着，事件留在
+    信箱里等它们一起交给模型。"""
+
+    pending: dict[str, PendingCall]
+    answers: dict[str, CallResult]
+    answer_mail: list[Mail]
+    ready: bool
+
+
+@dataclass(frozen=True)
+class Interrupted:
+    """被打断：最后的回复里有没出结果、也不在挂起的调用（这一步在执行工具时被打断：进程退出，或这一步失败）。它们
+    不重新执行（副作用可能已经发生），先补上「被中断」的结果（sessions.history.interrupted_results）再看 after：补完之后
+    历史停在补出来的请求上（Resend），或停在同一条回复里别的挂起调用上（Paused，补过结果的调用在交回回答时被标为跳过）。
+
+    只要有一个不能重放，整步都补、都不重放——pydantic-ai 续跑时要么执行这条回复里所有没结果的调用、要么一个都不
+    执行；历史停在这条回复之后的请求上时，pydantic-ai 重发那条请求、不再执行这些调用，所以都补。"""
+
+    calls: list[ToolCallPart]
+    after: Resend | Paused
+
+
+Position = Idle | Fresh | Resend | Paused | Interrupted
+
+
+def position(history: Sequence[ModelMessage], handed: HandedOut, queued: Sequence[Mail]) -> Position:
+    """会话现在停在哪（纯函数）。history 至少要含最后一条模型回复起的那一段（history.since_last_response：没出结果的
+    调用只可能在那里）；handed 是交出去的永久事实；queued 是信箱里排着的信件。
+
+    挂起的调用：没有结果的挂起工具调用（参数被拒绝、交还模型重试的有结果，不算）；要占用的（ask_agent，
+    DeferredKind.needs_hold）只算已经交出去的——没有占用的 ask_agent 是工具还没执行完（回复保存后、投递提交前失败），
+    是待执行的调用。其他工具的调用记过等批准的在等批准，没记过的是执行到一半被打断的。"""
+    unanswered = unanswered_calls(history)
+    pending: dict[str, PendingCall] = {}
+    others: list[ToolCallPart] = []
+    for c in unanswered:
+        kind = kind_of(c, handed.approvals)
+        if kind is not None and (not kind.needs_hold or c.tool_call_id in handed.delegated):
+            pending[c.tool_call_id] = PendingCall(c, kind)
+        else:
+            others.append(c)
+    last = history[-1] if history else None
+    replays = isinstance(last, ModelResponse) and all(_replayable(c, handed) for c in others)
+    after: Resend | Paused | None = None
+    if pending:
+        answer_mail = [m for m in queued if is_on_time(m, pending)]
+        answers = {k: call_result(v) for m in answer_mail for k, v in m.answers.items()}
+        ready = any(m.kind == MailKind.MESSAGE for m in queued) or set(pending) <= set(answers)
+        after = Paused(pending, answers, answer_mail, ready)
+    elif others:
+        after = Resend(others if replays else [])
+    elif isinstance(last, ModelRequest) and not is_stopped(last):
+        after = Resend([])
+    if others and not replays:
+        if after is None:
+            raise RuntimeError(f"interrupted calls without a way to go on: {others}")
+        return Interrupted(others, after)
+    if after is not None:
+        return after
+    return Fresh() if queued else Idle()
+
+
+def _replayable(call: ToolCallPart, handed: HandedOut) -> bool:
     kind = kind_of(call, handed.approvals)
     return kind is not None and kind.replayable
+
+
+def paused(at: Position) -> Paused | None:
+    """挂着的调用（被打断时是补完结果之后仍挂着的），没有为 None。"""
+    match at:
+        case Paused():
+            return at
+        case Interrupted(after=Paused() as after):
+            return after
+        case _:
+            return None
+
+
+def is_on_time(mail: Mail, pending: Mapping[str, object]) -> bool:
+    """这封回答信件针对的调用都还挂着：作为那些调用的结果交回。否则它是迟到的，作为文字交给模型（late_text）。"""
+    return mail.kind == MailKind.ANSWER and set(mail.answers) <= set(pending)
 
 
 @dataclass(frozen=True)
 class StopClosing:
     """用户停止时怎么关闭没出结果的调用（sessions.halt.close_history_in）：
 
-    - stopped：补「已停止」的结果——停止后不再挂着的调用（DeferredKind.kept_open_on_stop 为假，按 kind_of 认）；
+    - stopped：补「已停止」的结果——被打断的、能重放的，以及停止后不再挂着的挂起调用（DeferredKind.kept_open_on_stop
+      为假）；
     - answered：停止后本该仍挂着、但回答已提交还排着的调用 -> 交给模型的结果。回答属于它回答的调用，是停止前用户
       已经给出的部分，照常写进历史（同「停止前已经产生的部分照常保存」），不留在信箱里等以后唤醒；
     - used：answered 的回答所在的信件，随之记为已处理（整封信：同一封里对等批准调用的决定也算已处理，那个调用
@@ -162,69 +266,35 @@ class StopClosing:
     used: list[Mail]
 
 
-def closing_on_stop(
-    history: Sequence[ModelMessage], handed: HandedOut, queued: Sequence[Mail]
-) -> StopClosing:
-    kept = {
-        k: c
-        for k, c in pending_calls(history, handed).items()
-        if (kind := kind_of(c, handed.approvals)) is not None and kind.kept_open_on_stop
-    }
-    answers: dict[str, CallResult] = {}
-    used: list[Mail] = []
-    for m in queued:
-        if m.kind != MailKind.ANSWER or not (mine := [k for k in m.answers if k in kept]):
-            continue
-        used.append(m)
-        answers.update({k: call_result(m.answers[k]) for k in mine})
-    # 回答怎么变成调用的结果只在 deferred_results 一处定
-    results = deferred_results({k: kept[k] for k in answers}, answers, handed)
-    for call_id, value in results.items():
-        if isinstance(value, ToolReturn):
-            # 停止时结果直接写进历史；ToolReturn 要由 pydantic-ai 转换成消息，停止后仍挂着的种类不能交回它
-            raise RuntimeError(
-                f"call {call_id} of {kept[call_id].tool_name}: a ToolReturn cannot be saved on stop"
+def closing_on_stop(at: Position) -> StopClosing:
+    match at:
+        case Interrupted(calls=calls, after=after):
+            rest = closing_on_stop(after)
+            return StopClosing([*calls, *rest.stopped], rest.answered, rest.used)
+        case Resend(replays=replays):
+            return StopClosing(list(replays), [], [])
+        case Paused(pending=pending, answers=answers, answer_mail=answer_mail):
+            kept = {k: p for k, p in pending.items() if p.kind.kept_open_on_stop}
+            # 回答怎么变成调用的结果只在 deferred_results 一处定
+            results = deferred_results({k: p for k, p in kept.items() if k in answers}, answers)
+            for call_id, value in results.items():
+                if isinstance(value, ToolReturn):
+                    # 停止时结果直接写进历史；ToolReturn 要由 pydantic-ai 转换成消息，停止后仍挂着的种类不能交回它
+                    raise RuntimeError(
+                        f"call {call_id} of {kept[call_id].call.tool_name}: a ToolReturn cannot be saved on stop"
+                    )
+            return StopClosing(
+                stopped=[p.call for k, p in pending.items() if k not in kept],
+                answered=[(kept[k].call, v) for k, v in results.items()],
+                used=[m for m in answer_mail if set(m.answers) & set(results)],
             )
-    return StopClosing(
-        stopped=[c for c in unanswered_calls(history) if c.tool_call_id not in kept],
-        answered=[(kept[k], v) for k, v in results.items()],
-        used=used,
-    )
-
-
-async def pending_in(s: AsyncSession, session_id: str) -> dict[str, ToolCallPart]:
-    """会话现在挂着的调用，从库里的历史推导：只可能在最后一条模型回复里（history.since_last_response），不加载整段
-    上下文。"""
-    return pending_calls(await since_last_response(s, session_id), await handed_out_in(s, session_id))
-
-
-def answered_in(queued: Sequence[Mail], pending: Mapping[str, ToolCallPart]) -> dict[str, CallResult]:
-    """信箱里对这些挂起调用的回答。回答信件里不针对它们的（迟到的，提问已被别的运行关闭）不在这里，见 is_on_time。"""
-    return {
-        call_id: call_result(value)
-        for m in queued
-        if is_on_time(m, pending)
-        for call_id, value in m.answers.items()
-    }
-
-
-def is_on_time(mail: Mail, pending: Mapping[str, ToolCallPart]) -> bool:
-    """这封回答信件针对的调用都还挂着：作为那些调用的结果交回。否则它是迟到的，作为文字交给模型（late_text）。"""
-    return mail.kind == MailKind.ANSWER and set(mail.answers) <= set(pending)
-
-
-def waiting(history: Sequence[ModelMessage], queued: Sequence[Mail], handed: HandedOut) -> bool:
-    """停在挂起的调用上、还不能继续：有挂起的调用，没有新消息，回答也没覆盖全部挂起的调用。"""
-    pending = pending_calls(history, handed)
-    if not pending or any(m.kind == MailKind.MESSAGE for m in queued):
-        return False
-    return not set(pending) <= set(answered_in(queued, pending))
+        case Idle() | Fresh():
+            return StopClosing([], [], [])
 
 
 def deferred_results(
-    pending: Mapping[str, ToolCallPart],
+    pending: Mapping[str, PendingCall],
     answers: Mapping[str, CallResult],
-    handed: HandedOut,
     *,
     replaced: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
@@ -235,15 +305,12 @@ def deferred_results(
     运行去执行，不再执行）。替换哪些、换成什么由那一种自己的模块定，这里只代入。"""
     replaced = replaced or {}
     results: dict[str, object] = {}
-    for call_id, call in pending.items():
-        kind = kind_of(call, handed.approvals)
-        if kind is None:
-            raise RuntimeError(f"call {call_id} of {call.tool_name} is not a deferred call")
+    for call_id, p in pending.items():
         result = answers.get(call_id)
         if result is None:
-            results[call_id] = kind.answer.skipped(list(answers.values()))
-        elif not isinstance(result, kind.answer):
-            raise RuntimeError(f"call {call_id} of {call.tool_name} got an answer for {result.tool}")
+            results[call_id] = p.kind.answer.skipped(list(answers.values()))
+        elif not isinstance(result, p.kind.answer):
+            raise RuntimeError(f"call {call_id} of {p.call.tool_name} got an answer for {result.tool}")
         elif call_id in replaced:
             results[call_id] = replaced[call_id]
         else:
@@ -275,21 +342,18 @@ class OpenAsks:
     approvals_submitted: frozenset[str]
 
 
-def open_asks_of(
-    since_last_response: Sequence[ModelMessage], queued: Sequence[Mail], requested: AbstractSet[str]
-) -> OpenAsks:
-    """挂起的调用只可能在最后一条模型回复里（history.since_last_response）；回答已在信箱里排着的算已提交。
-    requested 是会话里停下来等过批准的调用（HandedOut.approvals）。哪一种经 kind_of 认：提问是带问题的种类，批准是
+def open_asks_of(at: Position, queued: Sequence[Mail]) -> OpenAsks:
+    """会话停在哪（position）里挂着的、等用户的调用；回答已在信箱里排着的算已提交。提问是带问题的种类，批准是
     AWAITING_APPROVAL；ask_agent 不等用户，不在其中。"""
     submitted = frozenset(k for m in queued if m.kind == MailKind.ANSWER for k in m.answers)
+    pending = {} if (p := paused(at)) is None else p.pending
     questions: dict[str, list[Question]] = {}
     gated: dict[str, str] = {}
-    for c in unanswered_calls(since_last_response):
-        kind = kind_of(c, requested)
-        if kind is not None and kind.questions is not None:
-            questions[c.tool_call_id] = kind.questions(c)
-        elif kind is AWAITING_APPROVAL:
-            gated[c.tool_call_id] = c.tool_name
+    for k, c in pending.items():
+        if c.kind.questions is not None:
+            questions[k] = c.kind.questions(c.call)
+        elif c.kind is AWAITING_APPROVAL:
+            gated[k] = c.call.tool_name
     return OpenAsks(
         answerable={k: v for k, v in questions.items() if k not in submitted},
         approvable={k: v for k, v in gated.items() if k not in submitted},

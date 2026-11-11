@@ -37,11 +37,9 @@ async def runs_between_in(
     return {lanes[lane]: found for lane, found in runs.items()}
 
 
-async def run_unfinished_in(
-    s: AsyncSession, queue: TaskQueue, session_id: str, *, excluding: int | None
-) -> bool:
-    """会话有排着或进行中的运行（excluding：正在收尾的那一次不算，见 mailbox.wake_in）。"""
-    return await queue.has_unfinished_in(s, session_lane(session_id), RUN_TASK, excluding=excluding)
+async def run_unfinished_in(s: AsyncSession, queue: TaskQueue, session_id: str) -> bool:
+    """会话有排着或进行中的运行（在运行的收尾里调用时，它自己已经记为完成，TaskQueue.complete）。"""
+    return await queue.has_unfinished_in(s, session_lane(session_id), RUN_TASK)
 
 
 class RunPayload(BaseModel):

@@ -311,7 +311,7 @@ def stopped_results(
 def interrupted_results(calls: Sequence[ToolCallPart]) -> list[ModelMessage]:
     """一步在执行工具时被打断，这些调用没有结果：补上「被中断、没有重新执行」的结果。它们不重新执行——副作用
     （shell、通知、委派、改记忆）可能已经发生，而我们无从知道——由模型看着结果决定要不要再做一次。哪些调用走这条
-    路由 Consumer 决定（sessions.consumer.interrupted_calls），设计见 docs/architecture.md「从哪里开始」。"""
+    路由会话停在哪定（sessions.pending.position 的 Interrupted），设计见 docs/architecture.md「从哪里开始」。"""
     return _request_of(
         [
             ToolReturnPart(

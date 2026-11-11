@@ -21,12 +21,11 @@ from muliao.platform.tables import Task, TaskStatus
 from muliao.platform.tool_views import NO_RENDERS
 from muliao.sessions.api import Origin
 from muliao.sessions.codec import dump_message
-from muliao.sessions.consumer import interrupted_calls
 from muliao.sessions.content import Content, append_content
 from muliao.sessions.conventions import INTERRUPTED_TOOL_RESULT, RUN_CHECK_INS, RUN_EVENTS, format_event
 from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.mailbox import post_in, queued_in
-from muliao.sessions.pending import HandedOut
+from muliao.sessions.pending import HandedOut, Interrupted, Paused, Resend, position
 from muliao.sessions.sources import JobSource
 from muliao.sessions.tables import Mail, MailKind, MailState, Message
 from muliao.sessions.transcript import to_items, to_text
@@ -426,17 +425,18 @@ def test_only_a_step_whose_unfinished_calls_are_all_idempotent_asks_is_replayed(
     def history(*calls: ToolCallPart) -> list[ModelMessage]:
         return [ModelRequest(parts=[UserPromptPart("go")]), ModelResponse(parts=list(calls))]
 
-    assert interrupted_calls(history(ask), HandedOut(frozenset(), frozenset())) == []
-    assert interrupted_calls(history(shell), HandedOut(frozenset(), frozenset())) == [shell]
-    assert interrupted_calls(history(ask, shell), HandedOut(frozenset(), frozenset())) == [ask, shell]
+    none = HandedOut(frozenset(), frozenset())
+    assert position(history(ask), none, []) == Resend([ask])
+    assert position(history(shell), none, []) == Interrupted([shell], Resend([]))
+    assert position(history(ask, shell), none, []) == Interrupted([ask, shell], Resend([]))
     # 已经交出去的 ask_agent 是在等回信（挂起的调用），不是被中断的调用
-    assert interrupted_calls(history(ask), HandedOut(delegated={"a1"}, approvals=frozenset())) == []
+    assert isinstance(position(history(ask), HandedOut(delegated={"a1"}, approvals=frozenset()), []), Paused)
 
 
 def test_stopping_and_resuming_read_the_kind_the_call_is_recognised_as():
     """停止、续跑都按 pending.kind_of 认出的种类查表（#574），不按工具名另查：等批准的调用停止时补「已停止」，提问
     仍挂着，回答已提交的写上回答（一封信同时带提问回答与批准决定时也按调用逐个认）；还没交出去的 ask_agent 可重放。"""
-    from muliao.sessions.pending import closing_on_stop, replayable
+    from muliao.sessions.pending import closing_on_stop
     from muliao.sessions.tables import Mail, MailKind
 
     ask = ToolCallPart("ask_agent", {"agent": "beta", "task": "check"}, tool_call_id="a1")
@@ -451,11 +451,16 @@ def test_stopping_and_resuming_read_the_kind_the_call_is_recognised_as():
     mixed = Mail(id=1, kind=MailKind.ANSWER, answers={"q1": answer, "g1": approval})
     other = Mail(id=2, kind=MailKind.MESSAGE, answers={})
 
-    closing = closing_on_stop(history, handed, [mixed, other])
+    closing = closing_on_stop(position(history, handed, [mixed, other]))
     assert closing.stopped == [gated]
     assert [(c.tool_call_id, v["answered"]) for c, v in closing.answered] == [("q1", True)]
     assert closing.used == [mixed]
-    assert replayable(ask, handed) and not replayable(gated, handed)
+    # 还没交出去的 ask_agent 可以重放，等批准的调用不行
+    unsent = [ModelResponse(parts=[ask])]
+    assert position(unsent, handed, []) == Resend([ask])
+    assert position(
+        [ModelResponse(parts=[ask, gated])], HandedOut(frozenset(), frozenset()), []
+    ) == Interrupted([ask, gated], Resend([]))
 
 
 async def test_a_tool_call_interrupted_alongside_a_question_is_not_executed_again(

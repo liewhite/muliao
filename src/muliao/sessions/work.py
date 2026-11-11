@@ -25,8 +25,8 @@ from muliao.platform.tasks import Commit, TaskQueue
 from muliao.sessions.events import WorkCheckIn, WorkEnded
 from muliao.sessions.holds import get_in, hold_in, release
 from muliao.sessions.lanes import work_lane
-from muliao.sessions.mailbox import has_queued_from, post_in, posted_with_key_in
-from muliao.sessions.pending import CallResult, pending_in
+from muliao.sessions.mailbox import has_queued_from, position_in, post_in, posted_with_key_in
+from muliao.sessions.pending import CallResult, paused
 from muliao.sessions.tables import HoldStatus, MailKind, Session, SessionHold
 
 log = logging.getLogger(__name__)
@@ -114,7 +114,13 @@ async def deliver_in(
     if before == HoldStatus.RELEASED and not await posted_with_key_in(s, session_id, key):
         # 重放带的是同一个 key（按它去重）；换了 key 再交回一次，是同一项工作被交回了两次
         raise RuntimeError(f"hold {holder} of session {session_id} was already released by another delivery")
-    if answer is not None and hold.call_id is not None and hold.call_id in await pending_in(s, session_id):
+    waiting = paused(await position_in(s, session_id))
+    if (
+        answer is not None
+        and hold.call_id is not None
+        and waiting is not None
+        and hold.call_id in waiting.pending
+    ):
         await post_in(
             s,
             queue,

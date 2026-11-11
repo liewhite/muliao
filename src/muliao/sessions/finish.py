@@ -55,14 +55,14 @@ class RunFinisher:
 
     def idle(self, state: RunState) -> Commit:
         """运行没有可交给模型的、也没有之前的尝试要收尾（信箱空了，或还在等挂起调用的回答）：只看要不要唤醒下一次。"""
-        return self.wake(state.session.id, state.run_id)
+        return self.wake(state.session.id)
 
-    def wake(self, session_id: str, run_id: int) -> Commit:
+    def wake(self, session_id: str) -> Commit:
         """运行结束、没有别的要收尾：只看要不要唤醒下一次。"""
 
         async def finish(s: AsyncSession) -> None:
             session, _agent = await load_session(s, session_id)
-            await wake_in(s, self._queue, session, finished=run_id)
+            await wake_in(s, self._queue, session)
 
         return finish
 
@@ -96,6 +96,6 @@ class RunFinisher:
                 await settle_finished_in(
                     s, self._queue, session, end.answer, shared_attachments(state.messages)
                 )
-            await wake_in(s, self._queue, session, finished=state.run_id)
+            await wake_in(s, self._queue, session)
 
         return finish

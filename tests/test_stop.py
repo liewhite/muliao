@@ -425,3 +425,69 @@ async def test_stopping_a_run_before_it_reads_its_state_still_stops_the_session(
     assert called == [True]
     assert [t.status for t in await tasks_of(container, RUN_TASK)] == [TaskStatus.DONE, TaskStatus.DONE]
     assert [m.state for m in await mail_of(container)] == [MailState.DISCARDED, MailState.CONSUMED]
+
+
+class _SlowFirstTool:
+    """先跑一个要半秒的工具，之后回答。"""
+
+    def __call__(self, messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if any(isinstance(p, ToolReturnPart) for m in messages for p in m.parts):
+            return ModelResponse(parts=[TextPart("done")])
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    "run_shell", {"command": "sleep 0.5; echo quick", "timeout": 60}, tool_call_id="fast"
+                )
+            ]
+        )
+
+
+async def test_stopping_while_a_request_is_being_prepared_keeps_the_results_of_tools_that_ran(
+    client, container, make_agent, models, monkeypatch
+):
+    """上一步的工具已经执行完，结果在下一条请求里；这条请求还在并入新到的信件（before_request）时被停止：请求已经交出，
+    停止把它原样存库，执行过的工具保留真实结果，不被补成「已停止」（#629）。"""
+    from muliao.sessions.content import ContentBuilder
+
+    await login(client)
+    agent = await make_agent("worker", model="steps")
+    models.models["steps"] = scripted(_SlowFirstTool())
+    entered, gate = asyncio.Event(), asyncio.Event()
+    original = ContentBuilder.of
+
+    async def slow(self, agent_id, mail):  # noqa: ANN001, ANN202
+        if any(m.content == "late" for m in mail):
+            entered.set()
+            await gate.wait()
+        return await original(self, agent_id, mail)
+
+    monkeypatch.setattr(ContentBuilder, "of", slow)
+    session_id = (await client.post("/api/sessions", json={"agent_id": agent.id, "prompt": "go"})).json()[
+        "id"
+    ]
+    worker = asyncio.create_task(drain(container, limit_seconds=20))
+
+    async def fast_tool_running() -> bool:
+        live = container.live.snapshot(session_id)
+        return live is not None and any(
+            e.event == "item" and e.item.tool_call_id == "fast" for e in live.events
+        )
+
+    # 第一步的工具在跑时到一封信：第二次请求之前并入它时卡住
+    await _wait_for(fast_tool_running)
+    async with container.db.transaction() as s:
+        await post_in(
+            s, container.queue, session_id, kind=MailKind.EVENT, source="x", content="late", awaited=False
+        )
+    async with asyncio.timeout(10):
+        await entered.wait()
+    assert (await client.post(f"/api/sessions/{session_id}/stop")).status_code == 202
+    await worker
+
+    detail = (await client.get(f"/api/sessions/{session_id}")).json()
+    items = [(i["type"], i["tool_call_id"], i["text"]) for i in detail["items"]]
+    assert ("tool_result", "fast", "exit_code: 0\nquick\n") in items
+    assert ("tool_result", "fast", STOPPED_TOOL_RESULT) not in items
+    assert items[-1][0] == "stopped"
+    # 这封信没并进请求：没交给模型，随停止被丢弃
+    assert [(m.content, m.state) for m in await mail_of(container)][-1] == ("late", MailState.DISCARDED)

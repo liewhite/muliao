@@ -107,18 +107,18 @@ class _Meter:
 class StepHooks:
     """逐步运行（AgentRuntime.run_steps）时消费者在每一步的两个点上介入（sessions.consumer）。
 
-    运行新增的每条消息恰好经 took 交出一次，交出之后归消费者保存：每次请求之前、每次回复之后交出这时新增的，驱动以
-    任何方式结束（跑完、停在挂起的调用上、失败、被用户停止而取消）时交出其余的。took 是同步的，交出与运行记下「交出到
-    哪」之间没有挂起点，被取消时不会有消息两边都不认。交进来的历史（run_steps 的 history）已经保存，不再交出；从末尾
-    那条请求续跑时重发的就是它，同样不交出、不回调 before_request。每次请求本身不经 took：before_request 把它和已交出的
-    一起保存，它在发出时才进运行的历史。"""
+    运行新增的每条消息（含每次请求）恰好经 took 交出一次，交出之后归消费者保存（「一次运行新产生了哪些消息」只由 runner
+    判定，docs/architecture.md 2.4 第 1 行）：每次请求之前交出这时新增的与这次请求、再回调 before_request，每次回复之后
+    交出这时新增的，驱动以任何方式结束（跑完、停在挂起的调用上、失败、被用户停止而取消）时交出其余的。took 是同步的，
+    交出与运行记下「交出到哪」之间没有挂起点，被取消时不会有消息两边都不认。交进来的历史（run_steps 的 history）已经
+    保存，不再交出；从末尾那条请求续跑时重发的就是它，同样不交出、不回调 before_request。"""
 
     # 运行开始、第一步之前。notices：工具组连接时发现、要并进这次运行上下文的问题（RunScope.notices，见
     # instructions.with_notices）
     started: Callable[[Sequence[str]], Awaitable[None]]
     # 运行新增、交给消费者保存的消息
     took: Callable[[list[ModelMessage]], None]
-    # 请求模型之前：request 还没发出，可以往里追加内容（新到的信件），并把它和已交出的消息一起保存
+    # 请求模型之前：request 已经交出、还没发出，可以往里追加内容（新到的信件），并保存已交出的消息
     before_request: Callable[[ModelRequest], Awaitable[None]]
     # 模型回复之后（回复已经交出），工具执行之前：保存已交出的消息
     after_response: Callable[[], Awaitable[None]]
@@ -234,6 +234,10 @@ class AgentRuntime:
         # 这次交回结果的挂起调用：调用已在历史里，结果随第一步保存
         resumed = frozenset(deferred or ())
         instructions = await self.instructions(config, scope, summary, origin_note)
+        if history and isinstance(last := history[-1], ModelResponse) and last.state == "suspended":
+            # 提供方暂停的回复（Anthropic pause_turn 等，只在用内置服务端工具时出现）：pydantic-ai 从它续跑走的是另一条路，
+            # 请求不进历史，交出到哪的下标会错位。muliao 不用内置工具，不支持这个起点，当场失败
+            raise RuntimeError("cannot resume a run from a provider-suspended response")
         # 这次驱动自己的一份 scope：notices 先放资源目录里与它相关的问题（读坏、名字冲突而没加载的文件），工具组连接时
         # 再往里加；压缩后续跑会重新连接工具组。读过的文件从空开始（压缩后模型看不到之前读到的内容了）
         scope = replace(scope, notices=await self._asset_problems(config.id), reads={})
@@ -367,7 +371,9 @@ async def _step_through(
 
     交出到哪由 handed 记（运行中的历史 ctx.state.message_history 的下标）：pydantic-ai 开始运行时规整过交进来的历史
     （合并相邻请求；重发时取出末尾那条请求），条数可能和交进来的不同，所以基准在规整之后取；之后历史只在末尾追加。
-    下标只在这里用，不交出去。是不是重发只问 pydantic-ai（第一次请求节点的 is_resuming_without_prompt）。"""
+    每次请求在发出时才由 pydantic-ai 追加进历史，它在那之前已经交出（重发的那条已经保存），所以 handed 先越过它，发出之后
+    按身份核对历史里那一位就是它（_sent），不符当场报错。下标只在这里用，不交出去。是不是重发只问 pydantic-ai（第一次请求
+    节点的 is_resuming_without_prompt）。"""
     node = await run.next(first)
     resend = PaiAgent.is_model_request_node(node) and node.is_resuming_without_prompt
     # 重发时 pydantic-ai 把末尾那条请求从历史里取出、放进第一次请求的节点，一起查
@@ -388,14 +394,18 @@ async def _step_through(
             if PaiAgent.is_model_request_node(node):
                 if take() and resend:
                     raise RuntimeError("messages appeared before resending the last request")
-                # 这条请求在发出时由 pydantic-ai 追加进历史：重发的那条已经保存，其余的由 before_request 保存
+                request = node.request
+                # 这条请求在发出时才由 pydantic-ai 追加进历史：重发的那条已经保存，其余的现在交出（与 handed 越过它之间
+                # 没有挂起点），由 before_request 并进内容、保存
                 handed += 1
                 if resend:
                     resend = False
                 else:
-                    await hooks.before_request(node.request)
+                    hooks.took([request])
+                    await hooks.before_request(request)
                 async with node.stream(run.ctx) as stream:
                     await _forward_events(stream, hooks, resumed)
+                _sent(run.ctx.state.message_history, handed - 1, request)
                 node = await run.next(node)
                 await meter.bill()
                 new = take()
@@ -410,6 +420,15 @@ async def _step_through(
                 node = await run.next(node)
     finally:
         take()
+
+
+def _sent(history: Sequence[ModelMessage], at: int, request: ModelRequest) -> None:
+    """发出之后运行中的历史第 at 位就是这条请求（同一个对象）：pydantic-ai 每次请求恰好在末尾追加它一条，交出到哪
+    的下标靠这条成立，不符就当场失败。"""
+    if at >= len(history) or history[at] is not request:
+        raise RuntimeError(
+            f"pydantic-ai did not append the sent request at {at} (history has {len(history)} messages)"
+        )
 
 
 def _unrepaired(given: Sequence[ModelMessage], messages: Sequence[ModelMessage]) -> None:

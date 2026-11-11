@@ -146,3 +146,17 @@ async def called_in(s: AsyncSession, session_id: str) -> set[str]:
         )
     )
     return {call_id for call_id in rows.all() if call_id is not None}
+
+
+async def called_among(s: AsyncSession, session_ids: Collection[str]) -> dict[str, set[str]]:
+    """called_in 的批量版本（一次查询），每个会话都在结果里。"""
+    found: dict[str, set[str]] = {x: set() for x in session_ids}
+    rows = await s.execute(
+        select(SessionHold.session_id, SessionHold.call_id).where(
+            SessionHold.session_id.in_(list(session_ids)), SessionHold.call_id.is_not(None)
+        )
+    )
+    for session_id, call_id in rows.all():
+        if call_id is not None:
+            found[session_id].add(call_id)
+    return found

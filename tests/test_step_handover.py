@@ -19,7 +19,7 @@ from tests.scripted import scripted
 
 
 class _Recorder:
-    """记下交出的消息与 before_request 交来的请求，按运行历史的顺序拼成一份。"""
+    """记下交出的消息；每次 before_request 交来的请求必须已经是最后交出的那一条。"""
 
     def __init__(self) -> None:
         self.saved: list[ModelMessage] = []
@@ -30,8 +30,8 @@ class _Recorder:
             return None
 
         async def before_request(request: ModelRequest) -> None:
+            assert self.saved and self.saved[-1] is request
             self.requests += 1
-            self.saved.append(request)
 
         async def after_response() -> None:
             return None
@@ -87,6 +87,18 @@ async def test_a_resent_request_is_not_handed_over_again(container, make_agent, 
     # 重发的那条已经保存：不经 before_request、不经 took，只交出模型的回复
     assert recorder.requests == 0
     assert [type(m) for m in recorder.saved] == [ModelResponse]
+
+
+async def test_a_run_never_resumes_from_a_provider_suspended_response(container, make_agent, models):
+    """提供方暂停的回复（suspended）走 pydantic-ai 另一条续跑路线，请求不进历史：当场拒绝，不让交出下标错位。"""
+    import pytest
+
+    models.models["m"] = scripted(lambda messages, info: ModelResponse(parts=[TextPart("ok")]))
+    agent = await make_agent("alpha", model="m")
+    history = [ModelRequest(parts=[UserPromptPart("go")]), ModelResponse(parts=[], state="suspended")]
+
+    with pytest.raises(RuntimeError, match="suspended"):
+        await _drive(container, agent, None, history, _Recorder())
 
 
 async def test_a_cancelled_run_hands_over_the_partial_answer(container, make_agent, models):

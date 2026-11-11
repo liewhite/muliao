@@ -1,11 +1,10 @@
 """会话的消费者：把信箱里的信件交给模型。设计见 docs/architecture.md「会话信箱」。
 
 一次运行（一条 run task）的编排，各部分在各自的模块里：
-- 起点由历史决定（_opening）：历史停在一条没得到回复、没标停止的请求上就重发它；最后一条回复里有没出结果的工具
-  调用（这一步在执行工具时被打断）就先补上「被中断、没有重新执行」的结果（sessions.history.interrupted_results），
-  再重发那条补出来的请求，不重新执行它们——可以安全重放的那一步除外（interrupted_calls）；停在挂起的调用上时按
-  sessions.pending 交回结果（同一个回复里被打断的别的调用同样先补上结果）；否则把信箱里排队的信件作为开头交给
-  模型（sessions.content）。
+- 起点由会话停在哪决定（sessions.pending.position，唯一的判断）：从历史续跑（Resend）就重发末尾那条请求、或重新
+  执行可以安全重放的调用；被打断（Interrupted）就先补上「被中断、没有重新执行」的结果
+  （sessions.history.interrupted_results）再看补完之后停在哪；等回答（Paused）且能继续时把回答作为挂起调用的结果交回；
+  新开（Fresh）时把信箱里排队的信件作为开头交给模型（sessions.content）。
 - 逐步运行、每一步保存（sessions.steps）；上下文超过阈值时在步与步之间压缩后续跑（sessions.compaction）。
 - 收尾（sessions.finish），与运行记为完成在同一个事务里。
 - 用户停止（sessions.halt）。
@@ -18,7 +17,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 
-from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, ToolCallPart, UserContent
+from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart, UserContent
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agent_runtime.api import AgentRuntime, Finished, Paused, Toolbox
@@ -26,11 +25,12 @@ from muliao.platform.db import Database
 from muliao.platform.messaging import Messaging
 from muliao.platform.tables import Task
 from muliao.platform.tasks import Commit, TaskQueue, TaskView
+from muliao.sessions import pending
 from muliao.sessions.approvals import take_in as take_approvals_in
 from muliao.sessions.approvals import waiting_text as approval_waiting_text
 from muliao.sessions.codec import load_messages
 from muliao.sessions.content import Content, ContentBuilder
-from muliao.sessions.conventions import answer_text, is_stopped, unanswered_calls
+from muliao.sessions.conventions import answer_text, is_stopped
 from muliao.sessions.events import RunFailed
 from muliao.sessions.finish import RunEnd, RunFinisher
 from muliao.sessions.halt import Halted, SessionHalt
@@ -45,19 +45,6 @@ from muliao.sessions.live import LiveSegments
 from muliao.sessions.loading import load_session
 from muliao.sessions.mailbox import audience_of, consumed_by_in, delegated_in, queued_in, wake_in
 from muliao.sessions.origins import OriginNotes
-from muliao.sessions.pending import (
-    DEFERRED_TOOLS,
-    CallResult,
-    HandedOut,
-    answered_in,
-    deferred_results,
-    handed_out_in,
-    is_on_time,
-    pending_calls,
-    questions_in,
-    replayable,
-    waiting,
-)
 from muliao.sessions.questions import waiting_text
 from muliao.sessions.runs import RunPayload, hand_over_in
 from muliao.sessions.settlement import settle_failure_in
@@ -70,11 +57,11 @@ log = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class Opening:
-    """一次运行开头要交给模型的（Consumer._opening，不改库）：取走的信件、挂起的调用与对它们的回答、其余信件的内容。"""
+    """一次运行开头要交给模型的（Consumer._opening，不改库）：取走的信件、停在挂起的调用上时那些调用与对它们的回答、
+    其余信件的内容。"""
 
     queued: list[Mail]
-    pending: dict[str, ToolCallPart]
-    answers: dict[str, CallResult]
+    paused: pending.Paused | None
     content: Content
 
 
@@ -85,43 +72,12 @@ class _Current:
     state: RunState | None = None
 
 
-def resumable(history: list[ModelMessage], handed: HandedOut) -> bool:
-    """历史从中途续跑：停在一条没得到回复、也没被停止的请求上，或最后的回复里有没出结果的工具调用（挂起的调用除外，
-    见 pending.pending_calls；这些调用一般不重新执行，由 Consumer._run 补上「被中断」的结果后重发）。
-
-    停在挂起的调用上时不是续跑，哪怕末尾是一条请求：挂起的调用与别的工具在同一个回复里时，pydantic-ai 以挂起结束时
-    把别的工具的结果追加成一条请求，这时要等回答（或跳过）作为挂起调用的结果交回，不能把那条请求重发出去。"""
-    pending = pending_calls(history, handed)
-    if not history or pending:
-        return False
-    last = history[-1]
-    if isinstance(last, ModelRequest):
-        return not is_stopped(last)
-    return bool(unanswered_calls(history))
-
-
-def interrupted_calls(history: list[ModelMessage], handed: HandedOut) -> list[ToolCallPart]:
-    """这次运行要补上「被中断」结果的调用：没出结果（只可能在最后一条回复里，conventions.unanswered_calls）、又不在等
-    回信的调用——这一步在执行工具时被打断（进程退出，或这一步失败）。挂起的调用不在其中：它们的结果由 sessions.pending
-    交回。补上之后交给 pydantic-ai 的历史里没有悬空的调用，它的修补无事可做（agent_runtime.runner 有则当场报错）。
-
-    可以原样重放的不补：历史停在这条回复上、没出结果的调用全是还没交出去的 ask_agent 时，pydantic-ai 续跑会重新执行
-    它们，按调用 id 幂等（sessions.holds，没有占用就是没投出去），没有别的副作用。只要有一个不能重放，整步都补结果、
-    都不重放——pydantic-ai 续跑时要么执行这条回复里所有没结果的调用、要么一个都不执行，挑不出单独一个来（停在挂起的
-    调用上时把已有结果的调用标为跳过，所以补过结果的不会再执行）。历史停在这条回复之后的请求上时，pydantic-ai 重发
-    那条请求、不再执行这些调用，所以都补。"""
-    pending = pending_calls(history, handed)
-    calls = [c for c in unanswered_calls(history) if c.tool_call_id not in pending]
-    replays = bool(history) and isinstance(history[-1], ModelResponse)
-    return [] if replays and all(replayable(c, handed) for c in calls) else calls
-
-
 def paused_end(
     calls: Sequence[ToolCallPart], gated: Sequence[ToolCallPart], requested: Mapping[str, str]
 ) -> RunEnd:
     """停在这些挂起的调用上（calls 等回信，gated 等批准，requested 是其中这次新请求的及其 pin）：ask_user 的问题、等批准的
     调用要告诉用户。"""
-    questions = [q for c in calls for q in questions_in(c)]
+    questions = [q for c in calls for q in pending.questions_in(c)]
     texts = [waiting_text(questions)] if questions else []
     if gated:
         texts.append(approval_waiting_text([_brief(c) for c in gated]))
@@ -145,22 +101,22 @@ def end_of(outcome: Finished | Paused) -> RunEnd:
     """模型运行的结局怎么收尾：最终回答，或停在挂起的调用上。"""
     if isinstance(outcome, Finished):
         return RunEnd(answer=outcome.answer, paused=False, asked_user=False, stopped=False)
-    if any(c.tool_name not in DEFERRED_TOOLS for c in outcome.calls):
+    if any(c.tool_name not in pending.DEFERRED_TOOLS for c in outcome.calls):
         # 只有 ask_user / ask_agent 会挂起；其他挂起说明工具与这里的约定不一致
         raise RuntimeError(f"run deferred unexpected tool calls: {[c.tool_name for c in outcome.calls]}")
-    if any(c.tool_name in DEFERRED_TOOLS for c in outcome.approvals):
+    if any(c.tool_name in pending.DEFERRED_TOOLS for c in outcome.approvals):
         # 挂起的工具按工具名认，等批准的按记录认（sessions.approvals）：同一个工具两样都做会认不清
         raise RuntimeError(f"a deferred tool asked for approval: {[c.tool_name for c in outcome.approvals]}")
     return paused_end(outcome.calls, outcome.approvals, outcome.pins)
 
 
-def settled_end(history: list[ModelMessage], handed: HandedOut) -> RunEnd:
-    """之前的尝试已经跑完、只差收尾：从保存的历史得出它怎么结束的。"""
-    if pending := pending_calls(history, handed):
-        calls = list(pending.values())
+def settled_end(history: list[ModelMessage], at: pending.Position) -> RunEnd:
+    """之前的尝试已经跑完、只差收尾：从保存的历史与它停在哪（at）得出它怎么结束的。"""
+    if (waiting := pending.paused(at)) is not None:
+        calls = list(waiting.pending.values())
         return paused_end(
-            [c for c in calls if c.tool_call_id not in handed.approvals],
-            [c for c in calls if c.tool_call_id in handed.approvals],
+            [p.call for p in calls if p.kind is not pending.AWAITING_APPROVAL],
+            [p.call for p in calls if p.kind is pending.AWAITING_APPROVAL],
             # 等批准的正是按 approval_requests 的记录认出来的：之前的尝试结束时已记下（Steps.save_end，连同 pin），没有新请求
             {},
         )
@@ -217,8 +173,9 @@ class Consumer:
             queued = await queued_in(s, session.id)
             delegated_work = await delegated_in(s, session.id)
             earlier = await consumed_by_in(s, session_id, run_id)
-            handed = await handed_out_in(s, session.id)
-            adopted = await _adopted(s, session.id, run_id) if resumable(context.messages, handed) else []
+            at = pending.position(context.messages, await pending.handed_out_in(s, session.id), queued)
+            resuming = isinstance(at.after if isinstance(at, pending.Interrupted) else at, pending.Resend)
+            adopted = await _adopted(s, session.id, run_id) if resuming else []
             saved_rows = await saved_by_in(s, session_id, run_id)
             state = RunState(
                 run_id=run_id,
@@ -231,23 +188,23 @@ class Consumer:
             )
             # 被打断的那一步里没出结果的调用不重新执行——副作用可能已经发生，而我们无从知道，重放一条重启服务的命令
             # 会让恢复无限循环。补上「被中断、没有重新执行」的结果交给模型判断，在读历史的同一个事务里存库（也接进
-            # state.context）：交给 pydantic-ai 的就是库里的历史，没有只在内存里补过的部分。没有挂起的调用时这次运行
-            # 就从这条补出来的请求重发，停在挂起的调用上时它让那些调用在交回回答时被标为跳过
-            if interrupted := interrupted_calls(context.messages, handed):
+            # state.context）：交给 pydantic-ai 的就是库里的历史，没有只在内存里补过的部分。补完之后停在 at.after
+            if isinstance(at, pending.Interrupted):
                 log.warning(
                     "resuming an interrupted step; its unfinished tool calls are not re-executed",
                     extra={
                         "session_id": session_id,
                         "run_id": run_id,
-                        "tools": [c.tool_name for c in interrupted],
+                        "tools": [c.tool_name for c in at.calls],
                     },
                 )
-                await self._steps.save_in(s, state, interrupted_results(interrupted), consumed=[])
+                await self._steps.save_in(s, state, interrupted_results(at.calls), consumed=[])
+                at = at.after
             last_message = await last_message_id_in(s, session_id)
         current.state = state
         history = state.context.messages
-        opening = await self._opening(state, history, queued, handed)
-        if opening is None and not resumable(history, handed):
+        opening = await self._opening(state, at, queued)
+        if opening is None and not isinstance(at, pending.Resend):
             # 没有要交给模型的：信箱空了，或停在挂起的调用上、还不能继续。之前的尝试已经跑完、只差收尾时（它保存的就是
             # 历史的末尾），按保存的历史收尾；之后的运行已经接着它保存的部分继续了（重试一个过时的失败运行），推送与
             # 委派的结局由那些运行做过，这里只了结它自己。历史停在标着停止的地方时，会话在这次运行登记可停止之前、或在它
@@ -259,7 +216,7 @@ class Consumer:
             )
             log.info("nothing to consume", extra={"session_id": session_id, "run_id": run_id})
             return (
-                self._finisher.commit(state, settled_end(history, handed))
+                self._finisher.commit(state, settled_end(history, at))
                 if settled
                 else self._finisher.idle(state)
             )
@@ -282,7 +239,7 @@ class Consumer:
         # 之前（压缩失败重试时，批准不会被当成已经交过、不再执行）
         if self._steps.compaction_due(state):
             await self._steps.compact(state, config)
-        prompt, deferred = (None, None) if opening is None else await self._hand_over(state, opening, handed)
+        prompt, deferred = (None, None) if opening is None else await self._hand_over(state, opening)
         self._live.begin(session_id, last_message)
         while True:
             try:
@@ -309,37 +266,37 @@ class Consumer:
         await self._steps.save_end(state, end.requested)
         return self._finisher.commit(state, end)
 
-    async def _opening(
-        self,
-        state: RunState,
-        history: list[ModelMessage],
-        queued: list[Mail],
-        handed: HandedOut,
-    ) -> Opening | None:
-        """这次运行开头要交给模型的：新信件的内容，以及挂起调用的回答。从历史续跑、还在等挂起调用的回答、或信件里
+    async def _opening(self, state: RunState, at: pending.Position, queued: list[Mail]) -> Opening | None:
+        """这次运行开头要交给模型的：新信件的内容，以及挂起调用的回答。从历史续跑、还在等挂起调用的回答、空闲、或信件里
         没有内容时为 None。不改库（附件复制进工作目录是可重做的派生副本），交出去由 _hand_over 做。"""
-        if resumable(history, handed) or waiting(history, queued, handed):
-            return None
-        pending = pending_calls(history, handed)
-        content = await self._content.of(state.agent.id, [m for m in queued if not is_on_time(m, pending)])
-        if not content.items and not pending:
-            return None
-        return Opening(queued, pending, answered_in(queued, pending), content)
+        match at:
+            case pending.Paused(ready=True, answer_mail=answer_mail):
+                # 回答作为挂起调用的结果交回，其余信件（事件、新消息、迟到的回答）作为内容
+                answering = {m.id for m in answer_mail}
+                rest = [m for m in queued if m.id not in answering]
+                return Opening(queued, at, await self._content.of(state.agent.id, rest))
+            case pending.Fresh():
+                content = await self._content.of(state.agent.id, queued)
+                return Opening(queued, None, content) if content.items else None
+            case _:
+                return None
 
     async def _hand_over(
-        self, state: RunState, opening: Opening, handed: HandedOut
+        self, state: RunState, opening: Opening
     ) -> tuple[list[UserContent] | None, dict[str, object] | None]:
         """把开头的信件交给这次运行：返回交给模型的内容，以及挂起调用的结果（`{调用 id: 结果}`）。"""
         interrupted: dict[str, object] = {}
+        answers = {} if opening.paused is None else opening.paused.answers
         if opening.queued:
             # 开头取走的信件都交给了这次运行（mailbox.handed_to），哪怕它在第一次保存之前就最终失败：失败的结清据此
             # 了结它们，也不会为它们再唤醒一次运行。批准在同一个事务里记为已交给运行执行：之前交过的不再执行
             async with self._db.transaction() as s:
                 await hand_over_in(s, self._queue, state.run_id, opening.queued[-1].id)
-                interrupted = await take_approvals_in(s, state.session.id, opening.answers)
-        pending = opening.pending
+                interrupted = await take_approvals_in(s, state.session.id, answers)
         deferred = (
-            deferred_results(pending, opening.answers, handed, replaced=interrupted) if pending else None
+            None
+            if opening.paused is None
+            else pending.deferred_results(opening.paused.pending, answers, replaced=interrupted)
         )
         self._steps.begin(state, opening.queued, opening.content)
         return (opening.content.items or None), deferred
@@ -349,14 +306,14 @@ class Consumer:
     async def _stopped(self, run_id: int, session_id: str, current: _Current) -> Commit:
         state = current.state
         log.info("run stopped by user", extra={"session_id": session_id, "run_id": run_id})
-        save_tail = None if state is None else partial(self._steps.save_tail_in, state=state)
-        if await self._halt(session_id, first=save_tail) == Halted.GONE:
+        save_handed = None if state is None else partial(self._steps.save_handed_in, state=state)
+        if await self._halt(session_id, first=save_handed) == Halted.GONE:
             # 正在运行的会话忙，不能被删除：走到这里是 bug
             raise RuntimeError(f"session {session_id} was deleted while its run was being stopped")
         if state is None:
             # 停在这次运行读出状态之前：它什么都没做。停止之后、它记为完成之前到的信没能唤醒运行（它还占着），
             # 由这里唤醒（停止后马上投信，如 issue_stop 的收尾消息）
-            return self._finisher.wake(session_id, run_id)
+            return self._finisher.wake(session_id)
         return self._finisher.commit(state, RunEnd("", paused=False, asked_user=False, stopped=True))
 
 

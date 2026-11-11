@@ -36,7 +36,7 @@ from muliao.sessions.history import (
 from muliao.sessions.holds import clear_in
 from muliao.sessions.lanes import RUN_TASK, session_lane
 from muliao.sessions.mailbox import consume_in, queued_in
-from muliao.sessions.pending import closing_on_stop, handed_out_in
+from muliao.sessions.pending import closing_on_stop, handed_out_in, position
 from muliao.sessions.runs import latest_run
 from muliao.sessions.settlement import settle_stopped_in
 from muliao.sessions.stopping import StoppableRuns
@@ -48,11 +48,13 @@ log = logging.getLogger(__name__)
 
 async def close_history_in(s: AsyncSession, queue: TaskQueue, session_id: str) -> None:
     """停止时让会话历史停在不会被续跑的地方（唯一事实源是库里的历史）。运行中被停止时同一事务里先把当前这一步已产生的部分存库
-    （Steps.save_tail_in），补结果与停止标记都在这里一处做：哪些调用补「已停止」、哪些写上已提交的回答由 pending.closing_on_stop
-    定，用上的回答信件随之记为已处理。
+    （Steps.save_handed_in），补结果与停止标记都在这里一处做：哪些调用补「已停止」、哪些写上已提交的回答按会话停在哪
+    （pending.position）由 pending.closing_on_stop 定，用上的回答信件随之记为已处理。
     只看最后一条模型回复起的那一段（history.since_last_response）：没出结果的调用只可能在那里。"""
     history = await since_last_response(s, session_id)
-    closing = closing_on_stop(history, await handed_out_in(s, session_id), await queued_in(s, session_id))
+    closing = closing_on_stop(
+        position(history, await handed_out_in(s, session_id), await queued_in(s, session_id))
+    )
     if results := stopped_results(closing.stopped, closing.answered):
         run = await latest_run(s, queue, session_id)
         if run is None:
@@ -89,7 +91,7 @@ class SessionHalt:
     async def __call__(
         self, session_id: str, *, first: Callable[[AsyncSession], Awaitable[None]] | None = None
     ) -> Halted:
-        """first：运行中被停止时，消费者保存这一步还没保存的部分（Steps.save_tail_in），和停止放在同一个事务里：两者
+        """first：运行中被停止时，消费者保存这一步还没保存的部分（Steps.save_handed_in），和停止放在同一个事务里：两者
         之间不会因关停留下没结果、没标停止、会被续跑的历史。"""
         async with self._db.transaction() as s:
             session = await s.get(Session, session_id)

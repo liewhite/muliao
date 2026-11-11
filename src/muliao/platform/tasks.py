@@ -271,10 +271,12 @@ class TaskQueue:
                 raise RuntimeError(
                     f"task {task_id} is not running, cannot complete it (status={task and task.status})"
                 )
-            await commit(s)
+            # 先记为完成再执行 commit（同一个事务）：commit 里查队列时看到的已经是它做完之后的样子，处理器不必把自己
+            # 排除在外（「任务做完没有」只由队列判定，docs/architecture.md 2.4 第 5 行）
             task.status = TaskStatus.DONE
             task.error = None
             task.finished_at = self._clock()
+            await commit(s)
         # 同 lane 的后续 task 现在可以领取了
         self.wake.set()
 
@@ -417,14 +419,11 @@ class TaskQueue:
         kind: str,
         *,
         pending_only: bool = False,
-        excluding: int | None = None,
     ) -> bool:
-        """这个 lane 上有没有排着或进行中的这种 task；pending_only 只看排着的，excluding 不算这一个（调用方正在收尾
-        的那个，队列稍后才把它记为完成）。"""
+        """这个 lane 上有没有排着或进行中的这种 task；pending_only 只看排着的。在处理器的 commit 里调用时，正在收尾
+        的那个已经记为完成（complete），不算在内。"""
         statuses = [TaskStatus.PENDING] if pending_only else [TaskStatus.PENDING, TaskStatus.RUNNING]
         query = select(Task.id).where(Task.lane == lane, Task.kind == kind, Task.status.in_(statuses))
-        if excluding is not None:
-            query = query.where(Task.id != excluding)
         return bool(await s.scalar(select(query.exists())))
 
     async def update_payload_in(self, s: AsyncSession, task_id: int, payload: Mapping[str, Any]) -> None:
