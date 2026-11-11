@@ -213,6 +213,34 @@ async def test_event_cannot_write_into_sessions_it_did_not_start(client, contain
     assert missing.status_code == 422
 
 
+async def test_continued_session_is_checked_even_when_nothing_goes_to_it(client, container, make_agent):
+    """内容一开头就是 `@route` 行、没有一段投进带来的会话时，那个会话照样校验（#602）。"""
+    alpha = (await make_agent("alpha")).id
+    await login(client)
+    _, github = await _create(client, alpha, "github")
+    _, slack = await _create(client, alpha, "slack")
+    issue = await container.issues.create(USER, owner=alpha, title="deploys")
+    only_issue = f"@route issue:{issue.id}\ndeploy failed"
+    slack_session = (await client.post("/api/hooks/slack", content="hi", headers=_bearer(slack))).json()
+
+    missing = await client.post(
+        "/api/hooks/github?session_id=nope", content=only_issue, headers=_bearer(github)
+    )
+    assert missing.status_code == 422, missing.text
+    others = await client.post(
+        f"/api/hooks/github?session_id={slack_session['session_id']}",
+        content=only_issue,
+        headers=_bearer(github),
+    )
+    assert others.status_code == 403, others.text
+
+    own = (await client.post("/api/hooks/github", content="opened", headers=_bearer(github))).json()
+    resp = await client.post(
+        f"/api/hooks/github?session_id={own['session_id']}", content=only_issue, headers=_bearer(github)
+    )
+    assert resp.status_code == 202, resp.text
+
+
 async def test_recreated_trigger_cannot_continue_sessions_of_the_deleted_one(client, make_agent):
     """触发器 id 是发送方身份：删后新建的触发器不能拿到旧 id，从而续写旧触发器的会话。"""
     alpha = (await make_agent("alpha")).id

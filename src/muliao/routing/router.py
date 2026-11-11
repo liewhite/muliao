@@ -110,7 +110,8 @@ async def plan_in(
     内容是 compose(合并后的内容)（发送方在前面加上自己的说明）。没有内容（payload 为 None，如定时触发）时是默认目标的一次
     投递 compose(None)；各段都是空的时 routed 为空，没有内容的段不投。只读。
 
-    默认目标投不进去时当场报领域错误（那是发送方配置的问题，routed_in）；和默认目标合并的段跟着默认目标走。内容里的地址
+    默认目标投不进去时当场报领域错误（那是发送方配置的问题，routed_in）；和默认目标合并的段跟着默认目标走。默认目标这次
+    没有内容要投（内容一开头就是 `@route` 行）也照样校验，和内容里的地址一样：带了目标就一定校验。内容里的地址
     每个都解析（后面有没有内容都一样），解析不了或目标不接受的连同那段记在 rejected，要不要整次拒绝由发送方定。"""
     if payload is None:
         return Plan(routed=[await routed_in(s, sender, default, compose(None))], rejected=[])
@@ -129,6 +130,8 @@ async def plan_in(
         if body.strip():
             bodies, first = planned.get(target, ([], address))
             planned[target] = ([*bodies, body], None if address is None else first)
+    if default not in planned:
+        await _command_in(s, sender, default, compose(""))
     routed: list[Routed] = []
     for target, (bodies, address) in planned.items():
         body = "\n".join(bodies)
@@ -147,15 +150,20 @@ async def routed_in(s: AsyncSession, sender: Sender, target: Destination, conten
     所以这里的任何领域错误（存下的目标后来被删除、归档，会话不接受这个发送方续写）都是目标的问题，照原类型报给调用方
     （如 webhook 续写别人的会话是 Forbidden）。只有 NotFound 换成 InvalidInput：它在发送方那里会被当成发送方自己不存在
     （如 HTTP 404 的 webhook）。"""
-    try:
-        routed = await _routed_in(s, sender, target, content)
-    except NotFound as e:
-        raise InvalidInput(f"route target not found or gone: {e}") from e
+    routed = await _command_in(s, sender, target, content)
     log.info(
         "event routed",
         extra={"source": sender.source, "target": target.model_dump(), "session_id": routed.session_id},
     )
     return routed
+
+
+async def _command_in(s: AsyncSession, sender: Sender, target: Destination, content: str) -> Routed:
+    """只读地校验并返回投到目标的命令（routed_in 去掉日志；也用来只校验、丢掉命令）。"""
+    try:
+        return await _routed_in(s, sender, target, content)
+    except NotFound as e:
+        raise InvalidInput(f"route target not found or gone: {e}") from e
 
 
 async def _routed_in(s: AsyncSession, sender: Sender, target: Destination, content: str) -> Routed:
