@@ -132,7 +132,7 @@ class AgentLifecycle:
 
 def _retire_assets(snapshot: Snapshot, agent_id: str) -> None:
     """删掉 agent 的资源目录与 access.toml 里它的那一节；它名下分发出去的资源（agents.access.Sharing.shared：base 收录，或别的
-    agent 的规则收录）先挪到平台目录（别的 agent 还在用）。目录没加载成功（agent.toml 坏了等）时它名下没有加载出的资源可挪，
+    agent 的规则收录）先挪到平台目录（别的 agent 还在用），私有记忆不分发、随目录删掉。目录没加载成功（agent.toml 坏了等）时它名下没有加载出的资源可挪，
     照样按数据库里的名字删目录与那一节，不留下占着这个名字的残留。"""
     directory = snapshot.own_dir(agent_id)
     assert directory is not None, "an agent being deleted is still in the database"
@@ -144,7 +144,7 @@ def _retire_assets(snapshot: Snapshot, agent_id: str) -> None:
     sharing = sharing_of(snapshot)
     for kind in StoredKind:
         for a in snapshot.of_kind(kind):
-            if a.owner == agent_id and sharing.shared(as_kind(kind), a.name, agent_id):
+            if a.owner == agent_id and sharing.shared(as_kind(kind), a.rule_name, agent_id):
                 assets.move(a.path, snapshot.path_of(kind, a.name, None))
                 log.info(
                     "asset moved to the platform with its agent deleted",
@@ -156,6 +156,4 @@ def _retire_assets(snapshot: Snapshot, agent_id: str) -> None:
 
 def _plan_retire(snapshot: Snapshot, name: str) -> access_file.AccessEdit:
     """去掉 access.toml 里名为 name 的 agent 那一节的改动（还没写）。"""
-    return access_file.plan(
-        snapshot.access_path, snapshot.tools, lambda doc: access_file.remove_agent(doc, name)
-    )
+    return access_file.plan(snapshot, lambda doc: access_file.remove_agent(doc, name))

@@ -23,8 +23,7 @@ from pathlib import Path
 import frontmatter
 import yaml
 
-from muliao.agents.kinds import StoredKind, label
-from muliao.agents.naming import validate_slug
+from muliao.agents.formats import Draft, Loaded, modified
 from muliao.errors import InvalidInput, TooLarge
 from muliao.platform.fs import resolve_within
 
@@ -191,7 +190,8 @@ def unpack(data: bytes) -> Package:
             raise InvalidInput(
                 f"a .skill package must contain exactly one top-level directory holding all files, found {sorted(tops)}"
             )
-        name = validate_slug(label(StoredKind.SKILL), tops.pop())
+        # 名字的规则由导入方按 skill 的 KindSpec 查（agents.skills）
+        name = tops.pop()
         if len(entries) > MAX_PACKAGE_FILES:
             raise TooLarge(f"package has {len(entries)} files, more than {MAX_PACKAGE_FILES}")
         total = sum(info.file_size for info, _ in entries)
@@ -292,3 +292,36 @@ def valid_description(description: str) -> str:
 
 def skill_md(name: str, description: str, body: str) -> str:
     return frontmatter.dumps(frontmatter.Post(body.strip() + "\n", name=name, description=description)) + "\n"
+
+
+# ---- 资源目录里的 skill（读树与写入口，agents.kinds 的 KindSpec 登记） ----
+
+
+@dataclass(frozen=True)
+class SkillDir:
+    """skill 的内容：描述与执行前要批准的脚本（frontmatter 里列的，读树时已换成目录里存在的文件的身份，
+    approval_scripts）。"""
+
+    description: str
+    approval: tuple[Path, ...]
+
+
+def load(path: Path, name: str, _memory_max_chars: int) -> Loaded[SkillDir]:
+    """读树：path 是 skill 目录，修改时间取 SKILL.md 的。"""
+    md = path / SKILL_FILE
+    if not md.is_file():
+        raise InvalidInput(f"skill directory has no {SKILL_FILE}")
+    fm = parse_frontmatter(md.read_text(encoding="utf-8"), name)
+    return Loaded(SkillDir(fm.description, approval_scripts(path, fm.approval)), modified(md))
+
+
+def vet(draft: Draft) -> str:
+    """写入口：SKILL.md 按读树的规则校验；附件要 skill 已有 SKILL.md，否则写出来的是一个读树时加载不了的目录。"""
+    if draft.inner == (SKILL_FILE,):
+        approval_scripts(draft.item, parse_frontmatter(draft.text, draft.name).approval)
+        return draft.text
+    if not (draft.item / SKILL_FILE).is_file():
+        raise InvalidInput(
+            f"{draft.name}/ has no {SKILL_FILE}; write {draft.name}/{SKILL_FILE} first, then its other files"
+        )
+    return draft.text

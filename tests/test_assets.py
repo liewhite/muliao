@@ -54,7 +54,10 @@ async def test_assets_belong_to_the_directory_they_are_in(container, make_agent)
     snapshot = await container.assets.snapshot()
     assert snapshot.asset(StoredKind.SKILL, "mine").owner == alpha.id
     assert snapshot.asset(StoredKind.SKILL, "shared").owner is None
-    assert snapshot.asset(StoredKind.MEMORY, "alpha").content == MemoryText("- likes tea")
+    private = snapshot.private_memory(alpha.id)
+    assert private is not None and private.content == MemoryText("- likes tea")
+    # 私有记忆按所属 agent 认：不占记忆的名字，规则里没有它的名字
+    assert snapshot.get(StoredKind.MEMORY, "alpha") is None and private.rule_name is None
     assert snapshot.asset(StoredKind.MEMORY, "trading").owner is None
     server = await container.mcp.get("docs")
     assert (server.owner, server.enabled, server.config.url) == (alpha.id, True, "https://x/mcp")
@@ -147,16 +150,23 @@ async def test_a_broken_platform_asset_still_hides_agent_copies(container, make_
     assert reported == {("platform/skills/dup", None), ("alpha/skills/dup", alpha.id)}
 
 
-async def test_a_platform_memory_named_like_an_agent_is_left_to_an_admin(container, make_agent):
+async def test_a_platform_memory_named_like_an_agent_does_not_touch_its_private_memory(container, make_agent):
+    # 私有记忆不占记忆的名字（#635）：同名的平台记忆与它各自加载，规则 `memory:alpha` 只指平台那份
     alpha = await make_agent("alpha")
+    beta = await make_agent("beta")
     r = root(container)
     write(r / "alpha" / "memory.md", "mine\n")
     write(r / "platform" / "memory" / "alpha.md", "platform's\n")
+    await container.agents.update(beta.id, AgentPatch(allow=["use:memory:alpha"]), actor="user")
     snapshot = await container.assets.snapshot()
     assert snapshot.asset(StoredKind.MEMORY, "alpha").owner is None
-    reported = {p.owner: p.reason for p in snapshot.problems}
-    assert "do not rename or remove this file" in reported[alpha.id]
-    assert "private memory is therefore not loaded" in reported[None]
+    assert snapshot.private_memory(alpha.id).content == MemoryText("mine")
+    assert await problems(container) == []
+    assert [(m.content, m.yours) for m in await container.memory.for_run(beta.id) if m.name == "alpha"] == [
+        ("platform's", False)
+    ]
+    alphas = [(m.content, m.yours) for m in await container.memory.for_run(alpha.id) if m.name == "alpha"]
+    assert alphas == [("mine", True)]
 
 
 async def test_an_agent_directory_must_carry_a_known_id_under_the_agents_own_name(container, make_agent):
@@ -183,12 +193,10 @@ async def test_renaming_in_the_app_moves_the_directory_and_rules_together(contai
     agent = await container.agents.create(
         AgentSpec(name="alpha", description="d", model="test", roles=["reader"]), actor="user"
     )
-    beta = await make_agent("beta")
-    # 别人指名 alpha 私有记忆的规则跟着改名；带通配的不动
-    await container.distribution.create(
-        RoleSpec("peek", "p", ["use:memory:alpha", "use:memory:alpha*"], ["write:memory:alpha"])
-    )
-    await container.agents.update(beta.id, AgentPatch(allow=["*:memory:alpha"]), actor="user")
+    await make_agent("beta")
+    # 规则不按名字指私有记忆：指名它的新规则匹配不上任何资源，写入时就拒绝
+    with pytest.raises(InvalidInput, match="private memories belong to their agent"):
+        await container.distribution.create(RoleSpec("peek", "p", ["use:memory:alpha"], []))
     r = root(container)
     with pytest.raises(Conflict, match="already taken"):
         await container.agents.update(agent.id, AgentPatch(name="beta"), actor="user")
@@ -197,10 +205,9 @@ async def test_renaming_in_the_app_moves_the_directory_and_rules_together(contai
     assert renamed.name == "gamma" and (r / "gamma" / "agent.toml").exists()
     snapshot = await container.assets.snapshot()
     assert snapshot.rules_of(agent.id).roles == ("reader",)
-    assert (await container.memory.read("gamma")).owner == agent.id
-    assert snapshot.rules_of(beta.id).allow == ("*:memory:gamma",)
-    access = (r / "platform" / "access.toml").read_text()
-    assert '"use:memory:gamma", "use:memory:alpha*"' in access and '"write:memory:gamma"' in access
+    memory = await container.memory.read_private(agent.id)
+    assert (memory.name, memory.owner) == ("gamma", agent.id)
+    assert "[agents.gamma]" in (r / "platform" / "access.toml").read_text()
     assert await problems(container) == []
 
 
@@ -247,10 +254,11 @@ async def test_a_failed_create_takes_back_its_directory_and_rules(container, mon
 async def test_an_access_edit_does_not_overwrite_a_change_made_after_it_was_planned(container, tmp_path):
     from muliao.agents import access_file
 
-    tools = (await container.assets.snapshot()).tools
-    path = tmp_path / "access.toml"
+    snapshot = await container.assets.snapshot()
+    path = snapshot.access_path
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("")
-    edit = access_file.plan(path, tools, lambda doc: access_file.delete_role(doc, "x"))
+    edit = access_file.plan(snapshot, lambda doc: access_file.delete_role(doc, "x"))
     path.write_text('[roles.ops]\ndescription = "by hand"\n')
     with pytest.raises(Conflict, match="changed meanwhile"):
         edit.apply()
@@ -434,13 +442,12 @@ def test_an_unparsable_access_toml_without_an_earlier_read_leaves_only_the_fixed
 
 
 async def test_memory_over_the_limit_is_loaded_but_reported(container, make_agent):
-    await make_agent("alpha")
+    alpha = await make_agent("alpha")
     write(root(container) / "alpha" / "memory.md", "x" * (container.memory.max_chars + 1))
     snapshot = await container.assets.snapshot()
-    assert (
-        len(content_of(snapshot.asset(StoredKind.MEMORY, "alpha"), MemoryText).text)
-        == container.memory.max_chars + 1
-    )
+    private = snapshot.private_memory(alpha.id)
+    assert private is not None
+    assert len(content_of(private, MemoryText).text) == container.memory.max_chars + 1
     assert any("over the limit" in p.reason for p in snapshot.problems)
 
 
@@ -503,19 +510,24 @@ async def test_memory_api_writes_files_and_follows_ownership(client, container, 
     )
     assert resp.json()["content"] == "first\n\nsecond"
     assert (root(container) / "platform" / "memory" / "global.md").read_text() == "first\n\nsecond\n"
-    alpha = (await client.get("/api/assets/memory/alpha")).json()
-    put = await client.put("/api/assets/memory/alpha", json={"content": "- tea", "version": alpha["version"]})
-    assert put.json()["owner"] == agent.id
+    # 私有记忆按所属的 agent 认（不在 /assets/memory/<名> 下）
+    assert (await client.get("/api/assets/memory/alpha")).status_code == 404
+    alpha = (await client.get(f"/api/agents/{agent.id}/memory")).json()
+    assert (alpha["name"], alpha["owner"]) == ("alpha", agent.id)
+    put = await client.put(
+        f"/api/agents/{agent.id}/memory", json={"content": "- tea", "version": alpha["version"]}
+    )
+    assert put.json()["content"] == "- tea"
+    assert (root(container) / "alpha" / "memory.md").read_text() == "- tea\n"
+    stale = await client.put(
+        f"/api/agents/{agent.id}/memory", json={"content": "x", "version": alpha["version"]}
+    )
+    assert stale.status_code == 409
+    assert (await client.get("/api/agents/nope/memory")).status_code == 404
     created = await client.put("/api/assets/memory/trading", json={"content": "x", "version": None})
     assert created.json()["owner"] is None
     bad = await client.put("/api/assets/memory/Bad Name", json={"content": "x", "version": None})
     assert bad.status_code == 422
-    # 私有记忆名字就是 agent 名
-    assert (
-        await client.put(
-            "/api/assets/memory/other", json={"content": "x", "owner": agent.id, "version": None}
-        )
-    ).status_code == 422
     assert (await client.delete("/api/assets/memory/trading")).status_code == 204
     assert not (root(container) / "platform" / "memory" / "trading.md").exists()
     assert (await client.delete("/api/assets/memory/global")).status_code == 422
@@ -635,13 +647,11 @@ async def test_transferring_moves_the_file_to_the_new_owner(container, make_agen
     assert await owned(container, "skill", None) == ["digest"]
     with pytest.raises(InvalidInput, match="already belongs"):
         await container.catalog.transfer(StoredKind.SKILL, "digest", None)
-    await container.catalog.transfer(StoredKind.MEMORY, "alpha", None)
-    assert (root(container) / "platform" / "memory" / "alpha.md").exists()
+    # 记忆不转移：私有记忆属于它的 agent，平台的记忆归了 agent 就是第二块私有记忆
     await container.memory.put("trading", "x", version=None)
-    with pytest.raises(InvalidInput, match="named after the agent"):
+    with pytest.raises(InvalidInput, match="not transferred"):
         await container.catalog.transfer(StoredKind.MEMORY, "trading", alpha.id)
-    await container.catalog.transfer(StoredKind.MEMORY, "alpha", alpha.id)
-    assert (root(container) / "alpha" / "memory.md").exists()
+    assert (root(container) / "platform" / "memory" / "trading.md").exists()
 
 
 # ---- agent 的建、改、删 ----
@@ -664,9 +674,12 @@ async def test_creating_and_renaming_an_agent_writes_its_directory_and_rules(con
         with pytest.raises(InvalidInput, match="directory name"):
             await container.agents.create(AgentSpec(name=bad, description="d"), actor="user")
     assert sorted(p.name for p in r.iterdir()) == ["alpha", "platform"]
-    # 私有记忆名就是 agent 名：与共享、全局记忆同名的 agent 建不了
-    with pytest.raises(Conflict, match="memory named 'global'"):
-        await container.agents.create(AgentSpec(name="global", description="d"), actor="user")
+    # 私有记忆不占记忆的名字：与全局记忆同名的 agent 也能建，各是各的
+    await container.assets.ensure_global_memory()
+    named_global = await container.agents.create(AgentSpec(name="global", description="d"), actor="user")
+    snapshot = await container.assets.snapshot()
+    assert snapshot.asset(StoredKind.MEMORY, "global").owner is None
+    assert snapshot.private_memory(named_global.id) is not None
 
     # 手写的注释保留；改名挪目录，access.toml 里那一节跟着改名
     write(r / "alpha" / "agent.toml", "# keep me\n" + (r / "alpha" / "agent.toml").read_text())

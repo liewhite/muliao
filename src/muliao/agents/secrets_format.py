@@ -15,9 +15,11 @@ from __future__ import annotations
 import re
 import tomllib
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import tomlkit
 
+from muliao.agents.formats import Draft, Loaded, modified
 from muliao.errors import InvalidInput
 
 # secret key 的语法。长度上限只在存储时检查：引用了超长 key 的模板照样认作引用，解析时按「不存在」报错，而不是当成字面
@@ -68,6 +70,29 @@ def parse_secret_file(key: str, text: str) -> SecretFile:
             "hand) and optionally 'allow_shell' (true or false, default true)"
         )
     return SecretFile(description, ciphertext.encode(), allow_shell)
+
+
+def load(path: Path, name: str, _memory_max_chars: int) -> Loaded[SecretFile]:
+    return Loaded(parse_secret_file(name, path.read_text(encoding="utf-8")), modified(path))
+
+
+_HINT = "secret values are encrypted by the platform: store them with vault_set"
+
+
+def vet(draft: Draft) -> str:
+    """密文只能由 vault_set 加密写入：已有的 secret 可以只改 description 与 allow_shell（密文原样不动），不能手写新的。"""
+    if not draft.item.is_file():
+        raise InvalidInput(f"new secrets are not written by hand; {_HINT}")
+    try:
+        new = parse_secret_file(draft.name, draft.text)
+        old = parse_secret_file(draft.name, draft.item.read_text(encoding="utf-8"))
+    except InvalidInput as e:
+        raise InvalidInput(f"{e}; {_HINT}") from e
+    if new.ciphertext != old.ciphertext:
+        raise InvalidInput(
+            f"only the description and allow_shell may be edited by hand, the ciphertext must stay; {_HINT}"
+        )
+    return draft.text
 
 
 def secret_file(secret: SecretFile) -> str:

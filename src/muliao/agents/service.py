@@ -29,9 +29,7 @@ from muliao.agents.active import (
     runnable_row_in,
 )
 from muliao.agents.agent_file import AGENT_FILE, CONFIG_FIELDS, AgentFile, Thinking
-from muliao.agents.assets import PRIVATE_MEMORY_FILE, AgentDir, Snapshot
-from muliao.agents.distribution import check_agent_rules
-from muliao.agents.kinds import StoredKind
+from muliao.agents.assets import PRIVATE_MEMORY_REL, AgentDir, Snapshot
 from muliao.agents.naming import new_agent_id, new_agent_name
 from muliao.agents.permissions import AgentRules
 from muliao.agents.source import AssetSource
@@ -254,15 +252,15 @@ class AgentService:
 
     def _config(self, agent_id: str, current: Mapping[str, object], given: Mapping[str, object]) -> AgentFile:
         """current（现在的配置，新建时是默认值）加上 given 之后的 agent.toml 内容，校验过（不合规则时 InvalidInput）：规则在
-        AgentFile 与 AssetSource.check_agent，与文件工具改它时同一套；分发规则在写入时按快照校验（distribution.check_agent_rules）。"""
+        AgentFile 与 AssetSource.check_agent，与文件工具改它时同一套；分发规则在写入时校验（access_file.plan）。"""
         file = agent_file.of({**current, **given, "id": agent_id})
         self._source.check_agent(file)
         return file
 
     @staticmethod
     async def _check_name_free(s: AsyncSession, snapshot: Snapshot, name: str, agent_id: str | None) -> None:
-        """名字要没人用：数据库里别的 agent（含目录坏掉、没加载的）、资源目录里已有的目录、同名的共享记忆（私有记忆名就是
-        agent 名）。只给名称：这条错误也会交还给模型，模型不接触 id。"""
+        """名字要没人用：数据库里别的 agent（含目录坏掉、没加载的）、资源目录里已有的目录。只给名称：这条错误也会交还给
+        模型，模型不接触 id。"""
         holder = await s.scalar(select(Agent.id).where(Agent.name == name))
         if holder is not None and holder != agent_id:
             raise Conflict(f"agent name {name!r} is already taken by another agent")
@@ -270,14 +268,6 @@ class AgentService:
         own = snapshot.agents.get(agent_id) if agent_id else None
         if name.casefold() in taken - ({own.path.name.casefold()} if own else set()):
             raise Conflict(f"agent name {name!r} is already taken by a directory in {snapshot.root}")
-        # 私有记忆名就是 agent 名：任何别的同名记忆（含共享、全局记忆，以及磁盘上没加载的）都占着这个名字
-        memory = snapshot.get(StoredKind.MEMORY, name)
-        if (memory is not None and (agent_id is None or memory.owner != agent_id)) or (
-            name in snapshot.unloaded[StoredKind.MEMORY]
-        ):
-            raise Conflict(
-                f"a memory named {name!r} already exists (private memories carry the agent's name)"
-            )
 
     async def create(self, spec: AgentSpec, *, actor: str) -> AgentInfo:
         """actor：创建者，"user" 或创建它的 agent 的 id。建资源目录（agent.toml、空的私有记忆）、写它的规则、插行、建工作目录。"""
@@ -286,15 +276,11 @@ class AgentService:
         file = self._config(agent_id, {"model": self.defaults.model}, _config_given(spec))
         rules = AgentRules.of(spec.roles, spec.allow, spec.deny)
         async with self._source.writing() as snapshot:
-            check_agent_rules(snapshot, rules)
             async with self._db.transaction() as s:
                 await self._check_name_free(s, snapshot, name, None)
-            # access.toml 的改动先算好：它不合法时什么都不写
+            # access.toml 的改动先算好（规则的校验都在这里）：它不合法时什么都不写
             access = await asyncio.to_thread(
-                access_file.plan,
-                snapshot.access_path,
-                snapshot.tools,
-                lambda doc: access_file.set_agent_rules(doc, name, rules),
+                access_file.plan, snapshot, lambda doc: access_file.set_agent_rules(doc, name, rules)
             )
             directory = snapshot.root / name
             # 先单独建目录：已存在（绕开锁用 shell 建的）就在这里失败，下面的撤回只删自己建的
@@ -333,7 +319,6 @@ class AgentService:
                 before.allow if patch.allow is None else patch.allow,
                 before.deny if patch.deny is None else patch.deny,
             )
-            check_agent_rules(snapshot, rules, before)
 
             def change(doc: TOMLDocument) -> None:
                 if name != directory.name:
@@ -341,7 +326,7 @@ class AgentService:
                 access_file.set_agent_rules(doc, name, rules)
 
             # 与建 agent 同：access.toml 的改动先算好，不合法时不动目录
-            access = await asyncio.to_thread(access_file.plan, snapshot.access_path, snapshot.tools, change)
+            access = await asyncio.to_thread(access_file.plan, snapshot, change)
             old_toml = await asyncio.to_thread((directory.path / AGENT_FILE).read_text, encoding="utf-8")
             moved: list[bool] = []
             try:
@@ -431,7 +416,7 @@ class AgentService:
 def _write_new_agent(directory: Path, file: AgentFile, access: AccessEdit) -> None:
     """在刚建的 agent 目录里写 agent.toml、空的私有记忆，再写入 access.toml 的改动。撤回是 _remove_new_agent。"""
     write_atomic(directory / AGENT_FILE, agent_file.dump(directory / AGENT_FILE, file))
-    write_atomic(directory / PRIVATE_MEMORY_FILE, "")
+    write_atomic(directory.joinpath(*PRIVATE_MEMORY_REL), "")
     access.apply()
 
 

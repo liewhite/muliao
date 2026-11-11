@@ -279,10 +279,10 @@ export const api = {
   previewRole: (body: Schemas['RolePreviewIn']) => call('post', '/api/role-preview', { body }),
   /** 全部 AI 资源：内置工具在前，资源文件按种类、名称 */
   assets: () => branded<CatalogAsset[]>(call('get', '/api/assets')),
-  /** 删掉 skill（整个目录）/ MCP server / secret / 记忆的文件；全局记忆不能删 */
+  /** 删掉 skill（整个目录）/ MCP server / secret / 平台记忆的文件；全局记忆不能删，私有记忆随 agent */
   deleteAsset: (kind: StoredKind, name: string) =>
     call('delete', '/api/assets/{kind}/{name}', { path: { kind, name } }),
-  /** 把 skill / MCP server / secret / 记忆挪到另一个 owner（null 归平台）的目录下；内容与收录它的角色不变 */
+  /** 把 skill / MCP server / secret 挪到另一个 owner（null 归平台）的目录下；内容与收录它的角色不变。记忆不转移 */
   transferAsset: (kind: StoredKind, name: string, owner: AgentId | null) =>
     call('put', '/api/assets/{kind}/{name}/owner', { path: { kind, name }, body: { owner } }),
   /** agent 的工作历史：不给 query 按日期倒序；给了按关键词检索 */
@@ -323,11 +323,17 @@ export const api = {
         ? call('put', '/api/agents/{agent_id}/archive', { path: { agent_id } })
         : call('delete', '/api/agents/{agent_id}/archive', { path: { agent_id } }),
     ),
-  /** 一块记忆（global 是全局记忆，agent 的私有记忆名字是它建时的名字） */
+  /** 平台的一块记忆（global 是全局记忆，其余是共享记忆） */
   memory: (name: string) => branded<Memory>(call('get', '/api/assets/memory/{name}', { path: { name } })),
-  /** 新建的归 owner（缺省为平台）；已有的整体改写正文，owner 不变。version 是打开时的版本（新建为 null），期间被别处改过 409 */
-  saveMemory: (name: string, body: WithAgentId<Schemas['MemoryIn'], 'owner'>) =>
+  /** 新建或整体改写平台的一块记忆。version 是打开时的版本（新建为 null），期间被别处改过 409 */
+  saveMemory: (name: string, body: Schemas['MemoryIn']) =>
     branded<Memory>(call('put', '/api/assets/memory/{name}', { path: { name }, body })),
+  /** agent 的私有记忆：按所属 agent 认，不占记忆的名字 */
+  agentMemory: (agent_id: AgentId) =>
+    branded<Memory>(call('get', '/api/agents/{agent_id}/memory', { path: { agent_id } })),
+  /** 整体改写 agent 的私有记忆，version 同 saveMemory */
+  saveAgentMemory: (agent_id: AgentId, body: Schemas['MemoryIn']) =>
+    branded<Memory>(call('put', '/api/agents/{agent_id}/memory', { path: { agent_id }, body })),
 
   skill: (name: string) => call('get', '/api/assets/skill/{name}', { path: { name } }),
   /** 新建的归 owner；已有的整体改写正文与描述，owner 不变。version 同 saveMemory */

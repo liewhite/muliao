@@ -229,14 +229,17 @@ def test_a_system_without_an_adapter_is_refused_not_left_unconfined():
 
 
 def test_writable_path_rules_are_literal_directories_written_with_write():
-    from muliao.agents.permissions import check_patterns
+    from muliao.agents.permissions import kind_of
 
-    check_patterns(
-        ["write:path:~/projects/arb", "write:path:/opt/data", "write:path:~/Library/Mobile Documents/x"]
-    )
+    for good in (
+        "write:path:~/projects/arb",
+        "write:path:/opt/data",
+        "write:path:~/Library/Mobile Documents/x",
+    ):
+        kind_of(good)
     for bad in ("use:path:~/x", "*:path:~/x", "write:path:relative/x", "write:path:~/x/*", "write:path:~"):
         with pytest.raises(InvalidInput, match="writable path rule"):
-            check_patterns([bad])
+            kind_of(bad)
     rules = Rules(allow=("write:path:~/a", "use:skill:s", "write:*"), deny=("write:path:~/a/b",))
     assert rules.paths() == (("~/a",), ("~/a/b",))
 
@@ -251,6 +254,7 @@ async def test_an_agent_writes_its_workspace_the_defaults_and_its_grants_minus_p
         return WriteScope(
             tree,
             (tree / "a1",),
+            (),
             ("~/proj",),
             ("~/proj/secret",),
             agent,
@@ -279,7 +283,7 @@ async def _tree_fixture(container, make_agent):
 
     alice = await make_agent("alice", model="tools")
     await container.skills.write("alice-skill", "alice's skill", "body", version=None, owner=alice.id)
-    await container.memory.put("trading", "shared notes", version=None, owner=None)
+    await container.memory.put("trading", "shared notes", version=None)
     await container.distribution.create(RoleSpec("trader", "trades", ["*:memory:trading"], []))
     bob = await make_agent("bob", model="tools", roles=("trader",))
     carol = await make_agent("carol", model="tools")
@@ -322,6 +326,14 @@ async def test_asset_tree_is_writable_by_ownership_roles_and_admin(container, ma
         tree / "platform/skills/x/SKILL.md",
     ):
         assert await can(root.id, p)
+    # admin 只是带 write:* 的角色：它的 deny 收回对应的资源，与界面、vault_set 的判断一致（都由 Grants 换算）
+    await container.agents.update(root.id, AgentPatch(deny=["write:memory:trading"]), actor="user")
+    assert not await can(root.id, shared) and await can(root.id, access)
+    assert await can(root.id, tree / "root/memory.md")
+    # 别的角色带上 write:* 也就是 admin：整棵树可写
+    await container.agents.update(carol.id, AgentPatch(allow=["write:*"]), actor="user")
+    assert await can(carol.id, access) and await can(carol.id, tree / "alice/memory.md")
+    assert (await container.assets.snapshot()).administers(carol.id)
 
 
 async def test_refused_asset_writes_say_whose_it_is_and_whom_to_ask(container, make_agent, models):
@@ -342,8 +354,12 @@ async def test_refused_asset_writes_say_whose_it_is_and_whom_to_ask(container, m
                     "content": "---\ndescription: mine\n---\nx\n",
                 },
             ),
+            ("run_shell", {"command": f"echo x >> {tree / 'alice/memory.md'}", "timeout": 30}),
         ],
     )
+    # 私有记忆没有规则里的名字：不提示去要 write:memory:<名>
+    assert "alice's private memory" not in outputs[3] and "private memory, which only it" in outputs[3]
+    assert "write:memory" not in outputs[3]
     assert "Operation not permitted" in outputs[0]
     assert "belongs to agent 'alice' (skill 'alice-skill')" in outputs[0]
     assert "'write:skill:alice-skill'" in outputs[0]

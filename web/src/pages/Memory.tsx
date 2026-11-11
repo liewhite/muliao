@@ -4,7 +4,7 @@ import { ChevronDown, ChevronRight, Trash2 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { api, type AgentId, type AssetOf, type Memory } from '../api'
 import { useDraft } from '../drafts'
-import { AssetAccess, OwnerSelect } from './assetParts'
+import { AssetAccess } from './assetParts'
 import {
   ActionButton,
   CollapsibleForm,
@@ -23,13 +23,22 @@ import { useLoad } from '../load'
 /** 全局记忆的名字（后端 agents/permissions.py 的 GLOBAL_MEMORY）：base 固定收录，不能删 */
 export const GLOBAL_MEMORY = 'global'
 
+/** 一块记忆是哪一块：平台的按名字（owner 为 null），agent 的私有记忆按它所属的 agent（name 只是显示用的 agent 名） */
+type MemoryRef = { name: string; owner: AgentId | null }
+
 /** 一块记忆：编辑正文、保存（写的是它的文件）。agent 随时会改它：随 changed 重新拉取，保存带打开时的版本 */
-export function MemoryEditor({ name, hint }: { name: string; hint: string }) {
-  const memory = useLoad('agents', () => api.memory(name), [name])
+export function MemoryEditor({ memory: ref, hint }: { memory: MemoryRef; hint: string }) {
+  const { name, owner } = ref
+  const memory = useLoad('agents', () => (owner === null ? api.memory(name) : api.agentMemory(owner)), [name, owner])
   return <Loading state={memory}>{(m) => <MemoryDraft latest={m} hint={hint} />}</Loading>
 }
 
 const MEMORY_FIELD_LABELS = { content: '正文' }
+
+function saveMemory(m: Memory, content: string): Promise<Memory> {
+  const body = { content, version: m.version }
+  return m.owner === null ? api.saveMemory(m.name, body) : api.saveAgentMemory(m.owner, body)
+}
 
 function MemoryDraft({ latest, hint }: { latest: Memory; hint: string }) {
   const doc = useDraft({ content: latest.content })
@@ -53,7 +62,7 @@ function MemoryDraft({ latest, hint }: { latest: Memory; hint: string }) {
         onPress={() =>
           void action.run(async () => {
             // 整份保存带版本：没有冲突时草稿的基线就是 latest（drafts.useDraft）
-            const saved = await api.saveMemory(latest.name, { content, version: latest.version })
+            const saved = await saveMemory(latest, content)
             toast.success('记忆已保存')
             // 存下的是规整过空白的：以它为新的起点，随 changed 重新拉取到这个版本时就对上了
             doc.saved({ content: saved.content })
@@ -67,14 +76,14 @@ function MemoryDraft({ latest, hint }: { latest: Memory; hint: string }) {
   )
 }
 
+/** 新建平台的共享记忆（私有记忆建 agent 时就有，每个 agent 一块） */
 function MemoryForm() {
-  const [owner, setOwner] = useState<AgentId | null>(null)
   const [name, setName] = useState('')
   const action = useAction()
 
   async function save() {
     const ok = await action.run(async () => {
-      await api.saveMemory(name, { owner, content: '', version: null })
+      await api.saveMemory(name, { content: '', version: null })
       toast.success(`已新建记忆 ${name}`)
     })
     if (ok) setName('')
@@ -83,7 +92,6 @@ function MemoryForm() {
   return (
     <CollapsibleForm title="新建共享记忆">
       <TextInput label="名字" hint="小写字母、数字、- 和 _" value={name} onChange={setName} placeholder="trading" mono isRequired />
-      <OwnerSelect value={owner} onChange={setOwner} />
       <ErrorAlert error={action.error} />
       <ActionButton isDisabled={!name} isPending={action.busy} onPress={() => void save()}>
         新建
@@ -120,7 +128,7 @@ function MemoryItem({ item }: { item: AssetOf<'memory'> }) {
               <span className="font-mono">{item.path}</span> · {formatTime(item.updated_at)}
             </div>
           </div>
-          {item.name !== GLOBAL_MEMORY && (
+          {item.owner === null && item.name !== GLOBAL_MEMORY && (
             <Button isIconOnly size="sm" variant="ghost" aria-label={`删除 ${item.name}`} onPress={() => void remove()}>
               <Trash2 className="size-4" />
             </Button>
@@ -130,7 +138,7 @@ function MemoryItem({ item }: { item: AssetOf<'memory'> }) {
         <ErrorAlert error={action.error} />
         {open && (
           <MemoryEditor
-            name={item.name}
+            memory={item}
             hint="能用它的 agent 每次运行都会看到全文；能改它的 agent 也会直接改它的文件"
           />
         )}
@@ -144,7 +152,7 @@ export function MemoryTab({ assets }: { assets: AssetOf<'memory'>[] }) {
   return (
     <div className="flex flex-col gap-3">
       <p className="text-sm text-muted">
-        agent 能用（use）的每一块记忆每次运行都全文放进指令，能改（write）的直接改它的文件。私有记忆归它的 agent；共享记忆在角色里写{' '}
+        agent 能用（use）的每一块记忆每次运行都全文放进指令，能改（write）的直接改它的文件。私有记忆只属于它的 agent（规则不按名字指它）；共享记忆在角色里写{' '}
         <code className="font-mono">*:memory:名字</code> 分给一组 agent（成员能用也能改），只读写{' '}
         <code className="font-mono">use:memory:名字</code>。
       </p>
@@ -154,7 +162,7 @@ export function MemoryTab({ assets }: { assets: AssetOf<'memory'>[] }) {
       ) : (
         <div className="flex flex-col gap-2">
           {assets.map((i) => (
-            <MemoryItem key={i.name} item={i} />
+            <MemoryItem key={i.path} item={i} />
           ))}
         </div>
       )}
@@ -176,8 +184,8 @@ export function AgentMemories({ agent }: { agent: AgentId }) {
             ) : (
               own.map((m) => (
                 <MemoryEditor
-                  key={m.name}
-                  name={m.name}
+                  key={m.path}
+                  memory={m}
                   hint="agent 每次运行都会看到它能用的全部记忆，也会自行修改"
                 />
               ))

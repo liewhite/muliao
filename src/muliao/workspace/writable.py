@@ -3,8 +3,8 @@
 说明（denial_note）。
 
 可写路径 = 它的工作目录 + 默认可写的几类路径（DEFAULT_WRITABLE）− 受保护的（PROTECTED）+ 它的 `write:path:<目录>` 授权
-− 它的 deny 里的 `write:path:<目录>` − 整棵 AI 资源树 + 树里它能改的资源（agents.access.write_scope：自己的目录、角色
-授予 write 的、admin 整棵树，#499）− 平台的私有文件（非 admin），后面的覆盖前面的。「能不能改某项资源」由此完全由沙箱回答。
+− 它的 deny 里的 `write:path:<目录>` − 整棵 AI 资源树 + 树里它能改的资源 − 它的 deny 收回的资源（agents.access.write_scope：
+自己的目录、角色授予 write 的、admin 整棵树减去它 deny 的，#499）− 平台的私有文件（非 admin），后面的覆盖前面的。「能不能改某项资源」由此完全由沙箱回答。
 类别换成具体路径、命令怎么关进沙箱由执行层按当前系统做（platform.sandbox）。
 
 读只拦一处（#539）：平台的私有文件（config.Settings.private_files：配置、备份、推送私钥）只有 admin 能读，命令由沙箱拒绝、
@@ -88,9 +88,10 @@ class Confiner:
             *((False, p) for c in PROTECTED for p in self._sandbox.paths(c)),
             *((True, expand(p, self._home)) for p in scope.granted),
             *((False, expand(p, self._home)) for p in scope.revoked),
-            # 资源树只按归属管：排在 write:path 之后，祖先目录的授权（如 ~/.muliao）不放开 access.toml
+            # 资源树只按规则与归属管：排在 write:path 之后，祖先目录的授权（如 ~/.muliao）不放开 access.toml
             (False, scope.tree),
             *((True, p) for p in scope.assets),
+            *((False, p) for p in scope.withheld),
             # 平台的私有文件排在最后：任何授权都放不开
             *((False, p) for p in private),
         ]

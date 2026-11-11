@@ -60,10 +60,12 @@ function TransferOwner({ asset, onDone }: { asset: Exclude<CatalogAsset, { kind:
   )
 }
 
-/** 资产归谁、被哪些角色收录；没被收录时说明谁能用。内置工具以外的可以转移 owner（内置工具归平台，不能转） */
+/** 资产归谁、被哪些角色收录；没被收录时说明谁能用。skill、MCP、secret 可以转移 owner（内置工具归平台；记忆不转移：私有记忆
+ * 只属于它的 agent） */
 export function AssetAccess({ asset }: { asset: CatalogAsset }) {
   const agents = useAgents()
   const [transferring, setTransferring] = useState(false)
+  const transferable = asset.kind !== 'tool' && asset.kind !== 'memory'
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-1.5 text-xs">
@@ -96,13 +98,13 @@ export function AssetAccess({ asset }: { asset: CatalogAsset }) {
           </Chip>
         )}
         {asset.shared && asset.roles.length === 0 && <span className="text-muted">经 agent 自己的 allow 分发</span>}
-        {asset.kind !== 'tool' && (
+        {transferable && (
           <Button size="sm" variant="ghost" className="h-6 px-2 text-xs text-accent" onPress={() => setTransferring(!transferring)}>
             {transferring ? '取消转移' : '转移 owner'}
           </Button>
         )}
       </div>
-      {asset.kind !== 'tool' && transferring && <TransferOwner asset={asset} onDone={() => setTransferring(false)} />}
+      {transferable && transferring && <TransferOwner asset={asset} onDone={() => setTransferring(false)} />}
     </div>
   )
 }

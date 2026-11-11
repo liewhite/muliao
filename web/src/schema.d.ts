@@ -594,7 +594,8 @@ export interface paths {
         post?: never;
         /**
          * Delete Asset
-         * @description 删掉文件（skill 是整个目录）。全局记忆不能删（422）；内置工具不在这里（kind 不接受 tool）。
+         * @description 删掉文件（skill 是整个目录）。记忆只指平台的（私有记忆随 agent），全局记忆不能删（422）；内置工具不在这里（kind 不接受
+         *     tool）。
          */
         delete: operations["delete_asset_api_assets__kind___name__delete"];
         options?: never;
@@ -612,7 +613,7 @@ export interface paths {
         get?: never;
         /**
          * Transfer Asset
-         * @description 挪到另一个 owner 的目录下；内容与收录它的角色不变。内置工具归平台，不在这里（kind 不接受 tool）。
+         * @description 挪到另一个 owner 的目录下；内容与收录它的角色不变。记忆不转移（422）；内置工具归平台，不在这里（kind 不接受 tool）。
          */
         put: operations["transfer_asset_api_assets__kind___name__owner_put"];
         post?: never;
@@ -629,14 +630,40 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get Memory */
+        /**
+         * Get Memory
+         * @description 平台的一块记忆（全局或共享）。
+         */
         get: operations["get_memory_api_assets_memory__name__get"];
         /**
          * Put Memory
-         * @description 新建的归 owner（归平台的名字要是 slug；agent 的私有记忆名字就是 agent 名）；已有的整体改写正文，owner 不变。谁能用由
-         *     角色收录它（`use:memory:<名>`）。
+         * @description 新建（名字要是 slug）或整体改写平台的一块记忆。谁能用由角色收录它（`use:memory:<名>`）。
          */
         put: operations["put_memory_api_assets_memory__name__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/{agent_id}/memory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Private Memory
+         * @description agent 的私有记忆（正在删除的按不存在处理）。
+         */
+        get: operations["get_private_memory_api_agents__agent_id__memory_get"];
+        /**
+         * Put Private Memory
+         * @description 整体改写 agent 的私有记忆（没有时新建）。只有它自己用；规则不按名字指它。
+         */
+        put: operations["put_private_memory_api_agents__agent_id__memory_put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -1753,7 +1780,8 @@ export interface components {
         };
         /**
          * CatalogMemoryOut
-         * @description 正文不在列表里（GET /assets/memory/{name} 读）。
+         * @description 正文不在列表里：平台的记忆（owner 为 null）用 GET /assets/memory/{name} 读，agent 的私有记忆（owner 是它，name 是
+         *     它的名字，只作显示）用 GET /agents/{owner}/memory。
          */
         CatalogMemoryOut: {
             /** Name */
@@ -2631,8 +2659,6 @@ export interface components {
         McpTransport: "stdio" | "http";
         /** MemoryIn */
         MemoryIn: {
-            /** Owner */
-            owner?: string | null;
             /** Content */
             content: string;
             /** Version */
@@ -5200,6 +5226,72 @@ export interface operations {
             header?: never;
             path: {
                 name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MemoryIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemoryOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_private_memory_api_agents__agent_id__memory_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemoryOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_private_memory_api_agents__agent_id__memory_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
             };
             cookie?: never;
         };

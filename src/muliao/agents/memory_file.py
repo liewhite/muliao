@@ -3,9 +3,36 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
+from muliao.agents.formats import Draft, Loaded, modified
 from muliao.errors import InvalidInput
+
+
+@dataclass(frozen=True)
+class MemoryText:
+    """记忆的内容：正文。"""
+
+    text: str
+
+    @property
+    def description(self) -> str:
+        return ""
+
+
+def load(path: Path, _name: str, memory_max_chars: int) -> Loaded[MemoryText]:
+    """读树：超过上限的照常加载（截断更糟），但报出来让它缩短。"""
+    text = text_of(path)
+    return Loaded(MemoryText(text), modified(path), over_limit(text, memory_max_chars))
+
+
+def vet(draft: Draft) -> str:
+    """写入口：存下的全文（stored）。"""
+    # 只为比长度：读坏了的（非 UTF-8）也要能整个覆盖修好
+    item = draft.item
+    old = item.read_text(encoding="utf-8", errors="replace") if item.is_file() else None
+    return stored(draft.text, old, draft.memory_max_chars)
 
 
 def text_of(path: Path) -> str:

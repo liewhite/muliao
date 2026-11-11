@@ -1,14 +1,16 @@
 """分发子域的门面（Distribution）：角色的增删改与查看，agent 的规则与它最终能用的（reach），配置的预览。
 
-角色定义与各 agent 的角色、allow / deny 都在 access.toml（agents.access_file 读写）；能用 / 能改与由此派生的
-在 agents.access。读到的坏规则读树时就跳过并报出，这里不再有启动检查。"""
+角色定义与各 agent 的角色、allow / deny 都在 access.toml（agents.access_file 读写，写之前的校验只有 access_file.vet，
+写与预览都经 access_file.plan）；能用 / 能改与由此派生的在 agents.access。读到的坏规则读树时就跳过并报出，这里不再有
+启动检查。"""
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from fnmatch import fnmatchcase
+
+from tomlkit.toml_document import TOMLDocument
 
 from muliao.agents import access_file
 from muliao.agents.access import (
@@ -23,18 +25,9 @@ from muliao.agents.access import (
     write_scope,
 )
 from muliao.agents.assets import Snapshot
-from muliao.agents.kinds import Kind, StoredKind, as_kind
+from muliao.agents.kinds import StoredKind
 from muliao.agents.mcp import McpServer, server_of
-from muliao.agents.permissions import (
-    BUILTIN_ROLES,
-    Action,
-    AgentRules,
-    Role,
-    Rules,
-    check_patterns,
-    kind_of,
-    pattern_of,
-)
+from muliao.agents.permissions import BUILTIN_ROLES, AgentRules, Role, Rules
 from muliao.agents.source import AssetSource
 from muliao.errors import Conflict, InvalidInput, NotFound
 
@@ -127,8 +120,7 @@ class Distribution:
         used = []
         for kind in StoredKind:
             for a in usable_by(snapshot, kind, grants):
-                k = as_kind(kind)
-                source = provenance.explain(k, a.name, a.owner)
+                source = provenance.explain(a)
                 if not (source.own or source.roles or source.allow):
                     raise RuntimeError(f"no source explains why {agent_id} can use {kind} {a.name!r}")
                 used.append(
@@ -138,20 +130,23 @@ class Distribution:
                         a.owner,
                         a.description,
                         source,
-                        grants.writes(k, a.name, a.owner),
+                        grants.writes(a),
                         server_of(a) if kind == StoredKind.MCP else None,
                     )
                 )
         return used
 
     async def preview_agent(self, agent_id: str | None, rules: AgentRules) -> Reach:
-        """agent（None 为还没建的）按还没保存的规则能用的内置工具与资源（界面预览），与写入时同样校验：已存的规则算作
-        「之前的」，不要求仍匹配现有资源。"""
+        """agent（None 为还没建的）按还没保存的规则能用的内置工具与资源（界面预览），与写入时同样校验（只 plan、
+        不写）：已存的规则不要求仍匹配现有资源。"""
         if agent_id is not None:
             await self._check_agent(agent_id)
         snapshot = await self._source.snapshot()
-        before = AgentRules() if agent_id is None else snapshot.rules_of(agent_id)
-        check_agent_rules(snapshot, rules, before)
+        # 还没建的没有名字：节名不影响校验
+        section = _PREVIEW_SECTION if agent_id is None else snapshot.names[agent_id]
+        await asyncio.to_thread(
+            access_file.plan, snapshot, lambda doc: access_file.set_agent_rules(doc, section, rules)
+        )
         known = snapshot.roles
         # 还没建的 agent 没有自己的资源，只看规则
         return reach_of(snapshot, Grants(agent_id, rules.effective(known)))
@@ -168,7 +163,7 @@ class Distribution:
         async with self._source.writing() as snapshot:
             if spec.name in snapshot.roles:
                 raise Conflict(f"role {spec.name!r} already exists")
-            await self._write_role(snapshot, spec, Rules())
+            await self._write_role(snapshot, spec)
         return await self.get(spec.name)
 
     async def patch(
@@ -189,19 +184,11 @@ class Distribution:
                 role.rules.allow if allow is None else allow,
                 role.rules.deny if deny is None else deny,
             )
-            await self._write_role(snapshot, spec, role.rules)
+            await self._write_role(snapshot, spec)
         return await self.get(name)
 
-    async def _write_role(self, snapshot: Snapshot, spec: RoleSpec, before: Rules) -> None:
-        check_rules(snapshot, Rules(tuple(spec.allow), tuple(spec.deny)), before)
-        edit = await asyncio.to_thread(
-            access_file.plan,
-            snapshot.access_path,
-            snapshot.tools,
-            lambda doc: access_file.set_role(
-                doc, spec.name, spec.description, list(spec.allow), list(spec.deny)
-            ),
-        )
+    async def _write_role(self, snapshot: Snapshot, spec: RoleSpec) -> None:
+        edit = await asyncio.to_thread(access_file.plan, snapshot, _set_role(spec))
         await asyncio.to_thread(edit.apply)
 
     async def delete(self, name: str) -> None:
@@ -215,10 +202,7 @@ class Distribution:
                     f"role {name!r} is used by agents {[snapshot.agents[a].name for a in holders]}"
                 )
             edit = await asyncio.to_thread(
-                access_file.plan,
-                snapshot.access_path,
-                snapshot.tools,
-                lambda doc: access_file.delete_role(doc, name),
+                access_file.plan, snapshot, lambda doc: access_file.delete_role(doc, name)
             )
             await asyncio.to_thread(edit.apply)
 
@@ -240,56 +224,28 @@ class Distribution:
         )
 
     async def preview_role(self, name: str | None, allow: Sequence[str], deny: Sequence[str]) -> Reach:
-        """角色（None 为还没建的）按还没保存的规则能用的（界面预览），与写入时同样校验；内置角色加上它固定的部分。"""
+        """角色（None 为还没建的）按还没保存的规则能用的（界面预览），与写入时同样校验（只 plan、不写）；内置角色加上它固定
+        的部分。"""
         snapshot = await self._source.snapshot()
         role = None if name is None else _role(snapshot, name)
+        # 还没建的没有名字与描述：都不影响规则的校验
+        spec = RoleSpec(
+            _PREVIEW_SECTION if role is None else role.name,
+            _PREVIEW_SECTION if role is None else role.description,
+            allow,
+            deny,
+        )
+        await asyncio.to_thread(access_file.plan, snapshot, _set_role(spec))
         rules = Rules(tuple(allow), tuple(deny))
-        check_rules(snapshot, rules, Rules() if role is None else role.rules)
         effective = rules if role is None else Rules.union([role.fixed, rules])
         return reach_of(snapshot, Grants(None, effective))
 
 
-def check_agent_rules(snapshot: Snapshot, rules: AgentRules, before: AgentRules = AgentRules()) -> None:
-    """写入 agent 的规则之前：角色可选、规则合法且新加的匹配现有资源。"""
-    _check_assignable(snapshot.roles, rules.roles)
-    check_rules(snapshot, rules.own, before.own)
+# 预览还没建的 agent 或角色时，在 plan 里给它的那一节用的名字（只算、不写）
+_PREVIEW_SECTION = "preview"
 
 
-def _check_assignable(roles: Mapping[str, Role], names: Sequence[str]) -> None:
-    """agent 可以选的角色：存在、不重复，不含 base（每个 agent 隐含）。"""
-    implicit = [n for n in names if n in roles and not roles[n].assignable]
-    if implicit:
-        raise InvalidInput(f"roles {implicit} are implicit for every agent; do not list them in roles")
-    unknown = [n for n in names if n not in roles]
-    if unknown or len(set(names)) != len(names):
-        assignable = [r.name for r in roles.values() if r.assignable]
-        raise InvalidInput(f"roles must be distinct names from {assignable}, got {list(names)}")
-
-
-def check_rules(snapshot: Snapshot, rules: Rules, before: Rules = Rules()) -> None:
-    """写入一组规则（agent 自己的 allow / deny 或角色的）之前的全部校验：形式合法，新加的匹配快照里的资源。读树时对已有
-    内容用同样的形式规则（agents.access_file，任何一处不合法整份作废）。"""
-    check_patterns(rules.allow)
-    check_patterns(rules.deny)
-    assets = [
-        *(pattern_of(Kind.TOOL, n) for n in snapshot.tools.names),
-        *(pattern_of(as_kind(k), n) for k, by_name in snapshot.assets.items() for n in by_name),
-    ]
-    _check_new(assets, rules.allow, before.allow)
-    _check_new(assets, rules.deny, before.deny)
-
-
-def _check_new(assets: Sequence[str], patterns: Sequence[str], before: Sequence[str]) -> None:
-    """新加的针对某种资产的规则（不在 before 里的）至少匹配 assets（当前注册的内置工具与全部资源的 `kind:name`）里的一项：
-    拼错的在写入时报出。已有的规则不查——资源删掉再建时分发不丢，没配置 [web] 时已有的 `use:tool:web_*` 也不让改别的字段
-    的写入失败。不限种类的（`write:*`）与路径规则（目录可以还没建）不查。"""
-    new = [p for p in patterns if p not in before and kind_of(p) not in (Kind.PATH, None)]
-    if not new:
-        return
-    candidates = [f"{a.value}:{i}" for i in assets for a in Action]
-    bad = [p for p in new if not any(fnmatchcase(i, p) for i in candidates)]
-    if bad:
-        raise InvalidInput(
-            f"rules {bad} match no existing tool, skill, MCP server, secret or memory; check the names "
-            "(tools are listed by get_agent, e.g. 'use:tool:issue_*')"
-        )
+def _set_role(spec: RoleSpec) -> Callable[[TOMLDocument], None]:
+    return lambda doc: access_file.set_role(
+        doc, spec.name, spec.description, list(spec.allow), list(spec.deny)
+    )

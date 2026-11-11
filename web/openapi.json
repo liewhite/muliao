@@ -1552,7 +1552,7 @@
     "/api/assets/{kind}/{name}": {
       "delete": {
         "summary": "Delete Asset",
-        "description": "删掉文件（skill 是整个目录）。全局记忆不能删（422）；内置工具不在这里（kind 不接受 tool）。",
+        "description": "删掉文件（skill 是整个目录）。记忆只指平台的（私有记忆随 agent），全局记忆不能删（422）；内置工具不在这里（kind 不接受\ntool）。",
         "operationId": "delete_asset_api_assets__kind___name__delete",
         "parameters": [
           {
@@ -1593,7 +1593,7 @@
     "/api/assets/{kind}/{name}/owner": {
       "put": {
         "summary": "Transfer Asset",
-        "description": "挪到另一个 owner 的目录下；内容与收录它的角色不变。内置工具归平台，不在这里（kind 不接受 tool）。",
+        "description": "挪到另一个 owner 的目录下；内容与收录它的角色不变。记忆不转移（422）；内置工具归平台，不在这里（kind 不接受 tool）。",
         "operationId": "transfer_asset_api_assets__kind___name__owner_put",
         "parameters": [
           {
@@ -1644,6 +1644,7 @@
     "/api/assets/memory/{name}": {
       "get": {
         "summary": "Get Memory",
+        "description": "平台的一块记忆（全局或共享）。",
         "operationId": "get_memory_api_assets_memory__name__get",
         "parameters": [
           {
@@ -1681,7 +1682,7 @@
       },
       "put": {
         "summary": "Put Memory",
-        "description": "新建的归 owner（归平台的名字要是 slug；agent 的私有记忆名字就是 agent 名）；已有的整体改写正文，owner 不变。谁能用由\n角色收录它（`use:memory:<名>`）。",
+        "description": "新建（名字要是 slug）或整体改写平台的一块记忆。谁能用由角色收录它（`use:memory:<名>`）。",
         "operationId": "put_memory_api_assets_memory__name__put",
         "parameters": [
           {
@@ -1691,6 +1692,94 @@
             "schema": {
               "type": "string",
               "title": "Name"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemoryIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/agents/{agent_id}/memory": {
+      "get": {
+        "summary": "Get Private Memory",
+        "description": "agent 的私有记忆（正在删除的按不存在处理）。",
+        "operationId": "get_private_memory_api_agents__agent_id__memory_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Put Private Memory",
+        "description": "整体改写 agent 的私有记忆（没有时新建）。只有它自己用；规则不按名字指它。",
+        "operationId": "put_private_memory_api_agents__agent_id__memory_put",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
             }
           }
         ],
@@ -4939,7 +5028,7 @@
           "kind"
         ],
         "title": "CatalogMemoryOut",
-        "description": "正文不在列表里（GET /assets/memory/{name} 读）。"
+        "description": "正文不在列表里：平台的记忆（owner 为 null）用 GET /assets/memory/{name} 读，agent 的私有记忆（owner 是它，name 是\n它的名字，只作显示）用 GET /agents/{owner}/memory。"
       },
       "CatalogSecretOut": {
         "properties": {
@@ -7332,17 +7421,6 @@
       },
       "MemoryIn": {
         "properties": {
-          "owner": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Owner"
-          },
           "content": {
             "type": "string",
             "title": "Content"

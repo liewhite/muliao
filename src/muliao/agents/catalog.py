@@ -80,8 +80,8 @@ class AssetCatalog:
                 a.owner,
                 a.description,
                 a.updated_at,
-                sharing.including(as_kind(kind), a.name),
-                sharing.shared(as_kind(kind), a.name, a.owner),
+                sharing.including(as_kind(kind), a.rule_name),
+                sharing.shared(as_kind(kind), a.rule_name, a.owner),
                 a.path,
                 SecretDetail(a.content.allow_shell) if isinstance(a.content, SecretFile) else a.content,
             )
@@ -90,8 +90,8 @@ class AssetCatalog:
         ]
 
     async def delete(self, kind: StoredKind, name: str) -> None:
-        """删掉这项资源的文件或目录（用户在界面上删）。全局记忆不能删（base 固定收录它）。收录它的规则留着：同名的再建
-        时分发不丢（distribution._check_new）。"""
+        """删掉这项按名字认的资源的文件或目录（用户在界面上删；记忆只有平台的，私有记忆随 agent）。全局记忆不能删（base
+        固定收录它）。收录它的规则留着：同名的再建时分发不丢（access_file.vet 只查新加的规则）。"""
         if kind == StoredKind.MEMORY and name == GLOBAL_MEMORY:
             raise InvalidInput(f"the global memory {GLOBAL_MEMORY!r} cannot be deleted")
         async with self._source.writing() as snapshot:
@@ -101,18 +101,19 @@ class AssetCatalog:
 
     async def transfer(self, kind: StoredKind, name: str, owner: str | None) -> None:
         """把资源挪到 owner（agent 的 id；None 归平台）的目录下（用户在界面上转）。内容不变；谁能用随
-        owner 变（agents.access 的 Grants.can）。agent 的私有记忆名字就是 agent 名，所以记忆只能在平台与同名 agent 之间转。"""
+        owner 变（agents.access 的 Grants.can）。记忆不转移：平台的记忆归了 agent 就是第二块私有记忆（每个 agent 只有一块），私有记忆
+        按所属 agent 认、在平台没有名字；要共享就把内容放进一块平台记忆。"""
+        if kind == StoredKind.MEMORY:
+            raise InvalidInput(
+                "memories are not transferred: each agent has exactly one private memory, which belongs to it; to "
+                "share content, put it into a platform memory"
+            )
         async with self._source.writing() as snapshot:
             asset = snapshot.asset(kind, name)
             if asset.owner == owner:
                 raise InvalidInput(f"{label(kind)} {name!r} already belongs to {snapshot.owner_label(owner)}")
             if owner is not None and owner not in snapshot.agents:
                 raise NotFound(f"agent {owner!r} not found")
-            if kind == StoredKind.MEMORY and owner is not None and snapshot.agents[owner].name != name:
-                raise InvalidInput(
-                    f"an agent's private memory is named after the agent; memory {name!r} cannot go to "
-                    f"{snapshot.owner_label(owner)}"
-                )
             copies = snapshot.shadowed[kind].get(name, ())
             if owner is not None and copies:
                 # 平台那份遮住着 agent 目录里的同名副本（#502）：转给 agent 后就是 agent 之间同名，两边都不加载

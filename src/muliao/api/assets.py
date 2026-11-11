@@ -113,7 +113,8 @@ class CatalogSecretOut(_StoredCatalogBase):
 
 
 class CatalogMemoryOut(_StoredCatalogBase):
-    """正文不在列表里（GET /assets/memory/{name} 读）。"""
+    """正文不在列表里：平台的记忆（owner 为 null）用 GET /assets/memory/{name} 读，agent 的私有记忆（owner 是它，name 是
+    它的名字，只作显示）用 GET /agents/{owner}/memory。"""
 
     kind: Literal["memory"]
 
@@ -161,7 +162,8 @@ async def list_assets(c: C) -> list[CatalogAssetOut]:
 
 @router.delete("/assets/{kind}/{name}", status_code=204)
 async def delete_asset(c: C, kind: StoredKind, name: str) -> None:
-    """删掉文件（skill 是整个目录）。全局记忆不能删（422）；内置工具不在这里（kind 不接受 tool）。"""
+    """删掉文件（skill 是整个目录）。记忆只指平台的（私有记忆随 agent），全局记忆不能删（422）；内置工具不在这里（kind 不接受
+    tool）。"""
     await c.catalog.delete(kind, name)
 
 
@@ -172,7 +174,7 @@ class OwnerIn(BaseModel):
 
 @router.put("/assets/{kind}/{name}/owner", status_code=204)
 async def transfer_asset(c: C, kind: StoredKind, name: str, body: OwnerIn) -> None:
-    """挪到另一个 owner 的目录下；内容与收录它的角色不变。内置工具归平台，不在这里（kind 不接受 tool）。"""
+    """挪到另一个 owner 的目录下；内容与收录它的角色不变。记忆不转移（422）；内置工具归平台，不在这里（kind 不接受 tool）。"""
     await c.catalog.transfer(kind, name, body.owner)
 
 
@@ -192,8 +194,6 @@ class MemoryOut(BaseModel):
 
 
 class MemoryIn(BaseModel):
-    # 新建时的 owner（缺省为平台）；已有的不变
-    owner: str | None = None
     content: str
     # 打开编辑时的版本（MemoryOut.version），新建为 null；期间被别处改过、删掉或抢先建了时 409
     version: str | None
@@ -213,14 +213,28 @@ def _memory_out(c: C, m: MemoryInfo) -> MemoryOut:
 
 @router.get("/assets/memory/{name}")
 async def get_memory(c: C, name: str) -> MemoryOut:
+    """平台的一块记忆（全局或共享）。"""
     return _memory_out(c, await c.memory.read(name))
 
 
 @router.put("/assets/memory/{name}")
 async def put_memory(c: C, name: str, body: MemoryIn) -> MemoryOut:
-    """新建的归 owner（归平台的名字要是 slug；agent 的私有记忆名字就是 agent 名）；已有的整体改写正文，owner 不变。谁能用由
-    角色收录它（`use:memory:<名>`）。"""
-    return _memory_out(c, await c.memory.put(name, body.content, version=body.version, owner=body.owner))
+    """新建（名字要是 slug）或整体改写平台的一块记忆。谁能用由角色收录它（`use:memory:<名>`）。"""
+    return _memory_out(c, await c.memory.put(name, body.content, version=body.version))
+
+
+@router.get("/agents/{agent_id}/memory")
+async def get_private_memory(c: C, agent_id: str) -> MemoryOut:
+    """agent 的私有记忆（正在删除的按不存在处理）。"""
+    await c.agents.get_active(agent_id)
+    return _memory_out(c, await c.memory.read_private(agent_id))
+
+
+@router.put("/agents/{agent_id}/memory")
+async def put_private_memory(c: C, agent_id: str, body: MemoryIn) -> MemoryOut:
+    """整体改写 agent 的私有记忆（没有时新建）。只有它自己用；规则不按名字指它。"""
+    await c.agents.get_active(agent_id)
+    return _memory_out(c, await c.memory.put_private(agent_id, body.content, version=body.version))
 
 
 # ---- skill ----

@@ -52,14 +52,9 @@ def new_agent_name(value: str) -> str:
     name = normalize_agent_name(value)
     if name == USER:
         raise InvalidInput(f"agent name {USER!r} is reserved: it refers to the user (e.g. as issue assignee)")
-    return file_name("agent", name)
-
-
-def file_name(kind: str, name: str) -> str:
-    """能当资源目录里一个文件或目录名的名字（agent 名、私有记忆挪到平台后的记忆名）。"""
     if "/" in name or "\\" in name or name.startswith(".") or name == PLATFORM:
         raise InvalidInput(
-            f"{kind} name {name!r} must not contain '/' or '\\', start with '.', or be {PLATFORM!r}: it is a "
+            f"agent name {name!r} must not contain '/' or '\\', start with '.', or be {PLATFORM!r}: it is a "
             "directory name in the asset tree"
         )
     return name

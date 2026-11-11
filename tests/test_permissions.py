@@ -18,8 +18,8 @@ from muliao.agents.permissions import (
     Kind,
     ToolSpec,
     ToolTable,
-    check_patterns,
     fixed_rules,
+    kind_of,
     matches_no_tool,
 )
 from muliao.agents.service import AgentPatch, AgentSpec
@@ -64,16 +64,28 @@ def test_rules_match_action_kind_and_name_and_deny_wins():
         [Rules(allow=("use:tool:issue_*",)), Rules(allow=("use:tool:*",), deny=("use:tool:issue_update",))]
     )
     assert union.includes(Kind.TOOL, "issue_create") and not union.includes(Kind.TOOL, "issue_update")
+    # 不按名字指的资产（私有记忆）：按种类与名字的规则管不到，只有不限种类的；admin 就是放行不限种类的写
+    everything = Rules(allow=("*:memory:*", "*:skill:*"))
+    assert not everything.allows(Action.USE, Kind.MEMORY, None) and not everything.allows_every(Action.WRITE)
+    assert admin.allows(Action.WRITE, Kind.MEMORY, None) and admin.allows_every(Action.WRITE)
+    assert not admin.includes(Kind.MEMORY, None)
+    assert not Rules(allow=("write:*",), deny=("write:*",)).allows_every(Action.WRITE)
+    # 针对某种资产的 deny 只收回那些，不影响「不限种类」
+    narrowed = Rules(allow=("write:*",), deny=("write:memory:global",))
+    assert narrowed.allows_every(Action.WRITE) and not narrowed.allows(Action.WRITE, Kind.MEMORY, "global")
 
 
 def test_patterns_need_an_action_and_a_kind_and_tool_patterns_a_tool():
     tools = ToolTable.of(
         [ToolSpec("run_shell", Access.WRITE, False), ToolSpec("issue_list", Access.READ, False)]
     )
-    check_patterns(
-        ["use:tool:*", "use:tool:issue_*", "use:skill:anything", "use:mcp:x", "use:secret:K_*"]
-        + ["write:memory:m", "*:memory:m", "write:*", "*:tool:run_shell"]
-    )
+    for good in ["use:tool:*", "use:tool:issue_*", "use:skill:anything", "use:mcp:x", "use:secret:K_*"] + [
+        "write:memory:m",
+        "*:memory:m",
+        "write:*",
+        "*:tool:run_shell",
+    ]:
+        kind_of(good)
     for bad in (
         "issue:list",
         "*",
@@ -85,11 +97,9 @@ def test_patterns_need_an_action_and_a_kind_and_tool_patterns_a_tool():
         ":x",
     ):
         with pytest.raises(InvalidInput, match="action:kind:name"):
-            check_patterns([bad])
+            kind_of(bad)
     with pytest.raises(InvalidInput, match="only be used"):
-        check_patterns(["write:tool:run_shell"])
-    with pytest.raises(InvalidInput, match="distinct"):
-        check_patterns(["use:tool:issue_*", "use:tool:issue_*"])
+        kind_of("write:tool:run_shell")
     # 是否匹配当前注册的工具单独判断（读树记问题、写入只查新加的）
     assert matches_no_tool("use:tool:isue_*", tools) and not matches_no_tool("use:tool:issue_*", tools)
     assert not matches_no_tool("use:skill:isue_*", tools)
@@ -150,8 +160,14 @@ async def test_roles_are_created_assigned_updated_and_protected(container):
     await container.agents.update(agent.id, AgentPatch(roles=[]), actor="user")
     await roles.delete("reviewer")
     assert [r.name for r in await roles.list()] == [BASE, ADMIN]
-    with pytest.raises(InvalidInput, match="roles must be"):
+    with pytest.raises(InvalidInput, match=r"not defined in \[roles\]"):
         await container.agents.create(AgentSpec(name="x", description="d", roles=["public"]), actor="user")
+    with pytest.raises(InvalidInput, match="implicit"):
+        await container.agents.create(AgentSpec(name="x", description="d", roles=[BASE]), actor="user")
+    with pytest.raises(InvalidInput, match="distinct"):
+        await container.agents.create(
+            AgentSpec(name="x", description="d", allow=["use:tool:*", "use:tool:*"]), actor="user"
+        )
 
 
 async def test_a_role_hands_out_skills_and_secrets_and_an_assets_owner_always_has_it(container, make_agent):

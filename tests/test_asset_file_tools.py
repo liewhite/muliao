@@ -315,8 +315,8 @@ async def test_the_app_and_the_file_tools_reach_the_same_conclusion(container, m
     long = "a" * 3000 + "\n" + "b" * 2100
 
     async def memory_ui(content: str) -> str:
-        info = await container.memory.read("root")
-        return await _ui(container.memory.put("root", content, version=info.version))
+        info = await container.memory.read_private(root.id)
+        return await _ui(container.memory.put_private(root.id, content, version=info.version))
 
     async def memory_tool(content: str) -> str:
         out = await run_tools(
@@ -388,9 +388,55 @@ async def test_the_app_and_the_file_tools_reach_the_same_conclusion(container, m
     # 界面上只给原因，文件工具另带上给 agent 的说明（看 assets-files 哪一节）
     assert "assets-files" not in ui and "section 'Memory'" in out[0]
 
+    # 新加的规则拼错了（匹配不上任何资源）两边都拒绝：只有 access_file.vet 一个校验
+    ui = await _ui(container.distribution.patch("ops", allow=["use:skill:no-such-skil"]))
+    out = await run_tools(
+        container,
+        models,
+        root.id,
+        [
+            (
+                "edit_file",
+                {
+                    "path": str(access),
+                    "old_text": "allow = []",
+                    "new_text": 'allow = ["use:skill:no-such-skil"]',
+                },
+            )
+        ],
+    )
+    assert "match no existing" in ui and "match no existing" in _tool(out[0])
+
+    # 没有 SKILL.md 的 skill 目录写入时就拒绝；与 SKILL.md 一起写、或它已在时放行
+    new = tree / "platform" / "skills" / "fresh"
+    out = await run_tools(
+        container, models, root.id, [("write_file", {"path": str(new / "run.sh"), "content": "echo"})]
+    )
+    assert "has no SKILL.md" in _tool(out[0]) and not new.exists()
+    md = "---\ndescription: When fresh\n---\nSteps.\n"
+    out = await run_tools(
+        container,
+        models,
+        root.id,
+        [
+            ("write_file", {"path": str(new / "SKILL.md"), "content": md}),
+            ("write_file", {"path": str(new / "run.sh"), "content": "echo"}),
+        ],
+    )
+    assert [_tool(o) for o in out] == ["ok", "ok"]
+
 
 def test_layout_maps_paths_and_assets_both_ways():
-    from muliao.agents.assets import Config, Entry, Misplaced, Shelf, place_of, rel_of
+    from muliao.agents.assets import (
+        PRIVATE_MEMORY_REL,
+        Config,
+        Entry,
+        Misplaced,
+        PrivateMemory,
+        Shelf,
+        place_of,
+        rel_of,
+    )
     from muliao.agents.kinds import StoredKind
 
     for kind, name in [
@@ -399,17 +445,23 @@ def test_layout_maps_paths_and_assets_both_ways():
         (StoredKind.MCP, "srv"),
         (StoredKind.SECRET, "TOKEN"),
     ]:
-        for agent in (None, "alice"):
-            if kind == StoredKind.MEMORY and agent is not None:
-                assert place_of(rel_of(kind, "alice", True), agent) == Entry(kind, "alice")
+        for in_agent in (False, True):
+            if kind == StoredKind.MEMORY and in_agent:
                 continue
-            assert place_of(rel_of(kind, name, agent is not None), agent) == Entry(kind, name)
-    assert place_of(("skills", "helper", "SKILL.md"), None) == Entry(
+            assert place_of(rel_of(kind, name), in_agent) == Entry(kind, name)
+    # 私有记忆不在货架上，没有名字
+    assert place_of(PRIVATE_MEMORY_REL, True) == PrivateMemory()
+    assert place_of(("skills", "helper", "SKILL.md"), False) == Entry(
         StoredKind.SKILL, "helper", ("SKILL.md",)
     )
-    assert place_of(("skills",), "alice") == Shelf(StoredKind.SKILL)
-    assert place_of(("agent.toml",), "alice") == Config("agent.toml")
-    assert place_of(("access.toml",), None) == Config("access.toml")
-    for rel, agent in [(("memory", "x.md"), "alice"), (("mcp", "x.txt"), None), (("notes.txt",), None)]:
+    assert place_of(("skills",), True) == Shelf(StoredKind.SKILL)
+    assert place_of(("agent.toml",), True) == Config("agent.toml")
+    assert place_of(("access.toml",), False) == Config("access.toml")
+    for rel, in_agent in [
+        (("memory", "x.md"), True),
+        (("mcp", "x.txt"), False),
+        (("notes.txt",), False),
+        (PRIVATE_MEMORY_REL, False),
+    ]:
         with pytest.raises(Misplaced):
-            place_of(rel, agent)
+            place_of(rel, in_agent)

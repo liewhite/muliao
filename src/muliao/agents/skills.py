@@ -17,7 +17,7 @@ import frontmatter
 
 from muliao.agents import assets, skill_package
 from muliao.agents.access import usable
-from muliao.agents.kinds import StoredKind
+from muliao.agents.kinds import StoredKind, spec_of
 from muliao.agents.skill_package import SKILL_FILE, SkillFile, Skipped, parse_frontmatter
 from muliao.agents.source import AssetSource
 from muliao.errors import Conflict, NotFound
@@ -209,6 +209,7 @@ class SkillStore:
         同名 skill 已存在时：replace 为假报冲突；为真则整个目录换掉（owner 不变）。"""
         package = skill_package.unpack(data)
         name = package.name
+        spec_of(_KIND).check_name(name)
         parse_frontmatter(package.files[SKILL_FILE].content, name)
         async with self._source.writing() as snapshot:
             existing = snapshot.existing(_KIND, name)

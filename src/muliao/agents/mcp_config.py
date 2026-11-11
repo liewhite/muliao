@@ -6,9 +6,11 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
+from muliao.agents.formats import Draft, Loaded, modified
 from muliao.errors import InvalidInput
 
 
@@ -98,6 +100,28 @@ def parse_mcp_file(text: str) -> tuple[McpConfig, bool]:
         return McpConfig.model_validate_json(json.dumps(fields)), enabled
     except ValidationError as e:
         raise InvalidInput(f"invalid MCP server config: {e}") from e
+
+
+@dataclass(frozen=True)
+class McpFile:
+    """MCP server 的内容：配置与是否启用。"""
+
+    config: McpConfig
+    enabled: bool
+
+    @property
+    def description(self) -> str:
+        return ""
+
+
+def load(path: Path, _name: str, _memory_max_chars: int) -> Loaded[McpFile]:
+    config, enabled = parse_mcp_file(path.read_text(encoding="utf-8"))
+    return Loaded(McpFile(config, enabled), modified(path))
+
+
+def vet(draft: Draft) -> str:
+    parse_mcp_file(draft.text)
+    return draft.text
 
 
 def mcp_file(config: McpConfig, enabled: bool) -> str:

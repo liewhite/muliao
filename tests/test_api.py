@@ -59,13 +59,14 @@ async def test_skill_and_memory_endpoints(client):
     ]
     assert (await client.get("/api/assets/skill/shared")).json()["body"].strip() == "steps"
 
-    version = (await client.get("/api/assets/memory/alpha")).json()["version"]
-    resp = await client.put("/api/assets/memory/alpha", json={"content": "- fact", "version": version})
+    private = f"/api/agents/{agent_id}/memory"
+    version = (await client.get(private)).json()["version"]
+    resp = await client.put(private, json={"content": "- fact", "version": version})
     assert (resp.json()["content"], resp.json()["owner"]) == ("- fact", agent_id)
-    for name in ("alpha", "global"):
-        version = (await client.get(f"/api/assets/memory/{name}")).json()["version"]
+    for path in (private, "/api/assets/memory/global"):
+        version = (await client.get(path)).json()["version"]
         too_long = {"content": "x" * 10_000, "version": version}
-        assert (await client.put(f"/api/assets/memory/{name}", json=too_long)).status_code == 422
+        assert (await client.put(path, json=too_long)).status_code == 422
 
 
 async def test_the_old_per_kind_endpoints_are_gone(client):

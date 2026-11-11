@@ -75,12 +75,10 @@ def of(data: Mapping[str, object]) -> AgentFile:
 def dump(path: Path, data: AgentFile) -> str:
     """path 要写成 data 时的全文：已有的文件在原文上改（保留注释与别的排版），没有就新建。同步 IO。"""
     doc = tomlkit.parse(path.read_text(encoding="utf-8")) if path.is_file() else tomlkit.document()
-    doc["id"] = data.id
-    doc["description"] = data.description
-    doc["model"] = data.model
-    doc["thinking"] = data.thinking
-    if data.group is None:
-        doc.pop("group", None)
-    else:
-        doc["group"] = data.group
+    # 每个字段都写（按 AgentFile 的字段，加字段不用改这里）；值为 None 的（不分组）就是没有这个键
+    for key, value in data.model_dump().items():
+        if value is None:
+            doc.pop(key, None)
+        else:
+            doc[key] = value
     return tomlkit.dumps(doc)

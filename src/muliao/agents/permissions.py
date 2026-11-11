@@ -12,6 +12,9 @@
   是否分发出去，都是这一个定义。
   agent 的规则 = 内置角色 base（每个 agent 隐含）+ 它的各个角色 + 它自己的 allow / deny，allow 与 deny 分别取并集。
 - agent 能对资产做某个动作 = 它是 owner（隐含的专属角色：use 与 write）或规则放行（agents.access）；deny 只拦规则分来的。
+  agent 的私有记忆按所属 agent 认，规则不按名字指它（`*:memory:<名>` 只指平台的记忆），只有不限种类的规则管得到它。
+- admin 就是规则放行不限种类的写（`write:*`，Rules.allows_every）：内置角色 admin 固定带它；能写整棵资源树、平台的
+  问题报给它、平台的私有文件只有它能读写，都按这一个判断（agents.assets.Snapshot.administers）。
 - 本机可写目录（path，#416）：`write:path:<目录>` 放开这个目录及其下的写，写在 deny 里则收回（Rules.paths，由
   workspace.writable 并进默认可写范围）；字面目录、不带通配符，不经 fnmatch，`write:*` 不含路径。
 - 内置角色 base（全部非管理工具与全局记忆）与 admin（全部工具，并能改任何资产）：规则 = 代码里固定的部分
@@ -119,15 +122,6 @@ def kind_of(pattern: str) -> Kind | None:
     return Kind(kind)
 
 
-def check_patterns(patterns: Sequence[str]) -> None:
-    """规则的形式校验：每条形式合法（kind_of）、不重复。是否匹配现有的工具与资产由写入方对着快照只查新加的
-    （agents.distribution.check_rules），读树时由 access_file 记成问题（matches_no_tool）。"""
-    for p in patterns:
-        kind_of(p)
-    if len(set(patterns)) != len(patterns):
-        raise InvalidInput(f"rules must be distinct, got {list(patterns)}")
-
-
 def matches_no_tool(pattern: str, tools: ToolTable) -> bool:
     """一条 tool 规则匹配不上 tools 里的任何工具（拼错、工具改了名，或这次配置没注册它，如没配置 [web] 时的 web_*）。"""
     return kind_of(pattern) == Kind.TOOL and not any(
@@ -150,14 +144,23 @@ class Rules:
             deny=tuple(dict.fromkeys(p for r in rules for p in r.deny)),
         )
 
-    def allows(self, action: Action, kind: Kind, name: str) -> bool:
-        """这组规则放行这个权限：allow 匹配、deny 没拦。全系统唯一的判断。"""
+    def allows(self, action: Action, kind: Kind, name: str | None) -> bool:
+        """这组规则放行这个权限：allow 匹配、deny 没拦。全系统唯一的判断。name 为 None 是规则不按名字指的资产（agent 的
+        私有记忆，agents.assets.Asset.rule_name）：只有不限种类的规则管得到它（allows_every）。"""
+        if name is None:
+            return self.allows_every(action)
         permission = permission_of(action, kind, name)
         return any(fnmatchcase(permission, p) for p in self.allow) and not any(
             fnmatchcase(permission, p) for p in self.deny
         )
 
-    def includes(self, kind: Kind, name: str) -> bool:
+    def allows_every(self, action: Action) -> bool:
+        """不限种类的规则（`write:*`、`*:*`）放行这个动作、也没有不限种类的 deny 拦它：对一切资产都能做。写上就是 admin
+        （整棵资源树可写，agents.access.write_scope）。针对某种资产的 deny 只收回那些资产。"""
+        every = (f"{action.value}:*", "*:*")
+        return any(p in every for p in self.allow) and not any(p in every for p in self.deny)
+
+    def includes(self, kind: Kind, name: str | None) -> bool:
         """收录：放行 use。"""
         return self.allows(Action.USE, kind, name)
 

@@ -373,6 +373,7 @@ def file_toolset(
         reports = [_edit_report(t, before[t], after[t], counts[t]) for t in after]
         return truncate("\n\n".join(reports), limits.max_output_chars)
 
+    # 工具声明的读写说的是它的效果：它把文件交给用户（存进文件库、随回复发出），算写；对路径本身只读（reach 的 "read"）
     @ts.tool(sequential=True, metadata=declared(Access.WRITE))
     @_io_errors_returned
     async def share_file(ctx: RunContext[RunScope], path: str) -> ToolReturn:

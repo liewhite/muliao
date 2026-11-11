@@ -6,18 +6,19 @@
     access.toml                 角色定义、各 agent 的角色与 allow / deny（分发规则的唯一来源，agents.access_file）
     memory/<名>.md              全局记忆（global）与共享记忆
     skills/<名>/SKILL.md …      公共 skill
-    mcp/<名>.json               MCP server（mcp_config.parse_mcp_file）
+    mcp/<名>.json               MCP server（agents.mcp_config）
     secrets/<KEY>.toml          secret：description、Fernet 密文 ciphertext（agents.secrets 加解密）与 allow_shell
   <agent 名>/                   归这个 agent
     agent.toml                  id、description、model、thinking、group（agents.agent_file）
-    memory.md                   私有记忆，记忆名就是 agent 名
+    memory.md                   私有记忆：按所属的 agent 认，不占记忆的名字（显示的名字是 agent 名）
     skills/<名>/  mcp/<名>.json  secrets/<KEY>.toml
 ```
 
 这里只管文件：布局（路径 ↔ 资源的双向函数 place_of / rel_of，读树、写前校验、平台新建与转移都只问它）、把整棵树读成一份
-不可变的快照（load_tree，纯同步 IO），以及平台自己的删除、挪动；改写一个资源文件（界面编辑与文件工具）经写入口 AssetSource.write。读坏的文件不加载、记成
-Problem（路径与原因）。名字冲突的（同一种类的同名资源在不止一处）：其中一处在平台目录时只加载平台那份，其余各记一条；
-否则全部不加载、每处各记一条（_Reader.resolved）。运行时把与这个 agent 相关的
+不可变的快照（load_tree，纯同步 IO；每种资源怎么读按它的 KindSpec.load），以及平台自己的删除、挪动；改写一个资源文件（界面编辑与
+文件工具）经写入口 AssetSource.write。读坏的文件不加载、记成 Problem（路径与原因）。名字冲突的（同一种类的同名资源在不止
+一处）：其中一处在平台目录时只加载平台那份，其余各记一条；否则全部不加载、每处各记一条（_Reader.resolved）。私有记忆没有名字，
+不会冲突。运行时把与这个 agent 相关的
 报给它（agents.source.AssetSource）。agent 目录按 agent.toml 里的 id 对应数据库里的 agent，目录名必须就是数据库里它的名字
 （名字只认数据库，改名只走平台）；对不上（id 不认识、重复、目录名不同）的整个目录不加载。
 
@@ -32,18 +33,21 @@ import os
 import shutil
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 
-from muliao.agents import access_file, agent_file, memory_file
+from muliao.agents import access_file, agent_file
 from muliao.agents.agent_file import AGENT_FILE, AgentFile
-from muliao.agents.kinds import StoredKind, label, spec_of
-from muliao.agents.mcp_config import McpConfig, parse_mcp_file
+from muliao.agents.kinds import Content, Kind, StoredKind, as_kind, label, spec_of
+from muliao.agents.mcp_config import McpFile
+from muliao.agents.memory_file import MemoryText
 from muliao.agents.naming import PLATFORM, nfc
-from muliao.agents.permissions import ADMIN, AgentRules, Role, ToolTable
-from muliao.agents.secrets_format import SecretFile, parse_secret_file
-from muliao.agents.skill_package import SKILL_FILE, approval_scripts, parse_frontmatter
+from muliao.agents.permissions import Action, AgentRules, Role, ToolTable, pattern_of
+from muliao.agents.skill_package import SkillDir
 from muliao.errors import Conflict, InvalidInput, NotFound
+
+# 各种类的内容在各自的格式模块，这里一并给出（agents.api）
+__all__ = ["Content", "McpFile", "MemoryText", "SkillDir"]
 
 log = logging.getLogger(__name__)
 
@@ -52,8 +56,8 @@ PRIVATE_MEMORY_FILE = "memory.md"
 
 
 # ---- 布局：owner 目录里的相对路径 ↔ 它是什么（读树、写前校验、平台新建与转移都只问这里） ----
-# 每种资源放在 owner 目录下哪个子目录、文件后缀、是不是目录，都在它的 KindSpec（kinds.spec_of）。私有记忆例外：agent
-# 目录里的 memory.md，名字是 agent 名
+# 每种资源放在 owner 目录下哪个子目录、文件后缀、是不是目录，都在它的 KindSpec（kinds.spec_of）。私有记忆不在货架
+# 上：agent 目录里的 memory.md（PrivateMemory）
 
 
 @dataclass(frozen=True)
@@ -72,14 +76,19 @@ class Shelf:
 
 @dataclass(frozen=True)
 class Entry:
-    """一项资源（记忆、MCP、secret 的文件，skill 的目录），inner 是 skill 目录里的文件的相对路径。"""
+    """一项按名字认的资源（平台记忆、MCP、secret 的文件，skill 的目录），inner 是 skill 目录里的文件的相对路径。"""
 
     kind: StoredKind
     name: str
     inner: tuple[str, ...] = ()
 
 
-Place = Config | Shelf | Entry
+@dataclass(frozen=True)
+class PrivateMemory:
+    """agent 目录里的私有记忆（memory.md）：按所属的 agent 认，没有名字。"""
+
+
+Place = Config | Shelf | Entry | PrivateMemory
 
 
 class Misplaced(InvalidInput):
@@ -90,18 +99,22 @@ class Misplaced(InvalidInput):
         self.kind = kind
 
 
-def place_of(rel: tuple[str, ...], agent: str | None) -> Place:
-    """owner 目录里的相对路径 rel 是什么（rel_of 的反向）：agent 是这个 agent 目录的 agent 名，平台目录为 None。不该有的
-    路径、不合规则的名字（skill、MCP 是 slug，secret 是 key，平台的记忆能当文件名）是 Misplaced。"""
+# agent 目录里私有记忆的相对路径（place_of 认成 PrivateMemory）
+PRIVATE_MEMORY_REL = (PRIVATE_MEMORY_FILE,)
+
+
+def place_of(rel: tuple[str, ...], in_agent: bool) -> Place:
+    """owner 目录里的相对路径 rel 是什么（rel_of 的反向）：in_agent 是 agent 的目录（否则是平台目录）。不该有的路径、
+    不合规则的名字（skill、MCP、平台的记忆是 slug，secret 是 key）是 Misplaced。"""
     head, rest = rel[0], rel[1:]
-    config = ACCESS_FILE if agent is None else AGENT_FILE
+    config = AGENT_FILE if in_agent else ACCESS_FILE
     if rel == (config,):
         return Config(config)
-    if agent is not None and rel == (PRIVATE_MEMORY_FILE,):
-        return Entry(StoredKind.MEMORY, agent)
-    shelves = {spec_of(k).shelf: k for k in StoredKind if agent is None or k != StoredKind.MEMORY}
+    if in_agent and rel == PRIVATE_MEMORY_REL:
+        return PrivateMemory()
+    shelves = {spec_of(k).shelf: k for k in StoredKind if not in_agent or k != StoredKind.MEMORY}
     if head not in shelves:
-        expected = sorted([config, *shelves, *([PRIVATE_MEMORY_FILE] if agent is not None else [])])
+        expected = sorted([config, *shelves, *(PRIVATE_MEMORY_REL if in_agent else ())])
         raise Misplaced(f"{'/'.join(rel)} is not a place for an asset file here (expected {expected})")
     kind = shelves[head]
     spec = spec_of(kind)
@@ -119,11 +132,9 @@ def place_of(rel: tuple[str, ...], agent: str | None) -> Place:
     return Entry(kind, name, inner)
 
 
-def rel_of(kind: StoredKind, name: str, private: bool) -> tuple[str, ...]:
-    """一项资源在 owner 目录里的相对路径（place_of 的反向）；private 是 agent 目录（私有记忆就是 memory.md）。名字不合这种
-    资源的规则时 InvalidInput。"""
-    if kind == StoredKind.MEMORY and private:
-        return (PRIVATE_MEMORY_FILE,)
+def rel_of(kind: StoredKind, name: str) -> tuple[str, ...]:
+    """一项按名字认的资源在 owner 目录里的相对路径（place_of 的反向；私有记忆是 PRIVATE_MEMORY_REL）。名字不合这种资源的
+    规则时 InvalidInput。"""
     spec = spec_of(kind)
     spec.check_name(name)
     return (spec.shelf, f"{name}{spec.suffix}")
@@ -143,36 +154,9 @@ class AgentDir:
 
 
 @dataclass(frozen=True)
-class MemoryText:
-    """记忆的内容：正文。"""
-
-    text: str
-
-
-@dataclass(frozen=True)
-class SkillDir:
-    """skill 的内容：描述与执行前要批准的脚本（frontmatter 里列的，读树时已换成目录里存在的文件的身份，
-    skill_package.approval_scripts）。"""
-
-    description: str
-    approval: tuple[Path, ...]
-
-
-@dataclass(frozen=True)
-class McpFile:
-    """MCP server 的内容：配置与是否启用。"""
-
-    config: McpConfig
-    enabled: bool
-
-
-# 各种类专有的内容；secret 的是它的文件内容（描述、密文与 allow_shell）
-Content = MemoryText | SkillDir | McpFile | SecretFile
-
-
-@dataclass(frozen=True)
 class Asset:
-    """一项资源。path：记忆、MCP、secret 是那个文件，skill 是它的目录。content 的类型由 kind 定（load）。"""
+    """一项资源。path：记忆、MCP、secret 是那个文件，skill 是它的目录。content 的类型由 kind 定（KindSpec.load）。私有
+    记忆的 name 是它的 agent 的名字，只用于显示（rule_name 为 None）。"""
 
     kind: StoredKind
     name: str
@@ -184,11 +168,13 @@ class Asset:
     @property
     def description(self) -> str:
         """skill 与 secret 的描述（记忆、MCP 为空）。"""
-        match self.content:
-            case SkillDir(description=d) | SecretFile(description=d):
-                return d
-            case MemoryText() | McpFile():
-                return ""
+        return self.content.description
+
+    @property
+    def rule_name(self) -> str | None:
+        """规则里指它的名字（`<action>:<kind>:<名>`）。私有记忆为 None：它按所属的 agent 认，规则不按名字指它，只有不限
+        种类的规则（`write:*`）管得到它（permissions.Rules.allows）。"""
+        return None if self.kind == StoredKind.MEMORY and self.owner is not None else self.name
 
 
 def content_of[C: Content](asset: Asset, cls: type[C]) -> C:
@@ -219,8 +205,10 @@ class Snapshot:
     names: Mapping[str, str]
     # 加载成功的 agent 目录，按 id
     agents: Mapping[str, AgentDir]
-    # 每种资源按名字
+    # 每种按名字认的资源，按名字（记忆只有平台的）
     assets: Mapping[StoredKind, Mapping[str, Asset]]
+    # 各 agent 的私有记忆，按 agent 的 id
+    private: Mapping[str, Asset]
     # 全部角色：内置在前（按定义顺序），自建的按名称
     roles: Mapping[str, Role]
     # access.toml 里各 agent 的规则，按 id；没写的 agent 只有 base
@@ -237,6 +225,7 @@ class Snapshot:
         return self.rules.get(agent_id, AgentRules())
 
     def get(self, kind: StoredKind, name: str) -> Asset | None:
+        """按名字认的资源（私有记忆不在其中：private_memory）。"""
         return self.assets[kind].get(name)
 
     def check_free(self, kind: StoredKind, name: str) -> None:
@@ -262,8 +251,16 @@ class Snapshot:
             raise NotFound(f"{label(kind)} {name!r} not found")
         return found
 
+    def private_memory(self, agent_id: str) -> Asset | None:
+        """agent 的私有记忆；它的目录里没有 memory.md（或读坏了）时 None。"""
+        return self.private.get(agent_id)
+
     def of_kind(self, kind: StoredKind) -> list[Asset]:
-        return sorted(self.assets[kind].values(), key=lambda a: a.name)
+        """这一种的全部资源（记忆含各 agent 的私有记忆），按名称。"""
+        mine = list(self.assets[kind].values())
+        if kind == StoredKind.MEMORY:
+            mine += self.private.values()
+        return sorted(mine, key=lambda a: (a.name, a.owner or ""))
 
     def loaded_agent(self, agent_id: str) -> AgentDir:
         """agent 加载成功的目录（它的配置：描述、模型、思考档位、分组的唯一来源）。没加载（agent.toml 坏了、目录名对不上
@@ -292,8 +289,12 @@ class Snapshot:
         return f"agent {agent.name if agent is not None else owner!r}"
 
     def path_of(self, kind: StoredKind, name: str, owner: str | None) -> Path:
-        """owner 名下这一项资源该在的位置（新建、转移时用）。"""
-        return self.owner_dir(owner).joinpath(*rel_of(kind, name, owner is not None))
+        """owner 名下这一项按名字认的资源该在的位置（新建、转移时用）。"""
+        return self.owner_dir(owner).joinpath(*rel_of(kind, name))
+
+    def private_memory_path(self, agent_id: str) -> Path:
+        """agent 的私有记忆该在的位置。"""
+        return self.owner_dir(agent_id).joinpath(*PRIVATE_MEMORY_REL)
 
     def own_dir(self, agent_id: str) -> Path | None:
         """agent 的目录该在的位置（目录名就是数据库里的名字），不论它现在加载成功没有；不认识的 agent 为 None。"""
@@ -301,8 +302,9 @@ class Snapshot:
         return None if name is None else self.root / name
 
     def administers(self, agent_id: str) -> bool:
-        """agent 管整棵树（有 admin 角色）：平台目录、access.toml 与每个 agent 的目录都能写，平台的问题报给它。"""
-        return ADMIN in self.rules_of(agent_id).roles
+        """admin：规则放行不限种类的写（`write:*`，内置角色 admin 固定带它，permissions.Rules.allows_every）。整棵树都能写
+        （agents.access.write_scope）；平台的问题报给它，平台的私有文件只有它能读写。"""
+        return self.rules_of(agent_id).effective(self.roles).allows_every(Action.WRITE)
 
     def problems_for(self, agent_id: str) -> list[Problem]:
         """报给这个 agent 的问题：它自己目录里的；平台的（platform/、根目录、access.toml）只报给能写它们的 admin
@@ -314,9 +316,13 @@ class Snapshot:
     def access_path(self) -> Path:
         return self.root / PLATFORM / ACCESS_FILE
 
-
-def updated(path: Path) -> datetime:
-    return datetime.fromtimestamp(path.stat().st_mtime, UTC)
+    def addressable(self) -> list[str]:
+        """规则能按名字指的全部 `kind:名`：注册的内置工具与按名字认的资源（不含私有记忆）。写规则时新加的至少要匹配其中
+        一项（access_file.vet）。"""
+        return [
+            *(pattern_of(Kind.TOOL, n) for n in self.tools.names),
+            *(pattern_of(as_kind(k), n) for k, by_name in self.assets.items() for n in by_name),
+        ]
 
 
 def _visible(entries: list[Path]) -> list[Path]:
@@ -346,12 +352,10 @@ class _Reader:
         # 平台目录里读坏了的名字：仍归平台占着，agent 的副本照样被遮住（不让副本趁平台那份坏了接管）
         self.broken_platform: dict[StoredKind, set[str]] = {k: set() for k in StoredKind}
         self.shadowed: dict[StoredKind, dict[str, tuple[Path, ...]]] = {k: {} for k in StoredKind}
+        self.private: dict[str, Asset] = {}
 
     def problem(self, path: Path, reason: str, owner: str | None) -> None:
         self.problems.append(Problem(path, reason, owner))
-
-    def add(self, asset: Asset) -> None:
-        self.found[asset.kind].setdefault(asset.name, []).append(asset)
 
     def read(self) -> Snapshot:
         agents: dict[str, AgentDir] = {}
@@ -380,10 +384,10 @@ class _Reader:
                     continue
                 agents[agent_id] = dirs[0]
             for agent in agents.values():
-                self.owner_assets(agent.path, agent.id, agent.name)
+                self.owner_assets(agent.path, agent.id)
             platform = self.root / PLATFORM
             if platform.is_dir():
-                self.owner_assets(platform, None, None)
+                self.owner_assets(platform, None)
         reported = {p.owner for p in self.problems}
         for agent_id, name in self.known.items():
             # 目录在、只是名字或内容不对的，上面已经报给它了
@@ -416,6 +420,7 @@ class _Reader:
             dict(self.known),
             agents,
             {kind: self.resolved(kind) for kind in StoredKind},
+            self.private,
             roles,
             rules,
             self.tools,
@@ -458,27 +463,12 @@ class _Reader:
         return out
 
     def shadow(self, kind: StoredKind, name: str, copy: Asset, where: str) -> None:
-        """agent 目录里的 copy 与平台的同名，不加载，报给它。私有记忆的名字就是 agent 名、改不了：报给它不要动，另报给
-        admin 处理平台那份。"""
-        if kind != StoredKind.MEMORY:
-            self.problem(
-                copy.path,
-                f"{label(kind)} name {name!r} is already used by the platform's {where}; the platform's one is "
-                "loaded and this one is not: rename or remove it",
-                copy.owner,
-            )
-            return
+        """agent 目录里的 copy 与平台的同名，不加载，报给它。"""
         self.problem(
             copy.path,
-            f"your private memory is not loaded: the platform has a memory with the same name {name!r} ({where}); "
-            "do not rename or remove this file, an admin has to rename or move the platform's one",
+            f"{label(kind)} name {name!r} is already used by the platform's {where}; the platform's one is "
+            "loaded and this one is not: rename or remove it",
             copy.owner,
-        )
-        self.problem(
-            self.root / PLATFORM / Path(*rel_of(StoredKind.MEMORY, name, False)),
-            f"memory {name!r} has the name of agent {name!r}, whose private memory is therefore not loaded: rename "
-            "it, or move it into that agent's directory if it is that agent's memory",
-            None,
         )
 
     def agent_dir(self, path: Path) -> AgentDir | None:
@@ -506,15 +496,15 @@ class _Reader:
             return None
         return AgentDir(name, path, data)
 
-    def owner_assets(self, base: Path, owner: str | None, agent_name: str | None) -> None:
+    def owner_assets(self, base: Path, owner: str | None) -> None:
         """owner 目录里的每一项，按布局（place_of）认出是什么再读；配置文件（agent.toml、access.toml）另外读。"""
         for entry in _visible(list(base.iterdir())):
-            self.visit(base, (entry.name,), owner, agent_name)
+            self.visit(base, (entry.name,), owner)
 
-    def visit(self, base: Path, rel: tuple[str, ...], owner: str | None, agent_name: str | None) -> None:
+    def visit(self, base: Path, rel: tuple[str, ...], owner: str | None) -> None:
         path = base.joinpath(*rel)
         try:
-            place = place_of(rel, agent_name)
+            place = place_of(rel, owner is not None)
         except Misplaced as e:
             self.problem(path, str(e), owner)
             return
@@ -526,44 +516,39 @@ class _Reader:
                     self.problem(path, "expected a directory", owner)
                     return
                 for child in _visible(list(path.iterdir())):
-                    self.visit(base, (*rel, child.name), owner, agent_name)
+                    self.visit(base, (*rel, child.name), owner)
+            case PrivateMemory():
+                assert owner is not None
+                if path.is_dir():
+                    self.problem(path, "expected a file", owner)
+                    return
+                # 显示的名字是 agent 名
+                asset = self.loaded(StoredKind.MEMORY, self.known[owner], path, owner)
+                if asset is not None:
+                    self.private[owner] = asset
             case Entry(kind=kind, name=name):
                 directory = spec_of(kind).is_directory
                 if path.is_dir() != directory:
                     self.problem(path, f"expected a {'directory' if directory else 'file'}", owner)
                     return
-                self.guarded(kind, name, path, owner)
+                asset = self.loaded(kind, name, path, owner)
+                if asset is not None:
+                    self.found[kind].setdefault(name, []).append(asset)
+                    return
+                self.unloaded[kind].add(name)
+                if owner is None:
+                    self.broken_platform[kind].add(name)
 
-    def guarded(self, kind: StoredKind, name: str, path: Path, owner: str | None) -> None:
+    def loaded(self, kind: StoredKind, name: str, path: Path, owner: str | None) -> Asset | None:
+        """按这种资源登记的读法（KindSpec.load）读一项；读坏了记成问题、返回 None。"""
         try:
-            self.add(self.load(kind, name, path, owner))
+            got = spec_of(kind).load(path, name, self.memory_max_chars)
         except (InvalidInput, OSError, UnicodeDecodeError) as e:
             self.problem(path, str(e), owner)
-            self.unloaded[kind].add(name)
-            if owner is None:
-                self.broken_platform[kind].add(name)
-
-    def load(self, kind: StoredKind, name: str, path: Path, owner: str | None) -> Asset:
-        match kind:
-            case StoredKind.MEMORY:
-                text = memory_file.text_of(path)
-                if problem := memory_file.over_limit(text, self.memory_max_chars):
-                    # 照常加载（截断更糟），但要让它缩短
-                    self.problem(path, problem, owner)
-                return Asset(kind, name, owner, path, updated(path), MemoryText(text))
-            case StoredKind.SKILL:
-                md = path / SKILL_FILE
-                if not md.is_file():
-                    raise InvalidInput(f"skill directory has no {SKILL_FILE}")
-                fm = parse_frontmatter(md.read_text(encoding="utf-8"), name)
-                skill = SkillDir(fm.description, approval_scripts(path, fm.approval))
-                return Asset(kind, name, owner, path, updated(md), skill)
-            case StoredKind.MCP:
-                config, enabled = parse_mcp_file(path.read_text(encoding="utf-8"))
-                return Asset(kind, name, owner, path, updated(path), McpFile(config, enabled))
-            case StoredKind.SECRET:
-                secret = parse_secret_file(name, path.read_text(encoding="utf-8"))
-                return Asset(kind, name, owner, path, updated(path), secret)
+            return None
+        if got.warning is not None:
+            self.problem(path, got.warning, owner)
+        return Asset(kind, name, owner, path, got.updated_at, got.content)
 
 
 def load_tree(
