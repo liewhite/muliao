@@ -40,7 +40,7 @@ from muliao.sessions.conventions import (
     parse_event,
     run_context_index,
 )
-from muliao.sessions.deferred import asks_user, questions_in
+from muliao.sessions.pending import asks_user, questions_in
 from muliao.sessions.questions import AnsweredQuestion, AskResult, Question
 from muliao.sessions.sources import EventSource, parse_source
 

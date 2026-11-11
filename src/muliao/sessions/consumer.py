@@ -32,7 +32,6 @@ from muliao.sessions.codec import load_messages
 from muliao.sessions.compaction import Compactor, Verdict
 from muliao.sessions.content import Content, ContentBuilder
 from muliao.sessions.conventions import answer_text, is_stopped, unanswered_calls
-from muliao.sessions.deferred import DEFERRED_TOOLS, CallResult, questions_in
 from muliao.sessions.events import RunFailed
 from muliao.sessions.finish import RunEnd, RunFinisher
 from muliao.sessions.halt import Halted, SessionHalt
@@ -48,13 +47,15 @@ from muliao.sessions.loading import load_session
 from muliao.sessions.mailbox import audience_of, consumed_by_in, delegated_in, queued_in, wake_in
 from muliao.sessions.origins import OriginNotes
 from muliao.sessions.pending import (
+    DEFERRED_TOOLS,
+    CallResult,
     HandedOut,
     answered_in,
-    approved_calls,
     deferred_results,
     handed_out_in,
     is_on_time,
     pending_calls,
+    questions_in,
     replayable,
     waiting,
 )
@@ -76,6 +77,13 @@ class Opening:
     pending: dict[str, ToolCallPart]
     answers: dict[str, CallResult]
     content: Content
+
+
+@dataclass
+class _Current:
+    """一次运行读出的状态（Consumer.run 里这次运行自己持有）：被停止时从这里取（运行的协程已被取消），还没读出时为 None。"""
+
+    state: RunState | None = None
 
 
 def resumable(history: list[ModelMessage], handed: HandedOut) -> bool:
@@ -192,20 +200,20 @@ class Consumer:
         self._notes = notes
         # 正在进行的运行的登记：停止会话的命令（sessions.halt.SessionStopper）经同一份登记停下运行
         self._runs = runs
-        # 正在进行的运行的状态，按会话：被停止时从这里取（运行的协程已被取消）
-        self._active: dict[str, RunState] = {}
 
     async def run(self, run_id: int, session_id: str) -> Commit:
         """执行一次运行直到模型不再调用工具（或停在挂起的调用上、被用户停止），返回它的收尾。"""
+        current = _Current()
         try:
             return await self._runs.run(
-                session_id, lambda: self._run(run_id, session_id), lambda: self._stopped(run_id, session_id)
+                session_id,
+                lambda: self._run(run_id, session_id, current),
+                lambda: self._stopped(run_id, session_id, current),
             )
         finally:
-            self._active.pop(session_id, None)
             self._live.end(session_id)
 
-    async def _run(self, run_id: int, session_id: str) -> Commit:
+    async def _run(self, run_id: int, session_id: str, current: _Current) -> Commit:
         async with self._db.transaction() as s:
             session, agent = await load_session(s, session_id)
             context = await load_context(s, session.id)
@@ -243,7 +251,7 @@ class Consumer:
                 await save_in(s, state, filled, consumed=[])
                 history = [*history, *filled]
             last_message = await last_message_id_in(s, session_id)
-        self._active[session_id] = state
+        current.state = state
         state.resending = resumable(history, handed) and isinstance(history[-1], ModelRequest)
         opening = await self._opening(state, history, queued, handed)
         if opening is None and not resumable(history, handed):
@@ -333,23 +341,25 @@ class Consumer:
     ) -> tuple[list[UserContent] | None, dict[str, object] | None]:
         """把开头的信件交给这次运行：返回交给模型的内容，以及挂起调用的结果（`{调用 id: 结果}`）。"""
         state.taken = list(opening.queued)
-        spent: set[str] = set()
+        interrupted: dict[str, object] = {}
         if opening.queued:
             # 开头取走的信件都交给了这次运行（mailbox.handed_to），哪怕它在第一次保存之前就最终失败：失败的结清据此
             # 了结它们，也不会为它们再唤醒一次运行。批准在同一个事务里记为已交给运行执行：之前交过的不再执行
             async with self._db.transaction() as s:
                 await hand_over_in(s, self._queue, state.run_id, opening.queued[-1].id)
-                spent = await take_approvals_in(s, state.session.id, approved_calls(opening.answers))
+                interrupted = await take_approvals_in(s, state.session.id, opening.answers)
         pending = opening.pending
-        deferred = deferred_results(pending, opening.answers, handed, spent=spent) if pending else None
+        deferred = (
+            deferred_results(pending, opening.answers, handed, replaced=interrupted) if pending else None
+        )
         # 开头的内容由 pydantic-ai 放进第一次请求的用户消息（下标从 0 起），事件在那次请求保存前标上
         state.opening = opening.content
         return (opening.content.items or None), deferred
 
     # ---- 停止（命令见 sessions.halt.SessionStopper）----
 
-    async def _stopped(self, run_id: int, session_id: str) -> Commit:
-        state = self._active.get(session_id)
+    async def _stopped(self, run_id: int, session_id: str, current: _Current) -> Commit:
+        state = current.state
         log.info("run stopped by user", extra={"session_id": session_id, "run_id": run_id})
         save_tail = None if state is None else partial(save_tail_in, state=state)
         if await self._halt(session_id, first=save_tail) == Halted.GONE:

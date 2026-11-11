@@ -68,8 +68,8 @@ class ApprovalAnswered(BaseModel):
         return Approval(approved=False, note=DENIED)
 
     @staticmethod
-    def skipped(answered_other: bool) -> object:
-        """没等到决定就继续时的结果：没批准，不执行。"""
+    def skipped(given: Collection[object]) -> object:
+        """没等到决定就继续时的结果（given 是这次交回的别的回答，不看）：没批准，不执行。"""
         return Approval(approved=False, note=NOT_DECIDED)
 
     @staticmethod
@@ -96,16 +96,18 @@ async def record_in(s: AsyncSession, session_id: str, calls: Mapping[str, str]) 
     await s.flush()
 
 
-async def take_in(s: AsyncSession, session_id: str, call_ids: Collection[str]) -> set[str]:
-    """这些调用的批准要交给运行去执行（运行开头取走信件的事务里）：没交过的记下时间；返回之前已经交过的——那次运行
-    可能在执行中被打断（进程退出、运行最终失败后又被新消息或手动重试接手），不能再执行一遍。按调用记，与哪个
-    run task、第几次尝试无关。"""
-    if not call_ids:
-        return set()
+async def take_in(s: AsyncSession, session_id: str, answers: Mapping[str, object]) -> dict[str, object]:
+    """交给运行的回答里被批准的调用要去执行了（运行开头取走信件的事务里）：没交过的记下时间。之前已经交过的，那次
+    运行可能在执行中被打断（进程退出、运行最终失败后又被新消息或手动重试接手），不能再执行一遍：返回它们的结果
+    「被中断」，代替批准交给模型，由模型查过再决定（同 docs/architecture.md「从哪里开始」不重新执行被打断的调用）。
+    按调用记，与哪个 run task、第几次尝试无关。"""
+    approved = [k for k, r in answers.items() if isinstance(r, ApprovalAnswered) and r.result.approved]
+    if not approved:
+        return {}
     rows = (
         await s.scalars(
             select(ApprovalRequest).where(
-                ApprovalRequest.session_id == session_id, ApprovalRequest.call_id.in_(list(call_ids))
+                ApprovalRequest.session_id == session_id, ApprovalRequest.call_id.in_(approved)
             )
         )
     ).all()
@@ -114,7 +116,7 @@ async def take_in(s: AsyncSession, session_id: str, call_ids: Collection[str]) -
     for r in rows:
         if r.taken_at is None:
             r.taken_at = now
-    return taken
+    return dict.fromkeys(taken, INTERRUPTED)
 
 
 async def requested_in(s: AsyncSession, session_id: str) -> set[str]:

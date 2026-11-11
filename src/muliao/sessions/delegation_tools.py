@@ -11,8 +11,8 @@ from muliao.platform.db import Database
 from muliao.platform.text_edit import truncate
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 from muliao.sessions.activity import WorkState
-from muliao.sessions.deferred import ASK_AGENT_KIND
 from muliao.sessions.halt import Halted, StopSession
+from muliao.sessions.pending import ASK_AGENT_KIND
 from muliao.sessions.threads import Threads, validate_thread
 from muliao.sessions.work import check_interval
 

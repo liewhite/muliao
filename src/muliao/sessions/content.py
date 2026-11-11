@@ -17,8 +17,7 @@ from muliao.sessions.conventions import (
     format_event,
     run_context_index,
 )
-from muliao.sessions.deferred import call_result
-from muliao.sessions.pending import late_text
+from muliao.sessions.pending import call_result, late_text
 from muliao.sessions.tables import Mail, MailKind
 
 

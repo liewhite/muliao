@@ -199,13 +199,13 @@ async def test_an_approved_call_interrupted_while_running_is_not_run_again(
 
 async def _crash_while_running(container) -> None:
     """模拟运行在执行批准过的脚本时进程退出：运行开头取走了信件、记下批准已交出（同一个事务），脚本还没出结果。"""
-    from muliao.sessions.approvals import take_in
+    from muliao.sessions.approvals import ApprovalAnswered, take_in
 
     run = (await tasks_of(container, RUN_TASK))[-1]
     async with container.db.transaction() as s:
         task = await s.get(Task, run.id)
         task.status, task.attempts = TaskStatus.RUNNING, 1
-        assert await take_in(s, run.session_id, ["c1"]) == set()
+        assert await take_in(s, run.session_id, {"c1": ApprovalAnswered.of("approve", None)}) == {}
 
 
 @pytest.mark.parametrize("then", ["message", "retry"])

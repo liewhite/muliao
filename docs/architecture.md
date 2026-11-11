@@ -87,7 +87,7 @@ sessions（表类只在它的子域模块里出现在查询与构造中；领域
 |---|---|---|---|
 | 会话 | `sessions` | `directory.py`（新建一行、按属性查会话只在这里；按 id 取到的行在领域内可改，删除在 `deletion.py`）、`origins.py`、`inbound.py`（来信与新建会话的规则）、`info.py`（读模型）、`deletion.py`、`service.py`（门面） | `add_in`、`among_in`、`with_prefix_in`、`of_agent_in`、`keyed_rows_among` / `keyed_among`、`threads_of` / `thread_in` / `threads_named_in`、`listed_ids_in` / `listed_page_in` |
 | 运行 | `messages`、`message_texts`（消息的可搜索文字）、`compactions`（历史）、`mail`（信箱）；运行本身是平台任务表里的 run task，只经 `TaskQueue` 的只读查询（`TaskView`）看 | `history.py`、`mailbox.py`、`runs.py`（运行与它的 payload）、`consumer.py`、`steps.py`、`finish.py`、`compaction.py`、`halt.py`、`settlement.py`、`conventions.py`、`reconcile.py`、`live.py` | 历史：`append_in`、`mark_last_stopped_in`、`saved_by_in`、`last_message_id_in`、`transcript_rows_in`、`spans_between_in`、`add_compaction_in`、`load_context` 等；信箱：`post_in`、`queued_in`、`sent_by_in`、`first_arrivals_between_in`、`consume_in`、`discard_in`、`unsettled_in` / `mark_settled`、`wake_in` 等；运行：`latest_run` / `latest_runs_among`、`runs_between_in`、`run_unfinished_in`、`hand_over_in`、`handed_to` |
-| 交互 | `approval_requests`（停下来等批准的调用）；其余由历史与信箱推导 | `pending.py`、`deferred.py`、`ask_user.py`、`questions.py`、`answers.py`、`approvals.py` | `pending_in`、`handed_out_in`、`open_asks_of`、`waiting`、`record_in`（等批准）、`requested_in` / `requested_among` |
+| 交互 | `approval_requests`（停下来等批准的调用）；其余由历史与信箱推导 | `pending.py`（含种类表）、`ask_user.py`、`questions.py`、`answers.py`、`approvals.py` | `pending_in`、`handed_out_in`、`open_asks_of`、`waiting`、`record_in`（等批准）、`requested_in` / `requested_among` |
 | 外部工作 | `session_holds` | `holds.py`、`work.py`（`SessionWork`、交回结局 `deliver_in`、运行中检查 `check_interval` / `CheckBeats` / `post_check_in`）、`activity.py`（工作状态） | `hold_in`、`get_in`、`release`、`abandon`、`clear_in`、`active_holders_of_in`、`active_holds`（active 占用的子查询，给别的子域连表）、`called_in`、`deliver_in` |
 | 委派 | `thread_calls`（哪次调用开出或续写了哪个 thread；要交回结局的调用即一项委派，同行记占用者与心跳间隔） | `thread_calls.py`（调用开出的 thread 与委派记录）、`delegation.py`（交回与运行中检查）、`threads.py`（发出）、`delegation_tools.py` | `record_call_in` / `call_threads_in`、`delegations_among`、`active_reporting_in`、`threads_of_holds_in`、`hand_back_in` |
 | 到点唤醒 | `wakeups` | `wakeups.py`（约、取消、到点投信 `WakeUps`）、`wakeup_tools.py`（`wake_me`） | `schedule_in`、`cancel_in`、`WakeUps` |
@@ -369,7 +369,7 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
 
 两者是同一件事：**模型调用了一个要等别人回信的工具**。工具调用 `defer_call()`（agent_runtime），这次运行停在这里正常结束，不占 worker、不在 worker 里等。回信是一封回答信件（`MailKind.ANSWER`，`tool_call_id →` 带工具名的结果信封 `{"tool": "ask_user" | "ask_agent", "result": …}`，读的一方按 `tool` 区分，不按形状），消费者开始下一次运行时把它作为那次调用的结果交回（`run_steps` 的 `deferred`），模型看到的就是「我问了，对方这样答」。
 
-三种挂起调用（两种挂起工具与下面的等批准）的差别只写在一张表里（`sessions/deferred.py` 的 `DeferredKind`，`KINDS`），各处查表，不按种类分支。一次调用是哪一种只经 `pending.kind_of` 认：等批准的按记录认，挂起工具按工具名认（`DEFERRED_TOOLS`，工具注册时显式用表里的名字）；挂起、停止（`closing_on_stop`）、续跑（`replayable`）都查它认出的种类的表项，没有按工具名另查的规则（#574）。每种的回答信封（`answer`，种类名就是信封 `tool` 字段的取值）自己给出交给模型的结果（`tool_return`）、没等到回答就继续时的结果（`skipped`）和迟到回答的文字（`late_lines`）：
+三种挂起调用（两种挂起工具与下面的等批准）的差别只写在一张表里（`sessions/pending.py` 的 `DeferredKind`，`KINDS`），各处查表，不按种类分支。一次调用是哪一种只经 `pending.kind_of` 认：等批准的按记录认，挂起工具按工具名认（`DEFERRED_TOOLS`，工具注册时显式用表里的名字）；挂起、停止（`closing_on_stop`）、续跑（`replayable`）都查它认出的种类的表项，没有按工具名另查的规则（#574）。每种的回答信封（`answer`，种类名就是信封 `tool` 字段的取值）自己给出交给模型的结果（`tool_return`）、没等到回答就继续时的结果（`skipped`）和迟到回答的文字（`late_lines`）；信封各在自己的模块（`questions.UserAnswered`、`answers.AgentAnswered`、`approvals.ApprovalAnswered`），通用代码不按信封类型分支：跳过时由信封看这次交回的别的回答自己定（提问据此区分「没回答」与「跳过」），批准已交给过运行的「被中断」由 `approvals.take_in` 给出、`deferred_results` 只代入：
 
 | 种类（信封 `tool`） | 要占用才算挂起（`needs_hold`） | 没交出去时可原样重放（`replayable`） | 停止时仍挂着（`kept_open_on_stop`） | 调用里给用户的问题（`questions`） | 没等到回答就继续时的结果（`skipped`） |
 |---|---|---|---|---|---|
@@ -377,7 +377,7 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
 | `ask_agent` | 是 | 是 | 否 | 无 | `STILL_WORKING` |
 | `approval`（等批准） | 否 | 否 | 否 | 无 | `NOT_DECIDED` |
 
-- **哪些调用还挂着**由历史推导（`pending_calls`），不另存状态：没有结果、参数合法的 `ask_user` 调用等用户（参数不合法的没执行过：这一步中途被打断时，回复已在工具执行前保存，参数校验与退回重试的结果还没保存；它按普通调用处理，停止或续跑时补结果，`deferred.deferred_call`，#563）；没有结果、并且已经交出去（本会话有带它的调用 id 的占用）的 `ask_agent` 调用等 agent（没有占用的不算挂着：回复保存后、投递提交前失败，它是待执行的调用，续跑时再执行——这一步里还有别的没出结果的调用时整步都不重放，见「从哪里开始」）。「调用是否已有结果」只在 `sessions.conventions.unanswered_calls` 定义一处，参数被拒绝、交还模型重试的调用也算有结果。挂起的调用只可能在历史末尾：之后的运行都会先关闭它们。
+- **哪些调用还挂着**由历史推导（`pending_calls`），不另存状态：没有结果、参数合法的 `ask_user` 调用等用户（参数不合法的没执行过：这一步中途被打断时，回复已在工具执行前保存，参数校验与退回重试的结果还没保存；它按普通调用处理，停止或续跑时补结果，`pending.kind_of`，#563）；没有结果、并且已经交出去（本会话有带它的调用 id 的占用）的 `ask_agent` 调用等 agent（没有占用的不算挂着：回复保存后、投递提交前失败，它是待执行的调用，续跑时再执行——这一步里还有别的没出结果的调用时整步都不重放，见「从哪里开始」）。「调用是否已有结果」只在 `sessions.conventions.unanswered_calls` 定义一处，参数被拒绝、交还模型重试的调用也算有结果。挂起的调用只可能在历史末尾：之后的运行都会先关闭它们。
 - **什么时候继续**（`waiting`，唯一规则）：用户发了新消息（跳过还没回答的），或挂起的调用都有了回答；事件（检查、完成通知）留在信箱里，等它们一起交给模型。唤醒（`mailbox.wake_in`）与消费者开头共用这一条。
 - **跳过**：pydantic-ai 拒绝在未处理的调用后追加新消息，所以用户发了新消息时，没回答的 `ask_user` 显式记为「用户没回答、发了新消息」（同一次提交里回答了别的提问时记为跳过），还没回答的 `ask_agent` 记为「它还在处理，回答会作为事件送达」（`STILL_WORKING`）——那时它已不再挂着，委派的结局按事件投回（第 8 节）。结果随那一步保存。
 - **迟到的回答**：回答投信之后、交给模型之前，调用可能已被另一次运行关闭（用户先发了消息）。这时回答作为一段用户消息交给模型（`pending.late_text`），不丢、也不让运行卡住。
@@ -428,7 +428,7 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
 
 - **发出**（工具里，`Threads.dispatch`，一个事务）：校验并打开或找到 thread（同一 agent 同名续聊，不论开它的是哪个工具；名字不合法抛出可纠正的 `InvalidInput`，事务回滚、什么都没写）；在发起方登记占用（holder 由工具调用 id 确定性派生，带 `call_id`、「用户是否在等发起方」），在调用开出 thread 的那行（`thread_calls`）上记下占用者与 report_back 的 `check_seconds`；往 thread 投一封以 holder 为关联 id 的信件。然后 `ask_agent` 调用 `defer_call()` 挂起，`delegate_task(report_back)` 返回。续跑重新执行这次调用时按 holder 幂等，只返回已经投递到的 thread。
 - **交回**（`hand_back_in`，thread 结清关联的同一个事务里，第 7 节「关联与结清」）：按 holder 找到发起方的占用，经 `deliver_in` 交回结局并释放占用。每个关联只结清一次，所以每项委派只交回一次；占用已 cleared（发起方被停止）不投，占用随发起方删除了就没有收件人（记日志）。没有中间状态，没有事件、没有投递顺序要证明。
-- **交回的形态**：发起方还停在那次 `ask_agent` 调用上时，结局是一封回答信件，作为调用的结果交回（`AgentAnswer`：回答文字与它挂给用户的文件，经 `sessions.answers` 带上 `TOOL_ATTACHMENTS`；做它的 thread 在 `thread_calls` 里，不在结果上）；否则（`report_back`，或用户已经跳过了那次调用）是一封事件信件（来源 `thread:<子会话 id>`）。thread 的回答不直接推送给用户：交给父 agent 处理，父会话处理它的运行按 `awaited` 推送。
+- **交回的形态**：发起方还停在那次 `ask_agent` 调用上时，结局是一封回答信件，作为调用的结果交回（`sessions.answers` 的 `AgentAnswered` 信封，`deliver_in` 收任一种回答信封：回答文字与它挂给用户的文件，交回时带上 `TOOL_ATTACHMENTS`；做它的 thread 在 `thread_calls` 里，不在结果上）；否则（`report_back`，或用户已经跳过了那次调用）是一封事件信件（来源 `thread:<子会话 id>`）。thread 的回答不直接推送给用户：交给父 agent 处理，父会话处理它的运行按 `awaited` 推送。
 - **发起方被停止**：停止事务清掉它的委派占用，并给做这些工作的 thread 各发一条定向命令 `StopThread`；thread 的停止再停下它自己委派出去的 thread（逐层）。thread 被停止时的结清看到占用已 cleared，不投。
 - **运行中检查**（`ThreadChecks`）：report_back 的委派按自己的 `check_seconds` 给发起方投检查信件，内容按 thread 的工作状态说（running：在跑多久了、在等重试或还排着；waiting：在等它自己开出的后台任务、委派或提问的回答）。委派没结清时 thread 也可能是 idle（信件到了，投信或运行结束——含最终失败——时的唤醒没做成，例如事务失败、重启，要等定期对账补唤醒下一次运行），这时与还排着同样说「排着、还没开始」。
 - **`list_threads`**：每个 thread 的工作状态（同一条规则，批量）、最近一次运行最终失败时的错误、它最近的回答。不按最近一次运行判断做没做完：thread 在等自己开出的工作时最近一次运行已经做完，那时的回答只是中间的。

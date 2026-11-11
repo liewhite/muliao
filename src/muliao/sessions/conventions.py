@@ -9,7 +9,7 @@ pydantic-ai 的消息是存储与回放的唯一形式（数据库里一行一�
 | `RUN_STOPPED`：运行被用户停止 | 停止时最后保存的那条消息的 metadata | sessions.history | 会话条目（「已停止」）、续跑（不重发标了它的请求） |
 | `STOPPED_TOOL_RESULT`：停止时没出结果的调用 | 合成的 ToolReturnPart 内容 | sessions.history | 模型（之后的运行）；会话条目（made_up_result：没有结束时间） |
 | `INTERRUPTED_TOOL_RESULT`：进程退出时没出结果的调用 | 合成的 ToolReturnPart 内容（`outcome='interrupted'`） | sessions.history | 模型（续跑的那次请求）；会话条目（同上） |
-| `questions.NOT_ANSWERED`：挂起提问没被回答 | 合成的 ask_user 结果（AskResult，属于提问领域） | sessions.questions 定义、sessions.deferred 填入 | 模型、会话条目 |
+| `questions.NOT_ANSWERED`：挂起提问没被回答 | 合成的 ask_user 结果（AskResult，属于提问领域） | sessions.questions 定义、sessions.pending 填入 | 模型、会话条目 |
 | 「回复是否报告了上下文大小」 | 完整的 ModelResponse，或被截断（pydantic-ai state='interrupted'）但已收到输入用量 | — | measured_responses：压缩判断 |
 | 「调用是否已有结果」 | ToolReturnPart 或 RetryPromptPart；没结果的只可能在最后一条回复里 | — | unanswered_calls：挂起的调用、被中断的调用、压缩切点、停止时补结果 |
 | `RUN_EVENTS`：这一步交给模型的事件信件 | 事件各占用户消息内容的一段（format_event，来源见 sessions.sources），metadata 记下是第几段 | sessions.content | 模型、会话条目 |

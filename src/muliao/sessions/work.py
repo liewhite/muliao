@@ -22,12 +22,11 @@ from muliao.errors import InvalidInput
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tasks import Commit, TaskQueue
-from muliao.sessions.deferred import AgentAnswer, AgentAnswered
 from muliao.sessions.events import WorkCheckIn, WorkEnded
 from muliao.sessions.holds import get_in, hold_in, release
 from muliao.sessions.lanes import work_lane
 from muliao.sessions.mailbox import has_queued_from, post_in, posted_with_key_in
-from muliao.sessions.pending import pending_in
+from muliao.sessions.pending import CallResult, pending_in
 from muliao.sessions.tables import HoldStatus, MailKind, Session, SessionHold
 
 log = logging.getLogger(__name__)
@@ -99,10 +98,10 @@ async def deliver_in(
     key: str,
     source: str,
     event_text: str,
-    answer: AgentAnswer | None = None,
+    answer: CallResult | None = None,
 ) -> Delivered:
-    """交回占用 holder 的结局并释放它，唯一出口。会话还停在这项占用对应的挂起调用上、且给了 answer 时作为那次调用
-    的结果（回答信件）；否则作为事件信件（「迟到的回答改为事件」只在这里）。用户是否在等这封信随占用登记时记下的。
+    """交回占用 holder 的结局并释放它，唯一出口。会话还停在这项占用对应的挂起调用上、且给了 answer（那一种挂起调用的
+    回答信封）时作为那次调用的结果（回答信件）；否则作为事件信件（「迟到的回答改为事件」只在这里）。用户是否在等这封信随占用登记时记下的。
     按 key 幂等。"""
     hold = await _hold_in(s, session_id, holder)
     if hold is None:
@@ -122,7 +121,7 @@ async def deliver_in(
             session_id,
             kind=MailKind.ANSWER,
             content="",
-            answers={hold.call_id: AgentAnswered.of(answer).model_dump()},
+            answers={hold.call_id: answer.model_dump()},
             awaited=hold.awaited,
             dedupe_key=key,
         )

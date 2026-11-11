@@ -60,8 +60,8 @@ async def test_redacted_secret_arguments_exist_in_the_registered_tool_schemas(co
 
 
 async def test_deferred_tools_are_registered_under_their_table_names(container):
-    """挂起工具表（sessions.deferred）按名字查：工具改了名而表没跟上，挂起判断会悄悄失效。"""
-    from muliao.sessions.deferred import DEFERRED_TOOLS
+    """挂起工具表（sessions.pending）按名字查：工具改了名而表没跟上，挂起判断会悄悄失效。"""
+    from muliao.sessions.pending import DEFERRED_TOOLS
 
     names = set(session_tools(container))
     missing = set(DEFERRED_TOOLS) - names
@@ -69,7 +69,7 @@ async def test_deferred_tools_are_registered_under_their_table_names(container):
 
 
 async def test_ask_user_arguments_are_parsed_by_the_same_rules_as_the_tool(container):
-    """挂起的提问按解析得出问题认（deferred.deferred_call）：解析规则比工具宽，工具会拒绝的调用被中途打断后
+    """挂起的提问按解析得出问题认（pending.kind_of）：解析规则比工具宽，工具会拒绝的调用被中途打断后
     就会被当成挂起的提问（#563）。"""
     from muliao.sessions.questions import _AskArgs
 

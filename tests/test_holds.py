@@ -182,11 +182,11 @@ async def test_a_hold_registered_while_the_run_winds_down_is_cleared_by_the_stop
     session = await start(container, agent, "go")
     original = consumer_module.Consumer._stopped
 
-    async def hold_then_stop(self, run_id, session_id):  # noqa: ANN001, ANN202
+    async def hold_then_stop(self, run_id, session_id, current):  # noqa: ANN001, ANN202
         # 运行刚退出、停止事务之前：模拟退出途中提交的占用（如后台任务的启动）
         async with container.db.transaction() as s:
             await hold_in(s, session_id, "job:77", awaited=False)
-        return await original(self, run_id, session_id)
+        return await original(self, run_id, session_id, current)
 
     consumer_module.Consumer._stopped = hold_then_stop
     try:

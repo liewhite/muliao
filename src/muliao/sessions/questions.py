@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
@@ -89,7 +89,7 @@ _ASK_ARGS: TypeAdapter[_AskArgs] = TypeAdapter(_AskArgs)
 def questions_of(call: ToolCallPart) -> list[Question]:
     """一次 ask_user 调用里的问题，按工具参数的同一个 Questions 类型解析。参数可以不合法：被工具 schema 退回、交还
     模型重试的，运行中刚生成、还没校验的，或这一步中途被打断、从没校验过的（回复在工具执行前保存，#563）。这时
-    没有问题，这次调用不是提问（deferred.deferred_call）。收紧 Questions 的约束会让历史里仍挂着、已不合新约束的提问
+    没有问题，这次调用不是提问（pending.kind_of）。收紧 Questions 的约束会让历史里仍挂着、已不合新约束的提问
     变成普通调用。"""
     try:
         return _ASK_ARGS.validate_json(call.args_as_json_str()).questions
@@ -111,8 +111,9 @@ class UserAnswered(BaseModel):
         return self.result.model_dump()
 
     @staticmethod
-    def skipped(answered_other: bool) -> object:
-        """没等到回答就继续时的结果：这次回答了别的提问时是跳过了它，否则是用户发了新消息。"""
+    def skipped(given: Collection[object]) -> object:
+        """没等到回答就继续时的结果（given 是这次交回的别的回答）：这次回答了别的提问时是跳过了它，否则是用户发了新消息。"""
+        answered_other = any(isinstance(r, UserAnswered) for r in given)
         return (SKIPPED if answered_other else NOT_ANSWERED).model_dump()
 
     @staticmethod

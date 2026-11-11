@@ -9,7 +9,7 @@ from pydantic_ai import FunctionToolset, RunContext
 from muliao.agent_runtime.api import defer_call
 from muliao.errors import Conflict
 from muliao.platform.tooling import TOOL_MAX_RETRIES, Audience, RunScope
-from muliao.sessions.deferred import ASK_USER_KIND
+from muliao.sessions.pending import ASK_USER_KIND
 from muliao.sessions.questions import Questions
 
 NO_USER_WAITING = (

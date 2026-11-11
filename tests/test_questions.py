@@ -637,7 +637,7 @@ def test_an_answer_for_another_tool_than_the_pending_call_is_an_error():
     import pytest
     from pydantic_ai.messages import ToolCallPart
 
-    from muliao.sessions.deferred import AgentAnswer, AgentAnswered
+    from muliao.sessions.answers import AgentAnswer, AgentAnswered
     from muliao.sessions.pending import HandedOut, deferred_results
 
     call = ToolCallPart("ask_user", {"questions": QUESTIONS}, tool_call_id="c")
@@ -648,7 +648,7 @@ def test_an_answer_for_another_tool_than_the_pending_call_is_an_error():
 
 def test_an_answer_mailed_before_thread_calls_still_parses():
     # #251 之前的回答信件里带 thread 键：现在 thread 记在 thread_calls，旧键忽略
-    from muliao.sessions.deferred import AgentAnswer, AgentAnswered
+    from muliao.sessions.answers import AgentAnswer, AgentAnswered
 
     parsed = AgentAnswered.model_validate(
         {"tool": "ask_agent", "result": {"text": "hi", "attachments": [], "thread": "t"}}
@@ -660,7 +660,7 @@ def test_every_deferred_kind_has_its_envelope_in_call_result():
     # 回答信封的联合类型与种类表各写一处：成员必须一致，种类名就是信封的 tool
     from typing import get_args
 
-    from muliao.sessions.deferred import KINDS, CallResult
+    from muliao.sessions.pending import KINDS, CallResult
 
     (union, _) = get_args(CallResult)
     assert set(get_args(union)) == {k.answer for k in KINDS}
@@ -671,7 +671,7 @@ def test_an_ask_whose_arguments_were_rejected_has_no_questions():
     # 参数被工具 schema 退回的提问不是提问（transcript 按普通工具调用展示），解析不抛异常
     from pydantic_ai.messages import ToolCallPart
 
-    from muliao.sessions.deferred import questions_in
+    from muliao.sessions.pending import questions_in
 
     for args in ({"questions": []}, "{not json", {}, {"questions": QUESTIONS, "extra": 1}):
         assert questions_in(ToolCallPart("ask_user", args, tool_call_id="a")) == []
