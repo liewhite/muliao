@@ -13,6 +13,7 @@
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from typing import assert_never
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -64,6 +65,15 @@ class NewSession:
 
 
 @dataclass(frozen=True)
+class NewChat:
+    """用户在界面上新建会话：标题由这条消息推导（文字的第一行，只发了文件时用文件名）。"""
+
+    agent_id: str
+    # 这个会话自己的压缩阈值（token）；None 用全局默认
+    compaction_threshold_tokens: int | None = None
+
+
+@dataclass(frozen=True)
 class Inbound:
     """一封来信的内部形式：用户消息、cron 到点、外部事件、agent 委派，都是「把 content 投进某个会话的信箱」（sessions.mailbox）。
     会话领域之外只用三种入口各自的类型：别的领域的 SenderMail、界面的 UserMessage；委派由 Threads 在领域内部构造。
@@ -75,7 +85,7 @@ class Inbound:
     origin: Origin
     origin_ref: str | None
     content: str
-    session: "str | NewConversation | SessionKey | NewChat"
+    session: str | NewConversation | SessionKey | NewChat
     # 用户是否在等它的回答（处理它的运行结束时推送）
     awaited: bool
     # 随消息发送的文件 id（muliao.files.store）；只有用户在界面上发的消息会带
@@ -97,15 +107,6 @@ def _inbound_of_mail(mail: SenderMail) -> Inbound:
         session=mail.session,
         awaited=False,
     )
-
-
-@dataclass(frozen=True)
-class NewChat:
-    """用户在界面上新建会话：标题由这条消息推导（文字的第一行，只发了文件时用文件名）。"""
-
-    agent_id: str
-    # 这个会话自己的压缩阈值（token）；None 用全局默认
-    compaction_threshold_tokens: int | None = None
 
 
 @dataclass(frozen=True)
@@ -266,6 +267,8 @@ def receive_lane_of(command: Receive) -> str:
             return keyed_receive_lane(mail.origin, mail.origin_ref, agent_id)
         case NewConversation(id=session_id) | str(session_id):
             return receive_lane(session_id)
+        case other:
+            assert_never(other)
 
 
 async def receive_command_in(s: AsyncSession, mail: SenderMail) -> Receive:
@@ -316,6 +319,8 @@ async def receive_into(
                     title=_derived_title(inbound, attachments),
                     compaction_threshold_tokens=threshold,
                 )
+            case other:
+                assert_never(other)
         session = await create_session(s, origin=inbound.origin, origin_ref=inbound.origin_ref, spec=spec)
     session.updated_at = utcnow()
     mail = []
