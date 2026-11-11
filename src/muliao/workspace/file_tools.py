@@ -1,6 +1,6 @@
 """文件工具：read_file / write_file / edit_file / share_file。相对路径以 agent 工作目录为基准；读只拦平台的私有文件（非 admin），写只能写 agent 的可写路径
 （writable，防误操作不防故意，见架构文档）。组合进运行的是 tools.workspace_toolset，它在此之上加上 run_shell 与后台任务。edit_file 的定位与拼接规则在
-file_edit / syntax_edit。
+file_edit。
 """
 
 import functools
@@ -26,7 +26,6 @@ from muliao.platform.tool_views import Args, CodeBlock, ToolRender, ViewBlock, d
 from muliao.platform.tooling import TOOL_MAX_RETRIES, Access, RunScope, declared
 from muliao.workspace import file_edit
 from muliao.workspace.file_edit import numbered
-from muliao.workspace.syntax_edit import PatternEdit, language_of
 from muliao.workspace.writable import Confiner, reach
 
 log = logging.getLogger(__name__)
@@ -48,11 +47,9 @@ class TextEdit(BaseModel):
     start_line: int | None = Field(default=None, description="First line to replace (1-based).")
     end_line: int | None = Field(default=None, description="Last line to replace (inclusive).")
     anchor: str | None = Field(default=None, description="The whole text of line start_line.")
-    pattern: str | None = Field(default=None, description="ast-grep pattern matching the code to replace.")
     new_text: str = Field(description="Replacement text.")
     replace_all: bool = Field(
-        default=False,
-        description="Replace every occurrence (old_text) or match (pattern) instead of exactly one.",
+        default=False, description="Replace every occurrence of old_text instead of exactly one."
     )
 
 
@@ -95,7 +92,7 @@ _WRITE_RENDER = ToolRender[str](call=lambda a: [CodeBlock(title=a["path"], text=
 
 
 def _edit_call(a: Args) -> list[ViewBlock] | None:
-    """每处修改一个 diff：按原文定位的是原文 → 新文；按行号、按模式定位的看不到原文，标题写行号或模式，只显示新文。
+    """每处修改一个 diff：按原文定位的是原文 → 新文；按行号定位的看不到原文，标题写行号，只显示新文。
     缺定位方式或新文（会被退回）显示原文。"""
     edits: tuple[TextEdit, ...] = a["edits"]
     if not edits:
@@ -106,7 +103,6 @@ def _edit_call(a: Args) -> list[ViewBlock] | None:
                 old_text=a["old_text"],
                 start_line=a["start_line"],
                 end_line=a["end_line"],
-                pattern=a["pattern"],
                 new_text=a["new_text"],
             ),
         )
@@ -115,8 +111,6 @@ def _edit_call(a: Args) -> list[ViewBlock] | None:
         path = e.path or a["path"] or ""
         if e.old_text is not None:
             blocks.append(diff(path, e.old_text, e.new_text))
-        elif e.pattern is not None:
-            blocks.append(diff(f"{path} · pattern {e.pattern}", "", e.new_text))
         elif e.start_line is not None and e.end_line is not None:
             blocks.append(diff(f"{path} · lines {e.start_line}-{e.end_line}", "", e.new_text))
         else:
@@ -238,29 +232,19 @@ def file_toolset(
         start_line: int | None = None,
         end_line: int | None = None,
         anchor: str | None = None,
-        pattern: str | None = None,
         new_text: str | None = None,
         replace_all: bool = False,
         edits: tuple[TextEdit, ...] = (),
     ) -> str:
-        """Change a file: locate a block in exactly one of three ways and replace it with `new_text`.
+        """Change a file: locate a block in exactly one of two ways and replace it with `new_text`.
         - `old_text`: exact text that must occur exactly once (unless `replace_all`). Copy it from the file as it
           is now (without the line-number prefix of read_file's `cat -n` output), with enough surrounding lines to be unique.
         - `start_line` + `end_line` + `anchor`: whole lines start_line..end_line as numbered by read_file;
           `anchor` is the whole text of line start_line (not just its beginning), checked so that stale line numbers fail instead of
           changing the wrong lines. Good for replacing or deleting a long block without copying it.
-        - `pattern`: an ast-grep pattern for a source file (language from the extension): code where `$VAR`
-          matches one syntax node and `$$$VARS` any number of them, e.g. `def test_x` matches that whole Python
-          function (with its body), `function f($$$A) { $$$B }` a JavaScript one. It must match exactly one place
-          (unless `replace_all`); `new_text` may use its metavariables (`$VAR` becomes the matched code).
-          Only the matched code is replaced and the indentation in front of it stays; lines 2+ of `new_text`
-          get the match's indentation added, so indent them relative to its first line; a multi-line
-          `$$$VARS` is re-indented to where you put it (e.g. one level deeper inside a new `with`).
-          Deleting a match also removes its decorators / `export`, and its lines with the extra blank lines
-          left behind.
         To change several places in one call, in one file or in several files, pass `edits` instead: each edit
         changes its own `path` (or the top-level `path` when it has none); they are applied in order: `old_text`
-        and `pattern` are found in the file as the earlier edits left it, while line numbers and anchors always
+        is found in the file as the earlier edits left it, while line numbers and anchors always
         refer to the file before this call (as read_file showed it), in any order; a line range that overlaps an
         earlier edit to the same file is rejected. If any edit fails no file is written. On success each file
         gets `edited <path> (<n> replacements; now <total> lines); cat -n of the changed lines ...:` followed by
@@ -274,15 +258,14 @@ def file_toolset(
             end_line: Last line to replace (inclusive).
             anchor: The whole text of line start_line, not just its beginning (leading/trailing whitespace
                 ignored).
-            pattern: ast-grep pattern matching the code to replace.
             new_text: Replacement text; empty deletes the located text (omit when using `edits`).
-            replace_all: Replace every occurrence of `old_text` or every match of `pattern` (e.g. renaming a
-                variable) instead of exactly one (omit when using `edits`).
+            replace_all: Replace every occurrence of `old_text` (e.g. renaming a variable) instead of exactly
+                one (omit when using `edits`).
             edits: List of changes, each {new_text} plus one way to locate it (old_text,
-                start_line/end_line/anchor or pattern), optionally replace_all, and optionally its own path,
+                start_line/end_line/anchor), optionally replace_all, and optionally its own path,
                 applied in order (line numbers always refer to the file before this call).
         """
-        single = (old_text, start_line, end_line, anchor, pattern, new_text)
+        single = (old_text, start_line, end_line, anchor, new_text)
         if edits and (any(v is not None for v in single) or replace_all):
             raise InvalidInput("pass either one change (old_text/.../new_text) or edits, not both")
         if not edits:
@@ -296,7 +279,6 @@ def file_toolset(
                     start_line=start_line,
                     end_line=end_line,
                     anchor=anchor,
-                    pattern=pattern,
                     new_text=new_text,
                     replace_all=replace_all,
                 ),
@@ -611,23 +593,18 @@ class _Located:
     edit: TextEdit
 
     def locate(self, current: str, what: str, origin: file_edit.Origin) -> tuple[list[text_edit.Splice], int]:
-        return _change_of(self.target, self.edit).locate(current, what, origin)
+        return _change_of(self.edit).locate(current, what, origin)
 
 
-def _change_of(target: Path, e: TextEdit) -> file_edit.Edit:
+def _change_of(e: TextEdit) -> file_edit.Edit:
     """一处修改按它给的定位方式（恰好一种）换成对应的 Edit。"""
     lines = (e.start_line, e.end_line, e.anchor)
     if any(v is not None for v in lines) and None in lines:
         raise InvalidInput("start_line, end_line and anchor go together: give all three")
-    given = [e.old_text is not None, e.start_line is not None, e.pattern is not None]
-    if sum(given) != 1:
-        raise InvalidInput(
-            "locate the text in exactly one way: old_text, start_line/end_line/anchor, or pattern"
-        )
+    if (e.old_text is None) == (e.start_line is None):
+        raise InvalidInput("locate the text in exactly one way: old_text or start_line/end_line/anchor")
     if e.old_text is not None:
         return file_edit.Replace(e.old_text, e.new_text, e.replace_all)
-    if e.pattern is not None:
-        return PatternEdit(e.pattern, language_of(target), e.new_text, e.replace_all)
     if e.replace_all:
         raise InvalidInput("replace_all does not apply to a line range")
     assert e.start_line is not None and e.end_line is not None and e.anchor is not None

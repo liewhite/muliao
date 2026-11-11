@@ -584,43 +584,48 @@ async def test_write_into_a_read_only_copy_is_returned_to_the_model_with_the_rea
     assert (ro / "old.sh").read_text() == "echo 1\n"
 
 
-async def test_edit_file_locates_by_line_range_or_pattern_and_validates_the_locator(
-    container, make_agent, models
-):
+async def test_edit_file_locates_by_line_range_and_validates_the_locator(container, make_agent, models):
     me = await make_agent("alpha", model="tools")
-    code = "import os\n\n\ndef keep():\n    return 1\n\n\ndef drop():\n    return 2\n"
+    code = "import os\n\ndef keep():\n    return 1\n"
     outputs = await run_tools(
         container,
         models,
         me.id,
         [
             ("write_file", {"path": "m.py", "content": code}),
-            ("edit_file", {"path": "m.py", "pattern": "def drop", "new_text": ""}),
             (
                 "edit_file",
                 {
                     "path": "m.py",
-                    "start_line": 4,
-                    "end_line": 5,
+                    "start_line": 3,
+                    "end_line": 4,
                     "anchor": "def keep():",
                     "new_text": "K = 1",
                 },
             ),
             (
                 "edit_file",
-                {"path": "m.py", "start_line": 4, "end_line": 4, "anchor": "def keep():", "new_text": ""},
+                {"path": "m.py", "start_line": 3, "end_line": 3, "anchor": "def keep():", "new_text": ""},
             ),
             (
                 "edit_file",
                 {
                     "path": "m.py",
                     "edits": [
-                        {"start_line": 4, "end_line": 4, "anchor": "K = 1", "new_text": "K = 2"},
-                        {"pattern": "import $M", "new_text": "import $M, sys"},
+                        {"start_line": 3, "end_line": 3, "anchor": "K = 1", "new_text": "K = 2"},
+                        {"old_text": "import os", "new_text": "import os, sys"},
                     ],
                 },
             ),
-            ("edit_file", {"path": "m.py", "edits": [{"old_text": "K", "pattern": "K", "new_text": "x"}]}),
+            (
+                "edit_file",
+                {
+                    "path": "m.py",
+                    "edits": [
+                        {"old_text": "K", "start_line": 1, "end_line": 1, "anchor": "x", "new_text": "x"}
+                    ],
+                },
+            ),
             ("edit_file", {"path": "m.py", "start_line": 1, "new_text": "x"}),
             (
                 "edit_file",
@@ -639,31 +644,24 @@ async def test_edit_file_locates_by_line_range_or_pattern_and_validates_the_loca
                     "path": "m.py",
                     "edits": [
                         {"old_text": "K = 2", "new_text": "K = 3"},
-                        {"pattern": "def nothing", "new_text": ""},
+                        {"old_text": "nothing", "new_text": ""},
                     ],
                 },
             ),
-            ("write_file", {"path": "conf.toml", "content": "a = 1\n"}),
-            ("edit_file", {"path": "conf.toml", "pattern": "a = 1", "new_text": "a = 2"}),
+            ("edit_file", {"path": "m.py", "new_text": "x"}),
             ("read_file", {"path": "m.py"}),
         ],
     )
-    # 删掉函数连同它前面多出来的空行
-    assert "(1 replacement; now 5 lines)" in outputs[1]
-    assert "drop" not in outputs[1]
-    assert "(1 replacement; now 4 lines)" in outputs[2] and "     4\tK = 1" in outputs[2]
-    assert "anchor does not match line 4" in outputs[3] and "     4\tK = 1" in outputs[3]
-    assert "(2 replacements; now 4 lines)" in outputs[4]
-    assert "exactly one way" in outputs[5]
-    assert "go together" in outputs[6]
-    assert "replace_all does not apply to a line range" in outputs[7]
-    assert (
-        "edit 2 of 2" in outputs[8]
-        and "matches nothing" in outputs[8]
-        and "nothing was written" in outputs[8]
-    )
-    assert "extension '.toml'" in outputs[10]
-    assert outputs[11] == "     1\timport os, sys\n     2\t\n     3\t\n     4\tK = 2"
+    assert "(1 replacement; now 3 lines)" in outputs[1] and "     3\tK = 1" in outputs[1]
+    assert "anchor does not match line 3" in outputs[2] and "     3\tK = 1" in outputs[2]
+    assert "(2 replacements; now 3 lines)" in outputs[3]
+    assert "exactly one way" in outputs[4]
+    assert "go together" in outputs[5]
+    assert "replace_all does not apply to a line range" in outputs[6]
+    assert "edit 2 of 2" in outputs[7] and "must occur exactly once" in outputs[7]
+    assert "nothing was written" in outputs[7]
+    assert "exactly one way" in outputs[8]
+    assert outputs[9] == "     1\timport os, sys\n     2\t\n     3\tK = 2"
 
 
 async def test_read_file_reads_several_parts_with_line_numbers_and_reports_bad_parts_inline(
