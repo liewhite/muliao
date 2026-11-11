@@ -47,62 +47,6 @@
         }
       }
     },
-    "/api/hooks/{name}": {
-      "post": {
-        "summary": "Hook",
-        "description": "外部事件入口：Authorization: Bearer <token>。不带 session_id 时按触发器的投递目标投递（默认新建会话）；带上之前\n返回的则以该会话为默认目标继续。返回的 session_id 是这次开出或续写的第一个会话（触发器的 last_session_id 由同一次投递的收件方问出，会话还在时是它）；\n整次只投进了 issue、或要续写的会话还没建出来时为 null。第一个 `@route` 行之前没有内容时，带来的那个会话这次没收到\n东西，返回的是后面各段开出或续写的第一个会话（没有则为 null）。",
-        "operationId": "hook_api_hooks__name__post",
-        "parameters": [
-          {
-            "name": "name",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Name"
-            }
-          },
-          {
-            "name": "session_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Session Id"
-            }
-          }
-        ],
-        "responses": {
-          "202": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/FiredOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/agent-defaults": {
       "get": {
         "summary": "Agent Defaults",
@@ -2517,25 +2461,6 @@
         "x-reads": []
       }
     },
-    "/api/trigger-routes/help": {
-      "get": {
-        "summary": "Route Help",
-        "operationId": "route_help_api_trigger_routes_help_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RouteHelpOut"
-                }
-              }
-            }
-          }
-        },
-        "x-reads": []
-      }
-    },
     "/api/triggers": {
       "get": {
         "summary": "List Triggers",
@@ -2570,9 +2495,6 @@
                         "$ref": "#/components/schemas/OnceTriggerOut"
                       },
                       {
-                        "$ref": "#/components/schemas/WebhookTriggerOut"
-                      },
-                      {
                         "$ref": "#/components/schemas/StreamTriggerOut"
                       }
                     ],
@@ -2581,7 +2503,6 @@
                       "mapping": {
                         "schedule": "#/components/schemas/ScheduleTriggerOut",
                         "once": "#/components/schemas/OnceTriggerOut",
-                        "webhook": "#/components/schemas/WebhookTriggerOut",
                         "stream": "#/components/schemas/StreamTriggerOut"
                       }
                     }
@@ -2625,9 +2546,6 @@
                     "$ref": "#/components/schemas/OnceTriggerCreate"
                   },
                   {
-                    "$ref": "#/components/schemas/WebhookTriggerCreate"
-                  },
-                  {
                     "$ref": "#/components/schemas/StreamTriggerCreate"
                   }
                 ],
@@ -2636,7 +2554,6 @@
                   "mapping": {
                     "schedule": "#/components/schemas/ScheduleTriggerCreate",
                     "once": "#/components/schemas/OnceTriggerCreate",
-                    "webhook": "#/components/schemas/WebhookTriggerCreate",
                     "stream": "#/components/schemas/StreamTriggerCreate"
                   }
                 },
@@ -2659,9 +2576,6 @@
                       "$ref": "#/components/schemas/OnceTriggerOut"
                     },
                     {
-                      "$ref": "#/components/schemas/WebhookTriggerOut"
-                    },
-                    {
                       "$ref": "#/components/schemas/StreamTriggerOut"
                     }
                   ],
@@ -2670,7 +2584,6 @@
                     "mapping": {
                       "schedule": "#/components/schemas/ScheduleTriggerOut",
                       "once": "#/components/schemas/OnceTriggerOut",
-                      "webhook": "#/components/schemas/WebhookTriggerOut",
                       "stream": "#/components/schemas/StreamTriggerOut"
                     }
                   },
@@ -2731,9 +2644,6 @@
                       "$ref": "#/components/schemas/OnceTriggerOut"
                     },
                     {
-                      "$ref": "#/components/schemas/WebhookTriggerOut"
-                    },
-                    {
                       "$ref": "#/components/schemas/StreamTriggerOut"
                     }
                   ],
@@ -2742,7 +2652,6 @@
                     "mapping": {
                       "schedule": "#/components/schemas/ScheduleTriggerOut",
                       "once": "#/components/schemas/OnceTriggerOut",
-                      "webhook": "#/components/schemas/WebhookTriggerOut",
                       "stream": "#/components/schemas/StreamTriggerOut"
                     }
                   },
@@ -2817,46 +2726,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/FiredOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/triggers/{trigger_id}/webhook/token": {
-      "post": {
-        "summary": "Generate Token",
-        "description": "生成（或重新生成）webhook 的 token；只能由用户在这里生成，旧 token 立即失效。",
-        "operationId": "generate_token_api_triggers__trigger_id__webhook_token_post",
-        "parameters": [
-          {
-            "name": "trigger_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "title": "Trigger Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TokenOut"
                 }
               }
             }
@@ -3492,9 +3361,6 @@
                     },
                     {
                       "$ref": "#/components/schemas/StoppedActivity"
-                    },
-                    {
-                      "$ref": "#/components/schemas/EventPostedActivity"
                     }
                   ],
                   "discriminator": {
@@ -3512,8 +3378,7 @@
                       "dependency": "#/components/schemas/DependencyFinishedActivity",
                       "run_failed": "#/components/schemas/RunFailureActivity",
                       "unsettled": "#/components/schemas/UnsettledActivity",
-                      "stopped": "#/components/schemas/StoppedActivity",
-                      "event": "#/components/schemas/EventPostedActivity"
+                      "stopped": "#/components/schemas/StoppedActivity"
                     }
                   },
                   "title": "Response Comment Issue Api Issues  Issue Id  Comments Post"
@@ -3804,7 +3669,7 @@
     "/api/features": {
       "get": {
         "summary": "Features",
-        "description": "服务端配置决定的界面行为：可选能力与界面要展示的默认值。",
+        "description": "服务端配置决定的界面行为：可选能力。",
         "operationId": "features_api_features_get",
         "responses": {
           "200": {
@@ -6072,65 +5937,10 @@
         ],
         "title": "EventMailOut"
       },
-      "EventPostedActivity": {
-        "properties": {
-          "id": {
-            "type": "integer",
-            "title": "Id"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Created At"
-          },
-          "actor": {
-            "type": "string",
-            "title": "Actor"
-          },
-          "session_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Session Id"
-          },
-          "kind": {
-            "type": "string",
-            "const": "event",
-            "title": "Kind",
-            "default": "event"
-          },
-          "body": {
-            "type": "string",
-            "title": "Body"
-          },
-          "change": {
-            "$ref": "#/components/schemas/Arrival"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "id",
-          "created_at",
-          "actor",
-          "session_id",
-          "kind",
-          "body",
-          "change"
-        ],
-        "title": "EventPostedActivity",
-        "description": "投到这个 issue 的一个事件（触发器的投递目标 issue:N）：actor 是事件来源所属的 agent。"
-      },
       "FaultSource": {
         "type": "string",
         "enum": [
           "precheck",
-          "route",
           "stream"
         ],
         "title": "FaultSource",
@@ -6141,21 +5951,11 @@
           "transcription": {
             "type": "boolean",
             "title": "Transcription"
-          },
-          "compaction_threshold_tokens": {
-            "type": "integer",
-            "title": "Compaction Threshold Tokens"
-          },
-          "min_compaction_threshold_tokens": {
-            "type": "integer",
-            "title": "Min Compaction Threshold Tokens"
           }
         },
         "type": "object",
         "required": [
-          "transcription",
-          "compaction_threshold_tokens",
-          "min_compaction_threshold_tokens"
+          "transcription"
         ],
         "title": "FeaturesOut"
       },
@@ -6463,9 +6263,6 @@
                 },
                 {
                   "$ref": "#/components/schemas/StoppedActivity"
-                },
-                {
-                  "$ref": "#/components/schemas/EventPostedActivity"
                 }
               ],
               "discriminator": {
@@ -6477,7 +6274,6 @@
                   "dependency": "#/components/schemas/DependencyFinishedActivity",
                   "depends_on": "#/components/schemas/DependsOnChangedActivity",
                   "description": "#/components/schemas/DescriptionEditedActivity",
-                  "event": "#/components/schemas/EventPostedActivity",
                   "owner": "#/components/schemas/OwnerChangedActivity",
                   "priority": "#/components/schemas/PriorityChangedActivity",
                   "run_failed": "#/components/schemas/RunFailureActivity",
@@ -7799,17 +7595,6 @@
               }
             ]
           },
-          "route": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Route"
-          },
           "kind": {
             "type": "string",
             "const": "once",
@@ -7860,10 +7645,6 @@
                 "type": "null"
               }
             ]
-          },
-          "route": {
-            "type": "string",
-            "title": "Route"
           },
           "last_checked_at": {
             "anyOf": [
@@ -7950,7 +7731,6 @@
           "prompt",
           "enabled",
           "precheck",
-          "route",
           "last_checked_at",
           "last_fired_at",
           "last_session_id",
@@ -8588,19 +8368,6 @@
         "title": "RoleUpdate",
         "description": "只改给出的字段：界面只提交用户改过的，编辑期间 agent 改了别的字段不会被旧值盖掉。"
       },
-      "RouteHelpOut": {
-        "properties": {
-          "address_help": {
-            "type": "string",
-            "title": "Address Help"
-          }
-        },
-        "type": "object",
-        "required": [
-          "address_help"
-        ],
-        "title": "RouteHelpOut"
-      },
       "RunDeltaEvent": {
         "properties": {
           "type": {
@@ -8834,17 +8601,6 @@
               }
             ]
           },
-          "route": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Route"
-          },
           "kind": {
             "type": "string",
             "const": "schedule",
@@ -8895,10 +8651,6 @@
                 "type": "null"
               }
             ]
-          },
-          "route": {
-            "type": "string",
-            "title": "Route"
           },
           "last_checked_at": {
             "anyOf": [
@@ -8985,7 +8737,6 @@
           "prompt",
           "enabled",
           "precheck",
-          "route",
           "last_checked_at",
           "last_fired_at",
           "last_session_id",
@@ -9348,17 +9099,6 @@
             ],
             "title": "Thread"
           },
-          "compaction_threshold_tokens": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Compaction Threshold Tokens"
-          },
           "unread": {
             "type": "boolean",
             "title": "Unread"
@@ -9385,7 +9125,6 @@
           "origin",
           "parent_session_id",
           "thread",
-          "compaction_threshold_tokens",
           "unread",
           "created_at",
           "updated_at",
@@ -9458,17 +9197,6 @@
             ],
             "title": "Thread"
           },
-          "compaction_threshold_tokens": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Compaction Threshold Tokens"
-          },
           "unread": {
             "type": "boolean",
             "title": "Unread"
@@ -9492,7 +9220,6 @@
           "origin",
           "parent_session_id",
           "thread",
-          "compaction_threshold_tokens",
           "unread",
           "created_at",
           "updated_at"
@@ -9723,17 +9450,6 @@
             "type": "array",
             "title": "Attachments",
             "default": []
-          },
-          "compaction_threshold_tokens": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Compaction Threshold Tokens"
           }
         },
         "type": "object",
@@ -9969,17 +9685,6 @@
               }
             ]
           },
-          "route": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Route"
-          },
           "kind": {
             "type": "string",
             "const": "stream",
@@ -10030,10 +9735,6 @@
                 "type": "null"
               }
             ]
-          },
-          "route": {
-            "type": "string",
-            "title": "Route"
           },
           "last_checked_at": {
             "anyOf": [
@@ -10120,7 +9821,6 @@
           "prompt",
           "enabled",
           "precheck",
-          "route",
           "last_checked_at",
           "last_fired_at",
           "last_session_id",
@@ -10463,19 +10163,6 @@
         ],
         "title": "TitleChangedActivity"
       },
-      "TokenOut": {
-        "properties": {
-          "token": {
-            "type": "string",
-            "title": "Token"
-          }
-        },
-        "type": "object",
-        "required": [
-          "token"
-        ],
-        "title": "TokenOut"
-      },
       "ToolOut": {
         "properties": {
           "name": {
@@ -10525,17 +10212,6 @@
           "error": {
             "type": "string",
             "title": "Error"
-          },
-          "address": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Address"
           }
         },
         "additionalProperties": false,
@@ -10545,7 +10221,7 @@
           "error"
         ],
         "title": "TriggerFault",
-        "description": "一条出错：来源、原因；写错的投递地址（且只有它）带着那个地址（每个地址各一条）。"
+        "description": "一条出错：来源、原因。"
       },
       "TriggerFields": {
         "properties": {
@@ -10592,23 +10268,12 @@
                 "type": "null"
               }
             ]
-          },
-          "route": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Route"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "title": "TriggerFields",
-        "description": "触发器能改的字段（局部修改与它的 base 共用）。precheck 给出 null 表示去掉前置检查，不出现表示不变；route 给 `new`\n回到默认。"
+        "description": "触发器能改的字段（局部修改与它的 base 共用）。precheck 给出 null 表示去掉前置检查，不出现表示不变。"
       },
       "TriggerKindOut": {
         "properties": {
@@ -10617,7 +10282,6 @@
             "enum": [
               "schedule",
               "once",
-              "webhook",
               "stream"
             ],
             "title": "Name"
@@ -10700,17 +10364,6 @@
                 "type": "null"
               }
             ]
-          },
-          "route": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Route"
           },
           "base": {
             "anyOf": [
@@ -11020,219 +10673,6 @@
         ],
         "title": "WakeWait",
         "description": "在等自己约的到点唤醒（wake_me）。"
-      },
-      "WebhookConfig": {
-        "properties": {},
-        "additionalProperties": false,
-        "type": "object",
-        "title": "WebhookConfig",
-        "description": "webhook 没有配置项。"
-      },
-      "WebhookStatus": {
-        "properties": {
-          "url": {
-            "type": "string",
-            "title": "Url"
-          },
-          "has_token": {
-            "type": "boolean",
-            "title": "Has Token"
-          }
-        },
-        "type": "object",
-        "required": [
-          "url",
-          "has_token"
-        ],
-        "title": "WebhookStatus"
-      },
-      "WebhookTriggerCreate": {
-        "properties": {
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
-          "agent_id": {
-            "type": "string",
-            "title": "Agent Id"
-          },
-          "prompt": {
-            "type": "string",
-            "title": "Prompt"
-          },
-          "precheck": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Precheck"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "route": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Route"
-          },
-          "kind": {
-            "type": "string",
-            "const": "webhook",
-            "title": "Kind"
-          },
-          "config": {
-            "$ref": "#/components/schemas/WebhookConfig"
-          }
-        },
-        "type": "object",
-        "required": [
-          "name",
-          "agent_id",
-          "prompt",
-          "kind",
-          "config"
-        ],
-        "title": "WebhookTriggerCreate"
-      },
-      "WebhookTriggerOut": {
-        "properties": {
-          "id": {
-            "type": "integer",
-            "title": "Id"
-          },
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
-          "agent_id": {
-            "type": "string",
-            "title": "Agent Id"
-          },
-          "prompt": {
-            "type": "string",
-            "title": "Prompt"
-          },
-          "enabled": {
-            "type": "boolean",
-            "title": "Enabled"
-          },
-          "precheck": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Precheck"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "route": {
-            "type": "string",
-            "title": "Route"
-          },
-          "last_checked_at": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Last Checked At"
-          },
-          "last_fired_at": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Last Fired At"
-          },
-          "last_session_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Last Session Id"
-          },
-          "disabled_reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Disabled Reason"
-          },
-          "faults": {
-            "items": {
-              "$ref": "#/components/schemas/TriggerFault"
-            },
-            "type": "array",
-            "title": "Faults"
-          },
-          "finished_at": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Finished At"
-          },
-          "kind": {
-            "type": "string",
-            "const": "webhook",
-            "title": "Kind"
-          },
-          "config": {
-            "$ref": "#/components/schemas/WebhookConfig"
-          },
-          "status": {
-            "$ref": "#/components/schemas/WebhookStatus"
-          }
-        },
-        "type": "object",
-        "required": [
-          "id",
-          "name",
-          "agent_id",
-          "prompt",
-          "enabled",
-          "precheck",
-          "route",
-          "last_checked_at",
-          "last_fired_at",
-          "last_session_id",
-          "disabled_reason",
-          "faults",
-          "finished_at",
-          "kind",
-          "config",
-          "status"
-        ],
-        "title": "WebhookTriggerOut"
       },
       "WorkState": {
         "type": "string",

@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from muliao.agents.api import USER, AgentNames
-from muliao.issues.activity import AssigneeChanged, Commented, Created, EventPosted, Happening, StatusChanged
+from muliao.issues.activity import AssigneeChanged, Commented, Created, Happening, StatusChanged
 from muliao.issues.tables import IssueStatus
 from muliao.sessions.api import WorkState
 
@@ -118,8 +118,8 @@ def cannot_stop_into(status: IssueStatus, with_message: bool) -> str | None:
 
 
 def from_outside(actor: str, happened: Sequence[Happening]) -> bool:
-    """这次的动态里有外来的输入（用户的评论、投到 issue 的事件）：没有 agent 接手时也唤起 owner（见 recipient）。"""
-    return any(isinstance(a, EventPosted) or (actor == USER and isinstance(a, Commented)) for a in happened)
+    """这次的动态里有外来的输入（用户的评论）：没有 agent 接手时也唤起 owner（见 recipient）。"""
+    return actor == USER and any(isinstance(a, Commented) for a in happened)
 
 
 def handed_to_user(actor: str, issue_assignee: str | None, happened: Sequence[Happening]) -> str | None:

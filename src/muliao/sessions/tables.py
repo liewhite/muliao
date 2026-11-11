@@ -29,8 +29,6 @@ class Session(Base):
         ForeignKey("sessions.id", ondelete="SET NULL", name="fk_sessions_parent_session_id"), index=True
     )
     thread: Mapped[str | None] = mapped_column(String(100))
-    # 建会话时给的压缩阈值（token）；None 用全局默认，取值规则只在 sessions.compaction.Compactor.threshold_of
-    compaction_threshold_tokens: Mapped[int | None]
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
 

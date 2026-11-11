@@ -1,7 +1,7 @@
 """触发器的前置检查：触发前先跑一条便宜、确定性的命令，只有真有事才调用 agent（所有触发方式共用）。
 
 约定（命令在该 agent 的工作目录里用 bash -o pipefail 执行，环境与 run_shell 相同，可按 key 注入 secret；stdin 是原始事件内容：
-webhook 的请求体，定时与手动触发为空）。退出码 0 时按 fire_when 决定（decide）：
+流式命令的输出行，定时与手动触发为空）。退出码 0 时按 fire_when 决定（decide）：
 - output（默认）：stdout 非空就触发，stdout 作为事件内容交给 agent（替换原始事件，可以借此过滤、裁剪）；为空不触发。
   命令可以把游标（如上次读到的消息 id）存在工作目录里，自己做增量。
 - changed：与上一次的输出逐字比较，变了才触发，交给 agent 的是差异加完整输出；命令只需打印当前状态，上一次的输出
@@ -48,7 +48,7 @@ class Precheck(BaseModel):
 
 
 class PrecheckFailed(ScriptFailed):
-    """前置检查本身失败。原因给用户与 agent 看（可能含脚本的 stderr），不交给 webhook 的外部调用方。"""
+    """前置检查本身失败。原因给用户与 agent 看（可能含脚本的 stderr）。"""
 
 
 @dataclass(frozen=True)

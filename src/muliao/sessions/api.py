@@ -2,8 +2,7 @@
 
 - 来信：界面的 UserMessage 经 SessionService.receive；别的领域的 SenderMail 由发送方在自己的事务里 receive_command_in（校验来信，结果是投得进 Accepted：定向命令 Receive，在同一事务 send_in，
   与之后问忙不忙的句柄 Recipient；或投不进 Refused：原因 Refusal）；目标会话可以按发送方
-  定位（SessionKey），keyed_session_in 查一个、keyed_sessions_among 查一批这样的会话；发送方只知道自己、不知道投给哪个 agent 时，
-  句柄是 ToSender（它开出的全部按 key 定位的会话）；
+  定位（SessionKey），keyed_session_in 查一个、keyed_sessions_among 查一批这样的会话；
 - 后台任务：SessionWork.hold（在会话领域自己的事务里登记占用），hold_registered_in；运行中检查的间隔规则 check_interval / CheckBeats；结局与运行中检查经定向命令
   WorkEnded / WorkCheckIn（sessions.events）；
 - HTTP 层用的会话门面（SessionService：会话的读写、停止、手动压缩）；别的领域停止会话经端口 StopSession（结果 Halted），返回时
@@ -15,11 +14,10 @@
 - 会话 lane 上的任务种类（RUN_TASK、COMPACTION_TASK：HTTP 层把各领域的任务种类组成接口里的 TaskKind）。
 """
 
-from muliao.config import MIN_COMPACTION_THRESHOLD_TOKENS
 from muliao.sessions.activity import RecipientState, SessionActivity, WorkState
 from muliao.sessions.approvals import Choice as ApprovalChoice
 from muliao.sessions.assembly import SessionDomain, SessionPorts
-from muliao.sessions.events import RECIPIENT, NewConversation, Recipient, SenderMail, SessionKey, ToSender
+from muliao.sessions.events import NewConversation, Recipient, SenderMail, SessionKey, ToSession
 from muliao.sessions.halt import Halted, StopSession
 from muliao.sessions.holds import registered_in as hold_registered_in
 from muliao.sessions.inbound import (
@@ -28,7 +26,6 @@ from muliao.sessions.inbound import (
     Refusal,
     Refused,
     UserMessage,
-    agent_refusal_in,
     receive_command_in,
 )
 from muliao.sessions.info import SessionInfo, keyed_session_in, keyed_sessions_among, session_in
@@ -57,7 +54,6 @@ from muliao.sessions.work import CheckBeats, SessionWork, check_interval
 
 __all__ = [
     "COMPACTION_TASK",
-    "MIN_COMPACTION_THRESHOLD_TOKENS",
     "RUN_TASK",
     "OWN_NOTES",
     "Origin",
@@ -108,14 +104,12 @@ __all__ = [
     "keyed_session_in",
     "keyed_sessions_among",
     "receive_command_in",
-    "agent_refusal_in",
     "Accepted",
     "Refused",
     "Refusal",
     "Recipient",
-    "RECIPIENT",
     "RecipientState",
-    "ToSender",
+    "ToSession",
     "SessionWork",
     "check_interval",
     "CheckBeats",

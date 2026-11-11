@@ -14,8 +14,7 @@
 - stderr 逐块脱敏后追加进工作目录下的 trigger-logs/<名称>.stderr.log（与后台任务共用 platform.output；每次启动前
   超过 1 MiB 就轮换一份 .1），agent 可以自己读。
 - 事件按 debounce 窗口合并：第一行到达后再等 debounce_seconds，期间到达的一起成为一次触发，事件内容是这些行
-  （以换行分隔）。`@route` 行按到达顺序给之后的行定目标（跨批次保持，与把整条流当一段文本相同，_Pending），
-  分段与同一目标的合并在投递时做（router.plan_in）。上一次触发的收件方还没做完（previous_fire_state_in，与定时触发同一个定义）时事件排队、不重叠，
+  （以换行分隔）。上一次触发开出的会话还没做完（previous_fire_state_in，与定时触发同一个定义）时事件排队、不重叠，
   它结束后合并投递；挡路的会话在等待（可能永远等不到，如没人回答的提问）时通知用户一次（这一份托管进程里每个挡路
   会话一次）。排队的事件以事件上限为界：排满了就不再读命令的输出，管道写满后命令自己阻塞——不丢、不重叠，内存与
   并行会话都有界。单行超过事件上限的丢弃并记日志。
@@ -57,7 +56,6 @@ from muliao.triggers.service import (
     set_state,
 )
 from muliao.triggers.tables import Trigger
-from muliao.triggers.targets import route_header, route_line
 from muliao.workspace.api import AgentCommands
 
 log = logging.getLogger(__name__)
@@ -108,7 +106,7 @@ class StreamKind:
         "it runs), disable and re-enable it; status.running_since is null until the new process has started. "
         "Lines arriving within debounce_seconds of "
         "the first one fire together (one conversation, the lines are the event); while the conversation the "
-        "previous firing went to (for an `issue:<N>` route, any agent's conversation on that issue) is still busy, "
+        "previous firing started is still busy, "
         "events queue and are delivered together once it is done. stderr goes to "
         f"{LOG_DIR}/<name>.stderr.log in the workspace. Queued events are lost on a restart, so the command handles "
         "reconnects, dedup and cursors itself; read skill triggers before writing one."
@@ -162,56 +160,39 @@ class _Spec:
 
 @dataclass
 class _Pending:
-    """排队等投递的事件（只在内存里）：命令输出的原行（含 `@route` 行），以事件上限为界：已有内容、再加一行会超过上限时
-    读取方等着，命令的输出留在管道里（第一行内容总是收下，所以一批最多是上限再加补在前面的一行 `@route`）。
-
-    `@route` 行按到达顺序给后面的行定目标，这个状态跨批次保持：取走一批时，最近的地址补成下一批的第一行，整条流的
-    分段因此与把它当一段文本时相同，不取决于在哪里分批。连着的 `@route` 行只留最后一个，一批末尾的 `@route` 行不进这一批
-    （它带到下一批）：后面没有内容的地址不进事件、不校验，只有 `@route` 行也不会把队列撑大。"""
+    """排队等投递的事件（只在内存里）：命令输出的行，以事件上限为界：已有内容、再加一行会超过上限时读取方等着，
+    命令的输出留在管道里（第一行总是收下）。"""
 
     max_bytes: int
-    # 最近一个 `@route` 行的地址（None 为默认目标）
-    address: str | None = None
-    # 这一批的行、其中内容行（不含 `@route` 行）的个数、合成文本的字节数
+    # 这一批的行与合成文本的字节数
     lines: list[str] = field(default_factory=list)
-    content: int = 0
     size: int = 0
-    # 这一批第一行内容到达的时间（anyio 时钟），debounce 从它算起
+    # 这一批第一行到达的时间（anyio 时钟），debounce 从它算起
     first_at: float = 0.0
     changed: asyncio.Event = field(default_factory=asyncio.Event)
 
     async def put(self, line: str) -> None:
         n = len(line.encode()) + 1
-        while self.content and self.size + n > self.max_bytes:
+        while self.lines and self.size + n > self.max_bytes:
             self.changed.clear()
             await self.changed.wait()
-        if (address := route_line(line)) is not None:
-            self.address = address
-            if self.lines and route_line(self.lines[-1]) is not None:
-                self.size -= len(self.lines.pop().encode()) + 1
-        else:
-            if not self.content:
-                self.first_at = anyio.current_time()
-            self.content += 1
+        if not self.lines:
+            self.first_at = anyio.current_time()
         self.lines.append(line)
         self.size += n
         self.changed.set()
 
     async def ready(self, debounce: float) -> None:
-        """等到有内容、且第一行内容到达后过了 debounce 秒。"""
-        while not self.content:
+        """等到有内容、且第一行到达后过了 debounce 秒。"""
+        while not self.lines:
             self.changed.clear()
             await self.changed.wait()
         await anyio.sleep(max(0.0, self.first_at + debounce - anyio.current_time()))
 
     def take(self) -> tuple[str, int]:
-        """取出这一批：(事件文本, 内容行数)。最近的 `@route` 地址补成下一批的第一行，继续给之后的行定目标。"""
-        lines = self.lines
-        if lines and route_line(lines[-1]) is not None:
-            lines = lines[:-1]
-        batch = ("\n".join(lines), self.content)
-        self.lines = [] if self.address is None else [route_header(self.address)]
-        self.content, self.size = 0, sum(len(x.encode()) + 1 for x in self.lines)
+        """取出这一批：(事件文本, 行数)。"""
+        batch = ("\n".join(self.lines), len(self.lines))
+        self.lines, self.size = [], 0
         self.changed.set()
         return batch
 
@@ -400,7 +381,7 @@ class StreamRunner:
         while True:
             await pending.ready(config.debounce_seconds)
             try:
-                await self._wait_previous(spec, pending.content, notified)
+                await self._wait_previous(spec, len(pending.lines), notified)
             except Exception:
                 # 契约之外的失败（如数据库暂时不可用）：事件留在队列里，稍后再试，不拖垮进程的监督
                 log.exception(
@@ -419,7 +400,7 @@ class StreamRunner:
                 await anyio.sleep(self._busy_poll_seconds)
 
     async def _wait_previous(self, spec: _Spec, queued: int, notified: list[str]) -> None:
-        """上一次触发的收件方还没做完时等着（事件继续排队，排满后命令阻塞）；挡路的会话在等待时通知用户一次。"""
+        """上一次触发开出的会话还没做完时等着（事件继续排队，排满后命令阻塞）；挡路的会话在等待时通知用户一次。"""
         while True:
             async with self._db.transaction() as s:
                 trigger = await s.get(Trigger, spec.trigger_id)

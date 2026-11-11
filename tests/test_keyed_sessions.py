@@ -94,7 +94,7 @@ async def test_a_keyed_receive_command_round_trips(container, make_agent):
 
 @pytest.mark.parametrize(
     "target",
-    ["s-1", NewConversation(id="s-2", agent_id="a", title="t"), SessionKey(agent_id="a", title="t")],
+    [NewConversation(id="s-2", agent_id="a", title="t"), SessionKey(agent_id="a", title="t")],
 )
 def test_every_receive_target_survives_the_task_payload(target):
     command = Receive(mail=SenderMail(sender=TriggerOrigin(trigger_id=1), content="x", session=target))

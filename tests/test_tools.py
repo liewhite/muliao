@@ -16,10 +16,9 @@ from pydantic_ai.models.function import AgentInfo
 from pydantic_ai.profiles import ModelProfile
 
 from muliao.agents.api import AgentPatch, McpTransport, mcp_config
-from muliao.agents.kinds import StoredKind
 from muliao.errors import InvalidInput
 from muliao.sessions.api import Origin
-from tests.conftest import login, session_tools, share
+from tests.conftest import session_tools, share
 from tests.scripted import scripted
 from tests.test_flow import drain, start, tool_returns
 
@@ -137,9 +136,7 @@ async def test_agent_pauses_trigger(container, make_agent, models):
     assert not (await container.triggers.get_by_name("daily")).enabled
 
 
-async def test_agent_creates_webhook_but_only_the_user_can_issue_its_token(
-    client, container, make_agent, models
-):
+async def test_agent_lists_trigger_kinds_and_sees_config_errors(container, make_agent, models):
     me = await make_agent("manager", model="tools", roles=["admin"])
     outputs = await run_tools(
         container,
@@ -147,7 +144,6 @@ async def test_agent_creates_webhook_but_only_the_user_can_issue_its_token(
         me.id,
         [
             ("trigger_kinds", {}),
-            ("trigger_create", {"name": "github", "kind": "webhook", "prompt": "Triage it.", "config": {}}),
             (
                 "trigger_create",
                 {"name": "daily", "kind": "schedule", "prompt": "Report.", "config": {"cron": "bad"}},
@@ -155,21 +151,8 @@ async def test_agent_creates_webhook_but_only_the_user_can_issue_its_token(
         ],
     )
 
-    assert "schedule" in outputs[0] and "webhook" in outputs[0]
-    assert "http://test/api/hooks/github" in outputs[1] and '"has_token":false' in outputs[1]
-    assert "invalid cron expression" in outputs[2]
-    # 没有 token 时收不到事件；用户在界面上生成后才能用，token 不经过 agent 与 vault
-    await login(client)
-    assert (
-        await client.post("/api/hooks/github", content="x", headers={"Authorization": "Bearer x"})
-    ).status_code == 401
-    trigger = await container.triggers.get_by_name("github")
-    token = (await client.post(f"/api/triggers/{trigger.id}/webhook/token")).json()["token"]
-    resp = await client.post(
-        "/api/hooks/github", content="opened", headers={"Authorization": f"Bearer {token}"}
-    )
-    assert resp.status_code == 202
-    assert (await container.assets.snapshot()).of_kind(StoredKind.SECRET) == []
+    assert "schedule" in outputs[0] and "stream" in outputs[0] and "webhook" not in outputs[0]
+    assert "invalid cron expression" in outputs[1]
 
 
 async def test_agent_stores_a_secret_as_an_encrypted_file_of_its_own(container, make_agent, models):

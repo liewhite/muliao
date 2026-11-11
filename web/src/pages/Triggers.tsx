@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
-import { Alert, Button, Card, Chip, Disclosure, Modal, toast } from '@heroui/react'
-import { Archive, Copy, History, KeyRound, Pencil, Play, Trash2 } from 'lucide-react'
+import { Button, Card, Chip, Disclosure, Modal, toast } from '@heroui/react'
+import { Archive, History, Pencil, Play, Trash2 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { useReturnState } from '../nav'
 import {
@@ -33,7 +33,6 @@ import {
   TextInput,
   ToggleSwitch,
   CardGrid,
-  copyText,
   formatTime,
   useAction,
   useAgentName,
@@ -41,9 +40,6 @@ import {
   useConfirm,
 } from '../ui'
 import { useLoad } from '../load'
-
-/** 某种方式的触发器：收窄后 config 与 status 都是这种方式的类型 */
-type TriggerOf<K extends TriggerKindName> = Extract<Trigger, { kind: K }>
 
 /** kind 与它的配置成对出现，形状同新建请求（有服务端默认值的配置项可省，读到的配置也合这个形状），编辑器按 kind 收窄 */
 type KindConfig = { [K in TriggerKindName]: Pick<Extract<TriggerCreate, { kind: K }>, 'kind' | 'config'> }[TriggerKindName]
@@ -55,7 +51,6 @@ type ConfigChange = (c: KindConfig | null) => void
 const KIND_LABELS: Record<TriggerKindName, { label: string; summary: string }> = {
   schedule: { label: '定时', summary: '按 cron 表达式周期运行' },
   once: { label: '一次性', summary: '到指定时间运行一次，之后移入「已结束」' },
-  webhook: { label: 'Webhook', summary: '收到 HTTP POST 时运行' },
   stream: { label: '流式', summary: '托管一条常驻命令，它输出的每一行是一个事件' },
 }
 
@@ -66,8 +61,6 @@ function emptyConfig(kind: TriggerKindName): KindConfig {
       return { kind, config: { cron: '*/5 * * * *' } }
     case 'once':
       return { kind, config: { at: inAnHour(new Date()) } }
-    case 'webhook':
-      return { kind, config: {} }
     case 'stream':
       return { kind, config: { command: '' } }
   }
@@ -165,15 +158,13 @@ function StreamEditor({ config, onChange }: { config: Schemas['StreamConfig-Inpu
   )
 }
 
-/** 按方式选配置编辑器；webhook 没有配置项 */
+/** 按方式选配置编辑器 */
 function ConfigEditor({ value, onChange }: { value: KindConfig; onChange: ConfigChange }) {
   switch (value.kind) {
     case 'schedule':
       return <CronEditor config={value.config} onChange={onChange} />
     case 'once':
       return <RunAtEditor config={value.config} onChange={onChange} />
-    case 'webhook':
-      return null
     case 'stream':
       return <StreamEditor config={value.config} onChange={onChange} />
   }
@@ -221,7 +212,7 @@ function PrecheckEditor({ precheck, onChange }: { precheck: Precheck | null; onC
         <>
           <TextAreaInput
             label="命令（bash，在 agent 的工作目录里执行）"
-            hint="stdin 是事件内容（webhook 的请求体）。退出码 0：按下面的条件决定是否触发，输出作为事件交给 agent；非 0 视为检查出错，不触发并推送一次告警"
+            hint="stdin 是事件内容（流式命令输出的行）。退出码 0：按下面的条件决定是否触发，输出作为事件交给 agent；非 0 视为检查出错，不触发并告警一次"
             value={command}
             onChange={(value) => {
               setCommand(value)
@@ -259,21 +250,6 @@ function PrecheckEditor({ precheck, onChange }: { precheck: Precheck | null; onC
   )
 }
 
-function RouteInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  // 地址格式的说明只在后端一份（与给 agent 的工具说明相同，是英文）
-  const help = useLoad(() => api.routeHelp(), [])
-  return (
-    <TextInput
-      label="投递目标"
-      hint={`可选地址：${help.data?.address_help ?? help.error ?? '…'}。事件里单独一行 @route <目标> 可以把之后的内容投到别处`}
-      value={value}
-      onChange={onChange}
-      placeholder="new"
-      mono
-    />
-  )
-}
-
 function PrecheckSummary({ trigger }: { trigger: Trigger }) {
   if (trigger.precheck === null) return null
   return (
@@ -287,60 +263,7 @@ function PrecheckSummary({ trigger }: { trigger: Trigger }) {
   )
 }
 
-/** webhook 的 token 只在生成后显示这一次 */
-function WebhookToken({ trigger }: { trigger: TriggerOf<'webhook'> }) {
-  const confirm = useConfirm()
-  const action = useAction()
-  const [token, setToken] = useState<string | null>(null)
-  const hasToken = trigger.status.has_token
-
-  async function generate() {
-    if (hasToken) {
-      const ok = await confirm({
-        title: `重新生成「${trigger.name}」的 token？`,
-        body: '旧 token 立即失效，外部系统需要换成新 token。',
-        confirmLabel: '重新生成',
-        danger: true,
-      })
-      if (!ok) return
-    }
-    await action.run(async () => {
-      setToken((await api.generateTriggerToken(trigger.id)).token)
-    })
-  }
-
-  return (
-    <>
-      <Button size="sm" variant="secondary" isDisabled={action.busy} onPress={() => void generate()}>
-        <KeyRound className="size-4" />
-        {hasToken ? '重新生成 token' : '生成 token'}
-      </Button>
-      <ErrorAlert error={action.error} />
-      {token && (
-        <Alert status="warning" className="basis-full">
-          <Alert.Content className="flex min-w-0 flex-col gap-2">
-            <Alert.Title>请保存 token，离开后无法再次查看</Alert.Title>
-            <pre className={CODE_BLOCK}>
-              {`curl -X POST ${trigger.status.url} \\\n  -H 'Authorization: Bearer ${token}' \\\n  -d '{"hello": "world"}'`}
-            </pre>
-            <div className="text-xs">响应里的 session_id 可以在后续请求中以 ?session_id=… 传回，在同一个会话里继续。</div>
-            <div className="flex gap-2">
-              <Button size="sm" variant="secondary" onPress={() => void action.run(() => copyText(token, ' token'))}>
-                <Copy className="size-4" />
-                复制 token
-              </Button>
-              <Button size="sm" variant="tertiary" onPress={() => setToken(null)}>
-                已保存
-              </Button>
-            </div>
-          </Alert.Content>
-        </Alert>
-      )}
-    </>
-  )
-}
-
-/** 这种方式自己的运行状态：下次时间、地址等 */
+/** 这种方式自己的运行状态：下次时间、进程等 */
 function KindStatus({ trigger }: { trigger: Trigger }) {
   switch (trigger.kind) {
     case 'schedule':
@@ -359,13 +282,6 @@ function KindStatus({ trigger }: { trigger: Trigger }) {
       )
     case 'once':
       return <span>计划 {formatTime(trigger.status.run_at)}</span>
-    case 'webhook':
-      return (
-        <span className="break-all">
-          <code className="rounded bg-surface-secondary px-1.5 py-0.5 font-mono text-xs">POST {trigger.status.url}</code>
-          {!trigger.status.has_token && <> · 还没有 token，生成后才能接收事件</>}
-        </span>
-      )
     case 'stream':
       return (
         <span className="flex flex-col gap-1">
@@ -450,8 +366,6 @@ function kindSummary(trigger: Trigger): string {
       return trigger.enabled ? `${trigger.config.cron} · 下次 ${formatTime(trigger.status.next_run_at)}` : trigger.config.cron
     case 'once':
       return `计划 ${formatTime(trigger.status.run_at)}`
-    case 'webhook':
-      return `POST ${trigger.status.url}`
     case 'stream':
       return trigger.config.command
   }
@@ -462,23 +376,12 @@ type FaultSource = Schemas['FaultSource']
 /** 各种脚本出错的标题：卡片上的一句话与详情里的标题 */
 const FAULT_TITLES: Record<FaultSource, { short: string; title: string }> = {
   precheck: { short: '前置检查出错', title: '前置检查出错，未触发' },
-  route: { short: '投递地址写错，有段被丢弃', title: '投递地址写错，这些地址的段被丢弃（其余照投）' },
   stream: { short: '流式命令反复退出', title: '流式命令反复退出' },
 }
 
 /** 脚本出错，按来源各一个提示；改前置检查或配置、重新启用后清除，检查成功或流式命令稳定运行后清除各自的 */
 function TriggerFaults({ trigger }: { trigger: Trigger }) {
-  const sources = [...new Set(trigger.faults.map((f) => f.source))]
-  return sources.map((source) => (
-    <ErrorAlert
-      key={source}
-      title={FAULT_TITLES[source].title}
-      error={trigger.faults
-        .filter((f) => f.source === source)
-        .map((f) => (f.address ? `@route ${f.address}: ${f.error}` : f.error))
-        .join('\n')}
-    />
-  ))
+  return trigger.faults.map((f) => <ErrorAlert key={f.source} title={FAULT_TITLES[f.source].title} error={f.error} />)
 }
 
 /** 需要人注意的状态，卡片上只给一句话，原因在详情里 */
@@ -488,8 +391,6 @@ function triggerWarning(trigger: Trigger): string | null {
   switch (trigger.kind) {
     case 'schedule':
       return trigger.status.skipped ? `已连续跳过 ${trigger.status.skipped.count} 次` : null
-    case 'webhook':
-      return trigger.status.has_token ? null : '还没有 token'
     case 'stream':
       return trigger.status.failures ? `连续失败 ${trigger.status.failures} 次` : null
     case 'once':
@@ -551,11 +452,6 @@ function TriggerCard({
             前置检查：<code className="font-mono">{trigger.precheck.command}</code>
           </div>
         )}
-        {trigger.route !== 'new' && (
-          <div className="truncate text-xs text-muted">
-            投递到：<code className="font-mono">{trigger.route}</code>
-          </div>
-        )}
         <p className="line-clamp-3 whitespace-pre-wrap break-words text-sm">{trigger.prompt}</p>
         <div className="text-xs text-muted">
           {trigger.finished_at
@@ -571,7 +467,7 @@ function TriggerCard({
 
 /**
  * 详情弹窗：trigger 为 undefined 时关闭（包括详情里删掉了它、列表重新加载后不再有它）。
- * 点背景不关：误触会丢掉编辑草稿和只显示一次的 webhook token；只用 Esc 或关闭按钮
+ * 点背景不关：误触会丢掉编辑草稿；只用 Esc 或关闭按钮
  */
 function DetailModal({
   trigger,
@@ -644,25 +540,24 @@ function TriggerItem({ trigger }: { trigger: Trigger }) {
   )
 }
 
-const TRIGGER_FIELD_LABELS = { prompt: '处理说明', config: '配置', precheck: '前置检查', route: '投递目标' }
+const TRIGGER_FIELD_LABELS = { prompt: '处理说明', config: '配置', precheck: '前置检查' }
 
 /** 字段草稿（drafts.useDraft）：只提交改过的，没动的字段别人可能改过，同一字段两边都改了提示冲突；前置检查改了还会重置
  * changed 模式的基线 */
 function TriggerEditor({ trigger, facts, onDone }: { trigger: Trigger; facts: ReactNode; onDone: () => void }) {
   // 配置不合法时为 null
-  const form = useDraft<{ prompt: string; config: KindConfig['config'] | null; precheck: Precheck | null; route: string }>({
+  const form = useDraft<{ prompt: string; config: KindConfig['config'] | null; precheck: Precheck | null }>({
     prompt: trigger.prompt,
     config: trigger.config,
     precheck: trigger.precheck,
-    route: trigger.route,
   })
   const action = useAction()
   const { draft } = form
   const save = () =>
     action.run(async () => {
-      const { config, route, base, ...rest } = form.patch
+      const { config, base, ...rest } = form.patch
       if (config === null) throw new Error('配置不合法')
-      const patch = { ...rest, ...(config && { config }), ...(route !== undefined && { route: route.trim() }), base }
+      const patch = { ...rest, ...(config && { config }), base }
       if (Object.keys(form.changes).length > 0) await api.updateTrigger(trigger.id, patch)
       onDone()
     })
@@ -683,7 +578,6 @@ function TriggerEditor({ trigger, facts, onDone }: { trigger: Trigger; facts: Re
           precheck={draft.precheck}
           onChange={(precheck) => form.set({ precheck })}
         />
-        <RouteInput value={draft.route} onChange={(route) => form.set({ route })} />
         <TextAreaInput label="处理说明" value={draft.prompt} onChange={(prompt) => form.set({ prompt })} rows={5} />
         <DraftConflicts draft={form} labels={TRIGGER_FIELD_LABELS} />
         <ErrorAlert error={action.error} />
@@ -691,10 +585,8 @@ function TriggerEditor({ trigger, facts, onDone }: { trigger: Trigger; facts: Re
       <Modal.Footer className="flex flex-wrap justify-start gap-2">
         <ActionButton
           size="sm"
-          // 投递目标必填（回到默认就填说明里的默认地址）；新建时留空才是用默认
           isDisabled={
             draft.config === null ||
-            !draft.route.trim() ||
             (draft.precheck !== null && !draft.precheck.command.trim()) ||
             form.conflicts.length > 0
           }
@@ -725,9 +617,6 @@ function TriggerShown({ trigger, facts, onEdit }: { trigger: Trigger; facts: Rea
       <Modal.Body className="flex flex-col gap-3">
         {facts}
         <PrecheckSummary trigger={trigger} />
-        <div className="text-xs text-muted">
-          投递到：<code className="font-mono">{trigger.route}</code>
-        </div>
         <p className="whitespace-pre-wrap text-sm">{trigger.prompt}</p>
         <TriggerSessions trigger={trigger} />
         <ErrorAlert error={action.error} />
@@ -751,7 +640,6 @@ function TriggerShown({ trigger, facts, onEdit }: { trigger: Trigger; facts: Rea
           <Play className="size-4" />
           立即运行
         </Button>
-        {trigger.kind === 'webhook' && <WebhookToken trigger={trigger} />}
         <Button size="sm" variant="danger-soft" isDisabled={action.busy} onPress={() => void remove()}>
           <Trash2 className="size-4" />
           删除
@@ -786,7 +674,6 @@ function TriggerFields({ kinds, onCreated }: { kinds: TriggerKind[]; onCreated: 
   const [prompt, setPrompt] = useState('')
   const [draft, setDraft] = useState<KindConfig | null>(initial)
   const [precheck, setPrecheck] = useState<Precheck | null>(null)
-  const [route, setRoute] = useState('')
   const action = useAction()
 
   async function create() {
@@ -799,7 +686,6 @@ function TriggerFields({ kinds, onCreated }: { kinds: TriggerKind[]; onCreated: 
         agent_id: asAgentId(agentId),
         prompt,
         precheck,
-        route: route.trim() || null,
       })
       toast.success('触发器已创建')
     })
@@ -821,7 +707,7 @@ function TriggerFields({ kinds, onCreated }: { kinds: TriggerKind[]; onCreated: 
       />
       <TextInput
         label="名称"
-        hint="小写字母、数字和 -，webhook 的地址里会用到，如 github-issues"
+        hint="小写字母、数字和 -，如 daily-report"
         value={name}
         onChange={setName}
         isRequired
@@ -836,10 +722,9 @@ function TriggerFields({ kinds, onCreated }: { kinds: TriggerKind[]; onCreated: 
       />
       {initial && <ConfigEditor key={initial.kind} value={initial} onChange={setDraft} />}
       <PrecheckEditor precheck={null} onChange={setPrecheck} />
-      <RouteInput value={route} onChange={setRoute} />
       <TextAreaInput
         label="处理说明"
-        hint="每次触发投到投递目标（默认新会话）；事件内容（如 webhook 的请求体）附在其后。触发的会话不会自动推送，需要时在说明里要求 agent 调用 notify_user"
+        hint="每次触发新开这个 agent 的一个会话；事件内容（如流式命令输出的行）附在其后。触发的会话不会自动推送，需要时在说明里要求 agent 调用 notify_user"
         value={prompt}
         onChange={setPrompt}
         rows={5}
@@ -936,7 +821,7 @@ function FinishedTriggers() {
   )
 }
 
-/** 自动发起会话的入口：定时、webhook……方式的差异只在各自的配置与操作。按 agent 分组的卡片网格，点卡片看详情 */
+/** 自动发起会话的入口：定时、一次性、流式，方式的差异只在各自的配置。按 agent 分组的卡片网格，点卡片看详情 */
 export default function Triggers() {
   const triggers = useLoad(() => api.triggers(), [])
   const kinds = useLoad(() => api.triggerKinds(), [])

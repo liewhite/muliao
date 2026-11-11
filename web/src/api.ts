@@ -83,7 +83,7 @@ export type TriggerKind = Schemas['TriggerKindOut']
 export type Precheck = Schemas['Precheck']
 /** 按 kind 区分的联合：收窄 kind 后 config 与 status 就是这种方式的类型 */
 export type Trigger = WithAgentId<
-  Schemas['ScheduleTriggerOut'] | Schemas['OnceTriggerOut'] | Schemas['WebhookTriggerOut'] | Schemas['StreamTriggerOut'],
+  Schemas['ScheduleTriggerOut'] | Schemas['OnceTriggerOut'] | Schemas['StreamTriggerOut'],
   'agent_id'
 >
 export type TriggerKindName = Trigger['kind']
@@ -91,7 +91,6 @@ export type TriggerKindName = Trigger['kind']
 export type TriggerCreate =
   | Schemas['ScheduleTriggerCreate']
   | Schemas['OnceTriggerCreate']
-  | Schemas['WebhookTriggerCreate']
   | Schemas['StreamTriggerCreate']
 export type McpServer = WithAgentId<Schemas['McpOut'], 'owner'>
 export type McpInput = WithAgentId<Schemas['McpIn'], 'owner'>
@@ -419,11 +418,8 @@ export const api = {
     branded<SessionListItem[]>(call('get', '/api/sessions', { query })),
   session: (session_id: string) =>
     branded<SessionDetail>(call('get', '/api/sessions/{session_id}', { path: { session_id } })),
-  /** compaction_threshold_tokens 为 null 时用全局默认 */
-  startSession: (agent_id: AgentId, prompt: string, attachments: string[], compaction_threshold_tokens: number | null) =>
-    branded<Session>(
-      call('post', '/api/sessions', { body: { agent_id, prompt, attachments, compaction_threshold_tokens } }),
-    ),
+  startSession: (agent_id: AgentId, prompt: string, attachments: string[]) =>
+    branded<Session>(call('post', '/api/sessions', { body: { agent_id, prompt, attachments } })),
   reply: (session_id: string, prompt: string, attachments: string[]) =>
     call('post', '/api/sessions/{session_id}/messages', { path: { session_id }, body: { prompt, attachments, answers: {}, approvals: {} } }),
   /** 回答挂起的提问：作为这次 ask_user 调用的结果交回模型 */
@@ -480,17 +476,12 @@ export const api = {
   triggerKinds: () => call('get', '/api/trigger-kinds'),
   /** finished 为 true 时列已结束的（跑完的一次性触发器），它们只能查看与删除 */
   triggers: (finished = false) => branded<Trigger[]>(call('get', '/api/triggers', { query: { finished } })),
-  /** 投递目标文字地址的格式说明（与给 agent 的工具说明同一份） */
-  routeHelp: () => call('get', '/api/trigger-routes/help'),
   createTrigger: (body: TriggerCreate & { agent_id: AgentId }) => branded<Trigger>(call('post', '/api/triggers', { body })),
   /** 只修改给出的字段；precheck 不给表示不变，给 null 表示去掉 */
   updateTrigger: (trigger_id: number, body: Schemas['TriggerPatch']) =>
     branded<Trigger>(call('patch', '/api/triggers/{trigger_id}', { path: { trigger_id }, body })),
   /** session_id 为 null：前置检查判定这次不调用 agent */
   runTrigger: (trigger_id: number) => call('post', '/api/triggers/{trigger_id}/run', { path: { trigger_id } }),
-  /** webhook：生成或重新生成 token，明文只返回这一次 */
-  generateTriggerToken: (trigger_id: number) =>
-    call('post', '/api/triggers/{trigger_id}/webhook/token', { path: { trigger_id } }),
   deleteTrigger: (trigger_id: number) => call('delete', '/api/triggers/{trigger_id}', { path: { trigger_id } }),
   /** 新增（启用的）MCP server；同名已存在 409 */
   addMcp: (name: string, body: McpInput) =>

@@ -140,13 +140,12 @@ class RuntimeConfig(_Section):
     # 外部服务不可用（errors.ServiceUnavailable：模型接口、推送服务 5xx/429、连不上）的故障常持续几分钟到半小时
     # （relay 503、本机到境外 HTTPS 断开），重试次数单独设：默认 12 次，等待 5+10+…+160 再加 5×300 秒，约 30 分钟
     outage_retry_max_attempts: int = Field(default=12, ge=1)
-    # 发给模型的上下文（上一次请求的输入 token）超过此值，就在步与步之间压缩该 session 的早期上下文。这是默认值：
-    # 用户新建会话时可以给这个会话单独设（sessions.compaction.Compactor.threshold_of）
+    # 发给模型的上下文（上一次请求的输入 token）超过此值，就在步与步之间压缩该 session 的早期上下文（所有会话同一个值）
     compaction_threshold_tokens: int = Field(default=100_000, ge=MIN_COMPACTION_THRESHOLD_TOKENS)
     # 压缩时保留最近这么多步原文不压缩（一步是一次模型回复及其工具结果）
     compaction_keep_steps: int = Field(default=10, ge=1)
     memory_max_chars: int = Field(default=4000, ge=100)
-    # 触发器前置检查的时限：webhook 的调用方在同步等它，检查本该便宜
+    # 触发器前置检查的时限：检查本该便宜
     precheck_timeout_seconds: float = Field(default=30.0, gt=0)
     tool_output_max_chars: int = Field(default=20000, ge=1000)
     # agent 的命令与文件工具写到可写路径之外时（workspace.writable）：enforce 拒绝；report 放行并记录（命令的记在系统日志，

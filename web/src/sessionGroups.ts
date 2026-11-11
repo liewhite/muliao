@@ -8,7 +8,7 @@ export const ORIGIN_LABEL: Record<Origin, string> = {
 }
 
 // 会话页按来源分三类，每个来源恰好属于一类：人发起的对话（含 agent 之间的委派）、issue 的工作会话、
-// 触发器（定时、webhook……）跑的自动任务；另有「全部」不按来源筛（origins 为 null）
+// 触发器（定时、一次性、流式）跑的自动任务；另有「全部」不按来源筛（origins 为 null）
 export const FILTERS = {
   all: { label: '全部', origins: null },
   chat: { label: '对话', origins: ['user', 'delegation'] },

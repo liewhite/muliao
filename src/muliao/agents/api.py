@@ -37,7 +37,6 @@ from muliao.agents.service import (
     AgentView,
     active_agent_in,
     agent_in,
-    named_agent_in,
     runnable_agent_in,
 )
 from muliao.agents.skill_package import MAX_PACKAGE_BYTES
@@ -102,7 +101,6 @@ __all__ = [
     "BASE",
     "active_agent_in",
     "agent_in",
-    "named_agent_in",
     "agent_names_in",
     "runnable_agent_in",
 ]

@@ -14,7 +14,6 @@ from muliao.issues.activity import (
     DependencyFinished,
     DependsOnChanged,
     DescriptionEdited,
-    EventPosted,
     OwnerChanged,
     PriorityChanged,
     RunFailure,
@@ -83,8 +82,6 @@ def render_activity(a: Activity, names: AgentNames, tz: ZoneInfo) -> str:
             return f"{head} {actor} changed status of dependency #{c.issue}: {c.before} -> {c.to}"
         case RunFailure(body=body):
             return f"{head} {actor}'s run in its issue session failed: {body}"
-        case EventPosted(body=body, change=c):
-            return f"{head} event from {c.to} ({actor}):" + _indented(body)
         case Stopped(change=c):
             return f"{head} {actor} stopped {_assignee(c.to, names)}'s conversation on this issue"
         case Unsettled():

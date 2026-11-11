@@ -398,7 +398,7 @@ async def test_assembly_refuses_a_command_without_handler_or_an_event_without_su
     bare = Messaging(container.queue, _left_to_the_worker)
     with pytest.raises(RuntimeError) as e:
         bare.check_wired()
-    assert "session.run_ended" in str(e.value) and "issues.post_event" in str(e.value)
+    assert "session.run_ended" in str(e.value) and "session.receive" in str(e.value)
     assert "test.happened" not in str(e.value)
 
 

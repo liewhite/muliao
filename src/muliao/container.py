@@ -58,7 +58,7 @@ from muliao.sessions.reconcile import MailReconciler
 from muliao.sessions.threads import Threads
 from muliao.sessions.wakeups import WakeUps
 from muliao.speech.api import Transcriber, build_transcriber
-from muliao.triggers.api import TriggerDomain, TriggerService, Webhooks
+from muliao.triggers.api import TriggerDomain, TriggerService
 from muliao.triggers.due import DueRunner
 from muliao.usage.api import UsageLog
 from muliao.web.api import WebProvider, build_web_provider
@@ -110,7 +110,6 @@ class Container:
     notifications: Notifications
     mcp: McpRegistry
     triggers: TriggerService
-    webhooks: Webhooks
     push_subscriptions: PushSubscriptions
     vapid: VapidKeys
     models: ModelRegistry
@@ -149,7 +148,6 @@ class Assembly:
     triggers: TriggerService
     # 定时与一次性触发器的到期扫描（测试自己驱动 fire_due）
     due: DueRunner
-    webhooks: Webhooks
     push_subscriptions: PushSubscriptions
     vapid: VapidKeys
     worker: Worker
@@ -199,7 +197,6 @@ class Assembly:
             notifications=self.notifications,
             mcp=self.mcp,
             triggers=self.triggers,
-            webhooks=self.webhooks,
             push_subscriptions=self.push_subscriptions,
             vapid=self.vapid,
             models=self.models,
@@ -376,7 +373,6 @@ def assemble(
         commands=commands,
         activity=ports.activity,
         agents=agents,
-        public_url=settings.server.public_url,
         precheck_timeout_seconds=settings.runtime.precheck_timeout_seconds,
     )
     workspace_domain = WorkspaceDomain.build(
@@ -482,7 +478,6 @@ def assemble(
         mcp=mcp,
         triggers=trigger_domain.triggers,
         due=trigger_domain.due,
-        webhooks=trigger_domain.webhooks,
         push_subscriptions=notification_domain.push_subscriptions,
         vapid=notification_domain.vapid,
         worker=worker,

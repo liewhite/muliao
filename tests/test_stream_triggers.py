@@ -16,7 +16,7 @@ from muliao.sessions.api import Origin, SessionActivity
 from muliao.sessions.mailbox import queued_in
 from muliao.triggers.faults import Faults, FaultSource
 from muliao.triggers.service import EVENT_MAX_BYTES
-from muliao.triggers.stream import StreamRunner, _Pending, _Spec
+from muliao.triggers.stream import StreamRunner, _Spec
 from tests.test_flow import drain, history_of
 
 
@@ -636,29 +636,3 @@ async def test_a_batch_whose_firing_failed_unexpectedly_is_not_fired_again(
 
 async def _payloads_seen(payloads: list, n: int) -> bool:
     return len(payloads) >= n
-
-
-async def test_route_lines_hold_across_batches_without_making_the_queue_grow():
-    """`@route` 按行到达顺序定目标、跨批次保持（与把整条流当一段文本相同），不取决于在哪里分批（#572）。"""
-    pending = _Pending(EVENT_MAX_BYTES)
-    for line in ["d1", "@route issue:5", "for 5"]:
-        await pending.put(line)
-    assert pending.take() == ("d1\n@route issue:5\nfor 5", 2)
-
-    for line in ["still 5", "@route agent:beta", "@route new", "n1", "@route issue:5", "5 again", "@route x"]:
-        await pending.put(line)
-    # 上一批的地址补在最前；连着的 `@route` 只留最后一个，末尾没有内容的地址不进这一批（带到下一批）
-    assert pending.take() == ("@route issue:5\nstill 5\n@route new\nn1\n@route issue:5\n5 again", 3)
-    await pending.put("y")
-    assert pending.take() == ("@route x\ny", 1)
-
-
-async def test_route_lines_alone_do_not_make_a_batch_ready():
-    pending = _Pending(EVENT_MAX_BYTES)
-    await pending.put("@route issue:5")
-    with anyio.move_on_after(0.2) as scope:
-        await pending.ready(0)
-    assert scope.cancelled_caught
-    await pending.put("x")
-    await pending.ready(0)
-    assert pending.take() == ("@route issue:5\nx", 1)

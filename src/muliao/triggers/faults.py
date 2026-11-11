@@ -1,10 +1,10 @@
-"""触发器脚本出错（触发器领域内部）：前置检查失败、事件内容里写错的 `@route` 地址、流式命令反复退出。
+"""触发器脚本出错（触发器领域内部）：前置检查失败、流式命令反复退出。
 
-这几种都是触发器所属 agent 写的脚本坏了，记录、清除、告警的规则只在这里写一次：
-- 记录（report_in）：存在触发器的 faults 列，同一（来源, 地址）只留一条，原因取最新；只有新出现的那条才告警，
-  所以每分钟检查一次的触发器坏了不会每分钟告警，同一个坏地址反复出现也只告警一次。
-- 清除：来源自己的恢复信号清本来源（recovered：检查成功、流式命令稳定运行；写错的地址没有恢复信号——丢不丢取决于
-  内容，好坏批次常常交替）；人工干预（换前置检查、改配置、重新启用）清全部（reset，TriggerService.update）。
+这两种都是触发器所属 agent 写的脚本坏了，记录、清除、告警的规则只在这里写一次：
+- 记录（report_in）：存在触发器的 faults 列，同一来源只留一条，原因取最新；只有新出现的那条才告警，
+  所以每分钟检查一次的触发器坏了不会每分钟告警。
+- 清除：来源自己的恢复信号清本来源（recovered：检查成功、流式命令稳定运行）；人工干预（换前置检查、改配置、
+  重新启用）清全部（reset，TriggerService.update）。
 - 告警去向（alert_in）：交给触发器所属的 agent 开一个新会话，由它修脚本，自己解决不了时通知用户；这封信投不进去
   （agent 已归档、正在删除）时退回给用户推送，不静默吞掉。
 faults 列只在这里赋值（tests/test_boundaries.py）。
@@ -18,17 +18,24 @@ from enum import StrEnum
 from typing import assert_never
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, model_validator
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.notifications.events import Notify
 from muliao.platform.db import utcnow
+from muliao.platform.ids import new_id
 from muliao.platform.messaging import Messaging
 from muliao.platform.tasks import Clock
 from muliao.platform.values import local_time
-from muliao.triggers.router import Routed, Sender, Undeliverable, routed_in
+from muliao.sessions.api import (
+    Accepted,
+    NewConversation,
+    Refused,
+    SenderMail,
+    TriggerOrigin,
+    receive_command_in,
+)
 from muliao.triggers.tables import Trigger
-from muliao.triggers.targets import DEFAULT
 
 log = logging.getLogger(__name__)
 
@@ -37,31 +44,22 @@ class FaultSource(StrEnum):
     """哪个脚本出的错。"""
 
     PRECHECK = "precheck"
-    ROUTE = "route"
     STREAM = "stream"
 
 
 # 告警会话的标题（跟在触发器名后面）
 _TITLES = {
     FaultSource.PRECHECK: "前置检查出错",
-    FaultSource.ROUTE: "投递地址写错",
     FaultSource.STREAM: "流式命令反复退出",
 }
 
 
 class TriggerFault(BaseModel):
-    """一条出错：来源、原因；写错的投递地址（且只有它）带着那个地址（每个地址各一条）。"""
+    """一条出错：来源、原因。"""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
     source: FaultSource
     error: str
-    address: str | None = None
-
-    @model_validator(mode="after")
-    def _address_iff_route(self) -> TriggerFault:
-        if (self.source == FaultSource.ROUTE) != (self.address is not None):
-            raise ValueError(f"a {self.source} fault {'needs' if self.address is None else 'has no'} address")
-        return self
 
 
 _FAULTS = TypeAdapter(list[TriggerFault])
@@ -77,12 +75,12 @@ def _store(trigger: Trigger, faults: list[TriggerFault]) -> None:
 
 
 def record(trigger: Trigger, faults: Sequence[TriggerFault]) -> list[TriggerFault]:
-    """记下这些出错：同一（来源, 地址）只留一条、原因取最新；返回其中新出现的（要告警的）。"""
+    """记下这些出错：同一来源只留一条、原因取最新；返回其中新出现的（要告警的）。"""
     stored = faults_of(trigger)
-    known = {(f.source, f.address) for f in stored}
-    latest = {(f.source, f.address): f for f in faults}
+    known = {f.source for f in stored}
+    latest = {f.source: f for f in faults}
     new = [f for key, f in latest.items() if key not in known]
-    _store(trigger, [latest.pop((f.source, f.address), f) for f in stored] + list(latest.values()))
+    _store(trigger, [latest.pop(f.source, f) for f in stored] + list(latest.values()))
     return new
 
 
@@ -131,15 +129,23 @@ class Faults:
     ) -> None:
         """告诉触发器所属的 agent（新会话，letter 说明出了什么错、怎么处理）；投不进去（它已归档或正在删除，如一次性
         触发器到点时 agent 已归档）时退回给用户推送（title 与 summary）：不论哪种原因，告警都不能静默丢掉。"""
-        sender = Sender.of(trigger, f"{trigger.name} {title} · {local_time(self._clock(), self._tz)}")
-        match routed := await routed_in(s, sender, DEFAULT, letter):
-            case Routed(command=command):
+        mail = SenderMail(
+            sender=TriggerOrigin(trigger_id=trigger.id),
+            content=letter,
+            session=NewConversation(
+                id=new_id(),
+                agent_id=trigger.agent_id,
+                title=f"{trigger.name} {title} · {local_time(self._clock(), self._tz)}",
+            ),
+        )
+        match refused := await receive_command_in(s, mail):
+            case Accepted(command=command):
                 self._messaging.send_in(s, command)
-            case Undeliverable(detail=detail):
+            case Refused(detail=detail):
                 log.warning(
                     "trigger alert could not reach the agent, notifying the user: %s",
                     detail,
-                    extra={"trigger": trigger.name, "problem": routed.problem},
+                    extra={"trigger": trigger.name, "reason": refused.reason},
                 )
                 self._messaging.send_in(
                     s,

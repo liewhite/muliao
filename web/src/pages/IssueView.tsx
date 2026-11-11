@@ -74,13 +74,12 @@ function Timeline({ detail }: { detail: IssueDetail }) {
   return (
     <ol className="flex flex-col gap-3">
       {detail.activities.map((a) =>
-        a.kind === 'comment' || a.kind === 'event' ? (
+        a.kind === 'comment' ? (
           <li key={a.id}>
             <Card>
               <Card.Content className="flex flex-col gap-1 p-3">
                 <div className="flex items-center gap-2 text-xs text-muted">
                   <span className="font-medium text-foreground">{actorName(agents, a.actor)}</span>
-                  {a.kind === 'event' && <span>{activityText(agents, a)}</span>}
                   <span>{formatTime(a.created_at)}</span>
                   <SourceSession sessionId={a.session_id} />
                 </div>

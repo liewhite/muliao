@@ -53,9 +53,6 @@ class ActivityKind(StrEnum):
     UNSETTLED = "unsettled"
     # actor 用 issue_stop 停掉了被指派 agent 在这个 issue 上的会话：change 为 {"from": null, "to": 那个 agent 的 id}
     STOPPED = "stopped"
-    # 投到这个 issue 的一个事件（触发器领域的投递目标 issue:N，如触发器的事件）：actor 是事件来源所属的 agent，body 是投递的
-    # 内容，change 为 {"from": null, "to": 来源的描述，如 "trigger slack-live"}。像用户评论一样没人接手时投给 owner（rules.recipient）
-    EVENT = "event"
 
 
 class Issue(Base):

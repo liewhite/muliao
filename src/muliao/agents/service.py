@@ -25,7 +25,6 @@ from muliao.agents.active import (
     agent_names_in,
     listed_in,
     named_row_in,
-    named_row_or_none_in,
     runnable_row_in,
 )
 from muliao.agents.agent_file import AGENT_FILE, CONFIG_FIELDS, AgentFile, Thinking
@@ -144,13 +143,6 @@ async def runnable_agent_in(s: AsyncSession, agent_id: str) -> AgentInfo:
     （sessions.inbound）、指派与 owner（issues）、触发器的创建与触发。管理与资源的写入（改配置、记忆、secret）用 active_agent_in，
     归档的照常可改。"""
     return info_of(await runnable_row_in(s, agent_id))
-
-
-async def named_agent_in(s: AsyncSession, name: str) -> AgentInfo | None:
-    """按名称找还可用的 agent（模型与脚本按名称指代 agent，不接触 id；名称唯一），没有时 None：调用方自己决定怎么反应
-    （触发器把它当成写错的投递地址）。要当场报错的用 AgentService.find_by_name。"""
-    agent = await named_row_or_none_in(s, name)
-    return None if agent is None else info_of(agent)
 
 
 async def agent_in(s: AsyncSession, agent_id: str) -> AgentInfo:

@@ -91,9 +91,6 @@ describe('issues', () => {
     )
     expect(activityText(agents, at({ kind: 'run_failed', body: 'Boom: bad' }))).toBe('在 issue 会话里的运行失败了：Boom: bad')
     expect(activityText(agents, at({ kind: 'unsettled' }))).toContain('已请它表态')
-    expect(activityText(agents, at({ kind: 'event', body: 'x', change: { from: null, to: 'trigger feed' } }))).toBe(
-      '投递了事件（来自 trigger feed）',
-    )
     expect(activityText(agents, at({ kind: 'stopped', change: { from: null, to: 'a1' } }))).toBe('停止了 alpha 在这个 issue 上的会话')
   })
 })

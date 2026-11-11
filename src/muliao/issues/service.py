@@ -37,13 +37,11 @@ from muliao.issues.activity import (
     Commented,
     Created,
     DependsOnChanged,
-    EventPosted,
     RunFailure,
     Stopped,
     Unsettled,
 )
 from muliao.issues.change import BY_RULES, RECORD_ONLY, Direct, IssueChanges, new_issue_in
-from muliao.issues.events import PostIssueEvent
 from muliao.issues.graph import (
     Dependency,
     batch_label,
@@ -173,9 +171,8 @@ def batch_item(size: int, n: int, key: str | None) -> Iterator[None]:
         raise type(e)(f"{batch_label(n, key)}: {e}") from None
 
 
-async def issue_exists_in(s: AsyncSession, issue_id: int) -> bool:
-    """issue 存在（别的领域要把事件投到它之前，在自己的事务里只读地确认，不在时自己决定怎么反应；之后再被删除的由
-    PostIssueEvent 的处理丢弃）。issue 只会从存在变为删除。"""
+async def _exists_in(s: AsyncSession, issue_id: int) -> bool:
+    """issue 存在（issue 只会从存在变为删除）。"""
     return await s.get(Issue, issue_id) is not None
 
 
@@ -198,12 +195,6 @@ class IssueService:
         messaging.subscribe(AgentDeleting, "issues.agent_deleting", self.on_agent_deleting)
         messaging.subscribe(RunFailed, "issues.run_failed", self.on_run_failed, lane=_session_events_lane)
         messaging.subscribe(RunEnded, "issues.run_ended", self.on_run_ended)
-        messaging.handle(
-            PostIssueEvent,
-            "issues.post_event",
-            self.on_post_event,
-            lane=lambda c: f"issue-event:{c.issue_id}",
-        )
         messaging.subscribe(
             SessionDeleted, "issues.session_deleted", self.on_session_deleted, lane=_session_events_lane
         )
@@ -251,21 +242,6 @@ class IssueService:
 
         return commit
 
-    async def on_post_event(self, command: PostIssueEvent, _delivery: Delivery) -> Commit:
-        """投到 issue 的一个事件：记一条 EventPosted（actor 是事件来源所属的 agent），按 rules.recipient 投递：有被指派的
-        agent 接手时给它，否则像用户评论一样给 owner。不在任何 issue 会话里发生（session_id 为空），所以来源的 agent
-        自己是指派人时也投给它。发送方校验之后 issue 被删除了就丢弃。"""
-
-        async def commit(s: AsyncSession) -> None:
-            if not await issue_exists_in(s, command.issue_id):
-                log.info("event to a deleted issue dropped", extra={"issue_id": command.issue_id})
-                return
-            async with self._changes.open_in(s, command.issue_id, command.agent_id, None) as change:
-                change.record(EventPosted(body=command.body, change=Arrival(to=command.source)))
-            log.info("issue event posted", extra={"issue_id": command.issue_id, "source": command.source})
-
-        return commit
-
     async def on_run_failed(self, event: RunFailed, _delivery: Delivery) -> Commit:
         """issue 会话里的运行最终失败：在 issue 时间线上以该 agent 的名义记一笔（失败的是它的运行）。通知用户由通知领域
         订阅 RunFailed 做，这里不重复发。只记时间线（RECORD_ONLY）、不改状态：投进会话就是自动重试，永久性的错误会陪它
@@ -275,7 +251,7 @@ class IssueService:
         issue_id = event.origin.issue_id
 
         async def commit(s: AsyncSession) -> None:
-            if not await issue_exists_in(s, issue_id):
+            if not await _exists_in(s, issue_id):
                 log.info(
                     "run failed on a deleted issue", extra={"issue_id": issue_id, "run_id": event.run_id}
                 )

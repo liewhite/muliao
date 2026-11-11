@@ -121,16 +121,6 @@ class Stopped(_Value):
     change: Arrival
 
 
-class EventPosted(_Value):
-    """投到这个 issue 的一个事件（触发器的投递目标 issue:N）：actor 是事件来源所属的 agent。"""
-
-    kind: Literal[ActivityKind.EVENT] = ActivityKind.EVENT
-    # 投递的内容
-    body: str
-    # to 是来源的描述，如 "trigger slack-live"
-    change: Arrival
-
-
 type Happening = Annotated[
     Created
     | Commented
@@ -144,8 +134,7 @@ type Happening = Annotated[
     | DependencyFinished
     | RunFailure
     | Unsettled
-    | Stopped
-    | EventPosted,
+    | Stopped,
     Field(discriminator="kind"),
 ]
 _HAPPENING: TypeAdapter[Happening] = TypeAdapter(Happening)

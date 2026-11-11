@@ -164,19 +164,7 @@ def _response(tokens: int) -> list[ModelMessage]:
     return [ModelResponse(parts=[TextPart("x")], usage=RequestUsage(input_tokens=tokens))]
 
 
-# 没有自己阈值的会话：用全局默认
 _S = Session(id="s")
-
-
-async def test_a_session_with_its_own_threshold_uses_it_instead_of_the_default(container):
-    compactor = container.compactor
-    default = container.settings.runtime.compaction_threshold_tokens
-    own = Session(id="s", compaction_threshold_tokens=default * 3)
-    assert compactor.threshold_of(_S) == default
-    assert compactor.threshold_of(own) == default * 3
-    assert compactor.over_threshold(_S, _response(default + 1), None)
-    assert not compactor.over_threshold(own, _response(default + 1), None)
-    assert compactor.over_threshold(own, _response(default * 3 + 1), None)
 
 
 async def test_threshold_is_the_size_of_the_last_request(container):
@@ -308,7 +296,7 @@ async def test_oversized_backlog_is_compacted_in_batches_until_converged(
 
 async def test_a_long_run_is_compacted_between_steps_and_resumes(container, make_agent, models, monkeypatch):
     """运行中途上下文超过阈值：这次请求保存后停下、压缩，再从它续跑；留下的部分从一条回复开始时补接续的用户消息。"""
-    monkeypatch.setattr(container.compactor, "_default_threshold", 1)
+    monkeypatch.setattr(container.compactor, "_threshold", 1)
     monkeypatch.setattr(container.compactor, "_keep_steps", 1)
     alpha = (await make_agent("alpha", model="m")).id
     seen: list[tuple[list[ModelMessage], str | None]] = []
@@ -345,49 +333,6 @@ async def test_a_long_run_is_compacted_between_steps_and_resumes(container, make
     assert isinstance(history[-1], ModelResponse) and history[-1].parts[0].content == "done"
 
 
-async def test_a_run_compacts_at_the_sessions_own_threshold(container, make_agent, models, monkeypatch):
-    """全局默认阈值很大、会话自己的阈值很小：运行中按会话的阈值压缩。"""
-    monkeypatch.setattr(container.compactor, "_default_threshold", 10**12)
-    monkeypatch.setattr(container.compactor, "_keep_steps", 1)
-    alpha = (await make_agent("alpha", model="m")).id
-    session, recorder = await _session_with_exchanges(container, models, alpha, 3)
-    assert recorder.compactions == []
-
-    async with container.db.transaction() as s:
-        (await s.get(Session, session.id)).compaction_threshold_tokens = 1
-    await reply(container, session.id, "go on")
-    await drain(container)
-    assert len(recorder.compactions) == 1
-
-
-async def test_starting_a_session_with_a_threshold_through_the_api(container, make_agent, tmp_path):
-    import httpx
-
-    from tests.conftest import app_of, login
-
-    alpha = (await make_agent("alpha")).id
-    default = container.settings.runtime.compaction_threshold_tokens
-    app = app_of(container, tmp_path / "no-web")
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as client:
-        await login(client)
-        own = await client.post(
-            "/api/sessions", json={"agent_id": alpha, "prompt": "hi", "compaction_threshold_tokens": 5000}
-        )
-        plain = await client.post("/api/sessions", json={"agent_id": alpha, "prompt": "hi"})
-        too_small = await client.post(
-            "/api/sessions", json={"agent_id": alpha, "prompt": "hi", "compaction_threshold_tokens": 999}
-        )
-        features = (await client.get("/api/features")).json()
-
-    assert own.status_code == 201 and own.json()["compaction_threshold_tokens"] == 5000
-    assert plain.status_code == 201 and plain.json()["compaction_threshold_tokens"] is None
-    assert too_small.status_code == 422
-    assert features["compaction_threshold_tokens"] == default
-    assert features["min_compaction_threshold_tokens"] == 1000
-    async with container.db.transaction() as s:
-        assert (await s.get(Session, own.json()["id"])).compaction_threshold_tokens == 5000
-
-
 async def _tasks(container, kind: str) -> list[Task]:
     async with container.db.transaction() as s:
         return list((await s.scalars(select(Task).where(Task.kind == kind))).all())
@@ -422,7 +367,7 @@ async def test_stopping_while_compacting_between_steps_leaves_one_result_per_cal
     from muliao.sessions.conventions import calls_in, results_in
     from tests.test_flow import idle
 
-    monkeypatch.setattr(container.compactor, "_default_threshold", 1)
+    monkeypatch.setattr(container.compactor, "_threshold", 1)
     monkeypatch.setattr(container.compactor, "_keep_steps", 1)
     entered = asyncio.Event()
 
@@ -459,7 +404,7 @@ async def test_a_run_that_compacts_at_its_start_does_not_compact_again_before_a_
 ):
     alpha = (await make_agent("alpha", model="m")).id
     session, recorder = await _session_with_exchanges(container, models, alpha, 3)
-    monkeypatch.setattr(container.compactor, "_default_threshold", 1)
+    monkeypatch.setattr(container.compactor, "_threshold", 1)
     monkeypatch.setattr(container.compactor, "_keep_steps", 1)
 
     await reply(container, session.id, "go on")
@@ -486,7 +431,7 @@ async def test_after_a_manual_compaction_a_long_run_still_compacts_mid_way(
         return 5000 if "big" in str(last.parts) else 100
 
     monkeypatch.setattr(compaction, "context_tokens", tokens)
-    monkeypatch.setattr(container.compactor, "_default_threshold", 1000)
+    monkeypatch.setattr(container.compactor, "_threshold", 1000)
     monkeypatch.setattr(container.compactor, "_keep_steps", 1)
     alpha = (await make_agent("alpha", model="m")).id
     summaries = {"n": 0}
@@ -540,7 +485,7 @@ async def test_a_run_compacted_past_its_own_start_gets_its_run_context_again(
     container, make_agent, models, monkeypatch
 ):
     """长运行中途压缩切过了它自己的第一条请求（挂着运行上下文的那条）：之后的新请求重新挂一段，模型仍看得到当前时间。"""
-    monkeypatch.setattr(container.compactor, "_default_threshold", 1)
+    monkeypatch.setattr(container.compactor, "_threshold", 1)
     monkeypatch.setattr(container.compactor, "_keep_steps", 1)
     alpha = (await make_agent("alpha", model="m")).id
     seen: list[list[ModelMessage]] = []
@@ -600,16 +545,3 @@ async def test_compaction_uses_the_agents_thinking_level(container, make_agent, 
     await drain(container)
 
     assert recorder.compaction_thinking == ["low"]
-
-
-async def test_a_threshold_below_the_minimum_is_refused_by_the_domain_not_only_by_http(container, make_agent):
-    import pytest
-
-    from muliao.errors import InvalidInput
-    from muliao.sessions.api import NewChat, UserMessage
-
-    alpha = (await make_agent("alpha")).id
-    with pytest.raises(InvalidInput):
-        await container.sessions.receive(
-            UserMessage(content="hi", session=NewChat(alpha, compaction_threshold_tokens=5))
-        )

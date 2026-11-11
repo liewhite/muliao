@@ -23,7 +23,6 @@ from muliao.issues.activity import (
     DependencyFinished,
     DependsOnChanged,
     DescriptionEdited,
-    EventPosted,
     OwnerChanged,
     PriorityChanged,
     RunFailure,
@@ -351,10 +350,6 @@ _STORED_SHAPES = [
     (RunFailure(body="boom"), ("run_failed", "boom", None)),
     (Unsettled(), ("unsettled", None, None)),
     (Stopped(change=Arrival(to="a")), ("stopped", None, {"from": None, "to": "a"})),
-    (
-        EventPosted(body="x", change=Arrival(to="trigger t")),
-        ("event", "x", {"from": None, "to": "trigger t"}),
-    ),
 ]
 
 
@@ -390,9 +385,8 @@ def test_what_a_change_brings_is_read_from_its_activities():
     assert finishing([status(DONE, IssueStatus.CANCELLED)]) is None
     assert finishing([status(BACKLOG, PROGRESS)]) is None
     assert finishing([Commented(body="x")]) is None
-    # 外来的输入：用户的评论、事件；agent 的评论不算
+    # 外来的输入：用户的评论；agent 的评论不算
     assert from_outside(USER, [Commented(body="x")])
-    assert from_outside("a", [EventPosted(body="x", change=Arrival(to="trigger t"))])
     assert not from_outside("a", [Commented(body="x")])
 
 

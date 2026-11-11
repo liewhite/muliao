@@ -161,7 +161,7 @@ async def test_a_run_keeps_its_model_when_agent_toml_changes_mid_run(
     container, make_agent, models, monkeypatch
 ):
     """运行中途（这里是步间压缩时）改了 agent 的模型：这次运行压缩后续跑、压缩本身都还用开头那份配置。"""
-    monkeypatch.setattr(container.compactor, "_default_threshold", 1)
+    monkeypatch.setattr(container.compactor, "_threshold", 1)
     monkeypatch.setattr(container.compactor, "_keep_steps", 1)
     agent = await make_agent("alpha", model="m")
     calls: list[str] = []
@@ -200,7 +200,7 @@ async def test_a_run_with_nothing_to_hand_the_model_does_not_compact(
 ):
     agent = await make_agent("alpha", model="m")
     session, recorder = await _session_with_exchanges(container, models, agent.id, 3)
-    monkeypatch.setattr(container.compactor, "_default_threshold", 1)
+    monkeypatch.setattr(container.compactor, "_threshold", 1)
     monkeypatch.setattr(container.compactor, "_keep_steps", 1)
     async with container.db.transaction() as s:
         container.queue.enqueue(

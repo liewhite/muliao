@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.platform.tasks import TaskQueue
 from muliao.sessions.directory import among_in, keyed_among, keyed_rows_among, of_agent_in
-from muliao.sessions.events import Recipient, ToKeyed, ToSender, ToSession
+from muliao.sessions.events import Recipient, ToKeyed, ToSession
 from muliao.sessions.holds import active_among, with_active_among
 from muliao.sessions.lanes import keyed_receive_lane, receive_lane, session_lane
 from muliao.sessions.mailbox import open_asks_among
@@ -100,10 +100,7 @@ async def sessions_blocking_agent_deletion_in(s: AsyncSession, queue: TaskQueue,
 @dataclass(frozen=True)
 class RecipientState:
     """一个收件方（events.Recipient）现在的工作状态，和它对应的会话：一个会话的、按 key 定位的是它现在的那个会话（还没建出来、
-    已删除为 None）；一个发送方全部会话的，是不空闲的那个（先取 running），全都空闲为 None。防重叠只看 state；session_id 给通知与界面指到会话。
-
-    一个发送方全部会话的算不上「投给还没建出来的会话、还在路上的来信」：不知道投给哪个 agent，按 key 的 lane 无从问起；那只是
-    投递前的毫秒级窗口。"""
+    已删除为 None）。防重叠只看 state；session_id 给通知与界面指到会话。"""
 
     state: WorkState
     session_id: str | None
@@ -128,8 +125,8 @@ class SessionActivity:
         """一批句柄的 recipient_in，按顺序；查询次数与句柄数无关（触发器列表一次要几百个，事务持有全局写锁）。"""
         direct = {r.session_id for r in recipients if isinstance(r, ToSession)}
         existing = set(await among_in(s, direct)) if direct else set()
-        # 按 key 与按发送方的：一次查出这些发送方开出的会话，(发送方, agent) -> 会话
-        senders = {r.sender for r in recipients if isinstance(r, ToKeyed | ToSender)}
+        # 按 key 的：一次查出这些发送方开出的会话，(发送方, agent) -> 会话
+        senders = {r.sender for r in recipients if isinstance(r, ToKeyed)}
         keyed = await keyed_rows_among(s, senders)
         states = await work_states_in(s, self._queue, list(direct | {x.id for x in keyed.values()}))
         # 按 key 定位、会话还没建出来的：信还排着就算 running（信一投就建出会话开始处理）
@@ -150,12 +147,6 @@ class SessionActivity:
                         return RecipientState(states[session.id], session.id)
                     lane = keyed_receive_lane(sender.kind, sender.ref, agent_id)
                     return RecipientState(WorkState.RUNNING if lane in pending else WorkState.IDLE, None)
-                case ToSender(sender=sender):
-                    ids = [x.id for (r, _), x in keyed.items() if r == sender]
-                    for wanted in (WorkState.RUNNING, WorkState.WAITING):
-                        if busy := [x for x in ids if states[x] == wanted]:
-                            return RecipientState(wanted, busy[0])
-                    return RecipientState(WorkState.IDLE, None)
                 case other:
                     assert_never(other)
 

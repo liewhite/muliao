@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field
 
 from muliao.platform.messaging import Command, DomainEvent
 from muliao.sessions.origins import Sender, SessionOrigin
@@ -128,8 +128,8 @@ class SessionKey(BaseModel):
     title: str
 
 
-# 别的领域的来信投到哪个会话：已有会话的 id（在其中续写）、新建的会话、按发送方定位的会话
-type MailTarget = str | Annotated[NewConversation | SessionKey, Field(discriminator="to")]
+# 别的领域的来信投到哪个会话：新建的会话（触发器）、按发送方定位的会话（issue）
+type MailTarget = Annotated[NewConversation | SessionKey, Field(discriminator="to")]
 
 
 class ToSession(BaseModel):
@@ -149,18 +149,8 @@ class ToKeyed(BaseModel):
     agent_id: str
 
 
-class ToSender(BaseModel):
-    """收件方是这个发送方开出的全部按 key 定位的会话（不分 agent）：发送方只知道投给谁由别的领域再定的时候用（触发器投进
-    issue，issue 领域再定投给哪个 agent）。"""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-    to: Literal["sender"] = "sender"
-    sender: Sender
-
-
 # 投递之后能问「忙不忙」的句柄（归属表第 7 行）：形状由会话领域定，发送方原样存下、原样交回 SessionActivity.recipient_in
-type Recipient = Annotated[ToSession | ToKeyed | ToSender, Field(discriminator="to")]
-RECIPIENT: TypeAdapter[Recipient] = TypeAdapter(Recipient)
+type Recipient = Annotated[ToSession | ToKeyed, Field(discriminator="to")]
 
 
 class SenderMail(BaseModel):
@@ -175,7 +165,7 @@ class SenderMail(BaseModel):
 
 class Receive(Command):
     """把一封来信投进会话的信箱（inbound.receive），在会话领域自己的事务里。发送方在自己的事务里先用
-    receive_command_in 校验、记下自己的状态，同一事务发出它（触发器到点、收到 webhook）。投递时会话或 agent 已被
+    receive_command_in 校验、记下自己的状态，同一事务发出它（触发器触发、issue 有新动态）。投递时会话或 agent 已被
     删除（校验之后的变化）就不投，记日志。"""
 
     TYPE = "session.receive"

@@ -35,29 +35,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/hooks/{name}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Hook
-         * @description 外部事件入口：Authorization: Bearer <token>。不带 session_id 时按触发器的投递目标投递（默认新建会话）；带上之前
-         *     返回的则以该会话为默认目标继续。返回的 session_id 是这次开出或续写的第一个会话（触发器的 last_session_id 由同一次投递的收件方问出，会话还在时是它）；
-         *     整次只投进了 issue、或要续写的会话还没建出来时为 null。第一个 `@route` 行之前没有内容时，带来的那个会话这次没收到
-         *     东西，返回的是后面各段开出或续写的第一个会话（没有则为 null）。
-         */
-        post: operations["hook_api_hooks__name__post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/agent-defaults": {
         parameters: {
             query?: never;
@@ -924,23 +901,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/trigger-routes/help": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Route Help */
-        get: operations["route_help_api_trigger_routes_help_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/triggers": {
         parameters: {
             query?: never;
@@ -993,26 +953,6 @@ export interface paths {
          *     不消耗一次性触发器预定的那一次；已结束的触发器不能再运行。
          */
         post: operations["run_trigger_api_triggers__trigger_id__run_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/triggers/{trigger_id}/webhook/token": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Generate Token
-         * @description 生成（或重新生成）webhook 的 token；只能由用户在这里生成，旧 token 立即失效。
-         */
-        post: operations["generate_token_api_triggers__trigger_id__webhook_token_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1313,7 +1253,7 @@ export interface paths {
         };
         /**
          * Features
-         * @description 服务端配置决定的界面行为：可选能力与界面要展示的默认值。
+         * @description 服务端配置决定的界面行为：可选能力。
          */
         get: operations["features_api_features_get"];
         put?: never;
@@ -2201,44 +2141,15 @@ export interface components {
             check_in: boolean;
         };
         /**
-         * EventPostedActivity
-         * @description 投到这个 issue 的一个事件（触发器的投递目标 issue:N）：actor 是事件来源所属的 agent。
-         */
-        EventPostedActivity: {
-            /** Id */
-            id: number;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Actor */
-            actor: string;
-            /** Session Id */
-            session_id: string | null;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "event";
-            /** Body */
-            body: string;
-            change: components["schemas"]["Arrival"];
-        };
-        /**
          * FaultSource
          * @description 哪个脚本出的错。
          * @enum {string}
          */
-        FaultSource: "precheck" | "route" | "stream";
+        FaultSource: "precheck" | "stream";
         /** FeaturesOut */
         FeaturesOut: {
             /** Transcription */
             transcription: boolean;
-            /** Compaction Threshold Tokens */
-            compaction_threshold_tokens: number;
-            /** Min Compaction Threshold Tokens */
-            min_compaction_threshold_tokens: number;
         };
         /** FieldRow */
         FieldRow: {
@@ -2352,7 +2263,7 @@ export interface components {
         IssueDetailOut: {
             issue: components["schemas"]["IssueOut"];
             /** Activities */
-            activities: (components["schemas"]["CreatedActivity"] | components["schemas"]["CommentedActivity"] | components["schemas"]["DescriptionEditedActivity"] | components["schemas"]["TitleChangedActivity"] | components["schemas"]["StatusChangedActivity"] | components["schemas"]["PriorityChangedActivity"] | components["schemas"]["AssigneeChangedActivity"] | components["schemas"]["OwnerChangedActivity"] | components["schemas"]["DependsOnChangedActivity"] | components["schemas"]["DependencyFinishedActivity"] | components["schemas"]["RunFailureActivity"] | components["schemas"]["UnsettledActivity"] | components["schemas"]["StoppedActivity"] | components["schemas"]["EventPostedActivity"])[];
+            activities: (components["schemas"]["CreatedActivity"] | components["schemas"]["CommentedActivity"] | components["schemas"]["DescriptionEditedActivity"] | components["schemas"]["TitleChangedActivity"] | components["schemas"]["StatusChangedActivity"] | components["schemas"]["PriorityChangedActivity"] | components["schemas"]["AssigneeChangedActivity"] | components["schemas"]["OwnerChangedActivity"] | components["schemas"]["DependsOnChangedActivity"] | components["schemas"]["DependencyFinishedActivity"] | components["schemas"]["RunFailureActivity"] | components["schemas"]["UnsettledActivity"] | components["schemas"]["StoppedActivity"])[];
         };
         /**
          * IssueFields
@@ -2767,8 +2678,6 @@ export interface components {
             /** Prompt */
             prompt: string;
             precheck?: components["schemas"]["Precheck"] | null;
-            /** Route */
-            route?: string | null;
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -2789,8 +2698,6 @@ export interface components {
             /** Enabled */
             enabled: boolean;
             precheck: components["schemas"]["Precheck"] | null;
-            /** Route */
-            route: string;
             /** Last Checked At */
             last_checked_at: string | null;
             /** Last Fired At */
@@ -3044,11 +2951,6 @@ export interface components {
             deny?: string[] | null;
             base?: components["schemas"]["RoleFields"] | null;
         };
-        /** RouteHelpOut */
-        RouteHelpOut: {
-            /** Address Help */
-            address_help: string;
-        };
         /**
          * RunDeltaEvent
          * @description 流式文字：接在同类的最后一条后面（或开始新的一条）。
@@ -3168,8 +3070,6 @@ export interface components {
             /** Prompt */
             prompt: string;
             precheck?: components["schemas"]["Precheck"] | null;
-            /** Route */
-            route?: string | null;
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -3190,8 +3090,6 @@ export interface components {
             /** Enabled */
             enabled: boolean;
             precheck: components["schemas"]["Precheck"] | null;
-            /** Route */
-            route: string;
             /** Last Checked At */
             last_checked_at: string | null;
             /** Last Fired At */
@@ -3307,8 +3205,6 @@ export interface components {
             parent_session_id: string | null;
             /** Thread */
             thread: string | null;
-            /** Compaction Threshold Tokens */
-            compaction_threshold_tokens: number | null;
             /** Unread */
             unread: boolean;
             /**
@@ -3337,8 +3233,6 @@ export interface components {
             parent_session_id: string | null;
             /** Thread */
             thread: string | null;
-            /** Compaction Threshold Tokens */
-            compaction_threshold_tokens: number | null;
             /** Unread */
             unread: boolean;
             /**
@@ -3433,8 +3327,6 @@ export interface components {
             prompt: string;
             /** Attachments */
             attachments?: string[];
-            /** Compaction Threshold Tokens */
-            compaction_threshold_tokens?: number | null;
         };
         /** StatusChangedActivity */
         StatusChangedActivity: {
@@ -3526,8 +3418,6 @@ export interface components {
             /** Prompt */
             prompt: string;
             precheck?: components["schemas"]["Precheck"] | null;
-            /** Route */
-            route?: string | null;
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -3548,8 +3438,6 @@ export interface components {
             /** Enabled */
             enabled: boolean;
             precheck: components["schemas"]["Precheck"] | null;
-            /** Route */
-            route: string;
             /** Last Checked At */
             last_checked_at: string | null;
             /** Last Fired At */
@@ -3693,11 +3581,6 @@ export interface components {
             kind: "title";
             change: components["schemas"]["Change_str_"];
         };
-        /** TokenOut */
-        TokenOut: {
-            /** Token */
-            token: string;
-        };
         /**
          * ToolOut
          * @description 一个内置工具（当前配置下注册的，工具自己声明读写与是否管理类），在规则里写作 `tool:<name>`。
@@ -3720,19 +3603,16 @@ export interface components {
         };
         /**
          * TriggerFault
-         * @description 一条出错：来源、原因；写错的投递地址（且只有它）带着那个地址（每个地址各一条）。
+         * @description 一条出错：来源、原因。
          */
         TriggerFault: {
             source: components["schemas"]["FaultSource"];
             /** Error */
             error: string;
-            /** Address */
-            address?: string | null;
         };
         /**
          * TriggerFields
-         * @description 触发器能改的字段（局部修改与它的 base 共用）。precheck 给出 null 表示去掉前置检查，不出现表示不变；route 给 `new`
-         *     回到默认。
+         * @description 触发器能改的字段（局部修改与它的 base 共用）。precheck 给出 null 表示去掉前置检查，不出现表示不变。
          */
         TriggerFields: {
             /** Prompt */
@@ -3744,8 +3624,6 @@ export interface components {
             /** Enabled */
             enabled?: boolean | null;
             precheck?: components["schemas"]["Precheck"] | null;
-            /** Route */
-            route?: string | null;
         };
         /** TriggerKindOut */
         TriggerKindOut: {
@@ -3753,7 +3631,7 @@ export interface components {
              * Name
              * @enum {string}
              */
-            name: "schedule" | "once" | "webhook" | "stream";
+            name: "schedule" | "once" | "stream";
             /** Description */
             description: string;
         };
@@ -3781,8 +3659,6 @@ export interface components {
             /** Enabled */
             enabled?: boolean | null;
             precheck?: components["schemas"]["Precheck"] | null;
-            /** Route */
-            route?: string | null;
             base?: components["schemas"]["TriggerFields"] | null;
         };
         /** UnreadOut */
@@ -3921,71 +3797,6 @@ export interface components {
             since: string;
         };
         /**
-         * WebhookConfig
-         * @description webhook 没有配置项。
-         */
-        WebhookConfig: Record<string, never>;
-        /** WebhookStatus */
-        WebhookStatus: {
-            /** Url */
-            url: string;
-            /** Has Token */
-            has_token: boolean;
-        };
-        /** WebhookTriggerCreate */
-        WebhookTriggerCreate: {
-            /** Name */
-            name: string;
-            /** Agent Id */
-            agent_id: string;
-            /** Prompt */
-            prompt: string;
-            precheck?: components["schemas"]["Precheck"] | null;
-            /** Route */
-            route?: string | null;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "webhook";
-            config: components["schemas"]["WebhookConfig"];
-        };
-        /** WebhookTriggerOut */
-        WebhookTriggerOut: {
-            /** Id */
-            id: number;
-            /** Name */
-            name: string;
-            /** Agent Id */
-            agent_id: string;
-            /** Prompt */
-            prompt: string;
-            /** Enabled */
-            enabled: boolean;
-            precheck: components["schemas"]["Precheck"] | null;
-            /** Route */
-            route: string;
-            /** Last Checked At */
-            last_checked_at: string | null;
-            /** Last Fired At */
-            last_fired_at: string | null;
-            /** Last Session Id */
-            last_session_id: string | null;
-            /** Disabled Reason */
-            disabled_reason: string | null;
-            /** Faults */
-            faults: components["schemas"]["TriggerFault"][];
-            /** Finished At */
-            finished_at: string | null;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "webhook";
-            config: components["schemas"]["WebhookConfig"];
-            status: components["schemas"]["WebhookStatus"];
-        };
-        /**
          * WorkState
          * @description 会话此刻在不在处理事情。running 与 waiting 都是「事情还没做完」：等待中的会话结果回来会自动接着做，
          *     所以除了展示，别的判断（issue 看板的「没人在处理」、触发器避免重叠）都只区分 idle 与否。
@@ -4047,39 +3858,6 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
-            };
-        };
-    };
-    hook_api_hooks__name__post: {
-        parameters: {
-            query?: {
-                session_id?: string | null;
-            };
-            header?: never;
-            path: {
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["FiredOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
             };
         };
     };
@@ -5803,26 +5581,6 @@ export interface operations {
             };
         };
     };
-    route_help_api_trigger_routes_help_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RouteHelpOut"];
-                };
-            };
-        };
-    };
     list_triggers_api_triggers_get: {
         parameters: {
             query?: {
@@ -5841,7 +5599,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": (components["schemas"]["ScheduleTriggerOut"] | components["schemas"]["OnceTriggerOut"] | components["schemas"]["WebhookTriggerOut"] | components["schemas"]["StreamTriggerOut"])[];
+                    "application/json": (components["schemas"]["ScheduleTriggerOut"] | components["schemas"]["OnceTriggerOut"] | components["schemas"]["StreamTriggerOut"])[];
                 };
             };
             /** @description Validation Error */
@@ -5864,7 +5622,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ScheduleTriggerCreate"] | components["schemas"]["OnceTriggerCreate"] | components["schemas"]["WebhookTriggerCreate"] | components["schemas"]["StreamTriggerCreate"];
+                "application/json": components["schemas"]["ScheduleTriggerCreate"] | components["schemas"]["OnceTriggerCreate"] | components["schemas"]["StreamTriggerCreate"];
             };
         };
         responses: {
@@ -5874,7 +5632,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ScheduleTriggerOut"] | components["schemas"]["OnceTriggerOut"] | components["schemas"]["WebhookTriggerOut"] | components["schemas"]["StreamTriggerOut"];
+                    "application/json": components["schemas"]["ScheduleTriggerOut"] | components["schemas"]["OnceTriggerOut"] | components["schemas"]["StreamTriggerOut"];
                 };
             };
             /** @description Validation Error */
@@ -5938,7 +5696,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ScheduleTriggerOut"] | components["schemas"]["OnceTriggerOut"] | components["schemas"]["WebhookTriggerOut"] | components["schemas"]["StreamTriggerOut"];
+                    "application/json": components["schemas"]["ScheduleTriggerOut"] | components["schemas"]["OnceTriggerOut"] | components["schemas"]["StreamTriggerOut"];
                 };
             };
             /** @description Validation Error */
@@ -5970,37 +5728,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FiredOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    generate_token_api_triggers__trigger_id__webhook_token_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                trigger_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TokenOut"];
                 };
             };
             /** @description Validation Error */
@@ -6403,7 +6130,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CreatedActivity"] | components["schemas"]["CommentedActivity"] | components["schemas"]["DescriptionEditedActivity"] | components["schemas"]["TitleChangedActivity"] | components["schemas"]["StatusChangedActivity"] | components["schemas"]["PriorityChangedActivity"] | components["schemas"]["AssigneeChangedActivity"] | components["schemas"]["OwnerChangedActivity"] | components["schemas"]["DependsOnChangedActivity"] | components["schemas"]["DependencyFinishedActivity"] | components["schemas"]["RunFailureActivity"] | components["schemas"]["UnsettledActivity"] | components["schemas"]["StoppedActivity"] | components["schemas"]["EventPostedActivity"];
+                    "application/json": components["schemas"]["CreatedActivity"] | components["schemas"]["CommentedActivity"] | components["schemas"]["DescriptionEditedActivity"] | components["schemas"]["TitleChangedActivity"] | components["schemas"]["StatusChangedActivity"] | components["schemas"]["PriorityChangedActivity"] | components["schemas"]["AssigneeChangedActivity"] | components["schemas"]["OwnerChangedActivity"] | components["schemas"]["DependsOnChangedActivity"] | components["schemas"]["DependencyFinishedActivity"] | components["schemas"]["RunFailureActivity"] | components["schemas"]["UnsettledActivity"] | components["schemas"]["StoppedActivity"];
                 };
             };
             /** @description Validation Error */

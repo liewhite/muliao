@@ -50,8 +50,6 @@ class SessionOut(BaseModel):
     # 委派产生的子会话：父会话与 thread 名
     parent_session_id: str | None
     thread: str | None
-    # 建会话时给的压缩阈值；null 用全局默认
-    compaction_threshold_tokens: int | None
     # 有指向它的未读通知（用户在等的回答、提问、agent 主动通知、运行失败）：未读不另存，从通知派生
     unread: bool
     created_at: datetime
@@ -66,7 +64,6 @@ class SessionOut(BaseModel):
             origin=origin_of(s),
             parent_session_id=s.parent_session_id,
             thread=s.thread,
-            compaction_threshold_tokens=s.compaction_threshold_tokens,
             unread=unread,
             created_at=s.created_at,
             updated_at=s.updated_at,
@@ -238,8 +235,6 @@ class StartIn(BaseModel):
     prompt: str
     # 先经 POST /api/files 上传得到的 id
     attachments: list[str] = []
-    # 这个会话自己的压缩阈值（token）；不给用全局默认（GET /api/features 的 compaction_threshold_tokens）
-    compaction_threshold_tokens: int | None = None
 
 
 class ReplyIn(BaseModel):
@@ -282,7 +277,7 @@ async def start_session(c: C, body: StartIn) -> SessionOut:
     received = await c.sessions.receive(
         UserMessage(
             content=body.prompt,
-            session=NewChat(body.agent_id, compaction_threshold_tokens=body.compaction_threshold_tokens),
+            session=NewChat(body.agent_id),
             attachments=tuple(body.attachments),
         )
     )

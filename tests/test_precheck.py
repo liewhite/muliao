@@ -13,7 +13,6 @@ from muliao.triggers.service import trigger_in
 from tests.conftest import login
 from tests.test_flow import deliver, mail_of, tasks_of
 from tests.test_triggers import _make_due
-from tests.test_webhooks import _bearer, _create
 
 
 def test_output_mode_fires_on_any_output():
@@ -61,7 +60,7 @@ def precheck_error(trigger) -> str | None:
     return errors[0] if errors else None
 
 
-def test_faults_alert_once_per_source_and_address_keep_the_latest_and_clear_by_source():
+def test_faults_alert_once_per_source_keep_the_latest_and_clear_by_source():
     from muliao.triggers.tables import Trigger
 
     trigger = Trigger(name="t", kind="schedule", prompt="p", faults=[])
@@ -70,17 +69,11 @@ def test_faults_alert_once_per_source_and_address_keep_the_latest_and_clear_by_s
     assert record(trigger, [boom]) == [boom]
     assert record(trigger, [TriggerFault(source=FaultSource.PRECHECK, error="boom again")]) == []
     assert precheck_error(trigger) == "boom again"
-    # 写错的地址按地址各算一条
-    a = TriggerFault(source=FaultSource.ROUTE, address="agent:a", error="no agent")
-    b = TriggerFault(source=FaultSource.ROUTE, address="issue:9", error="no issue")
-    assert record(trigger, [a]) == [a]
-    assert record(trigger, [a, b]) == [b]
+    stream = TriggerFault(source=FaultSource.STREAM, error="exited")
+    assert record(trigger, [stream]) == [stream]
     # 恢复只清本来源；人工干预清全部
     recovered(trigger, FaultSource.PRECHECK)
-    assert precheck_error(trigger) is None and [f.address for f in faults_of(trigger)] == [
-        "agent:a",
-        "issue:9",
-    ]
+    assert precheck_error(trigger) is None and faults_of(trigger) == [stream]
     reset(trigger)
     assert faults_of(trigger) == []
 
@@ -119,7 +112,7 @@ async def test_schedule_runs_the_agent_only_when_the_precheck_has_output(contain
     await _tick(container, trigger.id)
     assert await tasks_of(container, RUN_TASK) == []
     checked = await container.triggers.get_by_name("watch")
-    assert checked.last_checked_at is not None and checked.last_target is None
+    assert checked.last_checked_at is not None and checked.last_session_id is None
 
     (workspace / "inbox.txt").write_text("alice: deploy is broken\n")
     await _tick(container, trigger.id)
@@ -188,7 +181,7 @@ async def test_a_failing_precheck_is_handed_to_the_agent_once_per_streak_not_to_
     sessions = await container.sessions.list(agent_id=alpha, origins=[Origin.TRIGGER], limit=10, offset=0)
     assert [x.session.origin_ref for x in sessions] == [str(trigger.id)]
     # 告警会话不算这个触发器的一次触发
-    assert failed.last_target is None
+    assert failed.last_session_id is None
 
     (workspace / "ok").write_text("")
     await _tick(container, trigger.id)
@@ -264,32 +257,25 @@ async def test_precheck_secrets_must_exist_when_the_trigger_is_created(container
         await _schedule(container, alpha, Precheck(command="true", secrets=["NOPE"]))
 
 
-async def test_webhook_precheck_filters_the_event_and_hides_failures_from_the_caller(
-    client, container, make_agent
-):
+async def test_http_patch_sets_keeps_and_removes_the_precheck(client, make_agent):
     alpha = (await make_agent("alpha")).id
     await login(client)
-    trigger, token = await _create(client, alpha)
+    created = await client.post(
+        "/api/triggers",
+        json={
+            "name": "t",
+            "agent_id": alpha,
+            "kind": "schedule",
+            "prompt": "p",
+            "config": {"cron": "0 9 * * *"},
+        },
+    )
+    trigger = created.json()
     resp = await client.patch(
         f"/api/triggers/{trigger['id']}",
         json={"precheck": {"command": "grep -i urgent || true"}},
     )
     assert resp.status_code == 200 and resp.json()["precheck"]["command"] == "grep -i urgent || true"
-
-    quiet = await client.post("/api/hooks/github", content="routine update\n", headers=_bearer(token))
-    assert quiet.status_code == 202 and quiet.json()["session_id"] is None
-    loud = await client.post("/api/hooks/github", content="ok\nURGENT: prod down\n", headers=_bearer(token))
-    assert loud.json()["session_id"] is not None
-    turns = await tasks_of(container, RUN_TASK)
-    [prompt] = [m.content for m in await mail_of(container)]
-    assert len(turns) == 1 and "URGENT: prod down" in prompt
-    assert "routine" not in prompt and "ok\n" not in prompt
-
-    await client.patch(
-        f"/api/triggers/{trigger['id']}", json={"precheck": {"command": "echo secret-ish >&2; exit 1"}}
-    )
-    broken = await client.post("/api/hooks/github", content="x", headers=_bearer(token))
-    assert broken.status_code == 502 and "secret-ish" not in broken.text
 
     # 不给 precheck 字段 = 不变；给 null = 去掉
     assert (await client.patch(f"/api/triggers/{trigger['id']}", json={"enabled": True})).json()[

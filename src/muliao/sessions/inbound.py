@@ -20,7 +20,6 @@ from typing import assert_never
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.api import AgentArchived, Availability, agent_in, availability_in, runnable_agent_in
-from muliao.config import MIN_COMPACTION_THRESHOLD_TOKENS
 from muliao.errors import Conflict, CorruptState, Forbidden, InvalidInput, NotFound
 from muliao.files.api import FileMeta, load_metas
 from muliao.platform.db import utcnow
@@ -93,8 +92,6 @@ class NewSession:
     thread: str | None = None
     # 发送方预先分配的会话 id（NewConversation）；None 时生成
     id: str | None = None
-    # 这个会话自己的压缩阈值（token）；None 用全局默认。只有用户在界面上新建会话（NewChat）会给
-    compaction_threshold_tokens: int | None = None
 
 
 @dataclass(frozen=True)
@@ -102,8 +99,6 @@ class NewChat:
     """用户在界面上新建会话：标题由这条消息推导（文字的第一行，只发了文件时用文件名）。"""
 
     agent_id: str
-    # 这个会话自己的压缩阈值（token）；None 用全局默认
-    compaction_threshold_tokens: int | None = None
 
 
 @dataclass(frozen=True)
@@ -204,11 +199,6 @@ async def create_session(s: AsyncSession, *, sender: From, spec: NewSession) -> 
             f"delegated session must be created by its parent {spec.parent_session_id}, "
             f"not {sender.parent_session_id}"
         )
-    threshold = spec.compaction_threshold_tokens
-    if threshold is not None and threshold < MIN_COMPACTION_THRESHOLD_TOKENS:
-        raise InvalidInput(
-            f"compaction threshold must be at least {MIN_COMPACTION_THRESHOLD_TOKENS} tokens, got {threshold}"
-        )
     return await add_in(
         s,
         session_id=new_id() if spec.id is None else spec.id,
@@ -220,7 +210,6 @@ async def create_session(s: AsyncSession, *, sender: From, spec: NewSession) -> 
         origin_ref=sender.ref if isinstance(sender, TriggerOrigin | IssueOrigin) else None,
         parent_session_id=spec.parent_session_id,
         thread=spec.thread,
-        compaction_threshold_tokens=spec.compaction_threshold_tokens,
     )
 
 
@@ -281,7 +270,7 @@ class Checked:
 
 
 async def agent_refusal_in(s: AsyncSession, agent_id: str) -> Refused | None:
-    """新来信能不能交给这个 agent（不能时是原因）：check_in 用它，别的领域提前校验（如触发器存默认目标时）也问它。"""
+    """新来信能不能交给这个 agent（不能时是原因，check_in 用）。"""
     match await availability_in(s, agent_id):
         case Availability.RUNNABLE:
             return None
@@ -383,7 +372,7 @@ async def receive_command_in(s: AsyncSession, mail: SenderMail) -> Accepted | Re
             assert_never(other)
     command = Receive(mail=mail)
     match mail.session:
-        case str(session_id) | NewConversation(id=session_id):
+        case NewConversation(id=session_id):
             return Accepted(command, ToSession(session_id=session_id), session_id)
         case SessionKey(agent_id=agent_id):
             recipient = ToKeyed(sender=mail.sender, agent_id=agent_id)
@@ -420,12 +409,8 @@ async def receive_into(s: AsyncSession, queue: TaskQueue, inbound: Inbound, chec
                 spec = NewSession(agent_id=agent_id, title=title)
             case NewConversation(id=session_id, agent_id=agent_id, title=title):
                 spec = NewSession(agent_id=agent_id, title=title, id=session_id)
-            case NewChat(agent_id=agent_id, compaction_threshold_tokens=threshold):
-                spec = NewSession(
-                    agent_id=agent_id,
-                    title=_derived_title(inbound, attachments),
-                    compaction_threshold_tokens=threshold,
-                )
+            case NewChat(agent_id=agent_id):
+                spec = NewSession(agent_id=agent_id, title=_derived_title(inbound, attachments))
             case other:
                 assert_never(other)
         session = await create_session(s, sender=inbound.sender, spec=spec)

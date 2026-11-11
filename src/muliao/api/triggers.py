@@ -1,4 +1,4 @@
-"""触发器的通用管理接口；某种触发方式专有的操作在它自己的模块里（如 api/webhook.py）。"""
+"""触发器的管理接口。"""
 
 from datetime import datetime
 from typing import Annotated, Any, Literal
@@ -11,7 +11,6 @@ from muliao.api.deps import C, reads
 from muliao.api.fieldlock import check_base
 from muliao.platform.values import KEEP
 from muliao.triggers.api import (
-    ADDRESS_HELP,
     Fired,
     OnceConfig,
     OnceStatus,
@@ -24,9 +23,6 @@ from muliao.triggers.api import (
     TriggerKind,
     TriggerKindName,
     TriggerView,
-    WebhookConfig,
-    WebhookStatus,
-    route_address,
 )
 from muliao.triggers.tables import Trigger
 
@@ -50,8 +46,6 @@ class _TriggerCreateBase(BaseModel):
     prompt: str
     # 触发前的前置检查（见 triggers.precheck）；不给则每次都交给 agent
     precheck: Precheck | None = None
-    # 事件的默认投递目标（文字地址，RouteHelpOut.address_help）；不给是新开这个 agent 的会话
-    route: str | None = None
 
 
 class ScheduleTriggerCreate(_TriggerCreateBase):
@@ -64,30 +58,19 @@ class OnceTriggerCreate(_TriggerCreateBase):
     config: OnceConfig
 
 
-class WebhookTriggerCreate(_TriggerCreateBase):
-    kind: Literal["webhook"]
-    config: WebhookConfig
-
-
 class StreamTriggerCreate(_TriggerCreateBase):
     kind: Literal["stream"]
     config: StreamConfig
 
 
 TriggerCreate = Annotated[
-    ScheduleTriggerCreate | OnceTriggerCreate | WebhookTriggerCreate | StreamTriggerCreate,
+    ScheduleTriggerCreate | OnceTriggerCreate | StreamTriggerCreate,
     Field(discriminator="kind"),
 ]
 
 
-class RouteHelpOut(BaseModel):
-    # 投递目标文字地址的格式说明（与给 agent 的工具说明同一份）
-    address_help: str
-
-
 class TriggerFields(BaseModel):
-    """触发器能改的字段（局部修改与它的 base 共用）。precheck 给出 null 表示去掉前置检查，不出现表示不变；route 给 `new`
-    回到默认。"""
+    """触发器能改的字段（局部修改与它的 base 共用）。precheck 给出 null 表示去掉前置检查，不出现表示不变。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -96,7 +79,6 @@ class TriggerFields(BaseModel):
     config: dict[str, Any] | None = None
     enabled: bool | None = None
     precheck: Precheck | None = None
-    route: str | None = None
 
 
 class TriggerPatch(TriggerFields):
@@ -116,14 +98,12 @@ class _TriggerOutBase(BaseModel):
     prompt: str
     enabled: bool
     precheck: Precheck | None
-    # 事件的默认投递目标（文字地址）
-    route: str
     last_checked_at: datetime | None
     last_fired_at: datetime | None
     last_session_id: str | None
     # 被自动停用的原因（重新启用时清除）
     disabled_reason: str | None
-    # 脚本出错：前置检查失败、事件内容里写错而被丢掉的 `@route`（每个地址一条）、流式命令反复退出（triggers.faults）
+    # 脚本出错：前置检查失败、流式命令反复退出（triggers.faults）
     faults: list[TriggerFault]
     # 结束的时间：不为空表示它不会再触发了（一次性触发器跑完），只能查看与删除
     finished_at: datetime | None
@@ -141,28 +121,18 @@ class OnceTriggerOut(_TriggerOutBase):
     status: OnceStatus
 
 
-class WebhookTriggerOut(_TriggerOutBase):
-    kind: Literal["webhook"]
-    config: WebhookConfig
-    status: WebhookStatus
-
-
 class StreamTriggerOut(_TriggerOutBase):
     kind: Literal["stream"]
     config: StreamConfig
     status: StreamStatus
 
 
-TriggerOut = Annotated[
-    ScheduleTriggerOut | OnceTriggerOut | WebhookTriggerOut | StreamTriggerOut, Field(discriminator="kind")
-]
+TriggerOut = Annotated[ScheduleTriggerOut | OnceTriggerOut | StreamTriggerOut, Field(discriminator="kind")]
 _TRIGGER_OUT: TypeAdapter[TriggerOut] = TypeAdapter(TriggerOut)
 
 
 class FiredOut(BaseModel):
-    # 触发一次的结果（手动触发与 webhook 共用）：是否投出了信（前置检查判定这次不触发时为 false），代表这次触发的会话
-    # （Fired.session_id：开出或续写的第一个已知会话，触发器的 last_session_id 由同一次投递的收件方问出；只投进了 issue、或要续写的会话
-    # 还没建出来时为 null）
+    # 手动触发一次的结果：是否投出了信（前置检查判定这次不触发时为 false），这次新开的会话（没触发时为 null）
     fired: bool
     session_id: str | None
 
@@ -188,7 +158,6 @@ def _out_of(view: TriggerView, names: AgentNames) -> TriggerOut:
             status=view.status,
             enabled=t.enabled,
             precheck=view.precheck,
-            route=route_address(t, names),
             last_checked_at=t.last_checked_at,
             last_fired_at=t.last_fired_at,
             last_session_id=view.last_session_id,
@@ -202,11 +171,6 @@ def _out_of(view: TriggerView, names: AgentNames) -> TriggerOut:
 @router.get("/trigger-kinds", openapi_extra=reads())
 async def trigger_kinds(c: C) -> list[TriggerKindOut]:
     return [TriggerKindOut.of(k) for k in c.triggers.kinds.values()]
-
-
-@router.get("/trigger-routes/help", openapi_extra=reads())
-async def route_help() -> RouteHelpOut:
-    return RouteHelpOut(address_help=ADDRESS_HELP)
 
 
 @router.get("/triggers", openapi_extra=reads("agents", "sessions", "tasks", "triggers"))
@@ -227,7 +191,6 @@ async def create_trigger(c: C, body: TriggerCreate) -> TriggerOut:
         # 原样交给触发方式规范化（没填的默认值由它补上）
         config=body.config.model_dump(mode="json", exclude_unset=True),
         precheck=body.precheck,
-        route=body.route,
     )
     return await _out(c, trigger)
 
@@ -243,7 +206,6 @@ async def update_trigger(c: C, trigger_id: int, body: TriggerPatch) -> TriggerOu
         config=body.config,
         enabled=body.enabled,
         precheck=body.precheck if "precheck" in body.model_fields_set else KEEP,
-        route=body.route,
     )
     return await _out(c, trigger)
 

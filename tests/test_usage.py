@@ -218,18 +218,19 @@ async def test_a_failure_to_record_usage_does_not_fail_the_run(container, make_a
 
 
 async def test_session_detail_reports_the_sessions_own_running_total(client, container, make_agent, models):
-    """会话详情的累计 = model_usage 里这个会话各行之和（不分运行类型），不含别的会话；阈值是会话自己的。"""
+    """会话详情的累计 = model_usage 里这个会话各行之和（不分运行类型），不含别的会话；阈值是全局的。"""
     await login(client)
     alpha = await make_agent("alpha", model="m")
     models.models["m"] = answering()
-    created = await client.post(
-        "/api/sessions", json={"agent_id": alpha.id, "prompt": "hi", "compaction_threshold_tokens": 5000}
-    )
+    created = await client.post("/api/sessions", json={"agent_id": alpha.id, "prompt": "hi"})
     session_id = created.json()["id"]
 
     # 还没有模型回复：上下文大小未知，累计各项为 0
     fresh = (await client.get(f"/api/sessions/{session_id}")).json()
-    assert fresh["context"] == {"tokens": None, "threshold_tokens": 5000}
+    assert fresh["context"] == {
+        "tokens": None,
+        "threshold_tokens": container.settings.runtime.compaction_threshold_tokens,
+    }
     assert fresh["usage"] == {
         "requests": 0,
         "input_tokens": 0,

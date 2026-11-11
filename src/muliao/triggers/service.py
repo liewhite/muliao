@@ -2,9 +2,8 @@
 
 触发方式是多态的，分两部分实现，新增一种方式（例如消息队列）只需各加一个实现并在 triggers.assembly.TriggerDomain.build 里注册：
 - TriggerKind：纯逻辑——校验配置、推导运行状态，注册给 TriggerService；
-- 激活机制：怎么被触发——到期扫描循环（due.DueRunner，定时与一次性共用）、流式托管（stream.StreamRunner）、HTTP 入口
-  （webhook.Webhooks）……没有调用方等结果的调用 TriggerService.fire_activated，调用方在等结果的（webhook）调用 fire，
-  组装成事件交给会话领域的统一入口；两者只差脚本出错怎么处理（_By）。
+- 激活机制：怎么被触发——到期扫描循环（due.DueRunner，定时与一次性共用）、流式托管（stream.StreamRunner）……都调用
+  TriggerService.fire_activated，组装成事件交给会话领域的统一入口。
 
 触发先跑触发器的前置检查（若有，见 triggers.precheck）：没有事件就不调用 agent。检查在数据库事务之外执行。
 用户与 agent 的「立即运行一次」走 run：那是管理操作（见它的说明），不消耗一次性触发器预定的那一次。
@@ -12,7 +11,8 @@
 结束（finished_at）是所有触发方式共用的概念：这个触发器不会再触发了（一次性触发器用掉了它那一次）。已结束的
 不出现在默认列表、不能再修改启用或立即运行，但行与 id 保留，它发起过的会话因此仍查得到是谁发的。
 
-触发投的信件都没有用户在等（awaited = False），处理它的运行不推送，需要通知时由 agent 调用 notify_user。
+每次触发都新开触发器自己的 agent 的一个会话。触发投的信件都没有用户在等（awaited = False），处理它的运行不推送，
+需要通知时由 agent 调用 notify_user。
 """
 
 from __future__ import annotations
@@ -34,19 +34,30 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.api import (
     AgentArchived,
-    AgentNames,
     Availability,
     agent_in,
     availability_in,
     runnable_agent_in,
 )
 from muliao.agents.events import AgentDeleting
-from muliao.errors import Conflict, CorruptState, DomainError, Forbidden, InvalidInput, NotFound
+from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.platform.db import Database, utcnow
+from muliao.platform.ids import new_id
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tasks import Clock, Commit
 from muliao.platform.values import KEEP, Keep, local_time
-from muliao.sessions.api import RECIPIENT, Recipient, RecipientState, SessionActivity, WorkState
+from muliao.sessions.api import (
+    Accepted,
+    NewConversation,
+    RecipientState,
+    Refused,
+    SenderMail,
+    SessionActivity,
+    ToSession,
+    TriggerOrigin,
+    WorkState,
+    receive_command_in,
+)
 from muliao.triggers.faults import Faults, FaultSource, TriggerFault, faults_of, reset
 from muliao.triggers.precheck import (
     Precheck,
@@ -60,39 +71,27 @@ from muliao.triggers.precheck import (
     precheck_of,
     set_precheck,
 )
-from muliao.triggers.router import (
-    Plan,
-    Problem,
-    Rejected,
-    Sender,
-    Undeliverable,
-    check_target_in,
-    plan_in,
-    resolve_in,
-)
 from muliao.triggers.tables import Trigger
-from muliao.triggers.targets import DEFAULT, TARGET, Destination, Target, describe
 from muliao.workspace.api import AgentCommands
 
 log = logging.getLogger(__name__)
 
-# 出现在 webhook 地址里
 _NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
-# 事件内容原样进入 prompt（webhook 请求体、前置检查的输出），过大的应由来源裁剪或改为传引用
+# 事件内容原样进入 prompt（流式命令的输出、前置检查的输出），过大的应由来源裁剪或改为传引用
 EVENT_MAX_BYTES = 256 * 1024
 
 # 触发器开出的会话（Origin.TRIGGER）在指令里的说明（会话级、不变）。TriggerDomain.origin_notes 交给会话领域（sessions.api.OriginNotes）
 SESSION_NOTE = (
     "This run was started by a trigger (a schedule, or an external event shown inside <event>); nobody is "
-    "watching. Each firing starts a fresh conversation unless its sender continues this one, so keep anything "
-    "later firings need in memory or workspace files."
+    "watching. Each firing starts a fresh conversation, so keep anything later firings need in memory or "
+    "workspace files."
 )
 
 
 @dataclass(frozen=True)
 class TriggerView:
-    """触发器的读模型（HTTP 层与工具共用）：行、运行状态（这种方式自己的类型）、前置检查、脚本出错，上一次触发对应的会话
-    （last_target 现在对应的会话，见 SessionActivity.recipient_in：已删除、还没建出来、只投进了 issue 且都空闲时为 None）。"""
+    """触发器的读模型（HTTP 层与工具共用）：行、运行状态（这种方式自己的类型）、前置检查、脚本出错，上一次触发开出的会话
+    （已删除时为 None，问会话领域 SessionActivity.recipients_in）。"""
 
     trigger: Trigger
     status: BaseModel
@@ -102,31 +101,23 @@ class TriggerView:
 
 
 class _By(Enum):
-    """谁在触发：决定脚本出错（前置检查失败、内容里写错的地址）怎么处理。"""
+    """谁在触发：决定前置检查失败怎么处理。"""
 
-    # 用户或 agent 的「立即运行一次」：都只报给调用方，不记不告警（见 run）
+    # 用户或 agent 的「立即运行一次」：只报给调用方，不记不告警（见 run）
     RUN = "run"
-    # 外部系统的 webhook：调用方等着结果，写错的地址整次报错；检查失败是脚本的问题，记下并告警，同时报给调用方
-    WEBHOOK = "webhook"
-    # 激活机制（到期扫描、流式）：没人等结果，都记下并告警；写错的地址只丢那一段（见 fire_activated）
+    # 激活机制（到期扫描、流式）：没人等结果，记下并告警（见 fire_activated）
     ACTIVATION = "activation"
 
 
 @dataclass(frozen=True)
 class Fired:
-    """一次触发投出去的信。"""
+    """一次触发投出去的信：新开的会话（id 预先分配，投递之后通常毫秒级出现），触发器记成 last_session_id。"""
 
-    # 每次投递交给的会话，按投递顺序；投进 issue 的、或要续写的会话还没建出来时为 None
-    sessions: tuple[str | None, ...]
-    # 代表这次触发的那次投递（_deliver_in 定）：会话已知的第一次投递，都不知道时是第一次投递。recipient 是它的收件方
-    # （会话领域给的句柄），触发器记成 last_target，防重叠问它忙不忙，界面上的 last_session_id 也由它问出来；session_id
-    # 是它的会话，回给调用方（webhook、立即运行），只投进了 issue、或续写的会话还没建出来时为 None
-    recipient: Recipient
-    session_id: str | None
+    session_id: str
 
 
 class Skip(StrEnum):
-    """触发器自己的原因让这次没触发（不是目标的问题）。"""
+    """触发器自己的原因让这次没触发。"""
 
     # 已停用
     DISABLED = "disabled"
@@ -149,26 +140,12 @@ class CheckFailed:
     error: PrecheckFailed
 
 
-# 一次触发的结果：投出去了、这次没事（前置检查判定不触发、各段都是空的，为 None）、触发器自己不触发、检查失败、默认目标投不进
-type Outcome = Fired | None | Skipped | CheckFailed | Undeliverable
-
-
-def problem_error(problem: Undeliverable) -> DomainError:
-    """投不进报给在等结果的调用方（立即运行、webhook、创建修改时的地址校验）时的错误类型：按原因逐种对应 HTTP 状态。
-    目标不在了不用 NotFound：webhook 的 404 是「没有这个触发器」。"""
-    match problem.problem:
-        case Problem.BAD_ADDRESS | Problem.GONE:
-            return InvalidInput(problem.detail)
-        case Problem.ARCHIVED:
-            return Conflict(problem.detail)
-        case Problem.NOT_YOURS:
-            return Forbidden(problem.detail)
-        case other:
-            assert_never(other)
+# 一次触发的结果：投出去了、这次没事（前置检查判定不触发，为 None）、触发器自己不触发、检查失败
+type Outcome = Fired | None | Skipped | CheckFailed
 
 
 def _settled(outcome: Outcome) -> Fired | None:
-    """在等结果的调用方（立即运行、webhook）：没投出去的原因按种类报错。"""
+    """在等结果的调用方（立即运行）：没投出去的原因按种类报错。"""
     match outcome:
         case Fired() | None:
             return outcome
@@ -182,24 +159,12 @@ def _settled(outcome: Outcome) -> Fired | None:
             assert_never(other)
         case CheckFailed(error=error):
             raise error
-        case Undeliverable():
-            raise problem_error(outcome)
         case other:
             assert_never(other)
 
 
-def route_of(trigger: Trigger) -> Target:
-    """触发器的默认投递目标；没设时是新开它的 agent 的会话。"""
-    return DEFAULT if trigger.route is None else TARGET.validate_python(trigger.route)
-
-
-def route_address(trigger: Trigger, names: AgentNames) -> str:
-    """默认投递目标的文字地址（targets.ADDRESS_HELP），给模型与界面看。"""
-    return describe(route_of(trigger), names)
-
-
 # 全部触发方式的名字（各方式模块的 KIND）；接口契约里的种类就是它，与 TriggerDomain.build 注册的方式一一对应（tests/test_triggers.py）
-TriggerKindName = Literal["schedule", "once", "webhook", "stream"]
+TriggerKindName = Literal["schedule", "once", "stream"]
 
 
 class TriggerKind(Protocol):
@@ -213,7 +178,7 @@ class TriggerKind(Protocol):
         """校验并规范化 config，返回 (config, 由配置推导的 state)。
 
         在创建、修改配置（规范化后与原配置相同的不算）、重新启用时调用；TriggerService 把推导结果合并进已有 state，
-        所以实现不必、也不能负责保留与配置无关的部分（如 token 摘要）。
+        所以实现不必负责保留与配置无关的部分（如流式的运行状态）。
         """
         ...
 
@@ -222,7 +187,7 @@ class TriggerKind(Protocol):
         ...
 
     def status(self, trigger: Trigger) -> BaseModel:
-        """给界面与模型看的运行状态（如下次触发时间、地址），不含任何凭证。
+        """给界面与模型看的运行状态（如下次触发时间），不含任何凭证。
 
         每种方式有自己的状态类型；HTTP 接口按 kind 区分的联合类型（api/triggers.py）列出全部方式。
         """
@@ -291,31 +256,16 @@ def set_state(trigger: Trigger, **values: Any) -> None:
     trigger.state = {**trigger.state, **values}
 
 
-def last_target(trigger: Trigger) -> Recipient | None:
-    """上一次触发的收件方（会话领域给的句柄）；从没触发过为 None。存下的不合法是数据坏了（CorruptState）。"""
-    return None if trigger.last_target is None else _last_target(trigger)
-
-
-def _last_target(trigger: Trigger) -> Recipient:
-    try:
-        return RECIPIENT.validate_python(trigger.last_target)
-    except ValidationError as e:
-        raise CorruptState(
-            f"trigger {trigger.id} ({trigger.name}) has an invalid last_target: {trigger.last_target!r}"
-        ) from e
-
-
 async def previous_fire_state_in(
     s: AsyncSession, activity: SessionActivity, trigger: Trigger
 ) -> RecipientState:
-    """上一次触发的收件方现在的工作状态与对应的会话（会话领域按句柄回答，归属表第 7 行），从没触发过时是 idle。不是 idle
-    就还有没做完的事：在运行、有还没投递的来信（包括这次的），或在等后台任务、委派、到点唤醒、用户回答——等待中的会话
-    结果回来会自动接着做，再开一个会重叠。新开会话、续写最近的会话、投进 issue 都一样（用户 11-11 定，#627）。定时触发据此
-    跳过，流式触发据此让事件排队（触发器领域内部用）。"""
-    target = last_target(trigger)
-    if target is None:
+    """上一次触发开出的会话现在的工作状态（会话领域回答，归属表第 7 行；会话已删除时 session_id 为 None），从没触发过时是
+    idle。不是 idle 就还有没做完的事：在运行、有还没投递的来信（包括这次的），或在等后台任务、委派、到点唤醒、用户回答——
+    等待中的会话结果回来会自动接着做，再开一个会重叠（用户 11-11 定，#627）。定时触发据此跳过，流式触发据此让事件排队
+    （触发器领域内部用）。"""
+    if trigger.last_session_id is None:
         return RecipientState(WorkState.IDLE, None)
-    return await activity.recipient_in(s, target)
+    return await activity.recipient_in(s, ToSession(session_id=trigger.last_session_id))
 
 
 def finish_in(trigger: Trigger, now: datetime) -> None:
@@ -379,10 +329,12 @@ class TriggerService:
 
     async def views(self, triggers: list[Trigger]) -> list[TriggerView]:
         """触发器的读模型：行、它的触发方式给出的运行状态（TriggerKind.status）、解析好的前置检查与脚本出错，以及上一次
-        触发现在对应的会话（问会话领域，一个事务）。"""
-        fired = [t for t in triggers if t.last_target is not None]
+        触发开出的会话还在不在（问会话领域，一个事务）。"""
+        fired = [t for t in triggers if t.last_session_id is not None]
         async with self._db.transaction() as s:
-            states = await self._activity.recipients_in(s, [_last_target(t) for t in fired])
+            states = await self._activity.recipients_in(
+                s, [ToSession(session_id=t.last_session_id) for t in fired if t.last_session_id is not None]
+            )
         last = {t.id: state.session_id for t, state in zip(fired, states, strict=True)}
         sessions = [last.get(t.id) for t in triggers]
         return [
@@ -399,17 +351,6 @@ class TriggerService:
         不会分叉。要读 vault（它自己开事务），不能在别的事务里调用。"""
         await self._commands.prepare(agent_id, keys, shell=True)
 
-    async def _route_in(self, s: AsyncSession, address: str, agent_id: str) -> dict[str, Any] | None:
-        """默认投递目标的文字地址解析成存储的形式，写错或现在投不进时按原因报错（problem_error）；新开自己的会话（默认）
-        存为 None。"""
-        match target := await resolve_in(s, address, agent_id):
-            case Undeliverable():
-                raise problem_error(target)
-            case _:
-                if (problem := await check_target_in(s, target)) is not None:
-                    raise problem_error(problem)
-                return None if target == DEFAULT else target.model_dump()
-
     async def create(
         self,
         *,
@@ -419,9 +360,7 @@ class TriggerService:
         prompt: str,
         config: dict[str, Any],
         precheck: Precheck | None = None,
-        route: str | None = None,
     ) -> Trigger:
-        """route 是默认投递目标的文字地址（targets.ADDRESS_HELP），不给是新开这个 agent 的会话。"""
         if not prompt.strip():
             raise InvalidInput("trigger prompt must not be empty")
         trigger_kind = self.kind(kind)
@@ -443,8 +382,6 @@ class TriggerService:
             async with self._db.transaction() as s:
                 # 正在删除的 agent 按不存在处理：否则删除流程清理过之后又建的触发器没人认领；归档的拒绝（它不能运行）
                 await runnable_agent_in(s, agent_id)
-                if route is not None:
-                    trigger.route = await self._route_in(s, route, agent_id)
                 s.add(trigger)
         except IntegrityError as e:
             raise Conflict(f"trigger {name!r} already exists") from e
@@ -477,9 +414,8 @@ class TriggerService:
         config: dict[str, Any] | None = None,
         enabled: bool | None = None,
         precheck: Precheck | None | Keep = KEEP,
-        route: str | None = None,
     ) -> Trigger:
-        """在一个事务里只修改给出的字段（None 不变；precheck 为 KEEP 不变、None 去掉；route 给 `new` 回到默认）。
+        """在一个事务里只修改给出的字段（None 不变；precheck 为 KEEP 不变、None 去掉）。
         重新启用时清除停用的原因；换前置检查、改配置或重新启用是人工干预，清掉脚本的出错（faults.reset），再出错重新告警。"""
         if prompt is not None and not prompt.strip():
             raise InvalidInput("trigger prompt must not be empty")
@@ -500,8 +436,6 @@ class TriggerService:
                 reset(trigger)
             if prompt is not None:
                 trigger.prompt = prompt
-            if route is not None:
-                trigger.route = await self._route_in(s, route, trigger.agent_id)
             reenabled = enabled is True and not trigger.enabled
             if (rederived := self._rederive(trigger, config, enabled)) is not None:
                 derived_config, derived = rederived
@@ -580,61 +514,34 @@ class TriggerService:
                 )
             raise NotFound(f"trigger {name!r} not found")
 
-    async def _plan_in(
-        self, s: AsyncSession, trigger: Trigger, payload: str | None, to: Destination | None, by: _By
-    ) -> Plan | Undeliverable:
-        """组装成事件、按投递目标规划（router.plan_in，只读，只由 _fire 调用）。
-
-        payload 为事件内容（无则只有处理说明），按目标投递：内容里的 `@route` 行把各段分到各自的目标，其余投到默认目标：
-        调用方给出的 to（如 webhook 续写的会话），否则是触发器的 route（没设是新开它的 agent 的会话）。每段前面都带处理说明。
-        默认目标投不进时整次不投（返回它的 Undeliverable）。内容里的地址投不进时：调用方在等结果（立即运行、webhook）同样整次
-        不投（返回第一个）；激活机制只丢那一段，其余照投（_deliver_in 记成出错并告警，triggers.faults）。
-        只读：整次不投时这次什么都不写（前置检查的结果也不记，与没跑过一样）。"""
-        sender = Sender.of(trigger, f"{trigger.name} · {local_time(self._clock(), self._tz)}")
-        default = route_of(trigger) if to is None else to
-        plan = await plan_in(s, sender, payload, default, lambda body: event_prompt(trigger.prompt, body))
-        if isinstance(plan, Plan) and plan.rejected and by is not _By.ACTIVATION:
-            return plan.rejected[0].problem
-        return plan
-
-    async def _deliver_in(self, s: AsyncSession, trigger: Trigger, plan: Plan) -> Fired | None:
-        """按规划交出去（只由 _fire 调用）：同一事务里记下触发、发出各次投递，触发记下了就一定投递，投递恰好一次。新建的
-        会话 id 在规划时预先分配，投递之后（通常毫秒级）会话才出现。内容里被拒的地址记成出错并告警；各段都是空的时不触发
-        （None）。"""
-        if plan.rejected:
-            await self._faults.report_in(
-                s,
-                trigger,
-                [
-                    TriggerFault(
-                        source=FaultSource.ROUTE, address=r.address, error=" ".join(r.problem.detail.split())
-                    )
-                    for r in plan.rejected
-                ],
-                lambda new: route_alert(trigger, new, plan.rejected),
-            )
-        if not plan.routed:
-            log.info(
-                "trigger event has no content to deliver after routing, not firing",
-                extra={"trigger": trigger.name, "dropped": len(plan.rejected)},
-            )
-            return None
-        lead = next((r for r in plan.routed if r.session_id is not None), plan.routed[0])
-        fired = Fired(
-            sessions=tuple(r.session_id for r in plan.routed),
-            recipient=lead.recipient,
-            session_id=lead.session_id,
+    async def _deliver_in(self, s: AsyncSession, trigger: Trigger, payload: str | None) -> Fired:
+        """新开触发器的 agent 的一个会话交出这次事件（只由 _fire 调用）：同一事务里记下触发、发出投递，触发记下了就一定投递，
+        投递恰好一次。会话 id 在这里预先分配，投递之后（通常毫秒级）会话才出现。payload 为事件内容（无则只有处理说明）。"""
+        mail = SenderMail(
+            sender=TriggerOrigin(trigger_id=trigger.id),
+            content=event_prompt(trigger.prompt, payload),
+            session=NewConversation(
+                id=new_id(),
+                agent_id=trigger.agent_id,
+                title=f"{trigger.name} · {local_time(self._clock(), self._tz)}",
+            ),
         )
-        for r in plan.routed:
-            self._messaging.send_in(s, r.command)
+        match await receive_command_in(s, mail):
+            case Accepted(command=command, session_id=str(session_id)):
+                pass
+            case Refused(detail=detail):
+                # 新会话只看 agent 能不能运行，_fire 在同一事务里刚由 _skip_in 确认过
+                raise RuntimeError(f"trigger {trigger.name!r}: own agent refused after the check: {detail}")
+            case other:
+                raise RuntimeError(f"trigger {trigger.name!r}: unexpected delivery {other!r}")
+        self._messaging.send_in(s, command)
         trigger.last_fired_at = self._clock()
         # 定时跳过、流式排队问它忙不忙（previous_fire_state_in）
-        trigger.last_target = fired.recipient.model_dump(mode="json")
+        trigger.last_session_id = session_id
         log.info(
-            "trigger fired",
-            extra={"trigger": trigger.name, "kind": trigger.kind, "sessions": list(fired.sessions)},
+            "trigger fired", extra={"trigger": trigger.name, "kind": trigger.kind, "session_id": session_id}
         )
-        return fired
+        return Fired(session_id=session_id)
 
     async def run(self, trigger_id: int) -> Fired | None:
         """用户或 agent 的「立即运行一次」（不带事件内容）：管理操作，不消耗一次性触发器预定的那一次。
@@ -646,18 +553,7 @@ class TriggerService:
         """
         async with self._db.transaction() as s:
             await self._manageable_in(s, trigger_id)
-        return _settled(await self._fire(trigger_id, None, None, _By.RUN))
-
-    async def fire(
-        self, trigger_id: int, payload: str | None = None, *, to: Destination | None = None
-    ) -> Fired | None:
-        """webhook 的触发：调用方等着结果，返回投出去的信。有前置检查时先跑检查：不触发返回 None（这次不调用 agent）；
-        检查失败记成触发器的出错并告警（脚本的问题，触发器保持启用），同时抛出 PrecheckFailed。内容里投不进的地址整次报错，
-        没投出去的其余原因也按种类报错（_settled）。
-
-        to 是这次替代触发器 route 的默认目标（如 webhook 续写的会话），内容里的 `@route` 行照样生效。触发记下之后马上执行
-        投信（Messaging 在提交后执行），通常返回时会话已经存在，调用方可以立即续写；做不到时由 worker 稍后投递。"""
-        return _settled(await self._fire(trigger_id, payload, to, _By.WEBHOOK))
+        return _settled(await self._fire(trigger_id, None, _By.RUN))
 
     async def fire_activated(self, trigger_id: int, payload: str | None = None) -> None:
         """激活机制（到期扫描、流式）的触发：没有调用方等着结果，按结果逐种处理。
@@ -665,11 +561,9 @@ class TriggerService:
         这是激活机制的入口，不看触发器是否已结束（finished_at）：按到期时间触发的方式（triggers.due）在调用前就把这次到期
         消耗掉了，一次性触发器那时已经结束。
         - 前置检查失败：已记成出错并告警；脚本的故障往往是暂时的，保持启用；
-        - 事件内容里的地址投不进：不是失败，只丢那一段、记成出错并告警（地址可能来自脚本转发的外部内容，不该停掉触发器）；
         - 它的 agent 已归档：跳过，触发器保持启用；一次性触发器那一次已用掉，告警说任务没做（agent 收不到，退给用户）；
-        - 被停用或删除：不是触发失败，只记日志，不覆盖失败原因；
-        - 默认目标投不进（目标 agent 归档或不在了、续写的会话没了）：停用并记 disabled_reason。"""
-        match await self._fire(trigger_id, payload, None, _By.ACTIVATION):
+        - 被停用或删除：不是触发失败，只记日志，不覆盖失败原因。"""
+        match await self._fire(trigger_id, payload, _By.ACTIVATION):
             case Fired() | None | CheckFailed():
                 pass
             case Skipped(why=Skip.ARCHIVED, detail=detail):
@@ -679,10 +573,6 @@ class TriggerService:
                 log.info("activated fire skipped: %s", detail, extra={"trigger_id": trigger_id})
             case Skipped(why=other):
                 assert_never(other)
-            case Undeliverable(problem=problem, detail=detail):
-                reason = f"route target {problem}: {detail}"
-                if await self.disable(trigger_id, reason):
-                    log.error("trigger disabled: %s", reason, extra={"trigger_id": trigger_id})
             case other:
                 assert_never(other)
 
@@ -703,7 +593,7 @@ class TriggerService:
                 summary=trigger.prompt,
             )
 
-    async def _fire(self, trigger_id: int, payload: str | None, to: Destination | None, by: _By) -> Outcome:
+    async def _fire(self, trigger_id: int, payload: str | None, by: _By) -> Outcome:
         async with self._db.transaction() as s:
             trigger = await s.get(Trigger, trigger_id)
             if trigger is None:
@@ -712,13 +602,7 @@ class TriggerService:
             if (skipped := await _skip_in(s, trigger)) is not None:
                 return skipped
             if trigger.precheck is None:
-                match plan := await self._plan_in(s, trigger, payload, to, by):
-                    case Plan():
-                        return await self._deliver_in(s, trigger, plan)
-                    case Undeliverable():
-                        return plan
-                    case other:
-                        assert_never(other)
+                return await self._deliver_in(s, trigger, payload)
             name, agent_id, stored = trigger.name, trigger.agent_id, trigger.precheck
         precheck = Precheck.model_validate(stored)
 
@@ -747,15 +631,8 @@ class TriggerService:
                         extra={"trigger": name, "baseline": decision.baseline},
                     )
                     return None
-                match plan := await self._plan_in(s, trigger, decision.event, to, by):
-                    case Plan():
-                        passed(trigger, precheck, output, self._clock())
-                        return await self._deliver_in(s, trigger, plan)
-                    case Undeliverable():
-                        # 整次不投：检查的结果也不记（与没跑过一样，下次照样比较）
-                        return plan
-                    case other:
-                        assert_never(other)
+                passed(trigger, precheck, output, self._clock())
+                return await self._deliver_in(s, trigger, decision.event)
         # 判定本身失败（差异过大）：在这个事务之外记录
         if by is not _By.RUN:
             await self._precheck_failed(trigger_id, stored, str(failure))
@@ -774,36 +651,3 @@ class TriggerService:
                 [TriggerFault(source=FaultSource.PRECHECK, error=error)],
                 lambda _new: precheck_alert(trigger, error),
             )
-
-
-def route_alert(trigger: Trigger, new: list[TriggerFault], rejected: list[Rejected]) -> str:
-    """事件内容里出现新的写错的投递地址时交给触发器所属 agent 的信件：哪些地址、为什么不行、丢掉的内容，以及怎么处理。"""
-    lines = [
-        f"An event of your trigger `{trigger.name}` (kind {trigger.kind}) had `@route` lines whose address was "
-        "rejected, so those parts were dropped (not delivered anywhere); the rest of the event was delivered as "
-        "usual and the trigger stays enabled. The lines come from your script's output (the precheck, or the "
-        "stream command), so this is yours to look at; the user has not been told.",
-        "",
-    ]
-    for fault in new:
-        dropped = "\n".join(r.body for r in rejected if r.address == fault.address)
-        lines += [
-            f"`@route {fault.address}`: {fault.error}",
-            "dropped part:",
-            "```",
-            dropped[:2000],
-            "```",
-            "",
-        ]
-    lines += [
-        "What to do:",
-        "- Your script wrote a wrong address (a typo, an agent or issue that is gone): fix the script; for a stream, "
-        "restart it by disabling and re-enabling the trigger.",
-        "- The line was outside text your script passes on (a message, a web page) that happens to start with "
-        "`@route`: make the script indent such lines, so outside content cannot pick where events go.",
-        "- If the dropped part matters, handle it yourself now.",
-        "Different bad addresses showing up again and again usually mean the script forwards outside text unindented.",
-        "You are told once per distinct bad address; `trigger_list` shows them all in `faults`, cleared when "
-        "you change the trigger's precheck or config (or re-enable it).",
-    ]
-    return "\n".join(lines)

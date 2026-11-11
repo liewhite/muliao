@@ -4,11 +4,11 @@
 
 - 下次时间记在 state["next_run_at"]；到点先推进到下次（消耗这次到期），再触发。
 - 错过的触发（进程停机期间）只补一次，然后从当前时间算下一次。
-- 不重叠：上一次触发的收件方还没做完（定义见 previous_fire_state_in）时跳过本次，并记 info 日志；前置检查还在跑、
+- 不重叠：上一次触发开出的会话还没做完（定义见 previous_fire_state_in）时跳过本次，并记 info 日志；前置检查还在跑、
   还没有会话时由 DueRunner 记下的在触发的集合挡住（只消耗不触发）。
 - 跳过要看得见：连续跳过记在 state["skipped"]（次数、从何时起、挡路的会话在运行还是在等待），作为状态给界面与
   模型看；挡路的会话在等待（后台任务、委派、用户回答——可能永远等不到，如没人回答的提问）时通知用户，每轮连续
-  跳过只通知一次。在运行的不通知：运行偶尔长过一个周期是常态。下次真正触发、改配置或重新启用时清除；挡路的收件方换了（手动「立即
+  跳过只通知一次。在运行的不通知：运行偶尔长过一个周期是常态。下次真正触发、改配置或重新启用时清除；挡路的会话换了（手动「立即
   运行」开了新会话）算新的一轮。
 - 停用后重新启用，下次时间从启用时算起（TriggerService 在重新启用时重新推导 state），不补暂停期间的触发。
 """
@@ -28,9 +28,9 @@ from muliao.notifications.events import Notify
 from muliao.platform.db import utcnow
 from muliao.platform.messaging import Messaging
 from muliao.platform.tasks import Clock
-from muliao.sessions.api import Recipient, SessionActivity, WorkState
+from muliao.sessions.api import SessionActivity, WorkState
 from muliao.triggers.due import stored_time
-from muliao.triggers.service import last_target, parse_config, previous_fire_state_in, set_state
+from muliao.triggers.service import parse_config, previous_fire_state_in, set_state
 from muliao.triggers.tables import Trigger
 
 KIND = "schedule"
@@ -43,16 +43,16 @@ class ScheduleConfig(BaseModel):
 
 
 class SkippedFires(BaseModel):
-    # 连续跳过了几次、第一次跳过的时间，以及最近一次跳过时上一次触发的收件方（last_target）的工作状态（不会是 idle）
+    # 连续跳过了几次、第一次跳过的时间，以及最近一次跳过时上一次触发开出的会话（last_session_id）的工作状态（不会是 idle）
     count: int
     since: datetime
     previous_state: WorkState
 
 
 class _SkipStreak(SkippedFires):
-    # 存在 state["skipped"] 里的样子，多记两件不给界面看的事：挡路的是哪个收件方（手动「立即运行」开了新会话就是新的
-    # 一轮；续写最近的会话、投进 issue 的收件方不变，同一轮接着算），以及这一轮是否已通知过用户
-    target: Recipient
+    # 存在 state["skipped"] 里的样子，多记两件不给界面看的事：挡路的是哪个会话（手动「立即运行」开了新会话就是新的
+    # 一轮），以及这一轮是否已通知过用户
+    session_id: str
     notified: bool
 
 
@@ -66,11 +66,9 @@ class ScheduleKind:
     name = KIND
     description = (
         'Fires on a schedule. config: {"cron": "<5-field cron expression>"} in the server timezone, '
-        'e.g. {"cron": "*/5 * * * *"}. Skips a firing while the conversation the previous firing went to (for an '
-        "`issue:<N>` route, any agent's conversation on that issue) is still busy: running, or waiting on background "
-        "jobs, delegated work, a wake-up or the user's answer; "
-        "status.skipped "
-        "then counts the consecutive skips, and the user is notified once when that conversation is waiting. "
+        'e.g. {"cron": "*/5 * * * *"}. Skips a firing while the conversation the previous firing started '
+        "is still busy: running, or waiting on background jobs, delegated work, a wake-up or the user's answer; "
+        "status.skipped then counts the consecutive skips, and the user is notified once when that conversation is waiting. "
         "For a task that should happen once, use the `once` kind: a cron expression with a date would fire "
         "again every year."
     )
@@ -160,10 +158,10 @@ class ScheduleDue:
         if previous.state == WorkState.IDLE:
             set_state(trigger, skipped=None)
             return None
-        target = last_target(trigger)
-        assert target is not None  # 从没触发过的是 idle
+        session_id = trigger.last_session_id
+        assert session_id is not None  # 从没触发过的是 idle
         streak = _streak(trigger)
-        if streak is not None and streak.target != target:
+        if streak is not None and streak.session_id != session_id:
             streak = None
         notified = streak is not None and streak.notified
         notify = previous.state == WorkState.WAITING and not notified
@@ -171,7 +169,7 @@ class ScheduleDue:
             count=1 if streak is None else streak.count + 1,
             since=now if streak is None else streak.since,
             previous_state=previous.state,
-            target=target,
+            session_id=session_id,
             notified=notified or notify,
         )
         if notify:

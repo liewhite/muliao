@@ -131,7 +131,7 @@ async def test_a_once_trigger_is_finished_even_when_its_precheck_finds_nothing_t
     await _fire_due(container, trigger.id)
 
     finished = (await container.triggers.list(finished=True))[0]
-    assert finished.finished_at is not None and finished.last_target is None
+    assert finished.finished_at is not None and finished.last_session_id is None
 
 
 async def test_a_once_trigger_whose_precheck_fails_is_finished_with_the_error(container, make_agent):
@@ -146,23 +146,11 @@ async def test_a_once_trigger_whose_precheck_fails_is_finished_with_the_error(co
     assert finished.finished_at is not None and "exited with 3" in precheck_error(finished)
 
 
-async def test_a_once_trigger_that_cannot_fire_is_finished_with_the_reason(container, make_agent):
-    alpha, beta = (await make_agent("alpha")).id, (await make_agent("beta")).id
-    trigger = await _once(container, alpha, route="agent:beta")
-    await container.agent_lifecycle.set_archived(beta, True)
-
-    await _fire_due(container, trigger.id)
-
-    finished = (await container.triggers.list(finished=True))[0]
-    assert finished.finished_at is not None and not finished.enabled
-    assert "is archived" in finished.disabled_reason
-
-
 async def test_running_a_once_trigger_by_hand_does_not_use_up_its_firing(container, make_agent):
     alpha = (await make_agent()).id
     trigger = await _once(container, alpha)
 
-    manual = (await container.triggers.run(trigger.id)).sessions[0]
+    manual = (await container.triggers.run(trigger.id)).session_id
 
     assert (await container.triggers.get_by_name("remind")).finished_at is None
     assert await _fire_due(container, trigger.id) == 1

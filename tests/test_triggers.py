@@ -11,8 +11,7 @@ from muliao.errors import InvalidInput
 from muliao.sessions.api import Origin, SessionActivity, WorkState
 from muliao.sessions.mailbox import queued_in
 from muliao.sessions.tables import MailKind
-from muliao.triggers.api import ADDRESS_HELP, TriggerKindName
-from muliao.triggers.router import Problem, Undeliverable
+from muliao.triggers.api import TriggerKindName
 from muliao.triggers.service import previous_fire_state_in, set_state, trigger_in
 from tests.conftest import login, owned, share
 from tests.test_flow import drain, history_of, start
@@ -199,11 +198,11 @@ async def test_a_new_blocking_session_or_reenabling_starts_a_new_streak(containe
             "skipped"
         ]
 
-    first = (await triggers.run(trigger.id)).sessions[0]
+    first = (await triggers.run(trigger.id)).session_id
     await drain(container)
     await wait_on(first, "job:1")
     assert (await skip())["count"] == 1
-    second = (await triggers.run(trigger.id)).sessions[0]
+    second = (await triggers.run(trigger.id)).session_id
     await drain(container)
     await wait_on(second, "job:2")
 
@@ -238,7 +237,7 @@ async def test_broken_schedule_trigger_is_disabled_without_blocking_others(conta
     assert not bad.enabled and bad.disabled_reason.startswith("CorruptState")
     # 停用经 TriggerService，和别的修改一样通知监听者
     assert changed.is_set()
-    assert good.last_target is not None
+    assert good.last_session_id is not None
 
 
 async def test_trigger_deleted_or_paused_after_being_listed_is_skipped(container, make_agent):
@@ -268,7 +267,7 @@ async def test_trigger_deleted_or_paused_after_being_listed_is_skipped(container
         triggers.list = real_list  # type: ignore[method-assign]
 
     paused = await triggers.get_by_name("paused")
-    assert not paused.enabled and paused.disabled_reason is None and paused.last_target is None
+    assert not paused.enabled and paused.disabled_reason is None and paused.last_session_id is None
     assert await container.sessions.list(agent_id=alpha, origins=None, limit=10, offset=0) == []
 
 
@@ -358,7 +357,7 @@ async def test_a_trigger_with_corrupt_stored_data_is_disabled_and_the_scan_goes_
 
     bad, good = await triggers.get_by_name("bad"), await triggers.get_by_name("good")
     assert not bad.enabled and bad.disabled_reason.startswith(f"CorruptState: trigger {bad.id} (bad)")
-    assert good.last_target is not None
+    assert good.last_session_id is not None
 
 
 async def test_a_trigger_corrupted_after_being_listed_is_disabled_when_it_fires(container, make_agent):
@@ -377,7 +376,7 @@ async def test_a_trigger_corrupted_after_being_listed_is_disabled_when_it_fires(
     assert not trigger.enabled and trigger.disabled_reason.startswith(
         f"CorruptState: trigger {trigger.id} (bad)"
     )
-    assert trigger.last_target is None
+    assert trigger.last_session_id is None
 
 
 async def test_an_unexpected_failure_of_one_due_trigger_is_logged_without_disabling_or_stopping_others(
@@ -398,11 +397,11 @@ async def test_an_unexpected_failure_of_one_due_trigger_is_logged_without_disabl
     fired = []
     real_fire = triggers._fire  # noqa: SLF001
 
-    async def fire(trigger_id, payload, to, by):  # noqa: ANN001, ANN202
+    async def fire(trigger_id, payload, by):  # noqa: ANN001, ANN202
         if trigger_id == ids[0]:
             raise CorruptState("agent resources missing")
         fired.append(trigger_id)
-        return await real_fire(trigger_id, payload, to, by)
+        return await real_fire(trigger_id, payload, by)
 
     monkeypatch.setattr(triggers, "_fire", fire)
     assert await schedules.fire_due() == 2
@@ -448,35 +447,16 @@ async def test_a_slow_due_fire_does_not_hold_up_the_next_scan(container, make_ag
     assert fired == [slow.id, quick.id]
 
 
-async def test_an_activated_fire_whose_default_target_refuses_it_disables_the_trigger(
-    container, make_agent, monkeypatch
-):
-    """只有触发器自己被停用、删除、归档才算跳过；默认目标投不进（不论哪种原因）停用并记原因。"""
-    alpha = (await make_agent()).id
-    triggers, _ = _schedule(container)
-    trigger = await triggers.create(
-        name="t", agent_id=alpha, kind="schedule", prompt="x", config={"cron": "* * * * *"}
-    )
-
-    async def refused(*_args):  # noqa: ANN002, ANN202
-        return Undeliverable(Problem.NOT_YOURS, "letter rejected")
-
-    monkeypatch.setattr(triggers, "_fire", refused)
-    await triggers.fire_activated(trigger.id)
-    after = await triggers.get_by_name("t")
-    assert not after.enabled and after.disabled_reason == "route target not_yours: letter rejected"
-
-
 @pytest.mark.parametrize(
     ("kind", "config"),
     [
         ("schedule", {"cron": "every minute"}),
         ("schedule", {"cron": "0 0 30 2 *"}),
         ("schedule", {}),
-        ("webhook", {"x": 1}),
+        ("webhook", {}),
         ("mq", {}),
     ],
-    ids=["bad-cron", "cron-that-never-fires", "missing-cron", "webhook-takes-no-config", "unknown-kind"],
+    ids=["bad-cron", "cron-that-never-fires", "missing-cron", "webhook-is-gone", "unknown-kind"],
 )
 async def test_trigger_config_is_validated_by_its_kind(container, make_agent, kind, config):
     alpha = (await make_agent()).id
@@ -486,8 +466,10 @@ async def test_trigger_config_is_validated_by_its_kind(container, make_agent, ki
 
 async def test_manual_run_starts_a_session_with_just_the_prompt(container, make_agent):
     alpha = (await make_agent()).id
-    trigger = await container.triggers.create(name="h", agent_id=alpha, kind="webhook", prompt="p", config={})
-    session = await container.sessions.get((await container.triggers.fire(trigger.id)).sessions[0])
+    trigger = await container.triggers.create(
+        name="h", agent_id=alpha, kind="schedule", prompt="p", config={"cron": "0 9 * * *"}
+    )
+    session = await container.sessions.get((await container.triggers.run(trigger.id)).session_id)
     assert session.origin == Origin.TRIGGER and session.origin_ref == str(trigger.id)
 
 
@@ -880,14 +862,12 @@ async def test_an_mcp_server_that_fails_to_disconnect_does_not_fail_the_run(
         ("schedule", {"cron": 5}),
         ("once", {"at": "2099-01-02T10:30", "repeat": True}),
         ("once", {}),
-        ("webhook", {"secret": "x"}),
     ],
     ids=[
         "schedule-extra-key",
         "schedule-not-a-string",
         "once-extra-key",
         "once-missing-at",
-        "webhook-extra-key",
     ],
 )
 async def test_a_config_outside_its_kinds_schema_is_refused(container, make_agent, kind, config):
@@ -1021,7 +1001,7 @@ async def test_a_fire_delivered_later_is_dropped_when_its_agent_was_deleted_mean
     trigger = await container.triggers.create(
         name="slack", agent_id=alpha, kind="schedule", prompt="check slack", config={"cron": "* * * * *"}
     )
-    session_id = (await container.triggers.fire(trigger.id)).sessions[0]
+    session_id = (await container.triggers.run(trigger.id)).session_id
     await container.agent_lifecycle.delete(alpha, actor="user")
     await drain(container)
 
@@ -1039,7 +1019,7 @@ async def test_a_fire_not_yet_delivered_counts_as_busy_so_the_schedule_does_not_
     trigger = await container.triggers.create(
         name="slack", agent_id=alpha, kind="schedule", prompt="check slack", config={"cron": "* * * * *"}
     )
-    await container.triggers.fire(trigger.id)
+    await container.triggers.run(trigger.id)
     async with container.db.transaction() as s:
         assert (
             WorkState.IDLE
@@ -1059,7 +1039,7 @@ async def test_a_previous_fire_waiting_on_a_background_job_counts_as_busy(contai
     trigger = await container.triggers.create(
         name="slack", agent_id=alpha, kind="schedule", prompt="check slack", config={"cron": "* * * * *"}
     )
-    session_id = (await container.triggers.fire(trigger.id)).sessions[0]
+    session_id = (await container.triggers.run(trigger.id)).session_id
     await drain(container)
 
     async def busy() -> bool:
@@ -1109,8 +1089,6 @@ async def test_http_create_checks_config_by_kind_and_fills_defaults(client, make
         "/api/triggers", json={**base, "name": "s", "kind": "schedule", "config": {"command": "echo hi"}}
     )
     assert resp.status_code == 422
-    help_text = (await client.get("/api/trigger-routes/help")).json()["address_help"]
-    assert help_text == ADDRESS_HELP
 
 
 async def test_trigger_list_returns_each_kinds_typed_status(client, container, make_agent):
@@ -1118,7 +1096,6 @@ async def test_trigger_list_returns_each_kinds_typed_status(client, container, m
     for name, kind, config in [
         ("s", "schedule", {"cron": "0 9 * * *"}),
         ("o", "once", {"at": "2099-01-01T10:00"}),
-        ("w", "webhook", {}),
     ]:
         await container.triggers.create(name=name, agent_id=alpha, kind=kind, prompt="p", config=config)
     await login(client)
@@ -1126,12 +1103,13 @@ async def test_trigger_list_returns_each_kinds_typed_status(client, container, m
     assert set(listed["schedule"]["status"]) == {"next_run_at", "skipped"}
     assert listed["schedule"]["status"]["skipped"] is None
     assert listed["once"]["status"]["run_at"].startswith("2099-01-01T10:00")
-    assert listed["webhook"]["status"] == {"url": "http://test/api/hooks/w", "has_token": False}
 
 
 async def test_disabling_a_trigger_notifies_watchers_and_reports_a_deleted_one(container, make_agent):
     alpha = (await make_agent()).id
-    t = await container.triggers.create(name="t", agent_id=alpha, kind="webhook", prompt="p", config={})
+    t = await container.triggers.create(
+        name="t", agent_id=alpha, kind="schedule", prompt="p", config={"cron": "0 9 * * *"}
+    )
     changed = container.triggers.watch()
 
     assert await container.triggers.disable(t.id, "boom")

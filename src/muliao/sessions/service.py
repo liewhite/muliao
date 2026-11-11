@@ -73,7 +73,7 @@ class SessionView:
     # 发给模型的上下文现在的大小（token，sessions.compaction.context_tokens：压缩判断看的同一个数）；还没有模型回复、
     # 或刚压缩过还没有新回复时为 None
     context_tokens: int | None
-    # 这个会话的压缩阈值（Compactor.threshold_of）：上下文超过它就压缩
+    # 压缩阈值（全局一个，Compactor.threshold）：上下文超过它就压缩
     compaction_threshold_tokens: int
 
 
@@ -168,7 +168,7 @@ class SessionService:
             state=state,
             waits=waits,
             context_tokens=context_tokens(context.messages, context.stale_responses),
-            compaction_threshold_tokens=self._compactor.threshold_of(session),
+            compaction_threshold_tokens=self._compactor.threshold,
         )
 
     async def receive(self, message: UserMessage) -> Received:
@@ -195,11 +195,6 @@ class SessionService:
     async def compact(self, session_id: str) -> bool:
         """用户手动压缩上下文（sessions.compaction.Compactor.request）：返回是否新排了一次。"""
         return await self._compactor.request(session_id)
-
-    @property
-    def default_compaction_threshold(self) -> int:
-        """没有自己压缩阈值的会话用的全局默认（sessions.compaction.Compactor.threshold_of）。"""
-        return self._compactor.default_threshold
 
     async def list(
         self,

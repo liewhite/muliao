@@ -116,24 +116,18 @@ class Compactor:
         self._db = db
         self._runtime = runtime
         self._queue = queue
-        # 全局默认阈值；会话建时给了自己的（Session.compaction_threshold_tokens）就用会话的
-        self._default_threshold = threshold_tokens
+        # 压缩阈值（config [runtime] compaction_threshold_tokens），所有会话同一个
+        self._threshold = threshold_tokens
         self._keep_steps = keep_steps
 
     @property
-    def default_threshold(self) -> int:
-        """没有自己阈值的会话用的全局默认（界面新建会话时作占位提示）。"""
-        return self._default_threshold
-
-    def threshold_of(self, session: Session) -> int:
-        """会话的压缩阈值，唯一规则：建会话时给了就用它，否则用全局默认（config [runtime] compaction_threshold_tokens）。"""
-        own = session.compaction_threshold_tokens
-        return self._default_threshold if own is None else own
+    def threshold(self) -> int:
+        return self._threshold
 
     def over_threshold(
         self, session: Session, history: Sequence[ModelMessage], stale_responses: int | None
     ) -> bool:
-        """发给模型的上下文（context_tokens：只认最近一次压缩之后的测量）是否超过这个会话的阈值。"""
+        """发给模型的上下文（context_tokens：只认最近一次压缩之后的测量）是否超过阈值。"""
         tokens = context_tokens(history, stale_responses)
         if tokens is None:
             return False
@@ -144,7 +138,7 @@ class Compactor:
                 extra={"session_id": session.id},
             )
             return False
-        return tokens > self.threshold_of(session)
+        return tokens > self._threshold
 
     def verdict(
         self, session: Session, history: Sequence[ModelMessage], stale_responses: int | None

@@ -111,15 +111,15 @@ async def test_archiving_needs_the_agent_idle_and_not_default(container, make_ag
 async def test_mail_validated_before_archiving_is_dropped_on_delivery(container, make_agent):
     alpha = await make_agent("alpha")
     trigger = await container.triggers.create(
-        name="h", agent_id=alpha.id, kind="webhook", prompt="p", config={}
+        name="h", agent_id=alpha.id, kind="schedule", prompt="p", config={"cron": "0 9 * * *"}
     )
     # 触发记下了、投信的定向命令还在排队（只校验了来信，会话还没建，agent 不忙）
-    fired = await container.triggers.fire(trigger.id)
+    fired = await container.triggers.run(trigger.id)
     assert fired is not None
     await container.agent_lifecycle.set_archived(alpha.id, True)
     await deliver(container)
     async with container.db.transaction() as s:
-        assert await s.get(Session, fired.sessions[0]) is None
+        assert await s.get(Session, fired.session_id) is None
 
 
 async def test_triggers_of_an_archived_agent_neither_run_their_precheck_nor_fire(
@@ -130,25 +130,27 @@ async def test_triggers_of_an_archived_agent_neither_run_their_precheck_nor_fire
     trigger = await container.triggers.create(
         name="w",
         agent_id=alpha.id,
-        kind="webhook",
+        kind="schedule",
         prompt="p",
-        config={},
+        config={"cron": "0 9 * * *"},
         precheck=Precheck(command=f"touch {marker}; echo event"),
     )
     await container.agent_lifecycle.set_archived(alpha.id, True)
 
     with pytest.raises(AgentArchived):
-        await container.triggers.fire(trigger.id)
+        await container.triggers.run(trigger.id)
     # 激活机制：只跳过，不停用、不记失败
     await container.triggers.fire_activated(trigger.id)
     after = await container.triggers.get_by_name("w")
     assert after.enabled and precheck_error(after) is None and after.disabled_reason is None
     assert not marker.exists()
     with pytest.raises(AgentArchived):
-        await container.triggers.create(name="x", agent_id=alpha.id, kind="webhook", prompt="p", config={})
+        await container.triggers.create(
+            name="x", agent_id=alpha.id, kind="schedule", prompt="p", config={"cron": "0 9 * * *"}
+        )
 
     await container.agent_lifecycle.set_archived(alpha.id, False)
-    assert await container.triggers.fire(trigger.id) is not None
+    assert await container.triggers.run(trigger.id) is not None
     assert marker.exists()
 
 

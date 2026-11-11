@@ -32,7 +32,6 @@ from muliao.api import (
     tasks,
     triggers,
     usage,
-    webhook,
     workspace,
 )
 from muliao.api.auth import COOKIE_NAME, MAX_AGE_SECONDS, Auth, LoginThrottle, require_auth
@@ -150,7 +149,6 @@ def _private_routes() -> APIRouter:
     router.include_router(assets.router)
     router.include_router(push.router)
     router.include_router(triggers.router)
-    router.include_router(webhook.router)
     router.include_router(files.router)
     router.include_router(notifications.router)
     router.include_router(usage.router)
@@ -239,8 +237,6 @@ def _install_api(app: FastAPI) -> None:
     """全部接口；不依赖运行时的 container，生成接口描述时也用它（api_schema）。处理请求时路由读取 app.state 上的
     container、auth、login_throttle、secure_cookie、ui_version，只有 create_app 设置它们：只装了路由的应用只能用来生成描述。"""
     app.include_router(_public_routes())
-    # webhook 的事件入口凭触发器 token 鉴权，不走登录
-    app.include_router(webhook.public_router)
     # agent 的页面在沙箱里跑、拿不到 cookie，凭签名 URL 访问
     app.include_router(sites.public_router)
     app.include_router(_private_routes())

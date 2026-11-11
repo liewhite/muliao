@@ -25,7 +25,6 @@ export const READS = {
   '/api/assets/secret/{name}': ['agents'],
   '/api/push/vapid': [],
   '/api/trigger-kinds': [],
-  '/api/trigger-routes/help': [],
   '/api/triggers': ['agents', 'sessions', 'tasks', 'triggers'],
   '/api/files/{file_id}/{name}': ['files'],
   '/api/notifications': ['notifications'],
