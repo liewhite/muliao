@@ -6,10 +6,11 @@ from collections.abc import Iterable
 from pydantic import BaseModel
 from pydantic_ai import FunctionToolset, RunContext
 
+from muliao.agents.agent_file import Thinking
 from muliao.agents.distribution import Distribution
 from muliao.agents.lifecycle import AgentLifecycle
 from muliao.agents.permissions import Role
-from muliao.agents.service import AgentService, AgentSpec, AgentView, Thinking
+from muliao.agents.service import AgentService, AgentSpec, AgentView
 from muliao.errors import InvalidInput, NotFound
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 

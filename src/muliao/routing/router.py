@@ -93,7 +93,7 @@ class Rejected:
 
 @dataclass(frozen=True)
 class Plan:
-    """一个事件的投递：要 send_in 的各次投递（按目标第一次出现的顺序），和内容里被拒的地址。"""
+    """一个事件的投递：要 send_in 的各次投递（默认目标在前，其余按目标第一次出现的顺序；显式地址落到默认目标的段跟着默认目标走），和内容里被拒的地址。"""
 
     routed: list[Routed]
     rejected: list[Rejected]

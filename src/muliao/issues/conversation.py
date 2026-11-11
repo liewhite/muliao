@@ -1,5 +1,5 @@
 """issue 会话的身份：每个 (issue, agent) 唯一的一个会话（#43），不存会话 id，由会话领域按发送方（Origin.ISSUE，origin_ref
-为 issue 号）与 agent 定位（sessions.api.SessionKey）。这个身份怎么拼、怎么解只在这里。"""
+为 issue 号）与 agent 定位（sessions.api.SessionKey）。后端只在这里拼、解这个身份（前端 web/src/issues.ts 的 issueIdOf 另解一份 origin_ref）。"""
 
 from collections.abc import Collection
 

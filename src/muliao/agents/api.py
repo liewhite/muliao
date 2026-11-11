@@ -14,6 +14,7 @@
 
 from muliao.agents.access import Reach, Source, WriteScope
 from muliao.agents.active import AgentArchived, AgentNames, agent_names_in
+from muliao.agents.agent_file import Thinking
 from muliao.agents.asset_files import SKILL as ASSETS_SKILL
 from muliao.agents.asset_files import AssetRejected
 from muliao.agents.assets import AgentDir
@@ -34,7 +35,6 @@ from muliao.agents.service import (
     AgentService,
     AgentSpec,
     AgentView,
-    Thinking,
     active_agent_in,
     agent_in,
     named_agent_in,

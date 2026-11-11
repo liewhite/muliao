@@ -35,8 +35,6 @@ from muliao.platform.fs import write_atomic
 
 log = logging.getLogger(__name__)
 
-__all__ = ["Thinking"]
-
 
 def group_input(group: str) -> str | None:
     """界面与工具给的分组名：去掉首尾空白，空串即不分组（None）；其余规则在 AgentFile。"""
