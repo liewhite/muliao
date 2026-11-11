@@ -407,3 +407,6 @@ async def test_the_service_runs_the_loops_the_domains_declare(container):
     assert sorted(name for name, _ in container.loops) == sorted(
         ["worker", "checks", "retention", "due", "streams", "mail", "assets"]
     )
+    # 运行中检查同样由各领域声明（Parts.checks）：后台任务、委派、到点唤醒都在节拍里
+    watcher = dict(container.loops)["checks"].__self__
+    assert {type(w).__name__ for w in watcher.works} == {"JobRunner", "ThreadChecks", "WakeUps"}

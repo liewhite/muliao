@@ -28,6 +28,10 @@ class WorkWatcher:
         self._works = works
         self._tick = tick_seconds
 
+    @property
+    def works(self) -> Sequence[PeriodicCheck]:
+        return self._works
+
     async def check(self) -> int:
         return sum([await work.check() for work in self._works])
 
