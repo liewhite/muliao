@@ -1,67 +1,81 @@
 // 编辑草稿与服务端的新值：编辑期间 agent、自进化、别的页面都可能改同一份数据（页面随 changed 事件重新拉取），
-// 草稿既不能被新值冲掉，保存时也不能用打开时的旧值盖掉别人的改动。
+// 草稿既不能被新值冲掉，保存时也不能用打开时的旧值盖掉别人的改动（#575、#634）。
 
 import { useState } from 'react'
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 
-/** draft 里相对 base 改过的字段（只提交这些：没动的字段别人可能改过） */
-export function changedFields<T extends object>(base: T, draft: T): Partial<T> {
-  return Object.fromEntries(Object.entries(draft).filter(([k, v]) => !same(v, base[k as keyof T]))) as Partial<T>
+const keysOf = <T extends object>(t: T) => Object.keys(t) as (keyof T)[]
+
+function pick<T extends object>(t: T, keys: (keyof T)[]): Partial<T> {
+  return Object.fromEntries(keys.map((k) => [k, t[k]])) as Partial<T>
 }
 
-/** 草稿跟上服务端的新值：用户没动过的字段（与打开时相同）换成新值，动过的保留 */
-export function rebased<T extends object>(opened: T, draft: T, latest: T): T {
-  const next = { ...draft }
-  for (const k of Object.keys(latest) as (keyof T)[]) {
-    if (same(draft[k], opened[k])) next[k] = latest[k]
+/** 改过的字段：草稿与基线不同 */
+export function editedFields<T extends object>(base: T, draft: T): (keyof T)[] {
+  return keysOf(draft).filter((k) => !same(draft[k], base[k]))
+}
+
+/** 冲突的字段：改过，而服务端此刻的值既不是基线、也不是草稿（编辑期间别处也改了它） */
+export function conflictingFields<T extends object>(base: T, draft: T, latest: T): (keyof T)[] {
+  return editedFields(base, draft).filter((k) => !same(latest[k], base[k]) && !same(latest[k], draft[k]))
+}
+
+/**
+ * 服务端有了新值：没改过的字段（草稿等于基线）跟上它；草稿正好等于新值的（多半是自己刚保存的）也跟上。
+ * 改过、新值又不同的留着，成为冲突。
+ */
+export function followed<T extends object>(base: T, draft: T, latest: T): { base: T; draft: T } {
+  const next = { base: { ...base }, draft: { ...draft } }
+  for (const k of keysOf(latest)) {
+    if (same(draft[k], base[k]) || same(draft[k], latest[k])) {
+      next.base[k] = latest[k]
+      next.draft[k] = latest[k]
+    }
   }
   return next
 }
 
 /**
- * 按字段保存的表单（只提交改过的字段）：latest 是服务端的当前值，变了时没动过的字段跟上它。
- * 返回草稿、改草稿、相对当前值改过的字段，以及保存成功后以保存结果为新起点。
+ * 编辑表单的草稿：每个字段有基线（开始改它时服务端的值）和草稿，latest 是服务端此刻的值。
+ * - 保存提交改过的字段和它们的基线（patch）：服务端此刻的值不是基线就 409（按字段乐观锁，api.fieldlock）。
+ *   整份保存、带版本的文档（记忆、skill）交回 latest 的版本：没有冲突时，改过的字段的基线就是 latest 的值。
+ * - 冲突（conflicts）由用户逐个决定：用对方的（takeTheirs，草稿换成服务端的值）或覆盖（keepMine，基线换成服务端的值、
+ *   草稿留着）。有冲突时不能保存。
+ * - 保存成功后 saved(结果)：改过的字段以服务端存下的值（可能规整过）为新的起点。
  */
-export function useFieldDraft<T extends object>(latest: T) {
-  const [opened, setOpened] = useState(latest)
+export function useDraft<T extends object>(latest: T) {
+  const [seen, setSeen] = useState(latest)
+  const [base, setBase] = useState(latest)
   const [draft, setDraft] = useState(latest)
-  if (!same(latest, opened)) {
-    setOpened(latest)
-    setDraft(rebased(opened, draft, latest))
+  if (!same(latest, seen)) {
+    setSeen(latest)
+    const next = followed(base, draft, latest)
+    setBase(next.base)
+    setDraft(next.draft)
   }
+  const edited = editedFields(base, draft)
+  const adopt = (keys: (keyof T)[], from: T, mine: boolean) => {
+    setBase((prev) => ({ ...prev, ...pick(from, keys) }))
+    if (!mine) setDraft((prev) => ({ ...prev, ...pick(from, keys) }))
+  }
+  const changes = pick(draft, edited)
   return {
     draft,
     set: (patch: Partial<T>) => setDraft((prev) => ({ ...prev, ...patch })),
-    changes: changedFields(opened, draft),
+    // 改过的字段；要换算后再提交的（如把文字解析成编号）自己从 changes 与 base 拼请求
+    changes,
+    // 各字段的基线（全部字段）：自己拼请求时取改过的字段；只在打开时读初值的编辑器拿它做 key，基线换了（跟上、用对方的、
+    // 保存后）就重新挂载，显示新的草稿
+    base,
+    // 局部修改的请求体：改过的字段加上它们的基线
+    patch: { ...changes, base: pick(base, edited) },
+    conflicts: conflictingFields(base, draft, latest),
+    latest,
+    takeTheirs: (k: keyof T) => adopt([k], latest, false),
+    keepMine: (k: keyof T) => adopt([k], latest, true),
+    saved: (result: T) => adopt(edited, result, false),
   }
 }
 
-/**
- * 整份保存、带版本的文档（记忆、skill）的草稿：保存时交回打开时的版本，期间被别处改过服务端 409。
- * 没改过时跟上服务端的新版本；改过了就留在打开时的版本上（stale），由用户决定丢掉自己的修改载入最新（discard）。
- */
-export function useVersionedDraft<T extends { version: string }, D>(latest: T, toDraft: (t: T) => D) {
-  const [base, setBase] = useState(latest)
-  const [draft, setDraft] = useState(() => toDraft(latest))
-  const dirty = !same(draft, toDraft(base))
-  // 服务端有了新版本：没改过就跟上；草稿正好就是新版本的内容（多半是自己刚保存的）也跟上。只有 latest 一个来源，
-  // 保存后不另设起点，晚到的旧结果也不会把它换回去
-  if (latest.version !== base.version && (!dirty || same(draft, toDraft(latest)))) {
-    setBase(latest)
-    setDraft(toDraft(latest))
-  }
-  return {
-    draft,
-    setDraft,
-    dirty,
-    // 打开时（或跟上的最新）的版本：保存时交回
-    version: base.version,
-    // 改过的草稿落后于服务端：保存会被拒绝
-    stale: latest.version !== base.version,
-    discard: () => {
-      setBase(latest)
-      setDraft(toDraft(latest))
-    },
-  }
-}
+export type Draft<T extends object> = ReturnType<typeof useDraft<T>>

@@ -16,7 +16,7 @@ import {
 } from '../api'
 import { selectableAgents, agentLabel } from '../agentGroups'
 import { groupTriggersByAgent } from '../triggerGroups'
-import { useFieldDraft } from '../drafts'
+import { useDraft } from '../drafts'
 import { inAnHour, wallClock } from '../wallClock'
 import {
   ActionButton,
@@ -25,6 +25,7 @@ import {
   EmptyHint,
   ErrorAlert,
   GroupSection,
+  DraftConflicts,
   Loading,
   Page,
   SelectInput,
@@ -650,41 +651,60 @@ function TriggerItem({ trigger }: { trigger: Trigger }) {
   )
 }
 
-/** 字段草稿（drafts.useFieldDraft）：只提交改过的，没动的字段别人可能改过；前置检查改了还会重置 changed 模式的基线 */
+const TRIGGER_FIELD_LABELS = { prompt: '处理说明', config: '配置', precheck: '前置检查', route: '投递目标' }
+
+/** 字段草稿（drafts.useDraft）：只提交改过的，没动的字段别人可能改过，同一字段两边都改了提示冲突；前置检查改了还会重置
+ * changed 模式的基线 */
 function TriggerEditor({ trigger, facts, onDone }: { trigger: Trigger; facts: ReactNode; onDone: () => void }) {
-  // 配置与前置检查的编辑器自己保存编辑中的内容（以打开时的值为初始值）；配置不合法时为 null
-  const form = useFieldDraft<{ prompt: string; config: KindConfig['config'] | null; precheck: Precheck | null; route: string }>({
+  // 配置不合法时为 null
+  const form = useDraft<{ prompt: string; config: KindConfig['config'] | null; precheck: Precheck | null; route: string }>({
     prompt: trigger.prompt,
     config: trigger.config,
     precheck: trigger.precheck,
     route: trigger.route,
   })
-  const [opened] = useState(trigger)
   const action = useAction()
   const { draft } = form
   const save = () =>
     action.run(async () => {
-      const { config, route, ...rest } = form.changes
+      const { config, route, base, ...rest } = form.patch
       if (config === null) throw new Error('配置不合法')
-      const patch = { ...rest, ...(config && { config }), ...(route !== undefined && { route: route.trim() }) }
-      if (Object.keys(patch).length > 0) await api.updateTrigger(trigger.id, patch)
+      const patch = { ...rest, ...(config && { config }), ...(route !== undefined && { route: route.trim() }), base }
+      if (Object.keys(form.changes).length > 0) await api.updateTrigger(trigger.id, patch)
       onDone()
     })
+  // 配置与前置检查的编辑器自己保存编辑中的内容、只在挂载时读初值：基线换了（跟上服务端、用对方的）就按 key 重新挂载，
+  // 从此刻的草稿开始（草稿不合法时从基线开始）
+  const config = { kind: trigger.kind, config: draft.config ?? form.base.config } as KindConfig
   return (
     <>
       <Modal.Body className="flex flex-col gap-3">
         {facts}
-        <ConfigEditor value={opened} onChange={(c) => form.set({ config: c?.config ?? null })} />
-        <PrecheckEditor precheck={opened.precheck} onChange={(precheck) => form.set({ precheck })} />
+        <ConfigEditor
+          key={JSON.stringify(form.base.config)}
+          value={config}
+          onChange={(c) => form.set({ config: c?.config ?? null })}
+        />
+        <PrecheckEditor
+          key={JSON.stringify(form.base.precheck)}
+          precheck={draft.precheck}
+          onChange={(precheck) => form.set({ precheck })}
+        />
         <RouteInput value={draft.route} onChange={(route) => form.set({ route })} />
         <TextAreaInput label="处理说明" value={draft.prompt} onChange={(prompt) => form.set({ prompt })} rows={5} />
+        <DraftConflicts draft={form} labels={TRIGGER_FIELD_LABELS} />
         <ErrorAlert error={action.error} />
       </Modal.Body>
       <Modal.Footer className="flex flex-wrap justify-start gap-2">
         <ActionButton
           size="sm"
           // 投递目标必填（回到默认就填说明里的默认地址）；新建时留空才是用默认
-          isDisabled={draft.config === null || !draft.route.trim() || (draft.precheck !== null && !draft.precheck.command.trim())}
+          isDisabled={
+            draft.config === null ||
+            !draft.route.trim() ||
+            (draft.precheck !== null && !draft.precheck.command.trim()) ||
+            form.conflicts.length > 0
+          }
           isPending={action.busy}
           onPress={() => void save()}
         >

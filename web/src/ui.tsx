@@ -47,6 +47,7 @@ import { Loader, errorMessage, refreshShown, useLoader, type LoadState } from '.
 import { normalizeMath } from './markdown'
 import { remarkIssueRefs } from './issueRefs'
 import { isSendShortcut, SEND_HINT } from './sendKey'
+import type { Draft } from './drafts'
 
 // ---- 数据操作 ----
 
@@ -265,6 +266,45 @@ export function ErrorAlert({ error, title = '出错了' }: { error: string | nul
     </Alert>
   )
 }
+
+/**
+ * 编辑期间别处（agent、自进化、另一个页面）也改了的字段（drafts.useDraft 的 conflicts）：逐个给出对方现在的版本，用户选用对方的
+ * 或保留自己的（保存时覆盖对方的）。有冲突时保存按钮应禁用。
+ */
+export function DraftConflicts<T extends object>({
+  draft,
+  labels,
+}: {
+  draft: Draft<T>
+  labels: { [K in keyof T]: string }
+}) {
+  if (draft.conflicts.length === 0) return null
+  return (
+    <Alert status="warning">
+      <Alert.Indicator />
+      <Alert.Content className="flex flex-col gap-2">
+        <Alert.Title>编辑期间别处也改了这些内容</Alert.Title>
+        <Alert.Description>逐项选用对方的，还是保留你的（保存时覆盖对方的），选完才能保存。</Alert.Description>
+        {draft.conflicts.map((k) => (
+          <div key={String(k)} className="flex flex-col gap-1">
+            <div className="text-sm font-medium">{labels[k]}：对方现在是</div>
+            <pre className={CODE_BLOCK}>{shownValue(draft.latest[k])}</pre>
+            <div className="flex gap-2">
+              <Button size="sm" variant="secondary" onPress={() => draft.takeTheirs(k)}>
+                用对方的
+              </Button>
+              <Button size="sm" variant="ghost" onPress={() => draft.keepMine(k)}>
+                保留我的（覆盖）
+              </Button>
+            </div>
+          </div>
+        ))}
+      </Alert.Content>
+    </Alert>
+  )
+}
+
+const shownValue = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v, null, 2))
 
 /**
  * 首次加载失败才整页报错；已有数据时重新拉取失败（网络抖动等）照常显示已有内容，只在顶部提示错误，

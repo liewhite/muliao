@@ -160,14 +160,14 @@ sessions（表类只在它的子域模块里出现在查询与构造中；领域
 | 15 | 被沙箱拒绝时说明什么 | `workspace.commands` | 起命令的调用方只负责拼接 |
 | 16 | 一个页面依赖哪些数据 | 各 GET 接口（声明与组装代码写在一起） | 前端按它自动订阅，不手写类别 |
 | 17 | 什么时候重新拉数据 | 前端 `Loader` | 操作只报告「做完了」 |
-| 18 | 字段被两边同时改了怎么办 | 后端各领域（版本校验） | 前端只负责显示冲突 |
+| 18 | 字段被两边同时改了怎么办 | 后端（各修改接口按输出比对原值 `api.fieldlock`；整份保存的文件按版本 `assets.check_version`） | 前端只负责显示冲突（`drafts.useDraft`） |
 | 19 | 一个领域有哪些订阅、处理器、工具、常驻循环 | 各领域自己声明 | 组合根只遍历 |
 
 用户 11-11 定下的三项（#627）：
 
 - **第 11 行·私有记忆**：私有记忆按「属于哪个 agent」认，不再占全局记忆的名字；别的 agent 也就不能再按名字被授权读它（`<action>:memory:<agent 名>` 规则不再指私有记忆）。
 - **第 7 行·防重叠**：投进 issue、续写最近会话的触发器也防重叠：目标会话不空闲就不触发，与「新建会话」的触发器同一条规则。
-- **第 18 行·乐观锁**：用户与 agent 同时改同一字段时按字段做乐观锁：保存时带上改动字段在打开时的原值，服务端发现当前值已经不同就返回 409，前端提示冲突；不同字段之间互不影响（保留 #575 的按字段保存）。记忆、SKILL.md 已有的整份版本校验不动。适用于 issue、触发器、agent 配置、角色。
+- **第 18 行·乐观锁**：用户与 agent 同时改同一字段时按字段做乐观锁：保存时带上改动字段在打开时的原值，服务端发现当前值已经不同就返回 409，前端提示冲突；不同字段之间互不影响（保留 #575 的按字段保存）。记忆、SKILL.md 已有的整份版本校验不动。适用于 issue、触发器、agent 配置、角色。做法见第三部分「编辑不盖掉别人的改动」（#634）。
 
 ## 3. 平台
 
@@ -657,7 +657,9 @@ agent 在任何一次运行里都可以在自己的资源目录里建 `skills/<�
 - **前端调用按描述类型化**（`api.ts` 的 `call`）：每个调用写一次路径模板（如 `/api/agents/{agent_id}`），路径参数、查询参数、请求体与成功响应的类型都从生成的 `paths` 推出；没有响应体的接口类型为 `void`。`api.ts` 只给生成的类型起名字，并在边界上把 agent id 字段换成品牌类型 `AgentId`。唯一的例外是上传（请求体是文件本身，描述里没有 JSON 请求体）。
 - **SSE 用 FastAPI 自带的事件流**（页面依赖与重新拉取的归属见 2.4 第 16、17 行；`/api/events`，`EventSourceResponse`）：每条 data 按 `ServerEvent` 校验并序列化。`ServerEvent` 是具名组件，前端的事件联合直接取它（openapi-typescript 还不认识 OpenAPI 3.2 的 `itemSchema`），只加上前端自己产生的 `connected`（每次连上都发，第一次也发：页面的首次请求可能早于订阅建立）。数据库是唯一事实源，事件只是展示加速：页面在 `changed` 与连上时从接口重新拉取，重新拉取只有一个主人（#622）：`load.useLoad(resource, load, deps)` 必须声明所展示的数据类别 `Resource`，在里面订阅、只让最新一次请求的结果落下、进行中最多再排一次（`load.Loader`、`events.coalesced`），保存之后不手动重新拉取、不逐层传 reload：用户操作（`ui.useAction`）成功后，正在显示的、随服务端变化的数据一起重新拉取并等它落下（`load.refreshShown`），不靠 SSE 送到；resource 为 null 的是不随服务端数据变化的（可选模型、地址说明）或按更细的事件自己刷新的：会话页（整份历史几 MB，按这个会话的 `saved`、运行事件刷新）、通知页（只在新通知时刷新，留住这次的未读标记）。agent 列表与未读数是各处共用的一份 `Loader`（`ui.useAgents`、`useAgentName` / `AgentName`，`unread.useUnreadCount`），按 id 查 agent 只有 `agentGroups.findAgent` 一处。单个页面监听器抛错不影响其他监听器（`reportError` 报告）。
 - **数据变了由服务端说（#575）**：`changed{resource}`（`schema.ChangedEvent`，resource 是领域名 `schema.Domain`，与表推导出的领域由测试核对）在写过某领域表的事务提交后发：`Database` 的 `after_commit` 在提交前拿到事务写过的表（与开发期断言 `single_domain_writes` 同一份记录），组合根按表所属领域算好事件（算错在提交前报错、回滚），提交成功后发（`schema.changes_of`；平台的任务表另有任务事件）；平台自己改 AI 资源文件（`AssetSource.writing()` 结束）发 `agents`。不论谁改（这个页面、别的页面、agent、触发器、推送通知上的通过），展示它的页面都刷新，前端不再自己列「哪些操作改了什么」（删掉了 `announceChange`）。接口输出里由别的数据派生的部分由 SSE 接口紧跟着补发受影响的类别（`api.events.derived_changes`），前端只认 `changed` 与连上，不自己推算：任务状态（任何种类）补发 `tasks`（任务表随任何领域的事务写，不按表发，`schema.Resource` 在领域之外多这一类）、`sessions` 与 `issues`（工作状态看会话与收信 lane 上的任务）；`sessions` 变了补发 `issues`（issue 上的工作状态含占用与挂起的提问，各 agent 的 issue 会话也在会话领域）；运行结束补发 `agents`（agent 在运行里直接改的资源文件服务端看不到）；`notifications` 变了补发 `sessions`（会话的未读由通知派生）。
-- **编辑不盖掉别人的改动（#575；同一字段被同时改的归属与用户定的乐观锁见 2.4 第 18 行）**：按字段保存的只提交改过的字段（`drafts.changedFields`）：agent 配置 `PATCH /api/agents/{id}`、角色 `PATCH /api/roles/{name}`、issue、触发器，都用 `drafts.useFieldDraft`（表单打开后服务端的新值让没动过的字段跟上；编辑器只在编辑时挂载，取消的草稿不留到下一次）；触发器的投递目标清空就是不改；allow、deny 这类列表按整个字段算。整份保存的文件（记忆、SKILL.md）带打开时的版本（内容摘要 `assets.version_of`），在 `writing()` 里写之前按此刻文件里的内容比对（agent 改文件不经这把锁，比对紧挨着写），期间被改过、删掉或抢先建了都 409（`assets.check_version`）；前端草稿没改过、或正好等于新版本的内容（刚保存的）就跟上新版本，改过了提示载入最新（`drafts.useVersionedDraft`，起点只来自加载的数据）。编辑框用加载好的数据做初值，不靠 key 重置表单。
+- **编辑不盖掉别人的改动（#575、#634；归属见 2.4 第 18 行）**：界面的编辑表单都用 `drafts.useDraft`：每个字段有基线（开始改它时服务端的值）和草稿，服务端的新值让没动过的字段（和正好等于新值的，多半是刚保存的）跟上；改过、服务端又变了的字段是冲突，`ui.DraftConflicts` 给出对方的版本，用户逐个选用对方的或覆盖（基线换成对方的值），有冲突时不能保存。编辑器只在编辑时挂载，取消的草稿不留到下一次。
+  - 按字段保存的（agent 配置 `PATCH /api/agents/{id}`、角色 `PATCH /api/roles/{name}`、issue、触发器）只提交改过的字段，并在 `base` 里带上它们的基线；接口拿此刻的输出逐个比，不同就 409（`api.fieldlock.check_base`）。按输出比（用户看到的就是输出），不为每个字段再写一份存法的换算；比对与写入不在同一把锁里，别人的修改恰好落在两者之间的几毫秒才会漏判（罕见，后果只是后写的覆盖）。不带 `base` 的修改（agent 的工具、启用开关、拖动状态这类一点就改的）照常直接改。触发器的投递目标清空就是不改；allow、deny 这类列表按整个字段算。
+  - 整份保存的文件（记忆、SKILL.md）带版本（内容摘要 `assets.version_of`）：界面交回最新加载到的版本（没有冲突时，改过的字段的基线就是它），在 `writing()` 里写之前按此刻文件里的内容比对（agent 改文件不经这把锁，比对紧挨着写），期间被改过、删掉或抢先建了都 409（`assets.check_version`）。
 - **实时条目与历史同一个投影**（`sessions/transcript.py`）：前端把快照（会话接口的 `live`）与之后收到的事件按 `segment_id`、`seq` 合并，完整条目原样接上，文字增量接在同类最后一条后面（`events.liveItems`），不自己投影。
 - **会话的来源是判别联合**（#622；来源编号格式的归属见 2.4 第 8 行）：`SessionOut.origin` 按 `kind` 给出用户、委派、触发器（`trigger_id`）、issue（`issue_id`），存储里的 `origin_ref` 只由会话领域解（`sessions.origins.origin_of`，与 `SessionInfo.origin`、运行事件同一个类型 `SessionOrigin`；发送方只交出自己的 id，如 `TriggerOrigin(trigger_id=…)`），前端不认识它的格式；列某个触发器的会话用 `GET /api/sessions?trigger_id=`。信箱信件 `MailOut` 同样按 `kind` 区分，事件一定带来源。
 - **结构化状态由后端给出**：`ask_user` 条目的状态见第 7 节；前端不解析工具结果文本。

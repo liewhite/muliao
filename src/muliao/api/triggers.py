@@ -4,10 +4,11 @@ from datetime import datetime
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Query
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from muliao.agents.api import AgentNames
 from muliao.api.deps import C
+from muliao.api.fieldlock import check_base
 from muliao.platform.values import KEEP
 from muliao.triggers.api import (
     ADDRESS_HELP,
@@ -84,8 +85,11 @@ class RouteHelpOut(BaseModel):
     address_help: str
 
 
-class TriggerPatch(BaseModel):
-    """只修改给出的字段。precheck 给出 null 表示去掉前置检查，不出现表示不变；route 给 `new` 回到默认。"""
+class TriggerFields(BaseModel):
+    """触发器能改的字段（局部修改与它的 base 共用）。precheck 给出 null 表示去掉前置检查，不出现表示不变；route 给 `new`
+    回到默认。"""
+
+    model_config = ConfigDict(extra="forbid")
 
     prompt: str | None = None
     # 修改请求不带 kind：按已存的 kind 校验，格式同新建时这种方式的 config
@@ -93,6 +97,13 @@ class TriggerPatch(BaseModel):
     enabled: bool | None = None
     precheck: Precheck | None = None
     route: str | None = None
+
+
+class TriggerPatch(TriggerFields):
+    """只修改给出的字段。"""
+
+    # 改动字段开始编辑时的值（TriggerOut 的形状）；此刻已不同就 409（api.fieldlock）
+    base: TriggerFields | None = None
 
 
 class _TriggerOutBase(BaseModel):
@@ -223,6 +234,9 @@ async def create_trigger(c: C, body: TriggerCreate) -> TriggerOut:
 
 @router.patch("/triggers/{trigger_id}")
 async def update_trigger(c: C, trigger_id: int, body: TriggerPatch) -> TriggerOut:
+    if body.base is not None:
+        current = await _out(c, await c.triggers.get(trigger_id))
+        check_base(f"trigger {current.name!r}", current.model_dump(mode="json"), body.base)
     trigger = await c.triggers.update(
         trigger_id,
         prompt=body.prompt,

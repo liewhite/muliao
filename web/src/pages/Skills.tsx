@@ -4,10 +4,11 @@ import { Download, Plus, Trash2, Upload } from 'lucide-react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { api, ApiError, skillFileUrl, type AgentId, type AssetOf, type Schemas, type Skill } from '../api'
 import { FileBrowser } from './FileBrowser'
-import { AssetAccess, OwnerSelect, StaleDraft } from './assetParts'
-import { useVersionedDraft } from '../drafts'
+import { AssetAccess, OwnerSelect } from './assetParts'
+import { useDraft } from '../drafts'
 import { ActionButton,
   CollapsibleForm,
+  DraftConflicts,
   EmptyHint,
   ErrorAlert,
   LinkButton,
@@ -158,6 +159,8 @@ function SkillFields({ value, set }: { value: SkillText; set: (patch: Partial<Sk
 
 type SkillText = Pick<Skill, 'description' | 'body'>
 
+const SKILL_FIELD_LABELS: Record<keyof SkillText, string> = { description: '描述', body: '正文' }
+
 export function SkillEditor() {
   const [params] = useSearchParams()
   const existing = params.get('name')
@@ -214,14 +217,15 @@ function SkillDraft({ latest }: { latest: Skill }) {
   const confirm = useConfirm()
   const { name, owner } = latest
   const agents = useAgents()
-  const doc = useVersionedDraft(latest, (s): SkillText => ({ description: s.description, body: s.body }))
+  const doc = useDraft<SkillText>({ description: latest.description, body: latest.body })
   const action = useAction()
   // 上一次导出没打进包的文件
   const [exportSkipped, setExportSkipped] = useState<Schemas['SkippedOut'][] | null>(null)
 
   async function save() {
     const ok = await action.run(async () => {
-      await api.saveSkill(name, { owner, ...doc.draft, version: doc.version })
+      // 整份保存带版本：没有冲突时草稿的基线就是 latest（drafts.useDraft）
+      await api.saveSkill(name, { owner, ...doc.draft, version: latest.version })
       toast.success('skill 已保存')
     })
     if (ok) navigate(SKILLS)
@@ -252,11 +256,11 @@ function SkillDraft({ latest }: { latest: Skill }) {
       <Card>
         <Card.Content className="flex flex-col gap-4">
           <div className="text-sm text-muted">归属：{owner === null ? '平台' : agentLabel(agents.data, owner)}</div>
-          <SkillFields value={doc.draft} set={(patch) => doc.setDraft((prev) => ({ ...prev, ...patch }))} />
-          {doc.stale && <StaleDraft what="这个 skill" onDiscard={doc.discard} />}
+          <SkillFields value={doc.draft} set={doc.set} />
+          <DraftConflicts draft={doc} labels={SKILL_FIELD_LABELS} />
           <ErrorAlert error={action.error} />
           <div className="flex gap-2">
-            <ActionButton isPending={action.busy} onPress={() => void save()}>
+            <ActionButton isPending={action.busy} isDisabled={doc.conflicts.length > 0} onPress={() => void save()}>
               保存
             </ActionButton>
             <Button variant="secondary" isDisabled={action.busy} onPress={() => void exportPackage()}>

@@ -3988,6 +3988,119 @@
         "title": "AgentDefaults",
         "description": "新建 agent 时表单预填的值。"
       },
+      "AgentFields": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "roles": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Roles"
+          },
+          "allow": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allow"
+          },
+          "deny": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deny"
+          },
+          "thinking": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "default",
+                  "off",
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thinking"
+          },
+          "group": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "AgentFields",
+        "description": "agent 能改的字段（局部修改与它的 base 共用；缺省或 null 是不变）。"
+      },
       "AgentOut": {
         "properties": {
           "id": {
@@ -4215,11 +4328,22 @@
               }
             ],
             "title": "Group"
+          },
+          "base": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentFields"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "title": "AgentUpdate",
-        "description": "只改给出的字段（缺省或 null 是不变）：界面只提交用户改过的，编辑期间 agent 自己改了另一个字段不会被旧值盖掉。"
+        "description": "只改给出的字段：界面只提交用户改过的，编辑期间 agent 自己改了另一个字段不会被旧值盖掉。"
       },
       "AnswerMailOut": {
         "properties": {
@@ -6179,6 +6303,92 @@
         ],
         "title": "IssueDetailOut"
       },
+      "IssueFields": {
+        "properties": {
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IssueStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IssuePriority"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "assignee": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assignee"
+          },
+          "depends_on": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Depends On"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "IssueFields",
+        "description": "issue 能改的字段（局部修改与它的 base 共用）。assignee 给出 null 表示取消指派，不出现表示不变。"
+      },
       "IssueOrigin": {
         "properties": {
           "kind": {
@@ -6414,11 +6624,22 @@
               }
             ],
             "title": "Depends On"
+          },
+          "base": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IssueFields"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "title": "IssuePatch",
-        "description": "只修改给出的字段。assignee 给出 null 表示取消指派，不出现表示不变。"
+        "description": "只修改给出的字段。"
       },
       "IssuePriority": {
         "type": "string",
@@ -7949,6 +8170,53 @@
         ],
         "title": "ReplyIn"
       },
+      "RoleFields": {
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "allow": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allow"
+          },
+          "deny": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deny"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "RoleFields",
+        "description": "角色能改的字段（局部修改与它的 base 共用；缺省或 null 是不变）。"
+      },
       "RoleIn": {
         "properties": {
           "description": {
@@ -8118,11 +8386,22 @@
               }
             ],
             "title": "Deny"
+          },
+          "base": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoleFields"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "title": "RoleUpdate",
-        "description": "只改给出的字段（缺省或 null 是不变）：界面只提交用户改过的，编辑期间 agent 改了别的字段不会被旧值盖掉。"
+        "description": "只改给出的字段：界面只提交用户改过的，编辑期间 agent 改了别的字段不会被旧值盖掉。"
       },
       "RouteHelpOut": {
         "properties": {
@@ -10083,6 +10362,69 @@
         "title": "TriggerFault",
         "description": "一条出错：来源、原因；写错的投递地址（且只有它）带着那个地址（每个地址各一条）。"
       },
+      "TriggerFields": {
+        "properties": {
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt"
+          },
+          "config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Config"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "precheck": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Precheck"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "route": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Route"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "TriggerFields",
+        "description": "触发器能改的字段（局部修改与它的 base 共用）。precheck 给出 null 表示去掉前置检查，不出现表示不变；route 给 `new`\n回到默认。"
+      },
       "TriggerKindOut": {
         "properties": {
           "name": {
@@ -10184,11 +10526,22 @@
               }
             ],
             "title": "Route"
+          },
+          "base": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TriggerFields"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "title": "TriggerPatch",
-        "description": "只修改给出的字段。precheck 给出 null 表示去掉前置检查，不出现表示不变；route 给 `new` 回到默认。"
+        "description": "只修改给出的字段。"
       },
       "UnreadOut": {
         "properties": {

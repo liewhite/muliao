@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Literal
 
 from fastapi import APIRouter
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from muliao.agent_runtime.api import memory_section
 from muliao.agents.api import (
@@ -24,6 +24,7 @@ from muliao.agents.api import (
     UsedAsset,
 )
 from muliao.api.deps import C
+from muliao.api.fieldlock import check_base
 
 router = APIRouter()
 
@@ -229,17 +230,29 @@ async def create_role(c: C, name: str, body: RoleIn) -> RoleOut:
     return RoleOut.of(await c.distribution.view(name))
 
 
-class RoleUpdate(BaseModel):
-    """只改给出的字段（缺省或 null 是不变）：界面只提交用户改过的，编辑期间 agent 改了别的字段不会被旧值盖掉。"""
+class RoleFields(BaseModel):
+    """角色能改的字段（局部修改与它的 base 共用；缺省或 null 是不变）。"""
+
+    model_config = ConfigDict(extra="forbid")
 
     description: str | None = None
     allow: list[str] | None = None
     deny: list[str] | None = None
 
 
+class RoleUpdate(RoleFields):
+    """只改给出的字段：界面只提交用户改过的，编辑期间 agent 改了别的字段不会被旧值盖掉。"""
+
+    # 改动字段开始编辑时的值（RoleOut 的形状）；此刻已不同就 409（api.fieldlock）
+    base: RoleFields | None = None
+
+
 @router.patch("/roles/{name}")
 async def update_role(c: C, name: str, body: RoleUpdate) -> RoleOut:
     """改角色的描述与可编辑的规则（内置角色也可以，固定的部分不变）；从带它的 agent 的下一次运行起生效。"""
+    if body.base is not None:
+        current = RoleOut.of(await c.distribution.view(name))
+        check_base(f"role {name!r}", current.model_dump(mode="json"), body.base)
     await c.distribution.patch(name, description=body.description, allow=body.allow, deny=body.deny)
     return RoleOut.of(await c.distribution.view(name))
 
@@ -345,8 +358,10 @@ def _mcp_out(u: UsedAsset) -> McpAssetOut:
     return McpAssetOut(**AssetOut.of(u).model_dump(), transport=u.mcp.transport, enabled=u.mcp.enabled)
 
 
-class AgentUpdate(BaseModel):
-    """只改给出的字段（缺省或 null 是不变）：界面只提交用户改过的，编辑期间 agent 自己改了另一个字段不会被旧值盖掉。"""
+class AgentFields(BaseModel):
+    """agent 能改的字段（局部修改与它的 base 共用；缺省或 null 是不变）。"""
+
+    model_config = ConfigDict(extra="forbid")
 
     name: str | None = None
     description: str | None = None
@@ -359,9 +374,27 @@ class AgentUpdate(BaseModel):
     group: str | None = None
 
 
+class AgentUpdate(AgentFields):
+    """只改给出的字段：界面只提交用户改过的，编辑期间 agent 自己改了另一个字段不会被旧值盖掉。"""
+
+    # 改动字段开始编辑时的值（AgentOut 的形状，配置展开到顶层）；此刻已不同就 409（api.fieldlock）
+    base: AgentFields | None = None
+
+
+def _editable(a: AgentOut) -> dict[str, object]:
+    """agent 能改的字段此刻的值（AgentFields 的形状）：配置展开到顶层。目录没加载时配置各项按 None 比，修改本身随后
+    会因目录没加载而失败。"""
+    out = a.model_dump(mode="json")
+    config = out["config"] or dict.fromkeys(AgentConfigOut.model_fields)
+    return {**config, **{f: out[f] for f in ("name", "roles", "allow", "deny")}}
+
+
 @router.patch("/agents/{agent_id}")
 async def update_agent(c: C, agent_id: str, body: AgentUpdate) -> AgentOut:
-    patch = AgentPatch(**body.model_dump())
+    if body.base is not None:
+        current = AgentOut.of(await c.agents.view(agent_id))
+        check_base(f"agent {current.name!r}", _editable(current), body.base)
+    patch = AgentPatch(**body.model_dump(exclude={"base"}))
     return await _out(c, await c.agents.update(agent_id, patch, actor=USER))
 
 

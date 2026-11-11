@@ -17,6 +17,7 @@ import {
   ActionButton,
   copyText,
   EmptyHint,
+  DraftConflicts,
   ErrorAlert,
   LinkButton,
   Loading,
@@ -36,7 +37,7 @@ import { AgentAssetsView } from './AgentAssets'
 import { HistoryList } from './History'
 import { FileBrowser } from './FileBrowser'
 import { SitePageList } from './SitePages'
-import { useFieldDraft } from '../drafts'
+import { useDraft } from '../drafts'
 import { groupAgents } from '../agentGroups'
 
 /** 目录没加载（agent.toml 坏了、目录名对不上等）：不能运行 */
@@ -281,20 +282,34 @@ function AgentCreateForm({ defaults, onSaved }: { defaults: AgentInput; onSaved:
   )
 }
 
-/** 编辑：只提交改过的字段，编辑期间 agent 自己改了别的字段（改它的 agent.toml）不会被旧值盖掉；没动过的字段跟着刷新 */
+const AGENT_FIELD_LABELS: Record<keyof AgentInput, string> = {
+  name: '名称',
+  description: '职责描述',
+  model: '模型',
+  roles: '角色',
+  allow: '额外允许',
+  deny: '禁止',
+  thinking: '思考',
+  group: '分组',
+}
+
+/** 编辑：只提交改过的字段，编辑期间 agent 自己改了别的字段（改它的 agent.toml）不会被旧值盖掉；没动过的字段跟着刷新，
+ * 同一字段两边都改了提示冲突（drafts.useDraft） */
 function AgentEditForm({ agent, current }: { agent: AgentId; current: AgentInput }) {
-  const form = useFieldDraft(current)
+  const form = useDraft(current)
   const action = useAction()
   return (
     <div className="flex flex-col gap-4">
       <AgentFields agentId={agent} input={form.draft} set={form.set} />
+      <DraftConflicts draft={form} labels={AGENT_FIELD_LABELS} />
       <ErrorAlert error={action.error} />
       <ActionButton
-        isDisabled={Object.keys(form.changes).length === 0}
+        isDisabled={Object.keys(form.changes).length === 0 || form.conflicts.length > 0}
         isPending={action.busy}
         onPress={() =>
           void action.run(async () => {
-            await api.updateAgent(agent, form.changes)
+            const saved = await api.updateAgent(agent, form.patch)
+            if (saved.config !== null) form.saved(currentInput(saved, saved.config))
             toast.success('已保存')
           })
         }

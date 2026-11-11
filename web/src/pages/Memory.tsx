@@ -3,11 +3,12 @@ import { Button, Card, toast } from '@heroui/react'
 import { ChevronDown, ChevronRight, Trash2 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { api, type AgentId, type AssetOf, type Memory } from '../api'
-import { useVersionedDraft } from '../drafts'
-import { AssetAccess, OwnerSelect, StaleDraft } from './assetParts'
+import { useDraft } from '../drafts'
+import { AssetAccess, OwnerSelect } from './assetParts'
 import {
   ActionButton,
   CollapsibleForm,
+  DraftConflicts,
   EmptyHint,
   ErrorAlert,
   Loading,
@@ -28,31 +29,34 @@ export function MemoryEditor({ name, hint }: { name: string; hint: string }) {
   return <Loading state={memory}>{(m) => <MemoryDraft latest={m} hint={hint} />}</Loading>
 }
 
+const MEMORY_FIELD_LABELS = { content: '正文' }
+
 function MemoryDraft({ latest, hint }: { latest: Memory; hint: string }) {
-  const doc = useVersionedDraft(latest, (m) => m.content)
+  const doc = useDraft({ content: latest.content })
   const action = useAction()
-  const content = doc.draft
+  const { content } = doc.draft
   return (
     <div className="flex flex-col gap-3">
       <TextAreaInput
         label={`记忆 ${latest.name}（${content.length}/${latest.max_chars} 字符）`}
         hint={hint}
         value={content}
-        onChange={doc.setDraft}
+        onChange={(content) => doc.set({ content })}
         rows={14}
         mono
       />
-      {doc.stale && <StaleDraft what="这块记忆" onDiscard={doc.discard} />}
+      <DraftConflicts draft={doc} labels={MEMORY_FIELD_LABELS} />
       <ErrorAlert error={action.error} />
       <ActionButton
-        isDisabled={!doc.dirty}
+        isDisabled={Object.keys(doc.changes).length === 0 || doc.conflicts.length > 0}
         isPending={action.busy}
         onPress={() =>
           void action.run(async () => {
-            const saved = await api.saveMemory(latest.name, { content, version: doc.version })
+            // 整份保存带版本：没有冲突时草稿的基线就是 latest（drafts.useDraft）
+            const saved = await api.saveMemory(latest.name, { content, version: latest.version })
             toast.success('记忆已保存')
-            // 存下的是规整过空白的：草稿换成它，随 changed 重新拉取到这个版本时就对上了
-            doc.setDraft(saved.content)
+            // 存下的是规整过空白的：以它为新的起点，随 changed 重新拉取到这个版本时就对上了
+            doc.saved({ content: saved.content })
           })
         }
       >

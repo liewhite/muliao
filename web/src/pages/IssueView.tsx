@@ -29,6 +29,7 @@ import {
 } from '../issues'
 import {
   ActionButton,
+  DraftConflicts,
   ErrorAlert,
   Loading,
   Markdown,
@@ -43,7 +44,7 @@ import {
 } from '../ui'
 import { agentLabel } from '../agentGroups'
 import { useLoad } from '../load'
-import { useFieldDraft } from '../drafts'
+import { useDraft } from '../drafts'
 import { OwnerSelect, StatusDot } from './Issues'
 
 function actorName(agents: Agent[] | undefined, actor: string) {
@@ -110,10 +111,13 @@ function IssueLinks({ ids }: { ids: number[] }) {
   ))
 }
 
-/** 编辑标题、正文与依赖：只提交改过的字段（编辑期间 agent 可能改了另一个），没动过的字段跟着服务端的新值（useFieldDraft） */
+const ISSUE_FIELD_LABELS = { title: '标题', description: '描述', depends_on: '依赖' }
+
+/** 编辑标题、正文与依赖：只提交改过的字段（编辑期间 agent 可能改了另一个），没动过的字段跟着服务端的新值，同一字段两边都改了
+ * 提示冲突（drafts.useDraft） */
 function Editor({ detail, onDone }: { detail: IssueDetail; onDone: () => void }) {
   const { issue } = detail
-  const form = useFieldDraft({
+  const form = useDraft({
     title: issue.title,
     description: issue.description,
     depends_on: issue.depends_on.map((i) => `#${i}`).join(', '),
@@ -136,18 +140,26 @@ function Editor({ detail, onDone }: { detail: IssueDetail; onDone: () => void })
           onChange={(depends_on) => form.set({ depends_on })}
         />
         {parsed === null && <p className="text-xs text-danger">只能填 issue 编号，如 #12, #15</p>}
+        <DraftConflicts draft={form} labels={ISSUE_FIELD_LABELS} />
         <ErrorAlert error={save.error} />
         <div className="flex gap-2">
           <ActionButton
             isPending={save.busy}
-            isDisabled={!form.draft.title.trim() || parsed === null}
+            isDisabled={!form.draft.title.trim() || parsed === null || form.conflicts.length > 0}
             onPress={() =>
               void save.run(async () => {
-                // 依赖按解析后的编号比较：只改了空格不算改过
-                const { depends_on: _text, ...text } = form.changes
-                const changedDeps = parsed !== null && parsed.join() !== issue.depends_on.join()
-                const patch = { ...text, ...(changedDeps && { depends_on: parsed }) }
-                if (Object.keys(patch).length > 0) await api.updateIssue(issue.id, patch)
+                // 依赖按解析后的编号提交、比较：只改了空格不算改过；基线是由编号拼出来的，解析回去就是原来的编号
+                const { depends_on: _text, base, ...text } = form.patch
+                const { depends_on: _baseText, ...textBase } = base
+                const baseDeps = parseIssueRefs(form.base.depends_on) ?? []
+                const changedDeps = parsed !== null && parsed.join() !== baseDeps.join()
+                if (Object.keys(text).length > 0 || changedDeps) {
+                  await api.updateIssue(issue.id, {
+                    ...text,
+                    ...(changedDeps && { depends_on: parsed }),
+                    base: { ...textBase, ...(changedDeps && { depends_on: baseDeps }) },
+                  })
+                }
                 onDone()
               })
             }

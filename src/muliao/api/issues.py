@@ -4,10 +4,11 @@ from datetime import datetime
 from typing import Annotated, Union
 
 from fastapi import APIRouter, Query
-from pydantic import BaseModel, Field, create_model
+from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from muliao.agents.api import USER
 from muliao.api.deps import C
+from muliao.api.fieldlock import check_base
 from muliao.issues.api import HAPPENINGS, Activity, IssuePriority, IssueStatus, IssueWork, NewIssue, WorkState
 from muliao.issues.tables import Issue
 from muliao.platform.values import KEEP, Keep
@@ -115,8 +116,10 @@ class IssueCreate(BaseModel):
     depends_on: list[int] = []
 
 
-class IssuePatch(BaseModel):
-    """只修改给出的字段。assignee 给出 null 表示取消指派，不出现表示不变。"""
+class IssueFields(BaseModel):
+    """issue 能改的字段（局部修改与它的 base 共用）。assignee 给出 null 表示取消指派，不出现表示不变。"""
+
+    model_config = ConfigDict(extra="forbid")
 
     owner: str | None = None
     title: str | None = None
@@ -126,6 +129,13 @@ class IssuePatch(BaseModel):
     assignee: str | None = Field(default=None)
     # 依赖的上游 issue id，整体替换（[] 去掉全部）；不出现表示不变
     depends_on: list[int] | None = None
+
+
+class IssuePatch(IssueFields):
+    """只修改给出的字段。"""
+
+    # 改动字段开始编辑时的值（IssueOut 的形状）；此刻已不同就 409（api.fieldlock）
+    base: IssueFields | None = None
 
 
 class CommentIn(BaseModel):
@@ -178,6 +188,9 @@ async def get_issue(c: C, issue_id: int) -> IssueDetailOut:
 
 @router.patch("/issues/{issue_id}")
 async def update_issue(c: C, issue_id: int, body: IssuePatch) -> IssueOut:
+    if body.base is not None:
+        current = await _out(c, (await c.issues.get(issue_id)).issue)
+        check_base(f"issue #{issue_id}", current.model_dump(mode="json"), body.base)
     assignee: str | None | Keep = body.assignee if "assignee" in body.model_fields_set else KEEP
     issue = await c.issues.update(
         USER,
