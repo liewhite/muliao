@@ -21,7 +21,7 @@
 | File | 对话里出现的文件：用户随消息发送的图片与附件、agent 用 `share_file` 发出的文件。写入后不可变，按 id 引用，引用形式唯一（`/api/files/<id>/<名称>`）；与消息相互独立，删除会话不删文件 | `files` 表（元数据）；内容按 sha256 存在 `data/files/` |
 | Notification | 发给用户的一条通知：标题、正文、指向的会话（系统通知如前置检查告警投不到 agent 时的兜底没有）、是否未读。通知页列出它们，未读数就是导航与应用图标的角标；Web Push 是它的投递方式，每台设备（推送订阅）一个 deliver task，只引用通知与订阅，内容不另存一份 | `notifications` 表 |
 | History（工作历史）| agent 做过的一件事：哪天（配置时区的日历日）、标题、2–5 行摘要、引用（issue、会话、commit）、重要程度 1–3。只追加：agent 用 `history_append` 写自己的，库里的触发器拒绝 UPDATE / DELETE；不随 agent 删除而消失 | `agent_history` 表 + FTS5 虚表 `agent_history_fts` |
-| ModelUsage（用量） | 一次模型运行报告的 token 用量：时间、agent、会话（没有就为空）、运行类型（对话 / 压缩；历史行里还有已删除的强制反思 `reflection` 与临时 agent `temp_agent`）、模型、请求数与各项 token。只增不改，也不随 agent 与会话的删除而消失——它是账目 | `model_usage` 表 |
+| ModelUsage（用量） | 一笔 token 用量（一次模型请求；#625 之前的历史行是一次运行）：时间、agent、会话（没有就为空）、运行类型（对话 / 压缩；历史行里还有已删除的强制反思 `reflection` 与临时 agent `temp_agent`）、模型、请求数与各项 token。只增不改，也不随 agent 与会话的删除而消失——它是账目 | `model_usage` 表 |
 | Issue（issue） | 人与 agent 协作的一件事：标题、描述、状态、优先级、负责项目（owner agent，必填、不随指派变）、指派人（agent / 用户 / 无）、依赖的上游 issue（有向无环）、时间线（评论与属性变化）。处于 in_progress 且上游都已完成时，每条动态投进被指派 agent 在这个 issue 上唯一的会话；没有 agent 接手时，用户的评论投给 owner | `issues`、`issue_activities`、`issue_dependencies` 表 |
 | Trigger | 具名、持久的事件来源，把外部刺激变成投进某个会话信箱的一封信件；触发方式（定时、一次性、webhook……）多态实现。跑完不会再触发的标为已结束（`finished_at`），离开列表但留下历史 | `triggers` 表 |
 
@@ -55,7 +55,7 @@ muliao/
   sessions/        会话（子域：会话、运行、交互、外部工作、委派、到点唤醒、展示，见下表）：信箱、历史、运行、挂起的调用、占用、结清、委派与 thread、到点唤醒、压缩、停止、删除、会话的消息约定
   workspace/       工作区：文件工具（read/write/edit_file、share_file）与 edit_file 的编辑规则、run_shell（前台与后台）、后台任务（jobs 表）、skill 脚本的始终允许（grants.py）、界面对工作目录与 skill 目录的只读浏览（browse.py）与 agent 自定义页面（sites.py，第 15 节）
   agents/          agent 目录、AI 资源（资源目录树 agents/assets.py 与快照 agents/source.py；skill、MCP、secret、记忆；secret 的加解密与 ${vault:KEY} 引用解析在 agents/secrets.py）、工具权限与角色
-  usage/           模型用量：每次运行记一条，按时间范围汇总，或取一个会话的累计
+  usage/           模型用量：每次请求记一条，按时间范围汇总，或取一个会话的累计
   issues/          issue 看板：人与 agent 协作的事项，动态按状态与指派投进 agent 的 issue 会话
   speech/          语音输入：把界面录下的语音转成文字（可选，配置 [transcription] 才有）
   web/             网页搜索与抓取：配置的服务（WebProvider）与 web 工具组（可选，配置 [web] 才有）

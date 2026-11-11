@@ -114,7 +114,8 @@ class UsageLog:
         self._tz = tz
 
     async def record(self, entry: UsageEntry) -> None:
-        """记一笔用量（自己开事务）。"""
+        """记一笔用量（自己开事务）。提交之后不再 await（不登记提交后的动作）：计量靠「正常返回即已入账、抛出即未入账」
+        决定下一笔要不要带上这笔（agent_runtime.runner._Meter）。"""
         async with self._db.transaction() as s:
             s.add(
                 ModelUsage(
