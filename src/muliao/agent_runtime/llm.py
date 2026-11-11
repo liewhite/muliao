@@ -65,7 +65,7 @@ def _thinking_shown(profile: ModelProfile, thinking: Thinking) -> ModelSettings:
     设置里没有这一项。Claude 与 OpenAI 的推理模型不给原始的思考过程，给的是摘要，而且要主动要；计费不变（按完整的
     思考算）。按 pydantic_ai 推断的 profile 判断（与 check_thinking 同一个依据）。
 
-    只在这次请求会思考时给：给了档位，或 "default" 而模型不传也在思考（thinking_enabled_by_default）；"default" 不去
+    只在这次请求会思考时给：给了档位，或 "default" 而模型不传也在思考（profile 标了默认思考或总在思考）；"default" 不去
     打开默认不思考的模型。
     - Anthropic（https://platform.claude.com/docs/en/build-with-claude/thinking 「Controlling thinking display」）：
       Claude Opus 4.7 起的模型 display 默认是 omitted（正文为空、只有签名），要 summarized 才回摘要。display 只能写在
@@ -75,7 +75,10 @@ def _thinking_shown(profile: ModelProfile, thinking: Thinking) -> ModelSettings:
       Chat Completions 接法（type = "openai"）也拿到这个键：那个接口没有这项设置，pydantic_ai 不读它，请求里不出现。
     - 其余为空。Google 给了档位时 pydantic_ai 自己带 include_thoughts，"default" 下不带、看不到思考（没接过，接入时
       再定）；deepseek 的 profile 判为不思考。"""
-    if thinking == "default" and not profile.get("thinking_enabled_by_default", False):
+    thinks_unasked = profile.get("thinking_enabled_by_default", False) or profile.get(
+        "thinking_always_enabled", False
+    )
+    if thinking == "default" and not thinks_unasked:
         return ModelSettings()
     if profile.get("anthropic_supports_adaptive_thinking", False):
         return AnthropicModelSettings(anthropic_thinking={"type": "adaptive", "display": "summarized"})
