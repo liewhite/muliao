@@ -294,6 +294,8 @@ class AgentService:
                 lambda doc: access_file.set_agent_rules(doc, name, rules),
             )
             directory = snapshot.root / name
+            # 先单独建目录：已存在（绕开锁用 shell 建的）就在这里失败，下面的撤回只删自己建的
+            await asyncio.to_thread(directory.mkdir, parents=True)
             try:
                 await asyncio.to_thread(_write_new_agent, directory, file, access)
                 async with self._db.transaction() as s:
@@ -424,8 +426,7 @@ class AgentService:
 
 
 def _write_new_agent(directory: Path, file: AgentFile, access: AccessEdit) -> None:
-    """建 agent 的目录（agent.toml、空的私有记忆）并写入 access.toml 的改动。撤回是 _remove_new_agent。"""
-    directory.mkdir(parents=True)
+    """在刚建的 agent 目录里写 agent.toml、空的私有记忆，再写入 access.toml 的改动。撤回是 _remove_new_agent。"""
     write_atomic(directory / AGENT_FILE, agent_file.dump(directory / AGENT_FILE, file))
     write_atomic(directory / PRIVATE_MEMORY_FILE, "")
     access.apply()
