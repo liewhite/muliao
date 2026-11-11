@@ -47,7 +47,8 @@ export interface paths {
         /**
          * Hook
          * @description 外部事件入口：Authorization: Bearer <token>。不带 session_id 时按触发器的投递目标投递（默认新建会话）；带上之前
-         *     返回的则以该会话为默认目标继续；返回的 session_id 是这次投到的第一个会话（内容以 `@route` 行开头时不是续写的那个）。
+         *     返回的则以该会话为默认目标继续。返回的 session_id 是这次开出或续写的第一个会话（内容以 `@route` 行开头时不是续写的
+         *     那个），和触发器的 last_session_id 是同一个；整次只投进了 issue、或要续写的会话还没建出来时为 null。
          */
         post: operations["hook_api_hooks__name__post"];
         delete?: never;

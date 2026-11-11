@@ -2,6 +2,7 @@
 
 import httpx
 
+from muliao.agents.api import USER
 from muliao.sessions.api import Origin
 from tests.conftest import login
 from tests.test_flow import drain, history_of, last_user_prompt
@@ -150,6 +151,45 @@ async def test_continued_event_still_splits_route_lines(client, container, make_
     others = [s.session.id for s in sessions if s.session.id != first["session_id"]]
     assert len(others) == 1
     assert last_user_prompt(await history_of(container, others[0])).endswith("<event>\nunrelated\n</event>")
+
+
+async def test_returned_session_is_the_first_one_opened_even_when_the_first_part_goes_to_an_issue(
+    client, container, make_agent
+):
+    """返回的 session_id 与触发器的 last_session_id 是同一个（Fired.session）：跳过投进 issue 的那段；带它能续写。"""
+    alpha = (await make_agent("alpha")).id
+    await login(client)
+    _, token = await _create(client, alpha)
+    issue = await container.issues.create(USER, owner=alpha, title="deploys")
+
+    resp = await client.post(
+        "/api/hooks/github",
+        content=f"@route issue:{issue.id}\ndeploy failed\n@route new\nplease look",
+        headers=_bearer(token),
+    )
+    assert resp.status_code == 202, resp.text
+    await drain(container)
+    [session] = await container.sessions.list(agent_id=alpha, origins=[Origin.TRIGGER], limit=10, offset=0)
+    assert resp.json() == {"fired": True, "session_id": session.session.id}
+    [listed] = (await client.get("/api/triggers")).json()
+    assert listed["last_session_id"] == session.session.id
+
+    again = await client.post(
+        f"/api/hooks/github?session_id={session.session.id}", content="recovered", headers=_bearer(token)
+    )
+    assert again.status_code == 202 and again.json() == resp.json()
+    await drain(container)
+    assert last_user_prompt(await history_of(container, session.session.id)).endswith(
+        "<event>\nrecovered\n</event>"
+    )
+
+    # 整次只投进了 issue：没有会话可回，触发器记的上一次会话不变
+    only_issue = await client.post(
+        "/api/hooks/github", content=f"@route issue:{issue.id}\nfixed", headers=_bearer(token)
+    )
+    assert only_issue.status_code == 202 and only_issue.json() == {"fired": True, "session_id": None}
+    [listed] = (await client.get("/api/triggers")).json()
+    assert listed["last_session_id"] == session.session.id
 
 
 async def test_event_cannot_write_into_sessions_it_did_not_start(client, container, make_agent):

@@ -103,9 +103,16 @@ class _By(Enum):
 
 @dataclass(frozen=True)
 class Fired:
-    """一次触发投出去的信：每次投递交给的会话（按投递顺序；投进 issue 的、或要续写的会话还没建出来时为 None）。"""
+    """一次触发投出去的信。"""
 
+    # 每次投递交给的会话，按投递顺序；投进 issue 的、或要续写的会话还没建出来时为 None
     sessions: tuple[str | None, ...]
+
+    @property
+    def session(self) -> str | None:
+        """代表这次触发的会话：开出或续写的第一个已知会话；只投进了 issue、或续写的会话还没建出来时为 None。触发器记的
+        last_session_id 与回给调用方（webhook、立即运行）的 session_id 都是它。"""
+        return next((x for x in self.sessions if x is not None), None)
 
 
 def route_of(trigger: Trigger) -> Target:
@@ -506,17 +513,18 @@ class TriggerService:
                 extra={"trigger": trigger.name, "dropped": len(plan.rejected)},
             )
             return None
-        sessions = [r.session_id for r in plan.routed]
+        fired = Fired(sessions=tuple(r.session_id for r in plan.routed))
         for r in plan.routed:
             self._messaging.send_in(s, r.command)
         trigger.last_fired_at = now
-        # 这次开出或续写的第一个已知会话（定时跳过、流式排队看它的工作状态）；只投进了 issue、或续写的会话还没建出来时
-        # 留着上一次的，不清空
-        known = [x for x in sessions if x is not None]
-        if known:
-            trigger.last_session_id = known[0]
-        log.info("trigger fired", extra={"trigger": trigger.name, "kind": trigger.kind, "sessions": sessions})
-        return Fired(sessions=tuple(sessions))
+        # 定时跳过、流式排队看它的工作状态；这次没有（Fired.session 为 None）时留着上一次的，不清空
+        if fired.session is not None:
+            trigger.last_session_id = fired.session
+        log.info(
+            "trigger fired",
+            extra={"trigger": trigger.name, "kind": trigger.kind, "sessions": list(fired.sessions)},
+        )
+        return fired
 
     async def run(self, trigger_id: int) -> Fired | None:
         """用户或 agent 的「立即运行一次」（不带事件内容）：管理操作，不消耗一次性触发器预定的那一次。
