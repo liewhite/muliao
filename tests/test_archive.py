@@ -11,7 +11,7 @@ from muliao.sessions.api import NewChat, Origin, UserMessage
 from muliao.sessions.tables import Session
 from muliao.triggers.api import Precheck
 from tests.conftest import login
-from tests.test_flow import deliver, drain
+from tests.test_flow import drain, side_tasks
 from tests.test_precheck import precheck_error
 
 PROGRESS = IssueStatus.IN_PROGRESS
@@ -107,21 +107,6 @@ async def test_archiving_needs_the_agent_idle_and_not_default(container, make_ag
         await container.agents.set_default(alpha.id, True)
 
 
-@pytest.mark.usefixtures("deliveries_later")
-async def test_mail_validated_before_archiving_is_dropped_on_delivery(container, make_agent):
-    alpha = await make_agent("alpha")
-    trigger = await container.triggers.create(
-        name="h", agent_id=alpha.id, kind="schedule", prompt="p", config={"cron": "0 9 * * *"}
-    )
-    # 触发记下了、投信的定向命令还在排队（只校验了来信，会话还没建，agent 不忙）
-    fired = await container.triggers.run(trigger.id)
-    assert fired is not None
-    await container.agent_lifecycle.set_archived(alpha.id, True)
-    await deliver(container)
-    async with container.db.transaction() as s:
-        assert await s.get(Session, fired.session_id) is None
-
-
 async def test_triggers_of_an_archived_agent_neither_run_their_precheck_nor_fire(
     container, make_agent, tmp_path
 ):
@@ -169,7 +154,7 @@ async def test_issues_cannot_go_to_an_archived_agent_and_its_old_ones_stay_quiet
     await container.agent_lifecycle.set_archived(alpha.id, True)
     await container.issues.update(USER, issue.id, status=PROGRESS)
     await container.issues.comment(USER, issue.id, "still there?")
-    await deliver(container)
+    await side_tasks(container)
     async with container.db.transaction() as s:
         assert (await s.scalars(select(Session).where(Session.origin == Origin.ISSUE))).all() == []
     activities = (await container.issues.get(issue.id)).activities
@@ -230,6 +215,6 @@ async def test_a_once_trigger_due_while_its_agent_is_archived_tells_the_user(con
         due = await trigger_in(s, trigger.id)
         due.config = {"at": (datetime.now().astimezone() - timedelta(seconds=1)).isoformat()}
     await container.due.fire_due()
-    await deliver(container)
+    await side_tasks(container)
     [note] = await container.notifications.list(10)
     assert "later" in note.title and "归档" in note.title and "weekly report" in note.body

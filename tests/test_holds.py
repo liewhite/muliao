@@ -7,7 +7,7 @@ from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo
 from sqlalchemy import select
 
-from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
+from muliao.platform.tables import Task, TaskStatus
 from muliao.sessions.holds import hold_in
 from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.tables import HoldStatus, Mail, SessionHold
@@ -50,11 +50,6 @@ async def test_an_answered_ask_is_not_executed_again_and_its_hold_stays_as_the_r
             await s.scalars(select(SessionHold).where(SessionHold.thread_call_id.is_not(None)))
         ).all()
     assert delegation.status == HoldStatus.RELEASED
-
-
-async def _event_count(container) -> int:
-    async with container.db.transaction() as s:
-        return len((await s.scalars(select(Task).where(Task.kind == EVENT_TASK))).all())
 
 
 async def _mail_count(container) -> int:
@@ -346,9 +341,9 @@ async def test_a_thread_run_failing_before_its_first_step_with_a_failing_hook_is
             suspends=False,
             awaited=False,
         )
-    from tests.test_flow import deliver
+    from tests.test_flow import side_tasks
 
-    await deliver(container)
+    await side_tasks(container)
     run = await container.queue.claim([RUN_TASK])
     assert run is not None and run.session_id == child.id
 
@@ -360,7 +355,7 @@ async def test_a_thread_run_failing_before_its_first_step_with_a_failing_hook_is
 
     assert await reconcile_failures(container.db, container.queue) == [child.id]
     assert await reconcile_failures(container.db, container.queue) == []
-    await deliver(container)
+    await side_tasks(container)
     events = [m for m in await _mail_of(container, parent.id) if m.source == f"thread:{child.id}"]
     assert len(events) == 1 and "boom" in events[0].content
 
@@ -463,17 +458,14 @@ async def test_deleting_a_stopped_asker_drops_its_threads_outcome(container, mak
 
 
 async def test_stopping_a_thread_that_is_already_deleted_is_a_no_op(container, make_agent):
-    from muliao.platform.messaging import Delivery
-    from muliao.sessions.events import StopThread
+    from muliao.sessions.api import Halted
 
     agent = (await make_agent("alpha")).id
     session = await start(container, agent, "go")
     await drain(container)
     await container.sessions.delete(session.id)
 
-    commit = await container.sessions.on_stop_thread(StopThread(session_id=session.id), Delivery("m"))
-    async with container.db.transaction() as s:
-        await commit(s)
+    assert await container.stopper(session.id) == Halted.GONE
 
 
 async def test_thread_checks_leave_background_job_holds_alone(container, make_agent):

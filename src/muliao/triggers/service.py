@@ -41,22 +41,19 @@ from muliao.agents.api import (
 )
 from muliao.agents.events import AgentDeleting
 from muliao.errors import Conflict, InvalidInput, NotFound
-from muliao.platform.db import Database, utcnow
-from muliao.platform.ids import new_id
-from muliao.platform.messaging import Delivery, Messaging
-from muliao.platform.tasks import Clock, Commit
+from muliao.platform.db import Database, utcnow, when_committed_in
+from muliao.platform.tasks import Clock
 from muliao.platform.values import KEEP, Keep, local_time
 from muliao.sessions.api import (
     Accepted,
     NewConversation,
-    RecipientState,
     Refused,
+    SenderInbox,
     SenderMail,
     SessionActivity,
-    ToSession,
+    SessionState,
     TriggerOrigin,
     WorkState,
-    receive_command_in,
 )
 from muliao.triggers.faults import Faults, FaultSource, TriggerFault, faults_of, reset
 from muliao.triggers.precheck import (
@@ -91,7 +88,7 @@ SESSION_NOTE = (
 @dataclass(frozen=True)
 class TriggerView:
     """触发器的读模型（HTTP 层与工具共用）：行、运行状态（这种方式自己的类型）、前置检查、脚本出错，上一次触发开出的会话
-    （已删除时为 None，问会话领域 SessionActivity.recipients_in）。"""
+    （已删除时为 None，问会话领域 SessionActivity.states_of_in）。"""
 
     trigger: Trigger
     status: BaseModel
@@ -258,14 +255,15 @@ def set_state(trigger: Trigger, **values: Any) -> None:
 
 async def previous_fire_state_in(
     s: AsyncSession, activity: SessionActivity, trigger: Trigger
-) -> RecipientState:
+) -> SessionState:
     """上一次触发开出的会话现在的工作状态（会话领域回答；会话已删除时 session_id 为 None），从没触发过时是
     idle。不是 idle 就还有没做完的事：在运行、有还没投递的来信（包括这次的），或在等后台任务、委派、到点唤醒、用户回答——
     等待中的会话结果回来会自动接着做，再开一个会重叠（用户 11-11 定，#627）。定时触发据此跳过，流式触发据此让事件排队
     （触发器领域内部用）。"""
     if trigger.last_session_id is None:
-        return RecipientState(WorkState.IDLE, None)
-    return await activity.recipient_in(s, ToSession(session_id=trigger.last_session_id))
+        return SessionState(WorkState.IDLE, None)
+    [state] = await activity.states_of_in(s, [trigger.last_session_id])
+    return state
 
 
 def finish_in(trigger: Trigger, now: datetime) -> None:
@@ -286,7 +284,7 @@ class TriggerService:
         tz: ZoneInfo,
         commands: AgentCommands,
         precheck: PrecheckRunner,
-        messaging: Messaging,
+        inbox: SenderInbox,
         faults: Faults,
         activity: SessionActivity,
         clock: Clock = utcnow,
@@ -294,7 +292,7 @@ class TriggerService:
         self._activity = activity
         self._commands = commands
         self._precheck = precheck
-        self._messaging = messaging
+        self._inbox = inbox
         self._faults = faults
         self._db = db
         self.kinds = dict(kinds)
@@ -303,14 +301,14 @@ class TriggerService:
         # 每个激活机制各自订阅变化通知（见 watch），互不清除对方的通知
         self._subscribers: list[asyncio.Event] = []
 
-    async def on_agent_deleting(self, event: AgentDeleting, _delivery: Delivery) -> Commit:
+    async def on_agent_deleting(self, s: AsyncSession, event: AgentDeleting) -> None:
         """删除 agent 的流程：删除它的触发器。"""
+        await s.execute(delete(Trigger).where(Trigger.agent_id == event.agent_id))
 
-        async def commit(s: AsyncSession) -> None:
-            await s.execute(delete(Trigger).where(Trigger.agent_id == event.agent_id))
+        async def changed() -> None:
             self._changed()
 
-        return commit
+        when_committed_in(s, changed)
 
     def watch(self) -> asyncio.Event:
         """返回一个只属于调用方的 Event：任何触发器变化时置位，由调用方自己清除。"""
@@ -332,8 +330,8 @@ class TriggerService:
         触发开出的会话还在不在（问会话领域，一个事务）。"""
         fired = [t for t in triggers if t.last_session_id is not None]
         async with self._db.transaction() as s:
-            states = await self._activity.recipients_in(
-                s, [ToSession(session_id=t.last_session_id) for t in fired if t.last_session_id is not None]
+            states = await self._activity.states_of_in(
+                s, [t.last_session_id for t in fired if t.last_session_id is not None]
             )
         last = {t.id: state.session_id for t, state in zip(fired, states, strict=True)}
         sessions = [last.get(t.id) for t in triggers]
@@ -511,26 +509,24 @@ class TriggerService:
             raise NotFound(f"trigger {name!r} not found")
 
     async def _deliver_in(self, s: AsyncSession, trigger: Trigger, payload: str | None) -> Fired:
-        """新开触发器的 agent 的一个会话交出这次事件（只由 _fire 调用）：同一事务里记下触发、发出投递，触发记下了就一定投递，
-        投递恰好一次。会话 id 在这里预先分配，投递之后（通常毫秒级）会话才出现。payload 为事件内容（无则只有处理说明）。"""
+        """新开触发器的 agent 的一个会话交出这次事件（只由 _fire 调用）：记下触发与投信在同一事务，恰好一次。payload 为
+        事件内容（无则只有处理说明）。"""
         mail = SenderMail(
             sender=TriggerOrigin(trigger_id=trigger.id),
             content=event_prompt(trigger.prompt, payload),
             session=NewConversation(
-                id=new_id(),
                 agent_id=trigger.agent_id,
                 title=f"{trigger.name} · {local_time(self._clock(), self._tz)}",
             ),
         )
-        match await receive_command_in(s, mail):
-            case Accepted(command=command, session_id=str(session_id)):
+        match await self._inbox.receive_in(s, mail):
+            case Accepted(session_id=session_id):
                 pass
             case Refused(detail=detail):
                 # 新会话只看 agent 能不能运行，_fire 在同一事务里刚由 _skip_in 确认过
                 raise RuntimeError(f"trigger {trigger.name!r}: own agent refused after the check: {detail}")
             case other:
-                raise RuntimeError(f"trigger {trigger.name!r}: unexpected delivery {other!r}")
-        self._messaging.send_in(s, command)
+                assert_never(other)
         trigger.last_fired_at = self._clock()
         # 定时跳过、流式排队问它忙不忙（previous_fire_state_in）
         trigger.last_session_id = session_id

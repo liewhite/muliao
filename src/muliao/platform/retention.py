@@ -1,5 +1,5 @@
 """任务队列的保留策略：启动时与之后每天一次，删掉 7 天前已完成的、处理它的领域声明了可删的任务（TaskHandler.prunable：
-现在是事件投递与推送），tasks 表不随时间无限增长。为什么只删这几种见 docs/architecture.md 3.2「保留」。
+如推送、停止 thread、删除 agent 的文件），tasks 表不随时间无限增长。为什么只删这几种见 docs/architecture.md 3.2「保留」。
 """
 
 import logging

@@ -17,7 +17,7 @@ from muliao.sessions.origins import Origin
 from muliao.sessions.questions import UserAnswered
 from muliao.sessions.tables import HoldStatus, Mail, MailKind, MailState, SessionHold, ThreadCall
 from tests.scripted import scripted
-from tests.test_flow import deliver, drain, history_of, note_args, start, tasks_of
+from tests.test_flow import drain, history_of, note_args, side_tasks, start, tasks_of
 from tests.test_mailbox import Recorder
 from tests.test_threads import call, echo, threads_of
 from tests.test_tools import run_tools
@@ -142,7 +142,7 @@ async def test_open_reported_threads_get_check_events_without_piling_up(containe
         )
     [child] = await threads_of(container, parent.id)
     assert child.id == received.id
-    await deliver(container)
+    await side_tasks(container)
 
     await asyncio.sleep(0.01)
     assert await container.thread_checks.check() == 1
@@ -178,7 +178,7 @@ async def test_each_reported_delegation_is_checked_at_its_own_interval(container
                 awaited=False,
                 check_seconds=interval,
             )
-    await deliver(container)
+    await side_tasks(container)
     await asyncio.sleep(0.01)
 
     assert await container.thread_checks.check() == 1
@@ -516,7 +516,7 @@ async def test_stopping_a_queued_thread_reports_that_it_was_stopped(container, m
     [child] = await threads_of(container, parent.id)
 
     await container.stopper(child.id)
-    await deliver(container)
+    await side_tasks(container)
 
     async with container.db.transaction() as s:
         [event] = (
@@ -751,13 +751,13 @@ async def test_a_reported_thread_is_deleted_only_after_stopping_and_the_delegato
             suspends=False,
             awaited=False,
         )
-    await deliver(container)
+    await side_tasks(container)
     # 排着运行的 thread 忙：先停止才能删除；停止时委派结清为「被停止」，删除不再重复交回
     with pytest.raises(Conflict, match="busy"):
         await container.sessions.delete(received.id)
     await container.stopper(received.id)
     await container.sessions.delete(received.id)
-    await deliver(container)
+    await side_tasks(container)
 
     async with container.db.transaction() as s:
         [event] = (
@@ -1087,7 +1087,7 @@ async def _failed_tasks(container) -> list[Task]:
 
 
 async def test_stopping_the_asker_stops_its_threads_level_by_level(container, make_agent, models):
-    """发起方被停止：停止事务清掉它的委派占用，并给做这些工作的 thread 发 StopThread；thread 的停止再停下它自己委派
+    """发起方被停止：停止事务清掉它的委派占用，并给做这些工作的 thread 各排一个停止任务；thread 的停止再停下它自己委派
     出去的 thread。结局一律不再交回。"""
     from muliao.sessions.tables import MailState
 

@@ -1,9 +1,9 @@
-"""各领域交给组合根的部件：一个领域有哪些工具集、订阅与命令处理、任务处理器、
+"""各领域交给组合根的部件：一个领域有哪些工具集、事件订阅、任务处理器、
 常驻循环、运行中检查，由它自己的装配对象声明（继承 Parts，覆盖自己有的，没有的默认为空）；组合根把各领域放进一个
 列表，每种部件遍历一次，不列举各领域有什么。
 
-漏装配不静默：每条定向命令都要有处理者、每个事件都要有订阅者，装配结束时由 Messaging.check_wired 核对，缺了当场
-报错（漏放进列表的领域，它的订阅与处理就会缺）。"""
+漏装配不静默：每个事件都要有订阅者，装配结束时由 Messaging.check_wired 核对，缺了当场报错（漏放进列表的领域，
+它的订阅就会缺）。"""
 
 from collections.abc import Awaitable, Callable, Sequence
 
@@ -24,7 +24,7 @@ class Parts:
         return ()
 
     def subscribe(self, messaging: Messaging) -> None:
-        """登记这个领域的事件订阅与定向命令的处理。"""
+        """登记这个领域的事件订阅。"""
 
     def handlers(self) -> Sequence[tuple[str, TaskHandler]]:
         """这个领域的任务种类与处理器（交给 worker）。"""

@@ -5,13 +5,14 @@ import anyio
 import pytest
 from sqlalchemy import select, text
 
+from muliao.agents.api import AGENT_REMOVAL_TASK
 from muliao.errors import Conflict
 from muliao.notifications.push import DELIVER_TASK
 from muliao.platform.db import utcnow
-from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
+from muliao.platform.tables import Task, TaskStatus
 from muliao.platform.tasks import no_commit
 from muliao.platform.worker import Worker
-from muliao.sessions.lanes import RUN_TASK
+from muliao.sessions.lanes import RUN_TASK, STOP_THREAD_TASK
 
 
 async def _nothing(_s, _task) -> None:  # noqa: ANN001
@@ -145,19 +146,19 @@ async def test_a_task_interrupted_past_its_attempts_is_failed_instead_of_recover
     assert failed.exc_info is not None and "Interrupted" in caplog.text
 
 
-async def test_retention_prunes_only_old_done_event_and_deliver_tasks(container, make_agent):
-    """保留策略：7 天前完成的 event/deliver 删掉；failed、run、排队中的与较新的保留（为什么见 docs/architecture.md 3.2「保留」）。"""
+async def test_retention_prunes_only_old_done_tasks_of_prunable_kinds(container, make_agent):
+    """保留策略：7 天前完成的可删种类（如 deliver、stop_thread）删掉；failed、run、排队中的与较新的保留（为什么见 docs/architecture.md 3.2「保留」）。"""
     # 可删的种类由处理它的领域声明（TaskHandler.prunable）
-    assert container.worker.prunable_kinds == {EVENT_TASK, DELIVER_TASK}
+    assert container.worker.prunable_kinds == {DELIVER_TASK, STOP_THREAD_TASK, AGENT_REMOVAL_TASK}
     alpha = (await make_agent()).id
     old, recent = utcnow() - timedelta(days=8), utcnow() - timedelta(days=6)
     rows = {
-        "old_event": (EVENT_TASK, TaskStatus.DONE, old),
+        "old_stop": (STOP_THREAD_TASK, TaskStatus.DONE, old),
         "old_deliver": (DELIVER_TASK, TaskStatus.DONE, old),
-        "recent_event": (EVENT_TASK, TaskStatus.DONE, recent),
-        "old_failed_event": (EVENT_TASK, TaskStatus.FAILED, old),
+        "recent_stop": (STOP_THREAD_TASK, TaskStatus.DONE, recent),
+        "old_failed_stop": (STOP_THREAD_TASK, TaskStatus.FAILED, old),
         "old_run": (RUN_TASK, TaskStatus.DONE, old),
-        "pending_event": (EVENT_TASK, TaskStatus.PENDING, None),
+        "pending_stop": (STOP_THREAD_TASK, TaskStatus.PENDING, None),
     }
     ids = {}
     async with container.db.transaction() as s:
@@ -172,7 +173,7 @@ async def test_retention_prunes_only_old_done_event_and_deliver_tasks(container,
 
     async with container.db.transaction() as s:
         left = {name for name, i in ids.items() if await s.get(Task, i) is not None}
-    assert left == set(rows) - {"old_event", "old_deliver"}
+    assert left == set(rows) - {"old_stop", "old_deliver"}
 
 
 async def test_mail_taken_by_is_indexed_for_task_deletes(container):
@@ -229,7 +230,7 @@ def test_registering_a_task_kind_twice_is_refused():
     from muliao.platform.worker import register_handlers
 
     with pytest.raises(ValueError, match="'run' is registered twice"):
-        register_handlers((RUN_TASK, object()), (EVENT_TASK, object()), (RUN_TASK, object()))
+        register_handlers((RUN_TASK, object()), (DELIVER_TASK, object()), (RUN_TASK, object()))
 
 
 async def test_recover_resets_only_the_kinds_asked_for(container, make_agent):
@@ -248,8 +249,8 @@ async def test_recover_resets_only_the_kinds_asked_for(container, make_agent):
 
 
 async def test_startup_recovers_running_tasks_before_any_worker_claims(container, make_agent):
-    """启动恢复在启动阶段执行（Container.running 的 _prepare），领取循环里不恢复：否则抢先开始的请求或运行经
-    run_now 当场领走的 task 会被复位，同一个 task 执行两次。"""
+    """启动恢复在启动阶段执行（Container.running 的 _prepare），领取循环里不恢复：否则抢先领走的 task 会被复位，
+    同一个 task 执行两次。"""
     alpha = (await make_agent()).id
     task = await _enqueue(container, "a", alpha)
     await container.queue.claim([DELIVER_TASK])
@@ -362,7 +363,8 @@ async def test_model_unavailable_retries_past_the_ordinary_limit_up_to_its_own(c
         while True:
             async with container.db.transaction() as s:
                 (await s.get(Task, task.id)).not_before = utcnow() - timedelta(seconds=1)
-            claimed = await q.claim_task(task.id, q.kinds)
+            claimed = await q.claim(q.kinds)
+            assert claimed is not None and claimed.id == task.id
             failed = await q.fail(claimed.id, str(exc), retry=q.retries.for_failure(exc), on_final=_nothing)
             if failed.status == TaskStatus.FAILED:
                 return failed

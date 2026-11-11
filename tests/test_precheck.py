@@ -11,7 +11,7 @@ from muliao.triggers.faults import FaultSource, TriggerFault, faults_of, record,
 from muliao.triggers.precheck import Precheck, PrecheckFailed, decide, passed, set_precheck
 from muliao.triggers.service import trigger_in
 from tests.conftest import login
-from tests.test_flow import deliver, mail_of, tasks_of
+from tests.test_flow import mail_of, side_tasks, tasks_of
 from tests.test_triggers import _make_due
 
 
@@ -51,7 +51,7 @@ async def _tick(container, trigger_id: int) -> None:
     """到点触发一次；告警是发给通知领域的命令，随后投递。"""
     await _make_due(container, trigger_id)
     await container.due.fire_due()
-    await deliver(container)
+    await side_tasks(container)
 
 
 def precheck_error(trigger) -> str | None:
@@ -236,7 +236,7 @@ async def test_a_finished_once_trigger_whose_precheck_failed_tells_the_agent_its
         due = await trigger_in(s, trigger.id)
         due.config = {"at": (datetime.now().astimezone() - timedelta(seconds=1)).isoformat()}
     await container.due.fire_due()
-    await deliver(container)
+    await side_tasks(container)
 
     [alert] = await _alerts(container)
     assert "NOT done" in alert and "<prompt>\nSend the weekly report.\n</prompt>" in alert
@@ -336,7 +336,7 @@ async def test_a_failing_precheck_on_a_manual_run_is_a_502_with_the_reason(clien
     resp = await client.post(f"/api/triggers/{trigger.id}/run")
     assert resp.status_code == 502 and "boom" in resp.json()["detail"]
     # 只报给调用方：不记在触发器上（否则会压住之后自动触发时的告警），也不告警
-    await deliver(container)
+    await side_tasks(container)
     assert precheck_error(await container.triggers.get_by_name("watch")) is None
     assert await mail_of(container) == [] and await container.notifications.list(10) == []
     await _tick(container, trigger.id)

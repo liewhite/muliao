@@ -20,7 +20,7 @@ from muliao.issues.api import ActivityKind, IssueStatus
 from muliao.sessions.conventions import STOPPED_TOOL_RESULT
 from muliao.sessions.tables import MailState
 from tests.scripted import scripted
-from tests.test_flow import deliver, drain, history_of, mail_of
+from tests.test_flow import drain, history_of, mail_of, side_tasks
 from tests.test_issues import _issue_sessions, _waits
 
 BACKLOG, PROGRESS = IssueStatus.BACKLOG, IssueStatus.IN_PROGRESS
@@ -128,7 +128,7 @@ async def test_redirecting_keeps_the_issue_in_progress(container, make_agent, mo
 async def test_stopping_without_a_message_clears_the_mailbox_and_delivers_nothing(container, make_agent):
     alpha, boss = (await make_agent("alpha")).id, (await make_agent("boss")).id
     issue = await container.issues.create(USER, owner=boss, title="t", status=PROGRESS, assignee=alpha)
-    await deliver(container)
+    await side_tasks(container)
     [session] = await _issue_sessions(container)
 
     # 信还排着、会话没在运行：停止就是清空信箱
@@ -150,7 +150,7 @@ async def test_an_assignee_without_a_conversation_only_gets_the_status_changed(c
     result = await container.issues.stop(
         boss, issue.id, session_id=None, status=IssueStatus.BLOCKED, message="hold"
     )
-    await deliver(container)
+    await side_tasks(container)
 
     assert not result.stopped and result.issue.status == IssueStatus.BLOCKED
     assert (await _kinds(container, issue.id))[-2:] == [ActivityKind.STATUS, ActivityKind.COMMENT]
@@ -161,7 +161,7 @@ async def test_an_assignee_without_a_conversation_only_gets_the_status_changed(c
 async def test_stop_is_refused_where_it_makes_no_sense(container, make_agent):
     alpha, boss = (await make_agent("alpha")).id, (await make_agent("boss")).id
     issue = await container.issues.create(USER, owner=boss, title="t", status=PROGRESS, assignee=alpha)
-    await deliver(container)
+    await side_tasks(container)
     [session] = await _issue_sessions(container)
 
     for status in (IssueStatus.IN_REVIEW, IssueStatus.DONE):
@@ -188,7 +188,7 @@ async def test_issue_stop_tool(container, make_agent, models):
     alpha = (await make_agent("alpha")).id
     issue = await container.issues.create(USER, owner=me.id, title="t", status=PROGRESS, assignee=alpha)
     other = await container.issues.create(USER, owner=me.id, title="o", assignee=alpha)
-    await deliver(container)
+    await side_tasks(container)
     outputs = await run_tools(
         container,
         models,

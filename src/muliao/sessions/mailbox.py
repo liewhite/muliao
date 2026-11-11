@@ -51,7 +51,7 @@ def audience_of(mail: Sequence[Mail], delegated: bool) -> Audience:
     """一次运行的回答交给谁（唯一规则）：它处理的信件有用户在等的就是用户；否则会话有委派来、还没结清的工作
     （delegated：ask_agent 或 report_back，见 sessions.settlement.delegated_in）就是发起委派的 agent——会话做完时
     最终回答在结清里交给它们，不论这次运行处理的是委派那封信，还是之后的后台任务事件、回答、运行中检查；都没有就是
-    没人在等。发起方已被停止（占用 cleared）的委派不算：没人再等 thread 的回答（停止已给 thread 发了 StopThread）。"""
+    没人在等。发起方已被停止（占用 cleared）的委派不算：没人再等 thread 的回答（停止已给 thread 排了停止任务）。"""
     if any(m.awaited for m in mail):
         return Audience.USER
     if delegated:

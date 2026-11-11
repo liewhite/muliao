@@ -358,7 +358,7 @@ class RunHandler:
         child, agent = await load_session(s, task.session_id)
         await settle_failure_in(s, self._queue, child, TaskView.of(task))
         await wake_in(s, self._queue, child)
-        self._messaging.publish_in(
+        await self._messaging.publish_in(
             s,
             RunFailed(
                 session_id=child.id,

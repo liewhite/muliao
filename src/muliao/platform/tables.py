@@ -10,8 +10,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from muliao.platform.db import Base, StrEnumType, UTCDateTime, utcnow
 
 # 任务种类是不透明的字符串：各领域定义自己的种类（如会话的运行、通知的推送），处理器由各领域声明（platform.wiring.Parts.handlers）、
-# 组合根交给 Worker 登记，平台不枚举它们。平台自己只有一种：领域事件或定向命令的一次投递（platform.messaging）
-EVENT_TASK = "event"
+# 组合根交给 Worker 登记，平台不枚举它们。
 
 
 class TaskStatus(StrEnum):

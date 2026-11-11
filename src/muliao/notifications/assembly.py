@@ -52,7 +52,7 @@ class NotificationDomain(Parts):
         return (notify_toolset(self.notifications),)
 
     def subscribe(self, messaging: Messaging) -> None:
-        """写下通知的订阅与命令（运行结束、运行失败、Notify）、随会话已读与删除。"""
+        """写下通知的订阅（运行结束、运行失败）、随会话已读与删除。"""
         self.notifications.subscribe(messaging)
 
     def handlers(self) -> Sequence[tuple[str, TaskHandler]]:

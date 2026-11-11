@@ -7,8 +7,9 @@
 2. 排队与等重试的运行记为完成，不再执行。
 3. 全部 active 占用记为 cleared：之后才到的结局（后台任务、委派）一律不投（sessions.work.deliver_in）。
 4. 交给这个会话、还没结清的委派结清为「被停止」，结局交回它们的发起方（sessions.delegation）；清空信箱。
-5. 被清掉的委派：给做这些工作的 thread 各发一条定向命令 StopThread（逐层停止）。
-6. 发布 SessionStopped（被清掉的外部工作的占用者）：工作区领域结束被清掉的进程。
+5. 被清掉的委派：给做这些工作的 thread 各排一个停止任务（STOP_THREAD_TASK，逐层停止）。停 thread 要等它正在跑的运行
+   退出，所以不在这个事务里等，由 worker 执行，发起停止的一方不等它。
+6. 发布 SessionStopped（被清掉的外部工作的占用者）：工作区领域在提交后结束被清掉的进程。
 """
 
 from __future__ import annotations
@@ -22,9 +23,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.platform.db import Database
 from muliao.platform.messaging import Messaging
-from muliao.platform.tasks import Commit, TaskQueue
+from muliao.platform.tables import Task
+from muliao.platform.tasks import Commit, TaskQueue, no_commit
 from muliao.sessions.conventions import is_stopped
-from muliao.sessions.events import SessionStopped, StopThread
+from muliao.sessions.events import SessionStopped
 from muliao.sessions.history import (
     append_in,
     latest_answer,
@@ -34,7 +36,7 @@ from muliao.sessions.history import (
     stopped_results,
 )
 from muliao.sessions.holds import clear_in
-from muliao.sessions.lanes import RUN_TASK, session_lane
+from muliao.sessions.lanes import RUN_TASK, STOP_THREAD_TASK, session_lane, stop_thread_lane
 from muliao.sessions.mailbox import consume_in, queued_in
 from muliao.sessions.pending import closing_on_stop, handed_out_in, position
 from muliao.sessions.runs import latest_run
@@ -73,7 +75,7 @@ class Halted(StrEnum):
     """停止的结果（命令的结果类型）。"""
 
     STOPPED = "stopped"
-    # 会话已删除（例如 StopThread 停止一个刚被用户删掉的 thread）：契约内的情况，不是错误
+    # 会话已删除（例如逐层停止一个刚被用户删掉的 thread）：契约内的情况，不是错误
     GONE = "gone"
 
 
@@ -114,10 +116,17 @@ class SessionHalt:
             )
             threads = list(dict.fromkeys(d.thread_id for d in delegations.values()))
             for thread_id in threads:
-                self._messaging.send_in(s, StopThread(session_id=thread_id))
+                self._queue.enqueue(
+                    s,
+                    kind=STOP_THREAD_TASK,
+                    lane=stop_thread_lane(thread_id),
+                    agent_id=None,
+                    session_id=thread_id,
+                    payload={},
+                )
             # 外部工作（后台任务）由它们的领域结束
             holders = [h.holder for h in cleared if h.holder is not None]
-            self._messaging.publish_in(s, SessionStopped(session_id=session_id, cleared=holders))
+            await self._messaging.publish_in(s, SessionStopped(session_id=session_id, cleared=holders))
         log.info(
             "session halted",
             extra={
@@ -148,3 +157,24 @@ class SessionStopper:
         if await self._runs.stop(session_id):
             return Halted.STOPPED
         return await self._halt(session_id)
+
+
+class StopThreadHandler:
+    """停止任务（STOP_THREAD_TASK）：一个 thread 做的委派的发起方被停止了，停下它（已被删除时是 GONE，什么都不做）。"""
+
+    prunable = True
+
+    def __init__(self, stop: StopSession):
+        self._stop = stop
+
+    async def execute(self, task: Task) -> Commit:
+        if task.session_id is None:
+            raise RuntimeError(f"stop task {task.id} has no session")
+        halted = await self._stop(task.session_id)
+        log.info(
+            "thread of a stopped session stopped", extra={"session_id": task.session_id, "halted": halted}
+        )
+        return no_commit
+
+    async def failed_in(self, s: AsyncSession, task: Task) -> None:
+        """停不下来只需可见（任务记录与日志）。"""

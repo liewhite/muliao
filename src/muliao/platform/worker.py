@@ -5,12 +5,10 @@ import anyio
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.platform.bus import EventBus, TaskEvent
-from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
+from muliao.platform.tables import Task, TaskStatus
 from muliao.platform.tasks import Commit, TaskQueue
 
 log = logging.getLogger(__name__)
-# run_now 被取消后把任务放回 pending 的时限（一个短事务）
-_UNCLAIM_SECONDS = 10.0
 
 _IDLE_POLL_SECONDS = 30.0
 
@@ -97,7 +95,7 @@ class Worker:
 
     async def recover(self) -> None:
         """启动阶段（领取循环、HTTP 与别的循环开始之前，由组合根调用）把上次进程遗留的 running 复位为 pending 重新
-        执行（队列的 recover）；放在领取循环里时，抢先开始的请求或运行经 run_now 领走的 task 会被复位、执行两次。
+        执行（队列的 recover）；放在领取循环里时，抢先开始的 task 会被复位、执行两次。
         尝试次数已经用完的除外：
         任务本身会让进程退出时（例如它执行的命令重启了服务），恢复—重启—再恢复会无限循环下去，还一直占住它的 lane。
         这时按最终失败记账（上限取各重试策略中最大的 Retries.max_attempts，钩子照常收尾、失败照常可见），用户在「任务」页
@@ -117,44 +115,6 @@ class Worker:
             else:
                 log.warning("recovered interrupted task", extra=ctx)
 
-    async def run_now(self, task_id: int) -> None:
-        """在调用方的任务里立刻执行这一个投递任务（经同一个执行边界：重试或失败记账）。
-        只由 Messaging 在发送方的事务提交之后调用（例如触发器新建的会话在返回会话 id 之前就已存在）；只执行投递
-        （EVENT_TASK）。此刻不可领取就什么都不做，照常由 worker 执行。
-
-        取消语义与 worker 不同：worker 的任务只被关停取消，下次启动由 recover 复位；这里的调用方随时可能被取消（请求
-        断开、调用它的运行被停止）。被取消时在屏蔽作用域里把还在 running 的它放回 pending 交给 worker，再照常抛出
-        取消——投递的写入与「完成」同一事务，重做是安全的。"""
-        if EVENT_TASK not in self._handlers:
-            raise RuntimeError("run_now executes deliveries, but this worker has no EVENT handler")
-        try:
-            task = await self._queue.claim_task(task_id, [EVENT_TASK])
-        except Exception:
-            # 投递已经提交、worker 已被唤醒：领取出错（如数据库暂时不可用）只是没能马上执行，不当成发送方的失败（它的
-            # 写入已经提交）
-            log.exception(
-                "could not claim a task to run on the spot; left to the worker", extra={"task_id": task_id}
-            )
-            return
-        if task is None:
-            log.info("task not claimable now, left to the worker", extra={"task_id": task_id})
-            return
-        try:
-            await self._process(task)
-        except anyio.get_cancelled_exc_class():
-            ctx = {"task_id": task.id, "lane": task.lane}
-            with anyio.CancelScope(shield=True), anyio.move_on_after(_UNCLAIM_SECONDS) as limited:
-                if await self._queue.unclaim(task.id):
-                    self._publish(task, TaskStatus.PENDING)
-                    log.warning("task run on the spot was cancelled; handed back to the worker", extra=ctx)
-            if limited.cancelled_caught:
-                log.error(
-                    "could not hand back a cancelled task run on the spot; it stays running and blocks its lane "
-                    "until the next start recovers it",
-                    extra=ctx,
-                )
-            raise
-
     async def _wait_for_work(self) -> None:
         self._queue.wake.clear()
         due = await self._queue.next_due(self.kinds)
@@ -171,7 +131,7 @@ class Worker:
             commit = await self._handlers[task.kind].execute(task)
             await self._queue.complete(task.id, commit)
         except anyio.get_cancelled_exc_class():
-            # worker 的任务只被关停取消，下次启动由 recover 复位；run_now 的调用方被取消时由 run_now 当场放回
+            # worker 的任务只被关停取消，下次启动由 recover 复位
             log.warning("task cancelled", extra=ctx)
             raise
         except Exception as e:
@@ -215,22 +175,3 @@ class Worker:
                 "task failed transiently, retry scheduled at %s: %s", failed.not_before, error, extra=ctx
             )
         self._publish(task, failed.status, error)
-
-
-class RunNow:
-    """「马上执行这个已提交的投递任务」的端口（Worker.run_now），交给 Messaging。
-
-    worker 的处理器里有 Messaging 本身（及用它的各领域）：端口先构造、交给 Messaging，组合根构造出 worker 之后 bind。绑定只在装配时发生一次；装配完成前（没有 bind）调用是组合根的 bug，当场报错。"""
-
-    def __init__(self) -> None:
-        self._worker: Worker | None = None
-
-    def bind(self, worker: Worker) -> None:
-        if self._worker is not None:
-            raise RuntimeError("RunNow is already bound to a worker")
-        self._worker = worker
-
-    async def __call__(self, task_id: int) -> None:
-        if self._worker is None:
-            raise RuntimeError(f"RunNow called for task {task_id} before a worker was bound")
-        await self._worker.run_now(task_id)

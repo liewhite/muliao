@@ -22,7 +22,7 @@ from muliao.agents.assets import AgentDir, McpFile, MemoryText, SkillDir
 from muliao.agents.catalog import AssetCatalog, CatalogAsset, SecretDetail
 from muliao.agents.distribution import Distribution, RoleSpec, RoleView, UsedAsset
 from muliao.agents.kinds import Kind, StoredKind
-from muliao.agents.lifecycle import AgentLifecycle, DeletionBlocker
+from muliao.agents.lifecycle import AGENT_REMOVAL_TASK, AgentLifecycle, DeletionBlocker
 from muliao.agents.mcp import McpRegistry
 from muliao.agents.mcp_config import McpConfig, McpServer, McpTransport, mcp_config
 from muliao.agents.memory import MemoryBlock, MemoryInfo, MemoryStore
@@ -43,6 +43,7 @@ from muliao.agents.skills import SkillMeta, SkillScripts, SkillStore
 from muliao.agents.source import AssetSource, Written
 
 __all__ = [
+    "AGENT_REMOVAL_TASK",
     "Source",
     "WriteScope",
     "UsedAsset",

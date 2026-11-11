@@ -1,5 +1,5 @@
-"""删除经事件完成（docs/architecture.md 第 10 节与第 7 节「thread 与结果路由」）：没有跨领域外键，各领域按 SessionDeleted / AgentDeleting 清理
-自己的数据；先停止再删除时迟到的结局不产生失败投递。"""
+"""删除（docs/architecture.md 第 10 节与第 7 节「thread 与结果路由」）：没有跨领域外键，各领域订阅 SessionDeleted / AgentDeleting，
+在删除的事务里清理自己的数据；先停止再删除时迟到的结局不产生失败任务。"""
 
 from types import SimpleNamespace
 
@@ -9,29 +9,17 @@ from sqlalchemy import select
 import muliao.agents.service
 from muliao.agents.tables import Agent
 from muliao.errors import Conflict, NotFound
-from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
+from muliao.platform.tables import Task, TaskStatus
 from muliao.sessions.api import NewChat, UserMessage
-from muliao.sessions.lanes import RUN_TASK, session_lane
 from muliao.workspace.tables import Job, JobStatus
 from tests.conftest import owned
-from tests.test_flow import deliver, drain, start
+from tests.test_flow import drain, side_tasks, start
 from tests.test_jobs import start_job, wait_until_done
 
 
 async def _failed_tasks(container) -> list[Task]:
     async with container.db.transaction() as s:
         return list((await s.scalars(select(Task).where(Task.status == TaskStatus.FAILED))).all())
-
-
-async def _lanes_of(container, *receivers: str) -> set[str]:
-    """这些接收方排队中的投递所在的 lane（每个接收方都必须有一条）。"""
-    async with container.db.transaction() as s:
-        pending = (
-            await s.scalars(select(Task).where(Task.kind == EVENT_TASK, Task.status == TaskStatus.PENDING))
-        ).all()
-    mine = [t for t in pending if t.payload["receiver"] in receivers]
-    assert {t.payload["receiver"] for t in mine} == set(receivers)
-    return {t.lane for t in mine}
 
 
 async def test_stopping_then_deleting_right_away_leaves_no_failed_delivery(container, make_agent, models):
@@ -87,7 +75,6 @@ async def test_a_workspace_that_cannot_be_fully_removed_does_not_block_deleting_
     assert leftover.agent_ids == [agent.id]
 
 
-@pytest.mark.usefixtures("deliveries_later")
 async def test_the_startup_check_does_not_report_an_agent_still_being_deleted(container, make_agent, caplog):
     agent = await make_agent("alpha")
     container.agents.workspace(agent.id).mkdir(parents=True, exist_ok=True)
@@ -99,7 +86,6 @@ async def test_the_startup_check_does_not_report_an_agent_still_being_deleted(co
     assert "deleted agents remain" not in caplog.text
 
 
-@pytest.mark.usefixtures("deliveries_later")
 async def test_deleting_an_agent_removes_its_sessions_triggers_and_secrets(container, make_agent):
     agent = await make_agent("alpha")
     await container.vault.set("TOKEN", "x", "", actor="user", owner=agent.id)
@@ -130,7 +116,7 @@ async def test_an_agent_marked_for_deletion_receives_no_new_mail(container, make
     session = await start(container, agent.id, "hi")
     await drain(container)
 
-    # 删除标记一提交就拒绝来信，不等删除流程的事件投递：它的会话不会再变忙
+    # 删除标记一提交就拒绝来信（删除文件的任务还没跑）：它的会话已删除，也不会新建
     await container.agent_lifecycle.delete(agent.id, actor="user")
     for target in (NewChat(agent.id), session.id):
         with pytest.raises(NotFound, match="not found"):
@@ -151,7 +137,6 @@ async def test_an_agent_with_a_busy_session_is_not_deleted(container, make_agent
     await wait_until_done(container, job.id)
 
 
-@pytest.mark.usefixtures("deliveries_later")
 async def test_deleting_an_agent_twice_is_a_conflict(container, make_agent):
     agent = await make_agent("alpha")
     await container.agent_lifecycle.delete(agent.id, actor="user")
@@ -161,36 +146,6 @@ async def test_deleting_an_agent_twice_is_a_conflict(container, make_agent):
     with pytest.raises(NotFound):
         await container.agents.get_active(agent.id)
     await drain(container)
-
-
-@pytest.mark.usefixtures("deliveries_later")
-async def test_a_run_rerun_after_the_mark_is_stopped_and_the_agent_deleted(container, make_agent, models):
-    """标记删除之后会话不再收到来信，人为重跑它的任务仍会让会话变忙：删除流程停止它（排队的运行不再执行）再删除。"""
-
-    agent = await make_agent("alpha")
-    session = await start(container, agent.id, "hi")
-    await drain(container)
-    await container.agent_lifecycle.delete(agent.id, actor="user")
-    # 模拟人为重跑：会话的 lane 上又有一个运行在排队
-    async with container.db.transaction() as s:
-        rerun = container.queue.enqueue(
-            s,
-            kind=RUN_TASK,
-            lane=session_lane(session.id),
-            agent_id=agent.id,
-            session_id=session.id,
-            payload={},
-        )
-    await deliver(container)
-
-    async with container.db.transaction() as s:
-        assert (await s.get(Task, rerun.id)).status == TaskStatus.DONE
-    await drain(container)
-    async with container.db.transaction() as s:
-        assert await s.get(Agent, agent.id) is None
-    with pytest.raises(NotFound):
-        await container.sessions.get(session.id)
-    assert await _failed_tasks(container) == []
 
 
 async def test_a_deleted_agents_thread_takes_no_new_delegation(container, make_agent, models):
@@ -230,69 +185,52 @@ async def test_notifications_of_a_deleted_agents_sessions_go_with_them(container
     assert await container.notifications.list(10) == []
 
 
-@pytest.mark.usefixtures("deliveries_later")
-async def test_check_ins_do_not_wake_a_stopped_session(container, make_agent, models):
+async def test_check_ins_do_not_wake_a_stopped_session(container, make_agent, models, monkeypatch):
     from muliao.sessions.tables import HoldStatus, Mail, SessionHold
 
-    session, job, _recorder, _agent = await start_job(container, make_agent, models, "sleep 30")
-    # 停止已清掉占用，但工作区领域还没处理 SessionStopped（进程还在跑）
-    await container.stopper(session.id)
+    session, job, _recorder, agent = await start_job(container, make_agent, models, "sleep 30")
+    # 停止已清掉占用，但进程还没被结束（停止提交之后才杀，监督者记下结局之前有一段窗口）
+    with monkeypatch.context() as m:
+        m.setattr(container.jobs, "_kill_cleared", lambda _event: None)
+        await container.stopper(session.id)
 
     # 任务还在运行，检查命令照发；会话领域看到占用已清掉，不投检查信件
     assert await container.jobs.check() == 1
-    await deliver(container)
+    await side_tasks(container)
     async with container.db.transaction() as s:
         [hold] = (await s.scalars(select(SessionHold).where(SessionHold.session_id == session.id))).all()
         mail = (
             await s.scalars(select(Mail).where(Mail.session_id == session.id, Mail.source.is_not(None)))
         ).all()
     assert hold.status == HoldStatus.CLEARED and mail == []
+    await container.jobs.kill(job.id, agent.id)
     await drain(container)
     await wait_until_done(container, job.id)
 
 
-@pytest.mark.usefixtures("deliveries_later")
-async def test_deleting_a_session_before_its_run_ended_is_delivered_leaves_no_notification(
-    container, make_agent, models
-):
-    from tests.test_flow import run_only
-
-    agent = await make_agent("alpha")
-    session = await start(container, agent.id, "hi")
-    await run_only(container)
-    # RunEnded 还没投递就删除：通知领域按会话的同一条 lane 先处理 RunEnded、再处理 SessionDeleted
-    await container.sessions.delete(session.id)
-    assert await _lanes_of(container, "notifications.run_ended", "notifications.session_deleted") == {
-        f"notifications:{session.id}"
-    }
-    await drain(container)
-
-    assert await container.notifications.list(10) == []
-    assert await _failed_tasks(container) == []
-
-
-async def test_a_session_turned_busy_between_the_check_and_the_mark_is_stopped_and_deleted(
+async def test_a_busy_session_found_while_deleting_rolls_the_whole_deletion_back(
     container, make_agent, models, monkeypatch
 ):
-    """删除前的检查与标记分属两个事务：之间来的信件排上的运行可能开出后台任务。删除流程先停止忙的会话再删除，
-    不靠重试等它自己结束。"""
+    """会话领域在删除 agent 的事务里删它的会话，发现忙的就报冲突：标记与别的领域的清理一起回滚，agent 原样留着。"""
     session, job, _recorder, agent = await start_job(container, make_agent, models, "sleep 30")
+    await container.triggers.create(
+        name="t", agent_id=agent.id, kind="schedule", prompt="p", config={"cron": "0 9 * * *"}
+    )
 
-    async def not_busy(_s, _agent_id):  # noqa: ANN202  检查时还不忙
+    async def not_busy(_s, _agent_id):  # noqa: ANN202  前置检查放过去
         return False
 
     monkeypatch.setattr(container.agent_lifecycle, "_blockers", {"sessions": not_busy})
-    await container.agent_lifecycle.delete(agent.id, actor="user")
-    await drain(container)
-    ended = await wait_until_done(container, job.id)
-    await drain(container)
+    with pytest.raises(Conflict, match="busy"):
+        await container.agent_lifecycle.delete(agent.id, actor="user")
 
-    assert ended.status == JobStatus.KILLED
     async with container.db.transaction() as s:
-        assert await s.get(Agent, agent.id) is None
-    with pytest.raises(NotFound):
-        await container.sessions.get(session.id)
-    assert await _failed_tasks(container) == []
+        assert (await s.get(Agent, agent.id)).deleting_by is None
+    assert [x.name for x in await container.triggers.list()] == ["t"]
+    await container.sessions.get(session.id)
+    await container.stopper(session.id)
+    await drain(container)
+    await wait_until_done(container, job.id)
 
 
 async def test_a_session_of_an_agent_marked_for_deletion_cannot_be_compacted(container, make_agent, models):
@@ -305,81 +243,6 @@ async def test_a_session_of_an_agent_marked_for_deletion_cannot_be_compacted(con
         await container.compactor.request(session.id)
 
 
-@pytest.mark.usefixtures("deliveries_later")
-async def test_a_failed_run_ended_retried_after_the_session_was_deleted_writes_no_notification(
-    container, make_agent, models, monkeypatch
-):
-    """失败的投递不挡同一条 lane 上之后的投递：SessionDeleted 先处理了，人工重试的 RunEnded 由处理器检查会话还在。"""
-    from tests.test_flow import deliver, run_only
-
-    agent = await make_agent("alpha")
-    session = await start(container, agent.id, "hi")
-    await run_only(container)
-
-    async def broken(*_args, **_kwargs):  # noqa: ANN202
-        raise RuntimeError("notification store unavailable")
-
-    with monkeypatch.context() as m:
-        m.setattr(container.notifications, "_enqueue_in", broken)
-        await deliver(container)
-    [failed] = [
-        t for t in await _failed_tasks(container) if t.payload["receiver"] == "notifications.run_ended"
-    ]
-
-    await container.sessions.delete(session.id)
-    await deliver(container)
-    await container.queue.retry(failed.id)
-    await drain(container)
-
-    assert await container.notifications.list(10) == []
-    assert await _failed_tasks(container) == []
-
-
-async def test_deleting_an_agent_whose_run_is_executing_stops_it_and_completes(
-    container, make_agent, models, monkeypatch
-):
-    """标记删除时有一次运行正在执行（检查与标记之间排上的）：删除流程停止它、等停止事务做完再删，一次完成。"""
-    import asyncio
-
-    from pydantic_ai.messages import ModelMessage
-    from pydantic_ai.models.function import AgentInfo, FunctionModel
-
-    agent = await make_agent("alpha", model="m")
-    started = asyncio.Event()
-
-    async def slow(messages: list[ModelMessage], info: AgentInfo):  # noqa: ANN202
-        started.set()
-        await asyncio.sleep(30)
-        yield "never"
-
-    models.models["m"] = FunctionModel(stream_function=slow)
-    session = await start(container, agent.id, "go")
-
-    async def not_busy(_s, _agent_id):  # noqa: ANN202  检查时还不忙
-        return False
-
-    monkeypatch.setattr(container.agent_lifecycle, "_blockers", {"sessions": not_busy})
-    worker = asyncio.create_task(container.worker.run_forever())
-    try:
-        await asyncio.wait_for(started.wait(), 5)
-        await container.agent_lifecycle.delete(agent.id, actor="user")
-        from tests.test_flow import idle
-
-        await idle(container)
-    finally:
-        worker.cancel()
-        await asyncio.gather(worker, return_exceptions=True)
-
-    async with container.db.transaction() as s:
-        assert await s.get(Agent, agent.id) is None
-        retried = (await s.scalars(select(Task).where(Task.kind == EVENT_TASK, Task.attempts > 1))).all()
-    assert retried == []
-    with pytest.raises(NotFound):
-        await container.sessions.get(session.id)
-    assert await _failed_tasks(container) == []
-
-
-@pytest.mark.usefixtures("deliveries_later")
 async def test_agent_names_cover_agents_being_deleted_and_label_deleted_ones(container, make_agent, models):
     """名称映射（AgentNames）包括正在删除的 agent：删除流程还没清掉它的 trigger、issue 时列出它们不报错；
     删完之后留下的 id 显示为 deleted agent。"""
@@ -408,8 +271,8 @@ async def test_agent_whose_private_memory_was_deleted_can_still_be_deleted(conta
 
 
 async def test_a_run_that_starts_after_the_mark_does_not_fail_on_its_memory(container, make_agent, models):
-    """删除前的检查与标记分属两个事务：标记之后仍可能有它的运行开始执行（由删除流程停下）。组装指令时读记忆包括正在
-    删除的 agent（资源目录在删除流程收尾时才删），运行不因读不到记忆而失败（不产生失败通知、issue 的 run_failed 动态）。"""
+    """组装指令时读记忆包括正在删除的 agent（资源目录在删除文件的任务里才删）：标记之后还在跑的运行（如人为重跑）不因读不到
+    记忆而失败（不产生失败通知、issue 的 run_failed 动态）。"""
     from tests.test_flow import run_only
 
     agent = await make_agent("alpha")

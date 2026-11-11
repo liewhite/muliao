@@ -3389,7 +3389,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "event" | "run" | "compaction" | "deliver";
+            kind: "run" | "compaction" | "stop_thread" | "deliver" | "agent_removal";
             /** Agent Id */
             agent_id: string | null;
             /** Session Id */

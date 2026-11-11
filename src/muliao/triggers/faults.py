@@ -21,19 +21,17 @@ from zoneinfo import ZoneInfo
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.notifications.events import Notify
+from muliao.notifications.events import Notify, NotifyIn
 from muliao.platform.db import utcnow
-from muliao.platform.ids import new_id
-from muliao.platform.messaging import Messaging
 from muliao.platform.tasks import Clock
 from muliao.platform.values import local_time
 from muliao.sessions.api import (
     Accepted,
     NewConversation,
     Refused,
+    SenderInbox,
     SenderMail,
     TriggerOrigin,
-    receive_command_in,
 )
 from muliao.triggers.tables import Trigger
 
@@ -99,8 +97,9 @@ def reset(trigger: Trigger) -> None:
 
 
 class Faults:
-    def __init__(self, messaging: Messaging, tz: ZoneInfo, clock: Clock = utcnow):
-        self._messaging = messaging
+    def __init__(self, inbox: SenderInbox, notify: NotifyIn, tz: ZoneInfo, clock: Clock = utcnow):
+        self._inbox = inbox
+        self._notify = notify
         self._tz = tz
         self._clock = clock
 
@@ -133,21 +132,20 @@ class Faults:
             sender=TriggerOrigin(trigger_id=trigger.id),
             content=letter,
             session=NewConversation(
-                id=new_id(),
                 agent_id=trigger.agent_id,
                 title=f"{trigger.name} {title} · {local_time(self._clock(), self._tz)}",
             ),
         )
-        match refused := await receive_command_in(s, mail):
-            case Accepted(command=command):
-                self._messaging.send_in(s, command)
+        match refused := await self._inbox.receive_in(s, mail):
+            case Accepted():
+                pass
             case Refused(detail=detail):
                 log.warning(
                     "trigger alert could not reach the agent, notifying the user: %s",
                     detail,
                     extra={"trigger": trigger.name, "reason": refused.reason},
                 )
-                self._messaging.send_in(
+                await self._notify(
                     s,
                     Notify(
                         agent_id=None,

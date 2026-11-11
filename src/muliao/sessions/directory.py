@@ -92,17 +92,6 @@ async def keyed_rows_among(
     return found
 
 
-async def keyed_among(s: AsyncSession, session_ids: Collection[str]) -> dict[str, tuple[Origin, str, str]]:
-    """其中可以按发送方定位的会话（顶层、带发送方身份）：会话 id -> (来源, 发送方身份, agent id)。"""
-    rows = await s.execute(
-        select(Session.id, Session.origin, Session.origin_ref, Session.agent_id).where(
-            Session.id.in_(list(session_ids)),
-            Session.origin_ref.is_not(None),
-        )
-    )
-    return {x: (origin, ref, agent_id) for x, origin, ref, agent_id in rows.all()}
-
-
 async def threads_of(s: AsyncSession, parent_id: str) -> list[Session]:
     """父会话开出的 thread，按创建顺序。"""
     query = select(Session).where(Session.parent_session_id == parent_id).order_by(Session.created_at)

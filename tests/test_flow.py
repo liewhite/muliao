@@ -21,19 +21,18 @@ from pydantic_ai.models.openai import OpenAIResponsesModel
 from pydantic_ai.providers.openai import OpenAIProvider
 from sqlalchemy import select
 
+from muliao.agents.api import AGENT_REMOVAL_TASK
 from muliao.notifications.push import DELIVER_TASK
 from muliao.notifications.webpush import WebPushDelivery
-from muliao.platform.ids import new_id
-from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
+from muliao.platform.tables import Task, TaskStatus
 from muliao.platform.tool_views import NO_RENDERS
 from muliao.platform.worker import Worker
 from muliao.sessions.api import Origin, UserMessage
 from muliao.sessions.codec import load_messages
 from muliao.sessions.consumer import RunHandler
 from muliao.sessions.conventions import run_context_index
-from muliao.sessions.events import NewConversation
-from muliao.sessions.inbound import Inbound, receive
-from muliao.sessions.lanes import RUN_TASK
+from muliao.sessions.inbound import Inbound, NewConversation, receive
+from muliao.sessions.lanes import RUN_TASK, STOP_THREAD_TASK
 from muliao.sessions.origins import IssueOrigin, TriggerOrigin, UserOrigin
 from muliao.sessions.tables import Mail, Message
 from muliao.sessions.transcript import to_items
@@ -49,18 +48,29 @@ async def drain(container, limit_seconds: float = 10.0) -> None:
         await asyncio.gather(worker, return_exceptions=True)
 
 
-async def deliver(container, limit_seconds: float = 10.0) -> None:
-    """只执行事件与定向命令的投递（不执行运行）：投进信箱的信件留着排队，测试可以直接看它们。"""
-    await work_only(container, {EVENT_TASK: container.messaging}, limit_seconds)
+async def side_tasks(container, limit_seconds: float = 10.0) -> None:
+    """只执行运行以外、由领域自己排的后台任务（逐层停止 thread、删除 agent 的文件），不执行运行：投进信箱的信件留着排队，
+    测试可以直接看它们。"""
+    kinds = (STOP_THREAD_TASK, AGENT_REMOVAL_TASK)
+    await work_only(
+        container, {k: h for k, h in container.worker._handlers.items() if k in kinds}, limit_seconds
+    )
 
 
 async def run_only(container, limit_seconds: float = 10.0) -> None:
-    """只执行运行（不投递事件）：运行发布的事件留着排队，测试可以安排它们与别的操作的先后。"""
+    """只执行运行（不执行别的后台任务，如逐层停止 thread）。"""
     await work_only(
         container,
         {RUN_TASK: RunHandler(container.consumer, container.queue, container.messaging)},
         limit_seconds,
     )
+
+
+async def run_one(container) -> None:
+    """只跑排着的第一次运行：它结束时投进来的信（如 issue 请它表态）留在信箱里，不接着跑。"""
+    task = await container.queue.claim([RUN_TASK])
+    assert task is not None, "no run is queued"
+    await container.worker._process(task)  # noqa: SLF001
 
 
 async def work_only(container, handlers: dict, limit_seconds: float) -> None:
@@ -152,7 +162,7 @@ async def start(container, agent: str, prompt: str, origin: Origin = Origin.USER
     inbound = Inbound(
         sender=senders[origin],
         content=prompt,
-        session=NewConversation(id=new_id(), agent_id=agent, title=prompt[:20]),
+        session=NewConversation(agent_id=agent, title=prompt[:20]),
         awaited=origin == Origin.USER,
     )
     async with container.db.transaction() as s:
@@ -215,23 +225,6 @@ async def test_turn_runs_tools_persists_messages_and_queues_notification(
     await container.sessions.mark_read(session.id)
     assert await container.notifications.unread_count() == 0
     assert await container.notifications.unread_sessions([session.id]) == set()
-
-
-@pytest.mark.usefixtures("deliveries_later")
-async def test_a_session_read_before_its_run_ended_event_is_handled_still_reads_that_runs_notification(
-    container, make_agent
-):
-    # 运行结束、通知还没写下时就打开了会话：SessionRead 排在 RunEnded 后面，写下的通知随即已读
-    alpha = (await make_agent("alpha")).id
-    session = await start(container, alpha, "hi")
-    await run_only(container)
-
-    await container.sessions.mark_read(session.id)
-    assert await container.notifications.list(10) == []
-
-    await deliver(container)
-    [note] = await container.notifications.list(10)
-    assert not note.unread
 
 
 async def test_a_session_is_unread_only_while_a_notification_points_to_it(container, make_agent):
@@ -297,7 +290,7 @@ async def test_long_runs_schedule_nothing_besides_the_run_itself(container, make
     assert len(prompts) == 40 and set(prompts) == {"long task"}
     async with container.db.transaction() as s:
         kinds = set((await s.scalars(select(Task.kind))).all())
-    assert kinds <= {RUN_TASK, EVENT_TASK, DELIVER_TASK}
+    assert kinds <= {RUN_TASK, DELIVER_TASK}
 
 
 async def test_transient_model_error_is_retried_and_converges(container, make_agent, models):

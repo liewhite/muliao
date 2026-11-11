@@ -31,11 +31,11 @@ from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.errors import Conflict, NotFound
-from muliao.platform.db import Database, utcnow
-from muliao.platform.messaging import Delivery, Messaging
+from muliao.platform.db import Database, utcnow, when_committed_in
+from muliao.platform.messaging import Messaging
 from muliao.platform.output import tail
 from muliao.platform.shell import DRAIN_SECONDS, LEFT_RUNNING_NOTE, kill_group, read_until_exit
-from muliao.platform.tasks import Clock, Commit, no_commit
+from muliao.platform.tasks import Clock
 from muliao.sessions.api import (
     CheckBeats,
     SessionWork,
@@ -44,7 +44,7 @@ from muliao.sessions.api import (
     job_id_of_holder,
     session_in,
 )
-from muliao.sessions.events import SessionStopped, WorkCheckIn, WorkEnded
+from muliao.sessions.events import SessionStopped
 from muliao.workspace.commands import AgentCommands, AgentShell
 from muliao.workspace.process import Recorder
 from muliao.workspace.tables import Job, JobStatus
@@ -100,14 +100,12 @@ class JobRunner:
         db: Database,
         commands: AgentCommands,
         workspace_of: Callable[[str], Path],
-        messaging: Messaging,
         sessions: SessionWork,
         clock: Clock = utcnow,
     ):
         self._commands = commands
         self._db = db
         self._sessions = sessions
-        self._messaging = messaging
         self._workspace_of = workspace_of
         self._clock = clock
         self._running: dict[int, _Running] = {}
@@ -338,7 +336,7 @@ class JobRunner:
             now = self._clock()
             job.status, job.exit_code, job.finished_at = status, exit_code, now
             text = _final_text(job, now, last, note)
-            self._report_in(s, job, text if refused is None else f"{text}\n{refused}")
+            await self._report_in(s, job, text if refused is None else f"{text}\n{refused}")
         log.info(
             "background job finished", extra={"job_id": job_id, "status": status, "exit_code": exit_code}
         )
@@ -356,12 +354,11 @@ class JobRunner:
                 f". Its process group {job.pid} may still be running: check with `pgrep -g {job.pid}` and stop it "
                 f"with `kill -- -{job.pid}` if it should not keep running"
             )
-        self._report_in(s, job, _final_text(job, now, last, note))
+        await self._report_in(s, job, _final_text(job, now, last, note))
 
-    def _report_in(self, s: AsyncSession, job: Job, text: str) -> None:
-        """结局与「一定交回会话」同一个事务（定向命令）：会话投一封事件信件并释放占用；会话已被停止（占用已清掉）
-        或已删除时不投。"""
-        self._messaging.send_in(s, WorkEnded(session_id=job.session_id, holder=job_holder(job.id), text=text))
+    async def _report_in(self, s: AsyncSession, job: Job, text: str) -> None:
+        """结局与交回会话同一个事务：会话投一封事件信件并释放占用；会话已被停止（占用已清掉）或已删除时不投。"""
+        await self._sessions.ended_in(s, job.session_id, job_holder(job.id), text)
 
     async def kill(self, job_id: int, agent_id: str) -> None:
         """结束这个 agent 的一个运行中的任务；结果（KILLED）随后作为事件到达。"""
@@ -378,11 +375,18 @@ class JobRunner:
         log.info("background job kill requested", extra={"job_id": job_id})
 
     def subscribe(self, messaging: Messaging) -> None:
-        messaging.subscribe(SessionStopped, "jobs.stopped", self.on_stopped)
+        messaging.subscribe(SessionStopped, self.on_stopped)
 
-    async def on_stopped(self, event: SessionStopped, _delivery: Delivery) -> Commit:
-        """会话被用户停止：结束被清掉的占用对应的后台任务（同 job_kill），结局照常由监督者记下（KILLED）；会话的
-        占用已经清掉，结局不再投信。没有监督者的（监督意外结束）由 check 的对账收敛。"""
+    async def on_stopped(self, s: AsyncSession, event: SessionStopped) -> None:
+        """会话被用户停止：停止提交之后结束被清掉的占用对应的后台任务（同 job_kill），结局照常由监督者记下（KILLED）；
+        会话的占用已经清掉，结局不再投信。没有监督者的（监督意外结束）由 check 的对账收敛。"""
+
+        async def kill() -> None:
+            self._kill_cleared(event)
+
+        when_committed_in(s, kill)
+
+    def _kill_cleared(self, event: SessionStopped) -> None:
         stopped = []
         for holder in event.cleared:
             job_id = job_id_of_holder(holder)
@@ -398,7 +402,6 @@ class JobRunner:
                 "background jobs stopped with their session",
                 extra={"session_id": event.session_id, "job_ids": stopped},
             )
-        return no_commit
 
     async def info(self, job_id: int, agent_id: str) -> JobInfo:
         async with self._db.transaction() as s:
@@ -447,8 +450,8 @@ class JobRunner:
         if not running:
             return 0
         tails = await self._tails(running)
-        # 在确认任务仍在运行的同一个事务里发出检查命令：与记下结局（同一事务发出 WorkEnded）互斥，检查要么先于结束
-        # 排进同一条 lane，要么任务已经结束、不再发
+        # 在确认任务仍在运行的同一个事务里投检查信件：与记下结局（同一事务交回结局）互斥，检查要么先于结束，要么任务
+        # 已经结束、不再发
         sent = 0
         async with self._db.transaction() as s:
             for stale in running:
@@ -456,9 +459,7 @@ class JobRunner:
                 if job is None or job.status != JobStatus.RUNNING or job.id not in self._running:
                     continue
                 text = _check_text(job, self._clock(), tails[job.id])
-                self._messaging.send_in(
-                    s, WorkCheckIn(session_id=job.session_id, holder=job_holder(job.id), text=text)
-                )
+                await self._sessions.checked_in(s, job.session_id, job_holder(job.id), text)
                 self._beats.checked(job.id, now)
                 sent += 1
         return sent

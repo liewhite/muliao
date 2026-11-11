@@ -21,7 +21,7 @@ from muliao.sessions.transcript import to_items
 from muliao.workspace.tables import Job, JobStatus
 from tests.conftest import share
 from tests.scripted import scripted
-from tests.test_flow import deliver, drain, history_of, start
+from tests.test_flow import drain, history_of, side_tasks, start
 from tests.test_mailbox import Recorder
 
 
@@ -113,11 +113,11 @@ async def test_running_jobs_get_check_events_without_piling_up_and_can_be_killed
     now = utcnow() + timedelta(seconds=1)
     monkeypatch.setattr(container.jobs, "_clock", lambda: now)
     assert await container.jobs.check() == 1
-    await deliver(container)
+    await side_tasks(container)
     # 上一条检查还在信箱里（还没交给模型）：会话领域不再堆一条
     now += timedelta(seconds=1)
     assert await container.jobs.check() == 1
-    await deliver(container)
+    await side_tasks(container)
     checks = [m for m in await queued_events(container, session.id) if m.source == f"job:{job.id}"]
     assert len(checks) == 1 and checks[0].check_in
     await drain(container)
@@ -258,7 +258,7 @@ async def test_a_job_whose_outcome_could_not_be_recorded_is_reconciled(
     monkeypatch.undo()
 
     await container.jobs.check()
-    await deliver(container)
+    await side_tasks(container)
 
     async with container.db.transaction() as s:
         assert (await s.get(Job, job.id)).status == JobStatus.INTERRUPTED
@@ -278,7 +278,7 @@ async def test_a_long_line_is_split_without_leaking_a_secret_or_breaking_charact
 async def test_stopping_the_service_reports_jobs_as_interrupted(container, make_agent, models):
     session, job, _recorder, _agent = await start_job(container, make_agent, models, "sleep 30")
     await container.jobs.stop()
-    await deliver(container)
+    await side_tasks(container)
     async with container.db.transaction() as s:
         assert (await s.get(Job, job.id)).status == JobStatus.INTERRUPTED
     [event] = await queued_events(container, session.id)
@@ -305,7 +305,7 @@ async def test_a_check_while_a_job_records_its_outcome_does_not_report_it_interr
     await container.jobs.check()
     release.set()
     finished = await wait_until_done(container, job.id)
-    await deliver(container)
+    await side_tasks(container)
 
     assert finished.status == JobStatus.EXITED
     contents = [e.content for e in await queued_events(container, session.id)]
@@ -362,7 +362,7 @@ async def test_a_job_that_fails_before_holding_its_session_leaves_no_row(contain
 
 async def _held_job_outcome(container, session_id: str) -> tuple[Job, str]:
     """启动失败、已经占用了会话的任务：按被中断结束，结局交回会话并释放占用。"""
-    await deliver(container)
+    await side_tasks(container)
     [row] = await _job_rows(container)
     [event] = [m for m in await queued_events(container, session_id) if m.source == f"job:{row.id}"]
     async with container.db.transaction() as s:
@@ -525,7 +525,7 @@ async def test_each_job_is_checked_at_its_own_interval(container, make_agent, mo
         assert await container.jobs.check() == 0
         now += timedelta(seconds=60)
         assert await container.jobs.check() == 1
-        await deliver(container)
+        await side_tasks(container)
         checks = [m.source for m in await queued_events(container, session.id) if m.check_in]
         assert checks == [f"job:{fast.id}"]
     finally:
@@ -628,7 +628,7 @@ async def test_a_job_that_ends_while_a_check_is_being_prepared_gets_no_check(con
     finally:
         gate.set()
         runner_module.tail = real_tail
-    await deliver(container)
+    await side_tasks(container)
 
     events = [m.content for m in await queued_events(container, session.id) if m.source == f"job:{job.id}"]
     assert len(events) == 1 and "was killed" in events[0]
@@ -640,7 +640,7 @@ async def test_a_check_sent_before_the_job_ends_arrives_before_its_end(container
     assert await container.jobs.check() == 1
     await container.jobs.kill(job.id, job.agent_id)
     await wait_until_done(container, job.id)
-    await deliver(container)
+    await side_tasks(container)
 
     events = [m.content for m in await queued_events(container, session.id) if m.source == f"job:{job.id}"]
     assert len(events) == 2 and "still running" in events[0] and "was killed" in events[1]
@@ -707,7 +707,7 @@ async def test_an_orphan_that_ends_while_its_log_is_read_is_left_alone(
     session, job, _recorder, _agent = await start_job(container, make_agent, models, "sleep 30")
     await container.jobs.kill(job.id, job.agent_id)
     await wait_until_done(container, job.id)
-    await deliver(container)
+    await side_tasks(container)
     # 让它看起来像监督意外结束的任务：库里还是 running，本进程没人监督
     async with container.db.transaction() as s:
         (await s.get(Job, job.id)).status = JobStatus.RUNNING
@@ -729,7 +729,7 @@ async def test_an_orphan_that_ends_while_its_log_is_read_is_left_alone(
         assert await check == 0
     finally:
         gate.set()
-    await deliver(container)
+    await side_tasks(container)
 
     async with container.db.transaction() as s:
         assert (await s.get(Job, job.id)).status == JobStatus.KILLED

@@ -61,12 +61,10 @@ async def test_push_carries_the_unread_count_and_system_notifications_open_the_n
 
 async def test_the_pushed_message_carries_the_page_the_notification_opens(container):
     from muliao.notifications.events import Notify
-    from muliao.platform.messaging import Delivery
 
     notify = Notify(agent_id=None, title="t", body="b", session_id=None, issue_id=7)
-    commit = await container.notifications.on_notify(notify, Delivery("m"))
     async with container.db.transaction() as s:
-        await commit(s)
+        await container.notifications.notify_in(s, notify)
     [note] = await container.notifications.list(10)
 
     async with container.db.transaction() as s:
@@ -87,13 +85,11 @@ def test_a_notification_opens_its_issue_its_session_or_nothing():
 
 async def test_opening_an_issue_marks_the_notifications_asking_to_review_it_read(container):
     from muliao.notifications.events import Notify
-    from muliao.platform.messaging import Delivery
 
     for issue_id in (7, 8, None):
         notify = Notify(agent_id=None, title=f"{issue_id}", body="b", session_id=None, issue_id=issue_id)
-        commit = await container.notifications.on_notify(notify, Delivery("m"))
         async with container.db.transaction() as s:
-            await commit(s)
+            await container.notifications.notify_in(s, notify)
 
     await container.notifications.mark_issue_read(7)
 

@@ -1,35 +1,37 @@
 """会话领域的公开接口：别的领域只经这里（与 sessions.events）使用会话领域（docs/architecture.md 第 7 节、2.3）。
 
-- 来信：界面的 UserMessage 经 SessionService.receive；别的领域的 SenderMail 由发送方在自己的事务里 receive_command_in（校验来信，结果是投得进 Accepted：定向命令 Receive，在同一事务 send_in，
-  与之后问忙不忙的句柄 Recipient；或投不进 Refused：原因 Refusal）；目标会话可以按发送方
+- 来信：界面的 UserMessage 经 SessionService.receive；别的领域的 SenderMail 由发送方在自己的事务里 SenderInbox.receive_in
+  投进去（结果是投进去了 Accepted：信进的会话；或投不进 Refused：原因 Refusal）；目标会话可以新建（NewConversation）或按发送方
   定位（SessionKey），keyed_session_in 查一个、keyed_sessions_among 查一批这样的会话；
-- 后台任务：SessionWork.hold（在会话领域自己的事务里登记占用），hold_registered_in；运行中检查的间隔规则 check_interval / CheckBeats；结局与运行中检查经定向命令
-  WorkEnded / WorkCheckIn（sessions.events）；
+- 后台任务：SessionWork.hold（在会话领域自己的事务里登记占用），hold_registered_in；运行中检查的间隔规则 check_interval / CheckBeats；
+  结局与运行中检查在发送方的事务里交给 SessionWork.ended_in / checked_in；
 - HTTP 层用的会话门面（SessionService：会话的读写、停止、手动压缩）；别的领域停止会话经端口 StopSession（结果 Halted），返回时
   停止已生效；
-- 查询：session_in（SessionInfo）、SessionActivity（会话忙不忙；按句柄问 recipient_in，结果 RecipientState）、SessionRecall（热历史：一段时间的会话活动与用户说的话，
+- 查询：session_in（SessionInfo）、SessionActivity（会话忙不忙；一批可能已删除的会话问 states_of_in，结果 SessionState）、SessionRecall（热历史：一段时间的会话活动与用户说的话，
   history 领域的 activity_overview 用；会话的时间线由本领域的 session_read 工具读）；
 - 会话在等的东西（Wait：后台任务、委派、到点唤醒、提问，随会话详情给出）；
 - 会话来源（Origin：发送方新建会话时给出）与 HTTP 层用的读模型、展示事件；
-- 会话 lane 上的任务种类（RUN_TASK、COMPACTION_TASK：HTTP 层把各领域的任务种类组成接口里的 TaskKind）。
+- 会话领域的任务种类（RUN_TASK、COMPACTION_TASK、STOP_THREAD_TASK：HTTP 层把各领域的任务种类组成接口里的 TaskKind）。
 """
 
-from muliao.sessions.activity import RecipientState, SessionActivity, WorkState
+from muliao.sessions.activity import SessionActivity, SessionState, WorkState
 from muliao.sessions.approvals import Choice as ApprovalChoice
 from muliao.sessions.assembly import SessionDomain, SessionPorts
-from muliao.sessions.events import NewConversation, Recipient, SenderMail, SessionKey, ToSession
 from muliao.sessions.halt import Halted, StopSession
 from muliao.sessions.holds import registered_in as hold_registered_in
 from muliao.sessions.inbound import (
     Accepted,
     NewChat,
+    NewConversation,
     Refusal,
     Refused,
+    SenderInbox,
+    SenderMail,
+    SessionKey,
     UserMessage,
-    receive_command_in,
 )
 from muliao.sessions.info import SessionInfo, keyed_session_in, keyed_sessions_among, session_in
-from muliao.sessions.lanes import COMPACTION_TASK, RUN_TASK
+from muliao.sessions.lanes import COMPACTION_TASK, RUN_TASK, STOP_THREAD_TASK
 from muliao.sessions.live import LiveSegment, RunDeltaEvent, RunEvent, RunItemEvent, SavedEvent
 from muliao.sessions.origins import (
     OWN_NOTES,
@@ -55,6 +57,7 @@ from muliao.sessions.work import CheckBeats, SessionWork, check_interval
 __all__ = [
     "COMPACTION_TASK",
     "RUN_TASK",
+    "STOP_THREAD_TASK",
     "OWN_NOTES",
     "Origin",
     "OriginNotes",
@@ -103,13 +106,11 @@ __all__ = [
     "SessionKey",
     "keyed_session_in",
     "keyed_sessions_among",
-    "receive_command_in",
+    "SenderInbox",
     "Accepted",
     "Refused",
     "Refusal",
-    "Recipient",
-    "RecipientState",
-    "ToSession",
+    "SessionState",
     "SessionWork",
     "check_interval",
     "CheckBeats",

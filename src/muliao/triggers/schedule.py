@@ -24,9 +24,8 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.errors import CorruptState, InvalidInput
-from muliao.notifications.events import Notify
+from muliao.notifications.events import Notify, NotifyIn
 from muliao.platform.db import utcnow
-from muliao.platform.messaging import Messaging
 from muliao.platform.tasks import Clock
 from muliao.sessions.api import SessionActivity, WorkState
 from muliao.triggers.due import stored_time
@@ -139,10 +138,10 @@ class ScheduleDue:
 
     kind = KIND
 
-    def __init__(self, activity: SessionActivity, kind: ScheduleKind, messaging: Messaging):
+    def __init__(self, activity: SessionActivity, kind: ScheduleKind, notify: NotifyIn):
         self._activity = activity
         self._kind = kind
-        self._messaging = messaging
+        self._notify = notify
 
     def due_at(self, trigger: Trigger) -> datetime:
         return next_run_at(trigger)
@@ -173,7 +172,7 @@ class ScheduleDue:
             notified=notified or notify,
         )
         if notify:
-            self._messaging.send_in(s, self._waiting_notice(trigger, streak.count, previous.session_id))
+            await self._notify(s, self._waiting_notice(trigger, streak.count, previous.session_id))
         set_state(trigger, skipped=streak.model_dump(mode="json"))
         return f"previous run still {previous.state.value} (skipped {streak.count} in a row)"
 

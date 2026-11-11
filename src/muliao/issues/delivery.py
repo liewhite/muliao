@@ -1,6 +1,5 @@
-"""issue 动态的投递：按 rules.recipient 判定这次的动态投给谁，在调用方的事务里发出定向命令 Receive（提交后由
-Messaging 马上执行）。信投进这个 agent 在这个 issue 上唯一的会话：身份见 issues.conversation，没有就新建；这里不存会话 id。这次的动态里 agent 把 issue 交给了
-用户（rules.handed_to_user）时同一事务发通知（Notify）。"""
+"""issue 动态的投递：按 rules.recipient 判定这次的动态投给谁，在调用方的事务里投进会话（SenderInbox）。信投进这个 agent 在这个 issue 上唯一的会话：身份见 issues.conversation，没有就新建；这里不存会话 id。这次的动态里 agent 把 issue 交给了
+用户（rules.handed_to_user）时同一事务发通知（NotifyIn）。"""
 
 import logging
 from collections.abc import Sequence
@@ -16,16 +15,16 @@ from muliao.issues.graph import links_in, snapshot
 from muliao.issues.render import delivery_message, issue_view
 from muliao.issues.rules import agent_actor, from_outside, handed_to_user, recipient
 from muliao.issues.tables import Issue
-from muliao.notifications.events import Notify
-from muliao.platform.messaging import Messaging
-from muliao.sessions.api import Accepted, Refusal, Refused, receive_command_in
+from muliao.notifications.events import Notify, NotifyIn
+from muliao.sessions.api import Accepted, Refusal, Refused, SenderInbox
 
 log = logging.getLogger(__name__)
 
 
 class IssueDelivery:
-    def __init__(self, messaging: Messaging, tz: ZoneInfo):
-        self._messaging = messaging
+    def __init__(self, inbox: SenderInbox, notify: NotifyIn, tz: ZoneInfo):
+        self._inbox = inbox
+        self._notify = notify
         self._tz = tz
 
     async def post_in(
@@ -45,7 +44,7 @@ class IssueDelivery:
         if (agent := handed_to_user(actor, issue.assignee, what)) is not None:
             # 推送通知，点开是 issue（在那里通过或打回）；也带上它交出 issue 的那个会话（打开会话即已读，会话删除时
             # 通知随之删除）
-            self._messaging.send_in(
+            await self._notify(
                 s,
                 Notify(
                     agent_id=agent,
@@ -68,9 +67,8 @@ class IssueDelivery:
         # 信里只有摘要和这次的动态：只渲染 happened，不读整条时间线
         letter = issue_view(issue, happened, links, names, self._tz)
         inbound = conversation.mail(issue.id, to, f"#{issue.id} {issue.title}", delivery_message(letter))
-        match result := await receive_command_in(s, inbound):
-            case Accepted(command=command):
-                self._messaging.send_in(s, command)
+        match result := await self._inbox.receive_in(s, inbound):
+            case Accepted():
                 log.info(
                     "issue activity delivered", extra={"issue_id": issue.id, "agent": to, "actor": actor}
                 )
@@ -78,7 +76,7 @@ class IssueDelivery:
                 # 已有 issue 的指派人或 owner 后来被归档：动态照常记进时间线（不让用户在这类 issue 上的评论、改动报错），
                 # 不投递；用户自己的改动、评论没人接要当场告诉他（只有他能取消归档或改指派）。别人的动态（agent、触发器
                 # 的事件）只记日志：不然周期触发器投进这类 issue 会每个周期推一条，in_progress 的由看板的「停滞」标出
-                self._messaging.send_in(
+                await self._notify(
                     s,
                     Notify(
                         agent_id=to,

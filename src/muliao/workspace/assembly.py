@@ -39,14 +39,13 @@ class WorkspaceDomain(Parts):
         commands: AgentCommands,
         confiner: Confiner,
         workspace_of: Callable[[str], Path],
-        messaging: Messaging,
         work: SessionWork,
         files: FileStore,
         assets: AssetSource,
         skills: SkillStore,
         tool_output_max_chars: int,
     ) -> WorkspaceDomain:
-        jobs = JobRunner(db, commands, workspace_of, messaging, work)
+        jobs = JobRunner(db, commands, workspace_of, work)
         script_grants = ScriptGrants(db)
         tools = workspace_toolset(
             commands,

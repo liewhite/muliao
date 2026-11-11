@@ -21,8 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from muliao.agents.events import AgentDeleting
 from muliao.errors import NotFound
 from muliao.platform.db import Database, utcnow
-from muliao.platform.messaging import Delivery, Messaging
-from muliao.platform.tasks import Commit
+from muliao.platform.messaging import Messaging
 from muliao.workspace.tables import ScriptGrant
 
 # 按始终允许直接执行时，接在结果前面告诉模型（也留在会话记录里）
@@ -93,15 +92,11 @@ class ScriptGrants:
         self._db = db
 
     def subscribe(self, messaging: Messaging) -> None:
-        messaging.subscribe(AgentDeleting, "workspace.script_grants.agent_deleting", self.on_agent_deleting)
+        messaging.subscribe(AgentDeleting, self.on_agent_deleting)
 
-    async def on_agent_deleting(self, event: AgentDeleting, _delivery: Delivery) -> Commit:
+    async def on_agent_deleting(self, s: AsyncSession, event: AgentDeleting) -> None:
         """删除 agent 的流程：删除给它的始终允许。"""
-
-        async def commit(s: AsyncSession) -> None:
-            await s.execute(delete(ScriptGrant).where(ScriptGrant.agent_id == event.agent_id))
-
-        return commit
+        await s.execute(delete(ScriptGrant).where(ScriptGrant.agent_id == event.agent_id))
 
     async def find(self, call: ScriptCall) -> int | None:
         """这个调用有始终允许时返回它的 id。"""

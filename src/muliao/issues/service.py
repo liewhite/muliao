@@ -66,30 +66,24 @@ from muliao.issues.rules import (
     stalled,
 )
 from muliao.issues.tables import Issue, IssueActivity, IssuePriority, IssueStatus
+from muliao.notifications.events import NotifyIn
 from muliao.platform.db import Database, utcnow
-from muliao.platform.messaging import Delivery, Messaging
-from muliao.platform.tasks import Commit, no_commit
+from muliao.platform.messaging import Messaging
 from muliao.platform.text_edit import truncate
 from muliao.platform.values import KEEP, Keep
 from muliao.sessions.api import (
     Halted,
     IssueOrigin,
+    SenderInbox,
     SessionActivity,
     StopSession,
     WorkState,
-    session_in,
 )
 from muliao.sessions.events import RunEnded, RunFailed, SessionDeleted
 
 log = logging.getLogger(__name__)
 # 运行失败记进时间线的正文（错误原文）最多这么多字符，全文在任务页
 RUN_FAILED_BODY_MAX = 500
-
-
-def _session_events_lane(event: RunFailed | SessionDeleted) -> str:
-    """同一个会话的事件在同一条 lane 上按发布顺序处理：RunFailed 一定先于 SessionDeleted 发布（会话忙时不能删除），
-    它记下的动态（带这个会话）一定在删除的置空之前。RunEnded 不在这里：它在提交事务里确认会话还是那个 issue 会话才记。"""
-    return f"issues:{event.session_id}"
 
 
 @dataclass(frozen=True)
@@ -180,7 +174,8 @@ class IssueService:
     def __init__(
         self,
         db: Database,
-        messaging: Messaging,
+        inbox: SenderInbox,
+        notify: NotifyIn,
         tz: ZoneInfo,
         activity: SessionActivity,
         stop_session: StopSession,
@@ -189,98 +184,75 @@ class IssueService:
         self._stop_session = stop_session
         self._db = db
         self._tz = tz
-        self._changes = IssueChanges(messaging, tz)
+        self._changes = IssueChanges(inbox, notify, tz)
 
     def subscribe(self, messaging: Messaging) -> None:
-        messaging.subscribe(AgentDeleting, "issues.agent_deleting", self.on_agent_deleting)
-        messaging.subscribe(RunFailed, "issues.run_failed", self.on_run_failed, lane=_session_events_lane)
-        messaging.subscribe(RunEnded, "issues.run_ended", self.on_run_ended)
-        messaging.subscribe(
-            SessionDeleted, "issues.session_deleted", self.on_session_deleted, lane=_session_events_lane
+        messaging.subscribe(AgentDeleting, self.on_agent_deleting)
+        messaging.subscribe(RunFailed, self.on_run_failed)
+        messaging.subscribe(RunEnded, self.on_run_ended)
+        messaging.subscribe(SessionDeleted, self.on_session_deleted)
+
+    async def on_session_deleted(self, s: AsyncSession, event: SessionDeleted) -> None:
+        """时间线上来自被删会话的动态保留，只是不再指向它（session_id 置空）。"""
+        await s.execute(
+            update(IssueActivity).where(IssueActivity.session_id == event.session_id).values(session_id=None)
         )
 
-    async def on_session_deleted(self, event: SessionDeleted, _delivery: Delivery) -> Commit:
-        """时间线上来自被删会话的动态保留，只是不再指向它（session_id 置空）。"""
-
-        async def commit(s: AsyncSession) -> None:
-            await s.execute(
-                update(IssueActivity)
-                .where(IssueActivity.session_id == event.session_id)
-                .values(session_id=None)
-            )
-
-        return commit
-
-    async def on_run_ended(self, event: RunEnded, _delivery: Delivery) -> Commit:
+    async def on_run_ended(self, s: AsyncSession, event: RunEnded) -> None:
         """issue 会话里的一次运行结束了：issue 指派给这个 agent、却因此停滞（还是 in_progress，会话空闲）时，以它的名义记一条
         UNSETTLED 并投进那个会话，请它表态（rules.ask_to_settle）。停在挂起的调用上、被用户停止的不问；会话已经又有事要做
         （信箱里还有信、在等后台任务）时不算停滞，不问。其他来源的会话、已被删除的 issue 不处理。"""
         if not isinstance(event.origin, IssueOrigin) or event.stopped or event.waiting_on:
-            return no_commit
+            return
         issue_id = event.origin.issue_id
+        issue = await s.get(Issue, issue_id)
+        if issue is None:
+            return
+        current = await conversation.session_in(s, issue_id, event.agent_id)
+        if current is None or current.id != event.session_id:
+            # 这个发送方给它开过不止一个会话时只认最新的（inbound.SessionKey）：别的那个不是它在这个 issue 上的会话，不问
+            return
+        key = (issue_id, event.agent_id)
+        state = (await conversation.work_states_in(self._activity, s, [key]))[key]
+        snap = snapshot(issue, (await links_in(s, [issue_id]))[issue_id])
+        if not ask_to_settle(snap, event.agent_id, state):
+            return
+        # 记在它自己的 issue 会话名下，却要投进那个会话：直接投给它（ask_to_settle 已确认它就是该接手的人），
+        # 不走「自己会话里的动作不投回」的规则
+        async with self._changes.open_in(
+            s, issue_id, event.agent_id, event.session_id, Direct(event.agent_id)
+        ) as change:
+            change.record(Unsettled())
+        log.info("issue left unsettled, asked", extra={"issue_id": issue_id, "run_id": event.run_id})
 
-        async def commit(s: AsyncSession) -> None:
-            issue = await s.get(Issue, issue_id)
-            if issue is None:
-                return
-            current = await conversation.session_in(s, issue_id, event.agent_id)
-            if current is None or current.id != event.session_id:
-                # 事件迟到（人工重试）时会话已被删除或换了新的：那次运行已不是它在这个 issue 上的会话，不问
-                return
-            key = (issue_id, event.agent_id)
-            state = (await conversation.work_states_in(self._activity, s, [key]))[key]
-            snap = snapshot(issue, (await links_in(s, [issue_id]))[issue_id])
-            if not ask_to_settle(snap, event.agent_id, state):
-                return
-            # 记在它自己的 issue 会话名下，却要投进那个会话：直接投给它（ask_to_settle 已确认它就是该接手的人），
-            # 不走「自己会话里的动作不投回」的规则
-            async with self._changes.open_in(
-                s, issue_id, event.agent_id, event.session_id, Direct(event.agent_id)
-            ) as change:
-                change.record(Unsettled())
-            log.info("issue left unsettled, asked", extra={"issue_id": issue_id, "run_id": event.run_id})
-
-        return commit
-
-    async def on_run_failed(self, event: RunFailed, _delivery: Delivery) -> Commit:
+    async def on_run_failed(self, s: AsyncSession, event: RunFailed) -> None:
         """issue 会话里的运行最终失败：在 issue 时间线上以该 agent 的名义记一笔（失败的是它的运行）。通知用户由通知领域
         订阅 RunFailed 做，这里不重复发。只记时间线（RECORD_ONLY）、不改状态：投进会话就是自动重试，永久性的错误会陪它
         无限循环；之后有新动态时照常投递、唤醒它。其他来源的会话、已被删除的 issue 不处理。"""
         if not isinstance(event.origin, IssueOrigin):
-            return no_commit
+            return
         issue_id = event.origin.issue_id
+        if not await _exists_in(s, issue_id):
+            log.info("run failed on a deleted issue", extra={"issue_id": issue_id, "run_id": event.run_id})
+            return
+        async with self._changes.open_in(
+            s, issue_id, event.agent_id, event.session_id, RECORD_ONLY
+        ) as change:
+            change.record(RunFailure(body=truncate(event.error.strip(), RUN_FAILED_BODY_MAX)))
+        log.info("issue run failure recorded", extra={"issue_id": issue_id, "run_id": event.run_id})
 
-        async def commit(s: AsyncSession) -> None:
-            if not await _exists_in(s, issue_id):
-                log.info(
-                    "run failed on a deleted issue", extra={"issue_id": issue_id, "run_id": event.run_id}
-                )
-                return
-            # 正常情况下同一会话的 SessionDeleted 排在后面（_session_events_lane）；投递失败后被人工重试时可能已在删除之后，
-            # 那时不再指向它（之后不会再有它的 SessionDeleted 来置空）。会话只会从存在变为删除，本事务里检查没有竞态。
-            session = event.session_id if await session_in(s, event.session_id) is not None else None
-            async with self._changes.open_in(s, issue_id, event.agent_id, session, RECORD_ONLY) as change:
-                change.record(RunFailure(body=truncate(event.error.strip(), RUN_FAILED_BODY_MAX)))
-            log.info("issue run failure recorded", extra={"issue_id": issue_id, "run_id": event.run_id})
-
-        return commit
-
-    async def on_agent_deleting(self, event: AgentDeleting, _delivery: Delivery) -> Commit:
+    async def on_agent_deleting(self, s: AsyncSession, event: AgentDeleting) -> None:
         """删除 agent 的流程：指派给它、归它负责的 issue 改为未指派、无负责人（以系统身份记在时间线上，只记不投）。它的
         会话由会话领域删除。"""
-
-        async def commit(s: AsyncSession) -> None:
-            query = select(Issue.id).where(
-                or_(Issue.assignee == event.agent_id, Issue.owner_agent_id == event.agent_id)
-            )
-            for issue_id in (await s.scalars(query)).all():
-                async with self._changes.open_in(s, issue_id, SYSTEM_ACTOR, None, RECORD_ONLY) as change:
-                    if change.issue.assignee == event.agent_id:
-                        await change.set_assignee(None)
-                    if change.issue.owner_agent_id == event.agent_id:
-                        await change.set_owner(None)
-
-        return commit
+        query = select(Issue.id).where(
+            or_(Issue.assignee == event.agent_id, Issue.owner_agent_id == event.agent_id)
+        )
+        for issue_id in (await s.scalars(query)).all():
+            async with self._changes.open_in(s, issue_id, SYSTEM_ACTOR, None, RECORD_ONLY) as change:
+                if change.issue.assignee == event.agent_id:
+                    await change.set_assignee(None)
+                if change.issue.owner_agent_id == event.agent_id:
+                    await change.set_owner(None)
 
     # ---- 查询 ----
 

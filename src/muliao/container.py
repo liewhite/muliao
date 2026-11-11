@@ -39,14 +39,13 @@ from muliao.issues.api import IssueDomain, IssueService
 from muliao.notifications.api import NotificationDomain, Notifications, PushSubscriptions, VapidKeys
 from muliao.platform.bus import EventBus, EventFeed
 from muliao.platform.checks import WorkWatcher
-from muliao.platform.db import Database, WriteCheck, create_engine, migrate
+from muliao.platform.db import Database, create_engine, migrate
 from muliao.platform.messaging import Messaging
 from muliao.platform.retention import TaskRetention
 from muliao.platform.sandbox import sandbox_for
-from muliao.platform.tables import EVENT_TASK
 from muliao.platform.tasks import Retries, RetryPolicy, TaskAdmin, TaskQueue
 from muliao.platform.wiring import Loop, Parts, Toolsets
-from muliao.platform.worker import RunNow, Worker, register_handlers
+from muliao.platform.worker import Worker, register_handlers
 from muliao.schema import ChangedEvent
 from muliao.sessions.api import OWN_NOTES, OriginNotes, SessionDomain, SessionPorts, SessionService
 from muliao.sessions.compaction import Compactor
@@ -275,10 +274,8 @@ def assemble(
     model_checker: Callable[[str, Thinking], None] | None = None,
     web: WebProvider | None = None,
     transcriber: Transcriber | None = None,
-    check_writes: WriteCheck | None = None,
 ) -> Assembly:
-    """resolve_model / model_checker / web / transcriber 仅供测试替换；默认由配置中的 LLM providers、[web] 与 [transcription] 构造。check_writes 是
-    测试打开的开发期断言（schema.single_domain_writes）。"""
+    """resolve_model / model_checker / web / transcriber 仅供测试替换；默认由配置中的 LLM providers、[web] 与 [transcription] 构造。"""
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     models = ModelRegistry(settings.llm)
     # 联网搜索与语音转写共用的出站 HTTP 客户端；不设默认超时，每个调用必须自己传 timeout。容器关停时关闭
@@ -293,15 +290,12 @@ def assemble(
     # 写过表的事务提交后：前端正在显示的页面重新拉取（不分哪类数据，#646）
     db = Database(
         create_engine(settings.db_path),
-        check_writes=check_writes,
         after_commit=lambda: bus.publish(ChangedEvent()),
     )
     live = LiveSegments(bus)
     queue = TaskQueue(db, retries=retries_of(settings.runtime))
-    # 领域事件与定向命令：订阅与命令处理者在下面各领域构造之后登记
-    # 提交后马上执行投递（Worker.run_now）：worker 由各领域的处理器组成，在最后构造、绑定
-    run_now = RunNow()
-    messaging = Messaging(queue, run_now)
+    # 领域事件：订阅者在下面各领域构造之后登记
+    messaging = Messaging()
     check_model = model_checker or models.check
     # 内置工具表：资源树、分发、资源池要用，而工具集要用它们构造，所以先建、装好工具集后 bind（agents.ToolTable）
     tool_table = ToolTable()
@@ -345,6 +339,7 @@ def assemble(
     ports = SessionPorts.build(db, queue, messaging, tz, agents, max_chars)
     agent_domain = AgentDomain.build(
         db=db,
+        queue=queue,
         agents=agents,
         assets=assets,
         vault=vault,
@@ -359,13 +354,22 @@ def assemble(
         vapid_key_path=settings.vapid_key_path,
         vapid_subject=settings.push.vapid_subject,
     )
+    # 别的领域发通知的端口：issue 与通知同层，不 import 对方的 api
+    notify = notification_domain.notifications.notify_in
     issue_domain = IssueDomain.build(
-        db=db, messaging=messaging, tz=tz, activity=ports.activity, stop_session=ports.stopper, agents=agents
+        db=db,
+        inbox=ports.inbox,
+        notify=notify,
+        tz=tz,
+        activity=ports.activity,
+        stop_session=ports.stopper,
+        agents=agents,
     )
     trigger_domain = TriggerDomain.build(
         db=db,
         tz=tz,
-        messaging=messaging,
+        inbox=ports.inbox,
+        notify=notify,
         commands=commands,
         activity=ports.activity,
         agents=agents,
@@ -376,7 +380,6 @@ def assemble(
         commands=commands,
         confiner=confiner,
         workspace_of=agents.workspace,
-        messaging=messaging,
         work=ports.work,
         files=files,
         assets=assets,
@@ -434,17 +437,16 @@ def assemble(
     if session_domain.toolsets():
         raise RuntimeError("SessionDomain is built after the toolbox: its toolsets belong in SessionPorts")
     domains.append(session_domain)
-    # 跨领域的反应：各领域的订阅与命令处理者（删除 agent 与会话时各领域清理自己的数据）；漏了的当场报错
+    # 跨领域的反应：各领域的事件订阅（运行结束的推送、删除 agent 与会话时各领域清理自己的数据）；漏了的当场报错
     for d in domains:
         d.subscribe(messaging)
     messaging.check_wired()
     # 各领域的任务种类与处理器；队列只接受登记过的种类（TaskQueue.accept）
     worker = Worker(
         queue,
-        register_handlers((EVENT_TASK, messaging), *(h for d in domains for h in d.handlers())),
+        register_handlers(*(h for d in domains for h in d.handlers())),
         bus,
     )
-    run_now.bind(worker)
     queue.accept(worker.kinds)
     # 只清理处理它的领域声明了可删的任务（docs/architecture.md 3.2「保留」）
     retention = TaskRetention(queue, prunable=worker.prunable_kinds)

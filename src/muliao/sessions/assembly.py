@@ -3,10 +3,10 @@
 分两段，因为中间隔着别的领域；两段各自声明交给组合根的部件（platform.wiring.Parts）：
 1. SessionPorts.build：先于消费者构造、别的领域要用的端口——会话忙不忙（SessionActivity）、停止会话（SessionStopper，
    由正在进行的运行的登记与 SessionHalt 组成）、委派（Threads、Delegations、ThreadChecks）、到点唤醒（WakeUps）、后台任务的占用
-   （SessionWork）、热历史（SessionRecall）。会话领域的工具集（提问、委派、到点唤醒、读会话）都由这一段交出：消费者要用
+   与结局（SessionWork）、别的领域的来信（SenderInbox）、热历史（SessionRecall）。会话领域的工具集（提问、委派、到点唤醒、读会话）都由这一段交出：消费者要用
    组好的工具箱，第 2 段交不了。委派与到点唤醒的运行中检查、删除 agent 时会话忙不忙的检查也在这里。
 2. SessionDomain.build：有了运行时与工具箱之后，会话门面、压缩、消费者、信箱对账，与会话领域的任务处理器。
-   subscribe 一处登记会话领域的全部订阅与命令处理（后台任务与委派的结局、Receive、删除 agent 的会话清理）。
+   subscribe 登记会话领域的订阅（删除 agent 时清理它的会话）。
 """
 
 from __future__ import annotations
@@ -36,8 +36,9 @@ from muliao.sessions.delegation import Delegations, ThreadChecks
 from muliao.sessions.delegation_tools import delegation_toolset
 from muliao.sessions.deletion import AgentSessionsCleanup
 from muliao.sessions.finish import RunFinisher
-from muliao.sessions.halt import SessionHalt, SessionStopper
-from muliao.sessions.lanes import COMPACTION_TASK, RUN_TASK
+from muliao.sessions.halt import SessionHalt, SessionStopper, StopThreadHandler
+from muliao.sessions.inbound import SenderInbox
+from muliao.sessions.lanes import COMPACTION_TASK, RUN_TASK, STOP_THREAD_TASK
 from muliao.sessions.live import LiveSegments
 from muliao.sessions.origins import OriginNotes
 from muliao.sessions.recall import SessionRecall
@@ -49,7 +50,7 @@ from muliao.sessions.stopping import StoppableRuns
 from muliao.sessions.threads import Threads
 from muliao.sessions.wakeup_tools import wakeup_toolset
 from muliao.sessions.wakeups import WakeUps
-from muliao.sessions.work import SessionWork, handle_work_commands
+from muliao.sessions.work import SessionWork
 
 
 @dataclass(frozen=True)
@@ -64,6 +65,7 @@ class SessionPorts(Parts):
     thread_checks: ThreadChecks
     wakeups: WakeUps
     work: SessionWork
+    inbox: SenderInbox
     # 热历史：一段时间里的会话活动与会话的时间线（history 领域的 activity_overview 也用）
     recall: SessionRecall
     _tools: tuple[FunctionToolset[RunScope], ...]
@@ -93,7 +95,8 @@ class SessionPorts(Parts):
             delegations=delegations,
             thread_checks=ThreadChecks(db, queue),
             wakeups=WakeUps(db, queue, tz),
-            work=SessionWork(db),
+            work=SessionWork(db, queue),
+            inbox=SenderInbox(queue),
             recall=recall,
             _tools=(
                 ask_user_toolset(),
@@ -178,17 +181,15 @@ class SessionDomain(Parts):
         )
 
     def subscribe(self, messaging: Messaging) -> None:
-        """会话领域的全部订阅与命令处理：后台任务与委派的结局、运行中检查（WorkEnded / WorkCheckIn）、来信（Receive）、
-        停止 thread、删除 agent 时清理它的会话。"""
-        handle_work_commands(messaging, self._queue)
-        self.sessions.subscribe(messaging)
-        AgentSessionsCleanup(self._db, self._queue, messaging, self._ports.stopper).subscribe(messaging)
+        """删除 agent 时清理它的会话。"""
+        AgentSessionsCleanup(self._queue, messaging).subscribe(messaging)
 
     def handlers(self) -> Sequence[tuple[str, TaskHandler]]:
-        """会话 lane 上的任务种类与处理器。"""
+        """会话领域的任务种类与处理器：会话 lane 上的运行与压缩，逐层停止 thread。"""
         return (
             (RUN_TASK, RunHandler(self.consumer, self._queue, self._messaging)),
             (COMPACTION_TASK, CompactionHandler(self._db, self.compactor, self._runtime)),
+            (STOP_THREAD_TASK, StopThreadHandler(self._ports.stopper)),
         )
 
     def loops(self) -> Sequence[tuple[str, Loop]]:

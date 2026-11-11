@@ -1,8 +1,8 @@
 """来信：一切投进会话信箱的东西的唯一入口（docs/architecture.md 第 14 节「触发源与通知」）。
 
 - receive：用户消息、对提问的回答、委派来的任务，在调用方的事务里，投不进报领域错误；别的领域（触发器、issue）用
-  receive_command_in 在自己的事务里校验（同一套规则 check_in，只读），得到结果：投得进（Accepted：定向命令 Receive 与之后问
-  忙不忙的句柄）或投不进（Refused：原因由这里判断），由会话领域在自己的事务里投信。
+  SenderInbox.receive_in 在自己的事务里投信（同一套规则 check_in），得到结果：投进去了（Accepted：信进的会话）或投不进
+  （Refused：原因由这里判断，发送方逐种决定自己的反应）。
 - 目标会话三种：续写已有的、新建、按发送方定位（SessionKey：同一发送方给同一个 agent 的来信进同一个会话，没有就建）。
 - 续写规则：用户可以在任何用户能写的会话里继续；其他来源只能续写自己发起的会话。
 - 新建会话只有 create_session 一处实现（来信与 thread 都经过它）。
@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import assert_never
 
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.api import AgentArchived, Availability, agent_in, availability_in, runnable_agent_in
@@ -27,22 +28,13 @@ from muliao.platform.ids import new_id
 from muliao.platform.tasks import TaskQueue
 from muliao.sessions.approvals import ApprovalAnswered, Choice, pins_in
 from muliao.sessions.directory import add_in, keyed_rows_among
-from muliao.sessions.events import (
-    NewConversation,
-    Receive,
-    Recipient,
-    SenderMail,
-    SessionKey,
-    ToKeyed,
-    ToSession,
-)
-from muliao.sessions.lanes import keyed_receive_lane, receive_lane
 from muliao.sessions.mailbox import open_asks_in, post_in
 from muliao.sessions.origins import (
     RULES,
     DelegationOrigin,
     IssueOrigin,
     Origin,
+    Sender,
     TriggerOrigin,
     UserOrigin,
     origin_of,
@@ -54,6 +46,33 @@ from muliao.sessions.tables import TITLE_LENGTH, Mail, MailKind, Session
 log = logging.getLogger(__name__)
 
 _TITLE_MAX = 60
+
+
+class NewConversation(BaseModel):
+    """别的领域的来信要新建的顶层会话，标题由发送方给出。"""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    agent_id: str
+    title: str
+
+
+class SessionKey(BaseModel):
+    """按发送方定位的会话：来信的发送方（SenderMail.sender）给这个 agent 的会话，没有就以 title 新建。发送方因此不用
+    记会话 id（issue：每个 issue 与 agent 对应唯一一个会话）。有多个时（同一发送方新建过多个会话）取最新的。"""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    agent_id: str
+    title: str
+
+
+class SenderMail(BaseModel):
+    """别的领域（触发器、issue）的来信，经 SenderInbox.receive_in 投递：只有文字，没有人在等（处理它的运行不推送）。
+    sender 是具体的发送方（触发器、issue；构造时校验）；session 是投到哪个会话：新建的（触发器）、按发送方定位的（issue）。"""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    sender: Sender
+    content: str
+    session: NewConversation | SessionKey
 
 
 @dataclass(frozen=True)
@@ -90,8 +109,6 @@ class NewSession:
     # 委派产生的 thread：父会话与 thread 名
     parent_session_id: str | None = None
     thread: str | None = None
-    # 发送方预先分配的会话 id（NewConversation）；None 时生成
-    id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -201,7 +218,7 @@ async def create_session(s: AsyncSession, *, sender: From, spec: NewSession) -> 
         )
     return await add_in(
         s,
-        session_id=new_id() if spec.id is None else spec.id,
+        session_id=new_id(),
         agent_id=spec.agent_id,
         # 发送方给的标题（如 issue 标题）可能比列宽长，在这里统一截断
         title=_shorten(spec.title, TITLE_LENGTH),
@@ -335,54 +352,30 @@ async def _target_in(s: AsyncSession, inbound: Inbound) -> Checked:
             assert_never(other)
 
 
-def receive_lane_of(command: Receive) -> str:
-    """Receive 投递所在的 lane：同一个目标的来信按发送顺序投递。按 key 定位的目标在会话存在之前就要有 lane。"""
-    mail = command.mail
-    match mail.session:
-        case SessionKey(agent_id=agent_id):
-            return keyed_receive_lane(mail.sender.kind, mail.sender.ref, agent_id)
-        case NewConversation(id=session_id):
-            return receive_lane(session_id)
-        case other:
-            assert_never(other)
-
-
 @dataclass(frozen=True)
 class Accepted:
-    """投得进：发送方要在自己事务里 send_in 的命令；之后问忙不忙的句柄（SessionActivity.recipient_in）；信会进的会话，
-    按 key 定位、会话还没建出来时为 None。"""
+    """投进去了：信进的会话。"""
 
-    command: Receive
-    recipient: Recipient
-    session_id: str | None
+    session_id: str
 
 
-async def receive_command_in(s: AsyncSession, mail: SenderMail) -> Accepted | Refused:
-    """别的领域投信的唯一入口（只读）：在发送方的事务里校验这封来信，投不进的返回 Refused（原因由这里判断，
-    发送方只决定自己怎么反应），投得进的返回定向命令 Receive 与句柄。发送方在同一事务里 send_in 命令，由会话领域在自己的
-    事务里投进信箱——发送方记下的状态与投信一起提交，投递恰好一次；提交后由 Messaging 马上执行投递。校验读的都是只会
-    单向变化或不变的事实（会话与 agent 是否还在、会话的发起方）与由用户显式切换的归档，投递时再查一次
-    （docs/architecture.md 2.2）。"""
-    match checked := await check_in(s, _inbound_of_mail(mail)):
-        case Refused():
-            return checked
-        case Checked(session=session):
-            pass
-        case other:
-            assert_never(other)
-    command = Receive(mail=mail)
-    match mail.session:
-        case NewConversation(id=session_id):
-            return Accepted(command, ToSession(session_id=session_id), session_id)
-        case SessionKey(agent_id=agent_id):
-            recipient = ToKeyed(sender=mail.sender, agent_id=agent_id)
-            return Accepted(command, recipient, None if session is None else session.id)
-        case other:
-            assert_never(other)
+class SenderInbox:
+    """别的领域（触发器、issue）投信的唯一入口，在发送方的事务里：发送方记下的状态与投信一起提交。"""
 
+    def __init__(self, queue: TaskQueue):
+        self._queue = queue
 
-def inbound_of(command: Receive) -> Inbound:
-    return _inbound_of_mail(command.mail)
+    async def receive_in(self, s: AsyncSession, mail: SenderMail) -> Accepted | Refused:
+        """投不进的返回 Refused（原因由这里判断，发送方只决定自己怎么反应）。"""
+        inbound = _inbound_of_mail(mail)
+        match checked := await check_in(s, inbound):
+            case Refused():
+                return checked
+            case Checked():
+                received = await receive_into(s, self._queue, inbound, checked)
+                return Accepted(received.session.id)
+            case other:
+                assert_never(other)
 
 
 def _derived_title(inbound: Inbound, attachments: Sequence[FileMeta]) -> str:
@@ -398,7 +391,7 @@ async def receive(s: AsyncSession, queue: TaskQueue, inbound: Inbound) -> Receiv
 
 
 async def receive_into(s: AsyncSession, queue: TaskQueue, inbound: Inbound, checked: Checked) -> Received:
-    """把已经校验过的来信（check_in 的结果）投进会话的信箱。只给要先单独处理校验结果的调用方（Receive 的投递）；其余一律
+    """把已经校验过的来信（check_in 的结果）投进会话的信箱。只给要先单独处理校验结果的调用方（SenderInbox）；其余一律
     经 receive。"""
     session, attachments = checked.session, checked.attachments
     if session is None:
@@ -407,8 +400,8 @@ async def receive_into(s: AsyncSession, queue: TaskQueue, inbound: Inbound, chec
                 raise RuntimeError(f"inbound for session {session_id!r} resolved to no session")
             case SessionKey(agent_id=agent_id, title=title):
                 spec = NewSession(agent_id=agent_id, title=title)
-            case NewConversation(id=session_id, agent_id=agent_id, title=title):
-                spec = NewSession(agent_id=agent_id, title=title, id=session_id)
+            case NewConversation(agent_id=agent_id, title=title):
+                spec = NewSession(agent_id=agent_id, title=title)
             case NewChat(agent_id=agent_id):
                 spec = NewSession(agent_id=agent_id, title=_derived_title(inbound, attachments))
             case other:

@@ -3,8 +3,6 @@
 - 每个领域有 api.py；领域之间只 import 对方的 api 与 events，经 api 的依赖按 LAYERS 单向；
 - platform 不 import 领域，领域不 import HTTP 层与组合根；HTTP 层只用领域的 api、events、tables；
 - 工具拒绝只抛 DomainError；pydantic-ai 的运行类型只在 agent_runtime；路径身份只在 platform.fs 算。
-
-另有一个写事务只写一个领域的表（开发期断言 schema.single_domain_writes）的两条运行测试。
 """
 
 import ast
@@ -14,7 +12,7 @@ import pytest
 
 SRC = Path(__file__).parent.parent / "src" / "muliao"
 # 经 api 的依赖方向（docs/architecture.md「依赖规则」）：领域只能 import 更早一层的领域的 api，同层与反向都不行，所以依赖无环。
-# 事件与定向命令不受方向限制（events 模块只放消息的数据形状）。新增领域要在这里定它在哪一层
+# events 模块不受方向限制（只放事件与请求的数据形状、端口类型）。新增领域要在这里定它在哪一层
 LAYERS: list[set[str]] = [
     {"files", "agents", "usage", "speech", "web"},
     {"agent_runtime"},
@@ -144,28 +142,6 @@ def test_relative_imports_are_resolved_to_the_module_they_name(tmp_path):
     module.write_text("from ... import x\n")
     with pytest.raises(AssertionError, match="above the muliao package"):
         _imports(module, root)
-
-
-async def test_a_transaction_writing_two_domains_tables_fails(container, make_agent):
-    from sqlalchemy import update
-
-    from muliao.agents.tables import Agent
-    from muliao.notifications.tables import Notification
-
-    await make_agent("alpha")
-    with pytest.raises(RuntimeError, match="several domains"):
-        async with container.db.transaction() as s:
-            s.add(Notification(title="t", body="b", session_id=None))
-            await s.execute(update(Agent).values(deleting_by=None))
-
-
-async def test_a_domain_and_the_task_table_may_be_written_together(container):
-    from muliao.notifications.tables import Notification
-
-    async with container.db.transaction() as s:
-        await container.notifications._enqueue_in(  # noqa: SLF001
-            s, None, Notification(title="t", body="b", session_id=None)
-        )
 
 
 def test_tools_refuse_with_domain_errors_not_model_retry():

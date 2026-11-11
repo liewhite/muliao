@@ -1,13 +1,12 @@
 """删除 agent（docs/architecture.md 第 10 节）：agent 领域发起、各领域清理自己的数据的流程。这里只编排 agent 领域各部分的
 接口（目录 agents.service、资源目录 agents.assets、分发 agents.access），不直接碰它们的表。
 
-1. delete：它的会话有忙的，就拒绝（与删除会话同一条规则）；否则把 agent 标为正在删除
-   （不再出现在列表与名称解析里，各领域的写入口按不存在处理，见 agents.service.active_agent_in），同一事务发布
-   AgentDeleting。
-2. 各领域订阅 AgentDeleting 清理自己引用它的数据（这里不列举是谁）；其中会话领域删除它的全部会话（标记之后它的
-   会话不会再收到来信），然后发布 AgentSessionsCleared。
-3. 收到 AgentSessionsCleared：删除工作目录与它的资源目录（`assets/<名>/`）和 access.toml 里它的那一节，再删除这一行；
-   它名下分发出去的资源（agents.access.Sharing.shared）先挪到平台目录（别的 agent 还在用）。
+1. delete：它的会话有忙的，就拒绝（与删除会话同一条规则）；否则在一个事务里把 agent 标为正在删除（不再出现在列表与
+   名称解析里，各领域的写入口按不存在处理，见 agents.service.active_agent_in）、发布 AgentDeleting（各领域的订阅者在
+   这个事务里清理自己引用它的数据，这里不列举是谁；会话领域删除它的全部会话，有忙的就整个回滚），并排上删除文件的任务。
+2. 删除文件的任务（AGENT_REMOVAL_TASK，AgentRemoval）：删除工作目录与它的资源目录（`assets/<名>/`）和 access.toml 里
+   它的那一节，再删除这一行；它名下分发出去的资源（agents.access.Sharing.shared）先挪到平台目录（别的 agent 还在用）。
+   文件不在数据库事务里，所以单独成一个可重试的任务；重做时已不在的文件跳过。
 
 归档（set_archived）是可以来回切换的停用：同样只在它空闲时做（与删除同一组检查），之后给它派新工作的入口都拒绝
 （agents.active.runnable_row_in），数据都留着。
@@ -38,12 +37,15 @@ from muliao.agents.service import (
 from muliao.agents.source import AssetSource
 from muliao.errors import Conflict
 from muliao.platform.db import Database
-from muliao.platform.messaging import Delivery, Messaging
-from muliao.platform.tasks import Commit, no_commit
-from muliao.sessions.events import AgentSessionsCleared
+from muliao.platform.messaging import Messaging
+from muliao.platform.tables import Task
+from muliao.platform.tasks import Commit, TaskQueue, no_commit
 
 log = logging.getLogger(__name__)
 
+
+# 删除 agent 的文件与这一行（AgentRemoval）
+AGENT_REMOVAL_TASK = "agent_removal"
 
 # 删除（或归档）这个 agent 会打断的工作还在进行（别的领域的只读查询，组合根注入，如它的会话忙）
 DeletionBlocker = Callable[[AsyncSession, str], Awaitable[bool]]
@@ -53,35 +55,43 @@ class AgentLifecycle:
     def __init__(
         self,
         db: Database,
-        agents: AgentService,
         source: AssetSource,
+        queue: TaskQueue,
         messaging: Messaging,
         blockers: Mapping[str, DeletionBlocker],
     ):
         self._db = db
-        self._agents = agents
         self._source = source
+        self._queue = queue
         self._messaging = messaging
         self._blockers = blockers
 
-    def subscribe(self, messaging: Messaging) -> None:
-        messaging.subscribe(AgentSessionsCleared, "agents.sessions_cleared", self.on_sessions_cleared)
-
     async def delete(self, agent_id: str, *, actor: str) -> None:
-        # 会话的状态是别的领域的数据：在自己的只读事务里查（docs/architecture.md 2.2）。检查与标记之间排上的工作
-        # 由会话领域的订阅者先停止再删除（4.4）
         async with self._db.transaction() as s:
             agent = await deletable_in(s, agent_id)
-            blocking = await self._blocking_in(s, agent_id)
-        if blocking:
-            log.info("agent deletion refused: busy", extra={"agent": agent_id, "blocked_by": blocking})
-            raise Conflict(f"agent {agent.name!r} is working right now; stop its sessions first, then delete")
-        # 删除最后要改 access.toml（_retire_assets）：同样的改动现在就算一遍，不合法时先拒绝，不让 agent 停在正在删除、一直重放
+        # 删除最后要改 access.toml（_retire_assets）：同样的改动现在就算一遍，不合法时先拒绝，不让 agent 停在正在删除、
+        # 删除文件的任务一直失败
         snapshot = await self._source.snapshot()
         await asyncio.to_thread(_plan_retire, snapshot, agent.name)
+        # 会话的状态是别的领域的数据：检查、标记与各领域的清理在同一个事务里，之间插不进新工作
         async with self._db.transaction() as s:
+            await deletable_in(s, agent_id)
+            blocking = await self._blocking_in(s, agent_id)
+            if blocking:
+                log.info("agent deletion refused: busy", extra={"agent": agent_id, "blocked_by": blocking})
+                raise Conflict(
+                    f"agent {agent.name!r} is working right now; stop its sessions first, then delete"
+                )
             await mark_deleting_in(s, agent_id, actor)
-            self._messaging.publish_in(s, AgentDeleting(agent_id=agent_id))
+            await self._messaging.publish_in(s, AgentDeleting(agent_id=agent_id))
+            self._queue.enqueue(
+                s,
+                kind=AGENT_REMOVAL_TASK,
+                lane=f"agents.removal:{agent_id}",
+                agent_id=agent_id,
+                session_id=None,
+                payload={},
+            )
         log.info("agent deletion started", extra={"agent": agent_id, "actor": actor})
 
     async def set_archived(self, agent_id: str, archived: bool) -> AgentInfo:
@@ -109,13 +119,26 @@ class AgentLifecycle:
         """还在挡着删除的查询的名字（空表示可以删除）。"""
         return [name for name, blocked in self._blockers.items() if await blocked(s, agent_id)]
 
-    async def on_sessions_cleared(self, event: AgentSessionsCleared, _delivery: Delivery) -> Commit:
-        agent_id = event.agent_id
+
+class AgentRemoval:
+    """删除文件的任务（AGENT_REMOVAL_TASK）：删工作目录、资源目录与 access.toml 里它的那一节，最后删除这一行。"""
+
+    prunable = True
+
+    def __init__(self, db: Database, agents: AgentService, source: AssetSource):
+        self._db = db
+        self._agents = agents
+        self._source = source
+
+    async def execute(self, task: Task) -> Commit:
+        agent_id = task.agent_id
+        if agent_id is None:
+            raise RuntimeError(f"agent removal task {task.id} has no agent")
         async with self._db.transaction() as s:
             actor = await deletion_actor_in(s, agent_id)
         if actor is None:
             return no_commit
-        # 文件不在数据库事务里：重放时它们已经不在，删除是空操作
+        # 文件不在数据库事务里：重做时它们已经不在，删除是空操作
         await self._agents.remove_workspace(agent_id)
         async with self._source.writing() as snapshot:
             await asyncio.to_thread(_retire_assets, snapshot, agent_id)
@@ -128,6 +151,9 @@ class AgentLifecycle:
             log.info("agent deleted", extra={"agent": agent_id, "actor": actor})
 
         return commit
+
+    async def failed_in(self, s: AsyncSession, task: Task) -> None:
+        """删不掉只需可见（任务记录与日志）；agent 停在正在删除，人工重试这个任务即可接着删。"""
 
 
 def _retire_assets(snapshot: Snapshot, agent_id: str) -> None:

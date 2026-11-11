@@ -141,8 +141,6 @@ def migrate(db_path: Path, target: str = "head") -> None:
         engine.dispose()
 
 
-# 一个事务写过的表名 -> 不合规时报错
-WriteCheck = Callable[[frozenset[str]], None]
 # 事务里登记的、提交之后要做的事（when_committed_in）在 AsyncSession.info 里的键
 _WHEN_COMMITTED = "muliao.when_committed"
 
@@ -192,13 +190,10 @@ class Database:
         self,
         engine: AsyncEngine,
         *,
-        check_writes: WriteCheck | None = None,
         after_commit: AfterCommit | None = None,
     ):
-        """check_writes：提交前拿到这个事务写过的表名（开发期断言，见 schema.single_domain_writes）。after_commit：
-        写过表的事务提交成功后调用（组合根据此给前端发数据变了的事件 schema.ChangedEvent），只做不会失败的事。"""
+        """after_commit：写过表的事务提交成功后调用（组合根据此给前端发数据变了的事件 schema.ChangedEvent），只做不会失败的事。"""
         self.engine = engine
-        self._check_writes = check_writes
         self._after_commit = after_commit
         self._factory = async_sessionmaker(engine, expire_on_commit=False)
         self._lock = asyncio.Lock()
@@ -239,13 +234,11 @@ class Database:
                         # 提交时的 flush 也会写，先 flush 让记下的表完整
                         await s.flush()
                         tables = frozenset(written)
-                        if self._check_writes is not None:
-                            self._check_writes(tables)
                         committed = s.info.pop(_WHEN_COMMITTED, [])
                     if tables and self._after_commit is not None:
                         self._after_commit()
                 finally:
                     self._holder = None
-        # 锁外、不屏蔽取消：它们可以开自己的事务，被取消时由各自处理（Messaging 的马上执行）
+        # 锁外、不屏蔽取消：它们可以开自己的事务，被取消时由各自处理
         for action in committed:
             await action()

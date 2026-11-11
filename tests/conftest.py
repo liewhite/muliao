@@ -15,7 +15,6 @@ from muliao.api.app import create_app
 from muliao.config import Settings
 from muliao.container import Assembly, assemble
 from muliao.platform.db import migrate
-from muliao.schema import single_domain_writes
 from tests.scripted import scripted
 
 os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
@@ -71,7 +70,6 @@ async def container(settings: Settings, models: ModelSlot) -> AsyncIterator[Asse
         resolve_model=models,
         # 不查 provider 配置（测试模型名不带 provider），思考档位按槽位里的模型照实检查
         model_checker=lambda m, t: check_thinking(m, models(m), t),
-        check_writes=single_domain_writes,
     )
     migrate(settings.db_path)
     # 同服务启动（Assembly._prepare）：全新的资源目录建上空的全局记忆
@@ -80,17 +78,6 @@ async def container(settings: Settings, models: ModelSlot) -> AsyncIterator[Asse
     async with c.jobs.running():
         yield c
     await c.db.engine.dispose()
-
-
-@pytest.fixture
-def deliveries_later(container: Assembly, monkeypatch: pytest.MonkeyPatch) -> None:
-    """投递不在发送方提交后马上执行，都留给 worker（测试用 deliver / drain 驱动）：测投递之前的中间状态，或模拟马上执行
-    没能执行（lane 被挡住、调用方被取消）。"""
-
-    async def later(_task_id: int) -> None:
-        return None
-
-    monkeypatch.setattr(container.messaging, "_run_now", later)
 
 
 async def restart(container: Assembly) -> None:

@@ -2,8 +2,8 @@
 未读数是它的展示；推到设备是 notifications.push 的事：写下通知时交给它排推送（schedule_in），推送时经 push_message_in
 取内容，deliver task 只引用通知与一台设备。
 
-Notifications 写下通知（notify、定向命令 Notify、订阅 RunEnded 与 RunFailed），提供通知页与未读数，随会话已读（订阅
-SessionRead）与删除（订阅 SessionDeleted）。同一会话的事件在同一条 lane 上（session_events_lane）。
+Notifications 写下通知（notify、别的领域在自己事务里调的 notify_in、订阅 RunEnded 与 RunFailed），提供通知页与未读数，
+随会话已读（订阅 SessionRead）与删除（订阅 SessionDeleted）。订阅都在发布方的事务里执行。
 
 会话的未读不另存：有指向它的未读通知就是未读（unread_sessions）。需要用户看的只有这几种：用户在等的回答与提问
 （RunEnded）、agent 主动通知（Notify，如 notify_user、issue 交给用户）、运行最终失败（RunFailed）。
@@ -20,10 +20,10 @@ from muliao.notifications.push import PushMessage, schedule_in
 from muliao.notifications.tables import Notification
 from muliao.platform.bus import EventBus
 from muliao.platform.db import Database, when_committed_in
-from muliao.platform.messaging import Delivery, Messaging
-from muliao.platform.tasks import Commit, TaskQueue, no_commit
+from muliao.platform.messaging import Messaging
+from muliao.platform.tasks import TaskQueue
 from muliao.platform.text_edit import truncate
-from muliao.sessions.api import SessionInfo, session_in
+from muliao.sessions.api import session_in
 from muliao.sessions.events import RunEnded, RunFailed, SessionDeleted, SessionRead
 
 log = logging.getLogger(__name__)
@@ -39,13 +39,6 @@ def _worth_pushing(event: RunEnded) -> bool:
     if "approval" in waiting:
         return True
     return event.awaited and not event.stopped and (not waiting or "ask_user" in waiting)
-
-
-def session_events_lane(event: RunEnded | RunFailed | SessionRead | SessionDeleted) -> str:
-    """同一个会话的事件在同一条 lane 上按发布顺序处理：RunEnded、RunFailed 一定先于 SessionDeleted 发布（会话忙时不能删除），
-    删除的清理之后不会再为它写通知；运行结束之后才打开会话时，SessionRead 排在 RunEnded 之后，标记已读能看到这次
-    运行的通知。顺序只对没有失败的投递成立：人工重试的 RunEnded 由处理器检查会话还在。"""
-    return f"notifications:{event.session_id}"
 
 
 class Notifications:
@@ -67,71 +60,54 @@ class Notifications:
         await schedule_in(s, self._queue, notification.id, notification.session_id, agent_id)
 
     def subscribe(self, messaging: Messaging) -> None:
-        messaging.subscribe(RunEnded, "notifications.run_ended", self.on_run_ended, lane=session_events_lane)
-        messaging.subscribe(
-            RunFailed, "notifications.run_failed", self.on_run_failed, lane=session_events_lane
-        )
-        messaging.subscribe(
-            SessionDeleted, "notifications.session_deleted", self.on_session_deleted, lane=session_events_lane
-        )
-        messaging.subscribe(
-            SessionRead, "notifications.session_read", self.on_session_read, lane=session_events_lane
-        )
-        messaging.handle(Notify, "notifications.notify", self.on_notify)
+        messaging.subscribe(RunEnded, self.on_run_ended)
+        messaging.subscribe(RunFailed, self.on_run_failed)
+        messaging.subscribe(SessionDeleted, self.on_session_deleted)
+        messaging.subscribe(SessionRead, self.on_session_read)
 
-    async def on_notify(self, command: Notify, _delivery: Delivery) -> Commit:
-        async def commit(s: AsyncSession) -> None:
-            await self._enqueue_in(
-                s,
-                command.agent_id,
-                Notification(
-                    title=command.title,
-                    body=command.body,
-                    session_id=command.session_id,
-                    issue_id=command.issue_id,
-                ),
-            )
+    async def notify_in(self, s: AsyncSession, request: Notify) -> None:
+        """别的领域给用户发一条通知（并排上推送），在它自己的事务里（触发器的告警兜底、定时被挡、issue 交给用户）。"""
+        await self._enqueue_in(
+            s,
+            request.agent_id,
+            Notification(
+                title=request.title,
+                body=request.body,
+                session_id=request.session_id,
+                issue_id=request.issue_id,
+            ),
+        )
 
-        return commit
-
-    async def on_run_ended(self, event: RunEnded, _delivery: Delivery) -> Commit:
+    async def on_run_ended(self, s: AsyncSession, event: RunEnded) -> None:
         """推送一次运行的回答（推送规则只在这里）。"""
         if not _worth_pushing(event):
-            return no_commit
+            return
+        await self._enqueue_in(
+            s,
+            event.agent_id,
+            Notification(
+                title=f"{event.agent_name} · {event.session_title}",
+                body=event.answer,
+                session_id=event.session_id,
+            ),
+        )
 
-        async def commit(s: AsyncSession) -> None:
-            if await _run_session_in(s, event) is None:
-                return
-            await self._enqueue_in(
-                s,
-                event.agent_id,
-                Notification(
-                    title=f"{event.agent_name} · {event.session_title}",
-                    body=event.answer,
-                    session_id=event.session_id,
-                ),
-            )
-
-        return commit
-
-    async def on_run_failed(self, event: RunFailed, _delivery: Delivery) -> Commit:
+    async def on_run_failed(self, s: AsyncSession, event: RunFailed) -> None:
         """运行最终失败：通知用户，点开是那个会话；运行中途的工具报错不走这里。"""
-
-        async def commit(s: AsyncSession) -> None:
-            session = await _run_session_in(s, event)
-            if session is None:
-                return
-            await self._enqueue_in(
-                s,
-                event.agent_id,
-                Notification(
-                    title=f"{event.agent_name} · {session.title} 运行失败",
-                    body=truncate(event.error.strip(), FAILURE_BODY_MAX),
-                    session_id=event.session_id,
-                ),
+        session = await session_in(s, event.session_id)
+        if session is None:
+            raise RuntimeError(
+                f"run {event.run_id} failed in session {event.session_id}, which does not exist"
             )
-
-        return commit
+        await self._enqueue_in(
+            s,
+            event.agent_id,
+            Notification(
+                title=f"{event.agent_name} · {session.title} 运行失败",
+                body=truncate(event.error.strip(), FAILURE_BODY_MAX),
+                session_id=event.session_id,
+            ),
+        )
 
     async def notify(self, agent_id: str | None, title: str, body: str, session_id: str | None) -> None:
         """agent_id 为 None 表示系统通知，不属于任何 agent；session_id 是点开通知打开的会话。"""
@@ -142,25 +118,17 @@ class Notifications:
         """用户在界面上开启推送后发的测试通知（系统通知，不打开会话）。"""
         await self.notify(None, "Muliao", "推送通知已开启。", None)
 
-    async def on_session_deleted(self, event: SessionDeleted, _delivery: Delivery) -> Commit:
+    async def on_session_deleted(self, s: AsyncSession, event: SessionDeleted) -> None:
         """指向被删会话的通知随它删除。"""
+        await s.execute(delete(Notification).where(Notification.session_id == event.session_id))
 
-        async def commit(s: AsyncSession) -> None:
-            await s.execute(delete(Notification).where(Notification.session_id == event.session_id))
-
-        return commit
-
-    async def on_session_read(self, event: SessionRead, _delivery: Delivery) -> Commit:
-        """看过了会话即看过了指向它的通知（会话已被删除时没有这样的通知，什么都不改）。"""
-
-        async def commit(s: AsyncSession) -> None:
-            await s.execute(
-                update(Notification)
-                .where(Notification.session_id == event.session_id, Notification.unread.is_(True))
-                .values(unread=False)
-            )
-
-        return commit
+    async def on_session_read(self, s: AsyncSession, event: SessionRead) -> None:
+        """看过了会话即看过了指向它的通知。"""
+        await s.execute(
+            update(Notification)
+            .where(Notification.session_id == event.session_id, Notification.unread.is_(True))
+            .values(unread=False)
+        )
 
     async def mark_issue_read(self, issue_id: int) -> None:
         """用户打开了 issue：请他审核这个 issue 的通知标为已读（与打开会话标记指向会话的通知一样）。"""
@@ -196,18 +164,6 @@ class Notifications:
                 .where(Notification.id <= through_id, Notification.unread.is_(True))
                 .values(unread=False)
             )
-
-
-async def _run_session_in(s: AsyncSession, event: RunEnded | RunFailed) -> SessionInfo | None:
-    """这次运行的会话；已删除时记日志、返回 None（不为它写通知）。正常情况下同一会话的 SessionDeleted 排在后面
-    （session_events_lane）；投递失败后被人工重试时可能已在删除之后。会话只会从存在变为删除，在本事务里检查没有竞态。"""
-    session = await session_in(s, event.session_id)
-    if session is None:
-        log.info(
-            "run of a deleted session not notified",
-            extra={"session_id": event.session_id, "run_id": event.run_id, "event": event.TYPE},
-        )
-    return session
 
 
 async def _unread_count_in(s: AsyncSession) -> int:

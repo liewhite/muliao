@@ -1,38 +1,27 @@
-"""Session 的查询、删除与在独立事务里接收事件。投递规则在 inbound.receive。"""
+"""Session 的查询、删除与界面的来信。投递规则在 inbound.receive。"""
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import assert_never
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.errors import NotFound
 from muliao.platform.db import Database
-from muliao.platform.messaging import Delivery, Messaging
-from muliao.platform.tasks import Commit, TaskQueue, TaskView, no_commit
+from muliao.platform.messaging import Messaging
+from muliao.platform.tasks import TaskQueue, TaskView
 from muliao.platform.tool_views import ToolRenders
 from muliao.sessions.activity import WorkState, waiting_among, work_states_in
 from muliao.sessions.codec import load_messages
 from muliao.sessions.compaction import Compactor, context_tokens
 from muliao.sessions.deletion import delete_sessions
 from muliao.sessions.directory import Listing, listed_ids_in, listed_page_in, threads_of
-from muliao.sessions.events import Receive, SessionRead, StopThread
+from muliao.sessions.events import SessionRead
 from muliao.sessions.halt import Halted, StopSession
 from muliao.sessions.history import compactions_in, context_of, transcript_rows_in
-from muliao.sessions.inbound import (
-    Checked,
-    Received,
-    Refused,
-    UserMessage,
-    check_in,
-    inbound_of,
-    receive,
-    receive_into,
-    receive_lane_of,
-)
+from muliao.sessions.inbound import Received, UserMessage, receive
 from muliao.sessions.live import LiveSegment, LiveSegments, RunItemEvent
 from muliao.sessions.mailbox import open_asks_in, visible_in
 from muliao.sessions.origins import Origin, Sender
@@ -223,48 +212,10 @@ class SessionService:
 
     async def mark_read(self, session_id: str) -> None:
         """用户看过了会话：发布 SessionRead（会话的未读就是指向它的未读通知，通知领域据此把它们标为已读；会话不存在时
-        NotFound）。提交后马上投递（Messaging），通常返回时界面重新取的未读数已经反映；同一 lane 上还有更早的投递时留给 worker
-        稍后处理（界面在事件投递完成时再取未读数）。"""
+        NotFound）。"""
         async with self._db.transaction() as s:
             await self._get(s, session_id)
-            self._messaging.publish_in(s, SessionRead(session_id=session_id))
-
-    def subscribe(self, messaging: Messaging) -> None:
-        # 停止 thread 要等它的运行连同收尾结束（不设时限）：停止发起方的一方不等它，一个停不下来的 thread 不拖住发起方
-        messaging.handle(StopThread, "sessions.stop_thread", self.on_stop_thread, slow=True)
-        messaging.handle(Receive, "sessions.receive", self.on_receive, lane=receive_lane_of)
-
-    async def on_stop_thread(self, command: StopThread, _delivery: Delivery) -> Commit:
-        """一个 thread 做的委派的发起方被停止了：停止它（已被删除时是 GONE，什么都不做）。"""
-        halted = await self._stop_session(command.session_id)
-        log.info(
-            "thread of a stopped session stopped", extra={"session_id": command.session_id, "halted": halted}
-        )
-        return no_commit
-
-    async def on_receive(self, command: Receive, delivery: Delivery) -> Commit:
-        inbound = inbound_of(command)
-
-        async def commit(s: AsyncSession) -> None:
-            match checked := await check_in(s, inbound):
-                case Checked():
-                    await receive_into(s, self._queue, inbound, checked)
-                case Refused(reason=reason, detail=detail):
-                    # 发送方校验之后会话或 agent 被删除、agent 被归档：契约内的变化，这封信不再有收件人（续写的会话
-                    # 不是它开的这一点不会变，发送方校验时就已拒绝；哪种原因都一样丢弃，记下原因）
-                    log.info(
-                        "inbound mail dropped: %s",
-                        reason,
-                        extra={
-                            "message_id": delivery.message_id,
-                            "sender": repr(inbound.sender),
-                            "reason": detail,
-                        },
-                    )
-                case other:
-                    assert_never(other)
-
-        return commit
+            await self._messaging.publish_in(s, SessionRead(session_id=session_id))
 
     async def delete(self, session_id: str) -> None:
         """用户删除会话（规则见 deletion.delete_sessions）。"""

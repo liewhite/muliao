@@ -21,7 +21,7 @@ from sqlalchemy.orm import aliased
 
 from muliao.errors import Conflict, InvalidInput, NotFound, ServiceUnavailable, TransientError
 from muliao.platform.db import Database, utcnow, when_committed_in
-from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
+from muliao.platform.tables import Task, TaskStatus
 
 log = logging.getLogger(__name__)
 
@@ -236,22 +236,6 @@ class TaskQueue:
         """领取一个可以执行的 task，只在调用方能处理的这些种类里找。"""
         return await self._claim(_claimable().where(Task.kind.in_(list(kinds))).order_by(Task.id).limit(1))
 
-    async def claim_task(self, task_id: int, kinds: Collection[str]) -> Task | None:
-        """现在就领取这一个 task（Worker.run_now）；它此刻不可领取（已被领取、同 lane 有更早或进行中的、还没到时间、
-        不是这些种类）时为 None，留给 worker。"""
-        return await self._claim(_claimable().where(Task.id == task_id, Task.kind.in_(list(kinds))))
-
-    async def unclaim(self, task_id: int) -> bool:
-        """把一个还在 running 的 task 放回 pending（领取它的执行者被取消、不会再完成它，同 recover 的语义：已用的
-        尝试次数不退回）。已经完成或记下失败的不动。返回是否放回了。"""
-        async with self._db.transaction() as s:
-            task = await s.get(Task, task_id)
-            if task is None or task.status != TaskStatus.RUNNING:
-                return False
-            task.status = TaskStatus.PENDING
-        self.wake.set()
-        return True
-
     async def _claim(self, query: Select[tuple[Task]]) -> Task | None:
         now = self._clock()
         async with self._db.transaction() as s:  # 事务串行化保证同一 task 不会被领取两次
@@ -327,10 +311,7 @@ class TaskQueue:
     async def retry(self, task_id: int) -> Task:
         """人工重试一个 failed task，沿用原来的 id（同 lane 内按 id FIFO）。
 
-        会话等 lane 上还有未结束的 task 时拒绝：重试会插到更新的工作前面，和正在进行的运行争同一个会话。
-        投递任务（EVENT）不受这个限制：共享的订阅 lane 上可能一直有新的投递，等它空下来可能永远等不到。沿用原 id
-        只保证它排在还没处理的投递前面；在它失败之后已经处理过的投递不会重来，所以依赖顺序的处理器遇到前置状态
-        缺失时必须自行判断（跳过并记日志，或在确属契约违约时报错），重试按 id 先后进行。
+        lane 上还有未结束的 task 时拒绝：重试会插到更新的工作前面，和正在进行的运行争同一个会话。
         """
         async with self._db.transaction() as s:
             task = await s.get(Task, task_id)
@@ -338,7 +319,7 @@ class TaskQueue:
                 raise NotFound(f"task {task_id} not found")
             if task.status != TaskStatus.FAILED:
                 raise InvalidInput(f"only failed tasks can be retried, task {task_id} is {task.status}")
-            if task.kind != EVENT_TASK and await self.lane_busy(s, task.lane):
+            if await self.lane_busy(s, task.lane):
                 raise Conflict(
                     f"lane {task.lane} still has unfinished tasks; retry task {task_id} after they finish"
                 )

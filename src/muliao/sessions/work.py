@@ -1,12 +1,12 @@
 """在会话之外进行的工作与会话的接口（docs/architecture.md 第 7 节「占用与结清」）：登记占用、运行中检查、交回结局。
 
-- SessionWork.hold：别的领域（后台任务）登记占用，在会话领域自己的事务里执行；结束与运行中检查经定向命令
-  WorkEnded / WorkCheckIn（同一条按占用者的 lane）。
+- SessionWork：别的领域（后台任务）登记占用（hold，在会话领域自己的事务里），工作结束与运行中检查（ended_in、
+  checked_in，在发送方记下结局或确认工作仍在进行的事务里）。
 - 运行中检查的间隔规则（check_interval 定间隔、CheckBeats 记上次检查的时刻）：后台任务与委派共用，节拍在
   platform.checks.WorkWatcher。
 - post_check_in：运行中检查投信，与 deliver_in 共用占用的检查。
 - deliver_in：交回结局并释放占用，和一封信件同一个事务；占用已被停止清掉、或会话已删除时不投。唯一出口：后台任务
-  经定向命令 WorkEnded，委派由 thread 结清时在同一个事务里调用（sessions.delegation）。
+  经 SessionWork.ended_in，委派由 thread 结清时在同一个事务里调用（sessions.delegation）。
 """
 
 from __future__ import annotations
@@ -20,11 +20,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.errors import InvalidInput
 from muliao.platform.db import Database
-from muliao.platform.messaging import Delivery, Messaging
-from muliao.platform.tasks import Commit, TaskQueue
-from muliao.sessions.events import WorkCheckIn, WorkEnded
+from muliao.platform.tasks import TaskQueue
 from muliao.sessions.holds import get_in, hold_in, release
-from muliao.sessions.lanes import work_lane
 from muliao.sessions.mailbox import has_queued_from, position_in, post_in, posted_with_key_in
 from muliao.sessions.pending import CallResult, paused
 from muliao.sessions.tables import HoldStatus, MailKind, Session, SessionHold
@@ -65,15 +62,33 @@ class CheckBeats[K]:
 
 
 class SessionWork:
-    """别的领域在会话之外做一项工作时对会话的命令，每个在会话领域自己的事务里执行。"""
+    """别的领域在会话之外做一项工作时对会话的命令。"""
 
-    def __init__(self, db: Database):
+    def __init__(self, db: Database, queue: TaskQueue):
         self._db = db
+        self._queue = queue
 
     async def hold(self, session_id: str, holder: str, *, awaited: bool) -> None:
         """登记一项进行中的工作（重放幂等）：会话据此知道工作还没做完。awaited：用户是否在等它的结局。"""
         async with self._db.transaction() as s:
             await hold_in(s, session_id, holder, awaited=awaited)
+
+    async def ended_in(self, s: AsyncSession, session_id: str, holder: str, text: str) -> None:
+        """这项工作结束了，在发送方记下结局的事务里：往会话的信箱投一封事件信件（来源是占用者），同时释放占用。占用
+        已被停止清掉、或会话已删除时不投；按占用者幂等。"""
+        await deliver_in(
+            s,
+            self._queue,
+            await hold_of_in(s, session_id, holder),
+            key=f"{holder}:end",
+            source=holder,
+            event_text=text,
+        )
+
+    async def checked_in(self, s: AsyncSession, session_id: str, holder: str, text: str) -> None:
+        """这项工作还在进行，在发送方确认它仍在进行的事务里：给会话投一封检查信件（规则见 post_check_in）。与 ended_in
+        互斥，检查信件不会排在结束之后。"""
+        await post_check_in(s, self._queue, await hold_of_in(s, session_id, holder), holder, text)
 
 
 class Delivered(StrEnum):
@@ -183,35 +198,3 @@ async def hold_of_in(s: AsyncSession, session_id: str, holder: str) -> SessionHo
     if hold is None and await s.get(Session, session_id) is not None:
         raise RuntimeError(f"session {session_id} has no hold {holder}")
     return hold
-
-
-def handle_work_commands(messaging: Messaging, queue: TaskQueue) -> None:
-    """登记 WorkEnded 与 WorkCheckIn 的处理者（会话领域）：投信、释放占用与这条投递的完成在同一个事务里。"""
-
-    async def ended(command: WorkEnded, _delivery: Delivery) -> Commit:
-        async def commit(s: AsyncSession) -> None:
-            await deliver_in(
-                s,
-                queue,
-                await hold_of_in(s, command.session_id, command.holder),
-                key=f"{command.holder}:end",
-                source=command.holder,
-                event_text=command.text,
-            )
-
-        return commit
-
-    async def check_in(command: WorkCheckIn, _delivery: Delivery) -> Commit:
-        async def commit(s: AsyncSession) -> None:
-            await post_check_in(
-                s,
-                queue,
-                await hold_of_in(s, command.session_id, command.holder),
-                command.holder,
-                command.text,
-            )
-
-        return commit
-
-    messaging.handle(WorkEnded, "sessions.work_ended", ended, lane=lambda c: work_lane(c.holder))
-    messaging.handle(WorkCheckIn, "sessions.work_check_in", check_in, lane=lambda c: work_lane(c.holder))

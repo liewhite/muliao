@@ -9390,10 +9390,11 @@
           "kind": {
             "type": "string",
             "enum": [
-              "event",
               "run",
               "compaction",
-              "deliver"
+              "stop_thread",
+              "deliver",
+              "agent_removal"
             ],
             "title": "Kind"
           },

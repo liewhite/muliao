@@ -44,9 +44,10 @@ from muliao.issues.delivery import IssueDelivery
 from muliao.issues.graph import downstream_in, set_depends_on_in
 from muliao.issues.rules import agent_assignee, finishing
 from muliao.issues.tables import Issue, IssueActivity, IssuePriority, IssueStatus
+from muliao.notifications.events import NotifyIn
 from muliao.platform.db import utcnow
-from muliao.platform.messaging import Messaging
 from muliao.platform.values import KEEP, Keep
+from muliao.sessions.api import SenderInbox
 
 log = logging.getLogger(__name__)
 
@@ -232,8 +233,8 @@ class IssueChange:
 class IssueChanges:
     """开变更单元、在退出时结算（见模块说明）。"""
 
-    def __init__(self, messaging: Messaging, tz: ZoneInfo):
-        self._delivery = IssueDelivery(messaging, tz)
+    def __init__(self, inbox: SenderInbox, notify: NotifyIn, tz: ZoneInfo):
+        self._delivery = IssueDelivery(inbox, notify, tz)
 
     @asynccontextmanager
     async def open_in(

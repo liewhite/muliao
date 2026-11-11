@@ -15,7 +15,7 @@ from muliao.triggers.once import OnceKind
 from muliao.triggers.precheck import Precheck
 from muliao.triggers.service import trigger_in
 from tests.conftest import login
-from tests.test_flow import deliver
+from tests.test_flow import side_tasks
 from tests.test_precheck import precheck_error
 
 
@@ -140,7 +140,7 @@ async def test_a_once_trigger_whose_precheck_fails_is_finished_with_the_error(co
     trigger = await _once(container, alpha, precheck=Precheck(command="echo boom >&2; exit 3"))
 
     await _fire_due(container, trigger.id)
-    await deliver(container)
+    await side_tasks(container)
 
     finished = (await container.triggers.list(finished=True))[0]
     assert finished.finished_at is not None and "exited with 3" in precheck_error(finished)

@@ -1,17 +1,18 @@
-"""通知领域接收的命令，以及推给前端的新通知事件。"""
+"""别的领域给用户发通知的请求与端口，以及推给前端的新通知事件。"""
 
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Literal
 
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.platform.messaging import Command
 
+@dataclass(frozen=True)
+class Notify:
+    """给用户发一条通知（并排上推送），在发送方自己的事务里（NotifyIn），例如触发器的前置检查告警投不到 agent 时的兜底、
+    定时触发因上次会话在等待而跳过、issue 交给用户。"""
 
-class Notify(Command):
-    """给用户发一条通知（并排上推送）。发送方在自己的事务里先提交了状态、又必须保证通知发出时用它（定向命令，
-    docs/architecture.md 3.4），例如触发器的前置检查告警投不到 agent 时的兜底、定时触发因上次会话在等待而跳过、issue 交给用户。"""
-
-    TYPE = "notifications.notify"
     # 系统通知（不属于任何 agent）为 None
     agent_id: str | None
     title: str
@@ -28,3 +29,7 @@ class NotificationEvent(BaseModel):
     type: Literal["notification"] = "notification"
     notification_id: int
     session_id: str | None
+
+
+# 发通知的端口（Notifications.notify_in）：issue 与通知同层、不能 import 对方的 api，由组合根交给要发通知的领域
+type NotifyIn = Callable[[AsyncSession, Notify], Awaitable[None]]

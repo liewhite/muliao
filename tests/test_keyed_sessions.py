@@ -1,4 +1,4 @@
-"""按发送方定位的会话（sessions.events.SessionKey）：同一发送方给同一个 agent 的来信进同一个会话，没有就建。"""
+"""按发送方定位的会话（sessions.inbound.SessionKey）：同一发送方给同一个 agent 的来信进同一个会话，没有就建。"""
 
 import pytest
 
@@ -6,8 +6,8 @@ from muliao.sessions.api import (
     Accepted,
     DelegationOrigin,
     IssueOrigin,
-    NewConversation,
     Origin,
+    SenderInbox,
     SenderMail,
     SessionActivity,
     SessionKey,
@@ -15,11 +15,8 @@ from muliao.sessions.api import (
     UserOrigin,
     WorkState,
     keyed_sessions_among,
-    receive_command_in,
 )
-from muliao.sessions.events import Receive
-from muliao.sessions.inbound import inbound_of
-from tests.test_flow import deliver, drain
+from tests.test_flow import drain
 
 ONE = IssueOrigin(issue_id=1)
 
@@ -34,9 +31,8 @@ def _keyed(agent_id: str, ref: str, text: str) -> SenderMail:
 
 async def _send(container, inbound: SenderMail) -> None:
     async with container.db.transaction() as s:
-        accepted = await receive_command_in(s, inbound)
+        accepted = await SenderInbox(container.queue).receive_in(s, inbound)
         assert isinstance(accepted, Accepted)
-        container.messaging.send_in(s, accepted.command)
 
 
 async def _keyed_sessions(container, ref: str):
@@ -54,13 +50,12 @@ async def test_mail_for_one_key_lands_in_one_session_per_agent(container, make_a
         _keyed(alpha, "2", "d"),
     ):
         await _send(container, inbound)
-    await deliver(container)
     one = await _keyed_sessions(container, "1")
     assert set(one) == {alpha, beta} and one[alpha].title == "#1"
     assert (await _keyed_sessions(container, "2"))[alpha].id != one[alpha].id
 
 
-async def test_undelivered_keyed_mail_keeps_the_session_running(container, make_agent):
+async def test_new_keyed_mail_makes_the_session_running(container, make_agent):
     alpha = (await make_agent()).id
     await _send(container, _keyed(alpha, "1", "a"))
     await drain(container)
@@ -80,42 +75,14 @@ async def test_a_key_needs_a_sender_identity(container, make_agent):
             SenderMail(sender=sender, content="a", session=SessionKey(agent_id=alpha, title="t"))
 
 
-async def test_a_keyed_receive_command_round_trips(container, make_agent):
-    alpha = (await make_agent()).id
-    inbound = _keyed(alpha, "7", "hello")
-    async with container.db.transaction() as s:
-        accepted = await receive_command_in(s, inbound)
-    assert isinstance(accepted, Accepted)
-    command = accepted.command
-    # 定向命令存进投递任务再读回来，目标不变
-    assert type(command).model_validate_json(command.model_dump_json()) == command
-    assert inbound_of(command).session == inbound.session
-
-
-@pytest.mark.parametrize(
-    "target",
-    [NewConversation(id="s-2", agent_id="a", title="t"), SessionKey(agent_id="a", title="t")],
-)
-def test_every_receive_target_survives_the_task_payload(target):
-    command = Receive(mail=SenderMail(sender=TriggerOrigin(trigger_id=1), content="x", session=target))
-    assert Receive.model_validate_json(command.model_dump_json()).mail.session == target
-
-
-@pytest.mark.usefixtures("deliveries_later")
-async def test_a_key_with_undelivered_mail_and_no_session_yet_is_running(container, make_agent):
+async def test_a_key_without_a_session_has_no_state(container, make_agent):
     alpha = (await make_agent()).id
     activity = SessionActivity(container.queue)
     async with container.db.transaction() as s:
         assert await activity.keyed_work_states_in(s, [(ONE, alpha)]) == {(ONE, alpha): None}
     await _send(container, _keyed(alpha, "1", "a"))
     async with container.db.transaction() as s:
-        states = await activity.keyed_work_states_in(s, [(ONE, alpha)])
-    assert states == {(ONE, alpha): WorkState.RUNNING}
-    assert await _keyed_sessions(container, "1") == {}
-    await drain(container)
-    async with container.db.transaction() as s:
-        states = await activity.keyed_work_states_in(s, [(ONE, alpha)])
-    assert states == {(ONE, alpha): WorkState.IDLE}
+        assert await activity.keyed_work_states_in(s, [(ONE, alpha)]) == {(ONE, alpha): WorkState.RUNNING}
 
 
 def test_every_origin_has_its_rules():
@@ -131,7 +98,6 @@ async def test_senders_of_different_kinds_with_the_same_id_have_their_own_sessio
         await _send(
             container, SenderMail(sender=sender, content="x", session=SessionKey(agent_id=alpha, title="t"))
         )
-    await deliver(container)
     async with container.db.transaction() as s:
         found = await keyed_sessions_among(s, [issue, trigger, TriggerOrigin(trigger_id=7)])
     assert found[issue][alpha].id != found[trigger][alpha].id

@@ -12,7 +12,7 @@ from pydantic_ai.messages import UserPromptPart
 
 from muliao.agents.api import AgentPatch, StoredKind
 from muliao.errors import InvalidInput, NotFound
-from muliao.sessions.api import Origin, SessionActivity
+from muliao.sessions.api import Origin, SenderInbox, SessionActivity
 from muliao.sessions.mailbox import queued_in
 from muliao.triggers.faults import Faults, FaultSource
 from muliao.triggers.service import EVENT_MAX_BYTES
@@ -26,8 +26,8 @@ def _runner(container, **kw) -> StreamRunner:
         container.triggers,
         SessionActivity(container.queue),
         container.commands,
-        container.messaging,
-        Faults(container.messaging, ZoneInfo("UTC")),
+        container.notifications.notify_in,
+        Faults(SenderInbox(container.queue), container.notifications.notify_in, ZoneInfo("UTC")),
         kw.pop("max_bytes", EVENT_MAX_BYTES),
         backoff=kw.pop("backoff", lambda _n: 0.05),
         stable_seconds=kw.pop("stable_seconds", 60.0),
@@ -619,7 +619,7 @@ async def test_a_batch_whose_firing_failed_unexpectedly_is_not_fired_again(
     async def flaky(trigger_id, payload=None):  # noqa: ANN001, ANN202
         payloads.append(payload)
         if len(payloads) == 1:
-            raise RuntimeError("run_now failed")
+            raise RuntimeError("fire failed")
         await real(trigger_id, payload)
 
     monkeypatch.setattr(container.triggers, "fire_activated", flaky)

@@ -41,9 +41,8 @@ import anyio
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from muliao.errors import InvalidInput, NotFound
-from muliao.notifications.events import Notify
+from muliao.notifications.events import Notify, NotifyIn
 from muliao.platform.db import Database, utcnow
-from muliao.platform.messaging import Messaging
 from muliao.platform.output import CHUNK, record_output, tail
 from muliao.platform.shell import DRAIN_SECONDS, kill_group, redact, wait_exit_code
 from muliao.platform.tasks import Clock
@@ -206,7 +205,7 @@ class StreamRunner:
         triggers: TriggerService,
         activity: SessionActivity,
         commands: AgentCommands,
-        messaging: Messaging,
+        notify: NotifyIn,
         faults: Faults,
         max_bytes: int,
         clock: Clock = utcnow,
@@ -218,7 +217,7 @@ class StreamRunner:
         self._triggers = triggers
         self._activity = activity
         self._commands = commands
-        self._messaging = messaging
+        self._notify = notify
         self._faults = faults
         self._max_bytes = max_bytes
         self._clock = clock
@@ -412,7 +411,7 @@ class StreamRunner:
                 blocking = previous.session_id
                 if previous.state == WorkState.WAITING and blocking is not None and blocking not in notified:
                     notified[:] = [blocking]
-                    self._messaging.send_in(s, self._waiting_notice(trigger, queued, blocking))
+                    await self._notify(s, self._waiting_notice(trigger, queued, blocking))
             await anyio.sleep(self._busy_poll_seconds)
 
     @staticmethod

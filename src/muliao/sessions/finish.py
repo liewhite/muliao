@@ -73,10 +73,18 @@ class RunFinisher:
 
         async def finish(s: AsyncSession) -> None:
             session, agent = await load_session(s, state.session.id)
+            handled = []
             if state.messages:
                 session.updated_at = utcnow()
                 handled = [*await consumed_by_in(s, session.id, state.run_id), *state.adopted]
-                self._messaging.publish_in(
+            if not end.stopped and not end.paused and await self._work_done(s, session.id):
+                await settle_finished_in(
+                    s, self._queue, session, end.answer, shared_attachments(state.messages)
+                )
+            await wake_in(s, self._queue, session)
+            # 最后发布：订阅者（推送、issue 的表态）看到的是结清与唤醒之后的状态
+            if state.messages:
+                await self._messaging.publish_in(
                     s,
                     RunEndedEvent(
                         session_id=session.id,
@@ -91,10 +99,5 @@ class RunFinisher:
                         awaited=any(m.awaited for m in handled),
                     ),
                 )
-            if not end.stopped and not end.paused and await self._work_done(s, session.id):
-                await settle_finished_in(
-                    s, self._queue, session, end.answer, shared_attachments(state.messages)
-                )
-            await wake_in(s, self._queue, session)
 
         return finish

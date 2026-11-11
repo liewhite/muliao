@@ -132,7 +132,7 @@ class Mail(Base):
     delegation_id: Mapped[int | None] = mapped_column(
         ForeignKey("thread_calls.id", ondelete="SET NULL", name="fk_mail_delegation_id")
     )
-    # 幂等键：带同一个键的投信只投一次（命令按键去重，docs/architecture.md 3.4）
+    # 幂等键：带同一个键的投信只投一次（交回结局按占用者去重，sessions.work.deliver_in）
     dedupe_key: Mapped[str | None] = mapped_column(String(200))
     state: Mapped[MailState] = mapped_column(StrEnumType(MailState), default=MailState.QUEUED)
     # 交给了哪次运行（只经 sessions.mailbox.give_in / consume_in 写）：投递运行时信箱里已有的、

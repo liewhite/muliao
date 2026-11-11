@@ -1,7 +1,5 @@
-"""全部领域的表：Alembic 与迁移测试从这里拿到完整的 metadata（各领域的表定义在各自的 tables 模块里）；表属于哪个
-领域也由这里推导（表定义所在的包），据此查一个事务只写一个领域。"""
+"""全部领域的表：Alembic 与迁移测试从这里拿到完整的 metadata（各领域的表定义在各自的 tables 模块里）。"""
 
-from functools import cache
 from typing import Literal
 
 from pydantic import BaseModel
@@ -12,19 +10,10 @@ from muliao.history import tables as history  # noqa: F401
 from muliao.issues import tables as issues  # noqa: F401
 from muliao.notifications import tables as notifications  # noqa: F401
 from muliao.platform import tables as platform  # noqa: F401
-from muliao.platform.db import Base  # noqa: E402  先导入全部表定义，映射才完整
 from muliao.sessions import tables as sessions  # noqa: F401
 from muliao.triggers import tables as triggers  # noqa: F401
 from muliao.usage import tables as usage  # noqa: F401
 from muliao.workspace import tables as workspace  # noqa: F401
-
-# 平台的表（任务队列）是每个领域的 outbox，可以和任何一个领域的表在同一个事务里写
-_SHARED = "platform"
-
-
-@cache
-def _domains() -> dict[str, str]:
-    return {m.local_table.name: m.class_.__module__.split(".")[1] for m in Base.registry.mappers}
 
 
 class ChangedEvent(BaseModel):
@@ -33,18 +22,3 @@ class ChangedEvent(BaseModel):
     推送通知上的操作都一样。"""
 
     type: Literal["changed"] = "changed"
-
-
-def single_domain_writes(tables: frozenset[str]) -> None:
-    """一个写事务只写一个领域的表（加上平台的任务表）：领域之间只经命令与事件通信，强一致只在一个领域内部
-    （docs/architecture.md 2.2、2.3）。"""
-    domains = _domains()
-    unknown = sorted(tables - domains.keys())
-    if unknown:
-        raise RuntimeError(f"transaction wrote tables no domain owns: {unknown}")
-    touched = {domains[t] for t in tables} - {_SHARED}
-    if len(touched) > 1:
-        raise RuntimeError(
-            f"a transaction wrote tables of several domains {sorted(touched)}: {sorted(tables)}; "
-            "domains talk through commands and events, each in its own transaction"
-        )
