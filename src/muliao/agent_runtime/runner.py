@@ -107,10 +107,11 @@ class _Meter:
 class StepHooks:
     """逐步运行（AgentRuntime.run_steps）时消费者在每一步的两个点上介入（sessions.consumer）。
 
-    运行新增的每条消息（含每次请求）恰好经 took 交出一次，交出之后归消费者保存（「一次运行新产生了哪些消息」只由 runner
-    判定，docs/architecture.md 2.4 第 1 行）：每次请求之前交出这时新增的与这次请求、再回调 before_request，每次回复之后
-    交出这时新增的，驱动以任何方式结束（跑完、停在挂起的调用上、失败、被用户停止而取消）时交出其余的。took 是同步的，
-    交出与运行记下「交出到哪」之间没有挂起点，被取消时不会有消息两边都不认。交进来的历史（run_steps 的 history）已经
+    运行新增的每条消息恰好交出一次，交出之后归消费者保存（「一次运行新产生了哪些消息」只由 runner 判定，
+    docs/architecture.md 2.4 第 1 行）：每次请求之前交出这时新增的（took）、再交出要发出的这次请求（took_request，第一次
+    是带着 prompt 的那条）、再回调 before_request，每次回复之后交出这时新增的，驱动以任何方式结束（跑完、停在挂起的
+    调用上、失败、被用户停止而取消）时交出其余的（其中可能有 pydantic-ai 补上的工具结果请求，不带 prompt，走 took）。两个
+    交出回调都是同步的，与运行记下「交出到哪」之间没有挂起点，被取消时不会有消息两边都不认。交进来的历史（run_steps 的 history）已经
     保存，不再交出；从末尾那条请求续跑时重发的就是它，同样不交出、不回调 before_request。"""
 
     # 运行开始、第一步之前。notices：工具组连接时发现、要并进这次运行上下文的问题（RunScope.notices，见
@@ -118,6 +119,8 @@ class StepHooks:
     started: Callable[[Sequence[str]], Awaitable[None]]
     # 运行新增、交给消费者保存的消息
     took: Callable[[list[ModelMessage]], None]
+    # 要发出的这次请求（交给消费者保存）：只有它带着这次驱动的 prompt（第一次）、上一步的工具结果
+    took_request: Callable[[ModelRequest], None]
     # 请求模型之前：request 已经交出、还没发出，可以往里追加内容（新到的信件），并保存已交出的消息
     before_request: Callable[[ModelRequest], Awaitable[None]]
     # 模型回复之后（回复已经交出），工具执行之前：保存已交出的消息
@@ -401,7 +404,7 @@ async def _step_through(
                 if resend:
                     resend = False
                 else:
-                    hooks.took([request])
+                    hooks.took_request(request)
                     await hooks.before_request(request)
                 async with node.stream(run.ctx) as stream:
                     await _forward_events(stream, hooks, resumed)

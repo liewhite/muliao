@@ -168,12 +168,14 @@ class Resend:
 class Paused:
     """等回答：停在挂起的调用上（pending，按出现顺序）。answers 是信箱里对它们的回答（answer_mail 是带着这些回答的
     信件），ready 是现在能不能继续：用户发了新消息（跳过还没回答的），或挂起的调用都有了回答；否则等着，事件留在
-    信箱里等它们一起交给模型。"""
+    信箱里等它们一起交给模型。replays 是同一条回复里没出结果、不挂起、能原样重新执行的调用（还没交出去的 ask_agent）：
+    继续时由 pydantic-ai 执行，停止时补「已停止」。"""
 
     pending: dict[str, PendingCall]
     answers: dict[str, CallResult]
     answer_mail: list[Mail]
     ready: bool
+    replays: list[ToolCallPart]
 
 
 @dataclass(frozen=True)
@@ -209,23 +211,24 @@ def position(history: Sequence[ModelMessage], handed: HandedOut, queued: Sequenc
         else:
             others.append(c)
     last = history[-1] if history else None
-    replays = isinstance(last, ModelResponse) and all(_replayable(c, handed) for c in others)
-    after: Resend | Paused | None = None
+    # 只要有一个不能重放，整步都补「被中断」（Interrupted）；全都能重放、历史又停在这条回复上时原样重新执行
+    replays = (
+        others if isinstance(last, ModelResponse) and all(_replayable(c, handed) for c in others) else []
+    )
+    interrupted = [] if replays else others
+    waiting: Paused | None = None
     if pending:
         answer_mail = [m for m in queued if is_on_time(m, pending)]
         answers = {k: call_result(v) for m in answer_mail for k, v in m.answers.items()}
         ready = any(m.kind == MailKind.MESSAGE for m in queued) or set(pending) <= set(answers)
-        after = Paused(pending, answers, answer_mail, ready)
-    elif others:
-        after = Resend(others if replays else [])
-    elif isinstance(last, ModelRequest) and not is_stopped(last):
-        after = Resend([])
-    if others and not replays:
-        if after is None:
-            raise RuntimeError(f"interrupted calls without a way to go on: {others}")
-        return Interrupted(others, after)
-    if after is not None:
-        return after
+        waiting = Paused(pending, answers, answer_mail, ready, replays)
+    if interrupted:
+        # 补完之后停在同一条回复里的挂起调用上，或停在补出来的请求上
+        return Interrupted(interrupted, waiting or Resend([]))
+    if waiting is not None:
+        return waiting
+    if replays or (isinstance(last, ModelRequest) and not is_stopped(last)):
+        return Resend(replays)
     return Fresh() if queued else Idle()
 
 
@@ -273,7 +276,7 @@ def closing_on_stop(at: Position) -> StopClosing:
             return StopClosing([*calls, *rest.stopped], rest.answered, rest.used)
         case Resend(replays=replays):
             return StopClosing(list(replays), [], [])
-        case Paused(pending=pending, answers=answers, answer_mail=answer_mail):
+        case Paused(pending=pending, answers=answers, answer_mail=answer_mail, replays=replays):
             kept = {k: p for k, p in pending.items() if p.kind.kept_open_on_stop}
             # 回答怎么变成调用的结果只在 deferred_results 一处定
             results = deferred_results({k: p for k, p in kept.items() if k in answers}, answers)
@@ -284,7 +287,7 @@ def closing_on_stop(at: Position) -> StopClosing:
                         f"call {call_id} of {kept[call_id].call.tool_name}: a ToolReturn cannot be saved on stop"
                     )
             return StopClosing(
-                stopped=[p.call for k, p in pending.items() if k not in kept],
+                stopped=[*replays, *(p.call for k, p in pending.items() if k not in kept)],
                 answered=[(kept[k].call, v) for k, v in results.items()],
                 used=[m for m in answer_mail if set(m.answers) & set(results)],
             )

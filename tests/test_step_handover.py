@@ -19,7 +19,7 @@ from tests.scripted import scripted
 
 
 class _Recorder:
-    """记下交出的消息；每次 before_request 交来的请求必须已经是最后交出的那一条。"""
+    """记下交出的消息（took 与 took_request）；每次 before_request 交来的请求必须已经是最后交出的那一条。"""
 
     def __init__(self) -> None:
         self.saved: list[ModelMessage] = []
@@ -29,9 +29,12 @@ class _Recorder:
         async def started(notices: object) -> None:
             return None
 
+        def took_request(request: ModelRequest) -> None:
+            self.saved.append(request)
+            self.requests += 1
+
         async def before_request(request: ModelRequest) -> None:
             assert self.saved and self.saved[-1] is request
-            self.requests += 1
 
         async def after_response() -> None:
             return None
@@ -39,6 +42,7 @@ class _Recorder:
         return StepHooks(
             started=started,
             took=self.saved.extend,
+            took_request=took_request,
             before_request=before_request,
             after_response=after_response,
             on_text=lambda kind, text: None,

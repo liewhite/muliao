@@ -472,3 +472,34 @@ async def test_writing_a_skill_md_whose_approval_names_no_script_is_refused(cont
     )
     assert "create the script first" in outputs[0]
     assert not md.exists()
+
+
+async def test_stopping_while_an_approved_script_runs_discards_the_message_sent_with_the_decision(
+    client, container, make_agent, models, monkeypatch
+):
+    """批准时一起发了消息，运行恢复后先执行批准的脚本（pydantic-ai 从挂起的调用续跑，还没发出带这条消息的请求）；
+    这时停止：消息没交给模型，随停止被丢弃（划掉显示），不会被记为已处理却不在历史里（#629 审查）。"""
+    import asyncio
+    import sys
+
+    from tests.test_flow import mail_of
+
+    await login(client)
+    monkeypatch.setattr(sys.modules[__name__], "SCRIPT", '#!/bin/sh\necho "$*" >> ran.txt\nsleep 5\n')
+    session_id, gate, ran = await _gated(container, make_agent, models)
+    resp = await client.post(
+        f"/api/sessions/{session_id}/messages",
+        json={"prompt": "顺便看下日志", "approvals": {"c1": "approve"}},
+    )
+    assert resp.status_code == 202
+    worker = asyncio.create_task(drain(container, limit_seconds=20))
+    for _ in range(250):
+        if ran.exists():
+            break
+        await asyncio.sleep(0.02)
+    assert ran.exists()
+    assert (await client.post(f"/api/sessions/{session_id}/stop")).status_code == 202
+    await worker
+
+    [message] = [m for m in await mail_of(container) if m.content == "顺便看下日志"]
+    assert message.state.value == "discarded"

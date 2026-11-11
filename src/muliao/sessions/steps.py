@@ -101,7 +101,8 @@ class Steps:
         """这次驱动的回调。run_context() 给出一段运行上下文（当前时间取调用时），挂在这次运行新增的第一条请求上。"""
         return StepHooks(
             started=lambda notices: self._started(state, notices),
-            took=lambda new: self._took(state, new),
+            took=lambda new: state.unsaved.extend(new),
+            took_request=lambda request: self._took_request(state, request),
             before_request=lambda request: self._before_request(state, request, run_context),
             after_response=lambda: self._save(state),
             on_text=lambda kind, text: self._live.publish_delta(
@@ -131,12 +132,12 @@ class Steps:
         """开头取走的信件与交给模型的内容（sessions.consumer 交出之后）：第一条请求交出时随它进入 taken（_took）。"""
         state.opening = Opening(list(taken), opening)
 
-    def _took(self, state: RunState, new: list[ModelMessage]) -> None:
-        """运行交出的消息（同步，与运行记下「交出到哪」之间没有挂起点）。第一条请求里是开头的内容：在它上面标出事件（pydantic-ai
-        把内容放进用户消息，下标从 0 起），开头的信件随它进入 taken。"""
-        state.unsaved.extend(new)
-        request = next((m for m in new if isinstance(m, ModelRequest)), None)
-        if state.opening is not None and request is not None:
+    def _took_request(self, state: RunState, request: ModelRequest) -> None:
+        """运行交出要发出的请求（同步，与运行记下「交出到哪」之间没有挂起点）。第一条带着开头的内容：在它上面标出事件
+        （pydantic-ai 把内容放进用户消息，下标从 0 起），开头的信件随它进入 taken。经 took 交出的请求（如执行工具时被打断，
+        pydantic-ai 补上的工具结果）不带开头的内容，不在此列。"""
+        state.unsaved.append(request)
+        if state.opening is not None:
             mark_events(request, 0, state.opening.content)
             state.taken += state.opening.mail
             state.opening = None
@@ -212,9 +213,9 @@ class Steps:
                 await record_approvals_in(s, state.session.id, requested)
 
     async def _save(self, state: RunState) -> None:
-        """一步：在自己的事务里保存已交出的（save_handed_in）。提交之后到清空 unsaved 之间没有挂起点，被停止时不会
-        把已提交的再存一遍：原生取消只在事务之外发出（sessions.stopping），提交后只有登记的 when_committed 动作会
-        await（platform.db），而 save_in 不登记——给它加上了就要在这里重新考虑重复保存。"""
+        """一步：在自己的事务里保存已交出的（save_handed_in）。unsaved/taken 在同一个事务体里、提交之前清空：原生取消
+        只在没有事务时发出（sessions.stopping），不会落在两者之间；提交失败时整次运行失败，state 不再用。提交后只有登记的
+        when_committed 动作会 await（platform.db），而 save_in 不登记——给它加上了就要在这里重新考虑重复保存。"""
         async with self._db.transaction() as s:
             await self.save_handed_in(s, state)
 

@@ -455,6 +455,10 @@ def test_stopping_and_resuming_read_the_kind_the_call_is_recognised_as():
     assert closing.stopped == [gated]
     assert [(c.tool_call_id, v["answered"]) for c, v in closing.answered] == [("q1", True)]
     assert closing.used == [mixed]
+    # 和挂起的提问在同一条回复里、还没交出去的 ask_agent：继续时重新执行，停止时补「已停止」
+    at = position([ModelResponse(parts=[q1, ask])], handed, [])
+    assert isinstance(at, Paused) and at.replays == [ask] and list(at.pending) == ["q1"]
+    assert closing_on_stop(at).stopped == [ask]
     # 还没交出去的 ask_agent 可以重放，等批准的调用不行
     unsent = [ModelResponse(parts=[ask])]
     assert position(unsent, handed, []) == Resend([ask])
