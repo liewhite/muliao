@@ -360,6 +360,91 @@ async def test_a_thread_run_failing_before_its_first_step_with_a_failing_hook_is
     assert len(events) == 1 and "boom" in events[0].content
 
 
+async def test_a_failing_run_failed_subscriber_leaves_the_settlement_to_reconciliation(
+    container, make_agent, models
+):
+    """RunFailed 的订阅者在失败收尾的事务里执行：它出错时收尾整个回滚，失败照记（不带收尾），委派的结清由信箱对账补做。"""
+    from muliao.sessions.events import RunFailed
+    from muliao.sessions.settlement import reconcile_failures
+
+    lead = (await make_agent("lead", model="l")).id
+    reviewer = await container.agents.get((await make_agent("reviewer", model="v")).id)
+    models.models["l"] = scripted(Recorder())
+
+    def refuse(_messages, _info):  # noqa: ANN001, ANN202  契约外的失败：不重试
+        raise ModelHTTPError(status_code=400, model_name="v", body="bad request")
+
+    models.models["v"] = scripted(refuse)
+    parent = await start(container, lead, "go")
+    await drain(container)
+
+    async def broken(_s, _event):  # noqa: ANN001, ANN202
+        raise RuntimeError("subscriber broke")
+
+    container.messaging.subscribe(RunFailed, broken)
+    async with container.db.transaction() as s:
+        child = await container.delegations.dispatch(
+            s,
+            parent_id=parent.id,
+            agent=reviewer,
+            thread="review",
+            prompt="look",
+            call_id="k",
+            suspends=False,
+            awaited=False,
+        )
+    await drain(container)
+
+    async with container.db.transaction() as s:
+        [run] = (
+            await s.scalars(select(Task).where(Task.session_id == child.id, Task.kind == RUN_TASK))
+        ).all()
+    assert run.status == TaskStatus.FAILED
+    assert [m for m in await _mail_of(container, parent.id) if m.source == f"thread:{child.id}"] == []
+
+    assert await reconcile_failures(container.db, container.queue) == [child.id]
+    events = [m for m in await _mail_of(container, parent.id) if m.source == f"thread:{child.id}"]
+    assert len(events) == 1
+
+
+async def test_stopping_a_thread_is_a_task_that_survives_a_restart(container, make_agent, models):
+    """停下发起方时给 thread 排的停止任务与清掉占用同一事务提交：重启后照样恢复执行，thread 排着的运行不再执行。"""
+    from muliao.sessions.lanes import STOP_THREAD_TASK
+    from tests.conftest import restart
+    from tests.test_flow import side_tasks
+
+    lead = (await make_agent("lead", model="l")).id
+    reviewer = await container.agents.get((await make_agent("reviewer", model="v")).id)
+    models.models["l"] = scripted(Recorder())
+    parent = await start(container, lead, "go")
+    await drain(container)
+    async with container.db.transaction() as s:
+        child = await container.delegations.dispatch(
+            s,
+            parent_id=parent.id,
+            agent=reviewer,
+            thread="review",
+            prompt="look",
+            call_id="k",
+            suspends=False,
+            awaited=False,
+        )
+    await container.stopper(parent.id)
+    async with container.db.transaction() as s:
+        [stop] = (await s.scalars(select(Task).where(Task.kind == STOP_THREAD_TASK))).all()
+    assert (stop.session_id, stop.status) == (child.id, TaskStatus.PENDING)
+
+    await restart(container)
+    await side_tasks(container)
+    async with container.db.transaction() as s:
+        tasks = (await s.scalars(select(Task).where(Task.session_id == child.id))).all()
+    assert {(t.kind, t.status) for t in tasks} == {
+        (RUN_TASK, TaskStatus.DONE),
+        (STOP_THREAD_TASK, TaskStatus.DONE),
+    }
+    assert not [m for m in await _mail_of(container, child.id) if m.state.value == "queued"]
+
+
 async def _mail_of(container, session_id: str) -> list[Mail]:
     async with container.db.transaction() as s:
         return list((await s.scalars(select(Mail).where(Mail.session_id == session_id))).all())

@@ -418,7 +418,7 @@ class JobRunner:
         )
 
     async def check(self) -> int:
-        """给到了自己检查间隔（Job.check_seconds）的运行中任务各发一条检查命令（会话领域投检查信件；它上一封还在
+        """给到了自己检查间隔（Job.check_seconds）的运行中任务各投一封检查信件（会话领域投；它上一封还在
         信箱里排着时不投，不堆积）。返回发出的命令数。
 
         每个节拍（platform.checks.TICK_SECONDS）都先对账（一次短查询，有意不另设节奏：孤儿越早告诉 agent 越好）：

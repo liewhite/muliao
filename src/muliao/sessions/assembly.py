@@ -193,5 +193,5 @@ class SessionDomain(Parts):
         )
 
     def loops(self) -> Sequence[tuple[str, Loop]]:
-        """信箱对账：收敛投递链上漏掉的信（sessions.reconcile）。"""
+        """信箱对账：收敛漏掉的唤醒与最终失败后没做完的结清（sessions.reconcile）。"""
         return (("mail", self.mail.run_forever),)
