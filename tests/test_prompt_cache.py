@@ -6,6 +6,7 @@ import httpx2
 import pytest
 from pydantic import SecretStr, ValidationError
 from pydantic_ai import Agent as PaiAgent
+from pydantic_ai.messages import ModelMessage
 from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.settings import ModelSettings
 
@@ -25,9 +26,15 @@ _REPLY = {
 
 
 async def _request_body(
-    *, prompt_cache: bool | None, model: str = "m", settings: ModelSettings | None = None
+    *,
+    prompt_cache: bool | None,
+    model: str = "m",
+    settings: ModelSettings | None = None,
+    thinking: llm.Thinking | None = None,
+    history: list[ModelMessage] | None = None,
 ) -> dict:
-    """用真实的 Anthropic SDK 与模型实现发一次请求（settings 是运行级 model settings），返回发到线上的请求体。"""
+    """用真实的 Anthropic SDK 与模型实现发一次请求，返回发到线上的请求体。settings 是运行级 model settings；给了
+    thinking 就再合并上运行时为这个思考档位算出的设置（llm.model_settings）；history 是接在前面的会话历史。"""
     sent: list[dict] = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
@@ -45,14 +52,17 @@ async def _request_body(
         registry._providers["a"] = AnthropicProvider(  # noqa: SLF001
             api_key="k", base_url="https://api.example", http_client=http
         )
-        agent = PaiAgent(model=registry.resolve(f"a:{model}"), instructions="Be helpful.")
+        resolved = registry.resolve(f"a:{model}")
+        if thinking is not None:
+            settings = {**(settings or {}), **(llm.model_settings(resolved, thinking) or {})}  # type: ignore[assignment]
+        agent = PaiAgent(model=resolved, instructions="Be helpful.")
 
         @agent.tool_plain
         def look(query: str) -> str:
             """Look something up."""
             return query
 
-        await agent.run("hi", model_settings=settings)
+        await agent.run("hi", model_settings=settings, message_history=history)
     assert len(sent) == 1
     return sent[0]
 

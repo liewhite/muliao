@@ -241,12 +241,12 @@ class AgentRuntime:
         return outcome_of(result)
 
     def _model(self, model: str, thinking: Thinking) -> tuple[Model, ModelSettings | None]:
-        """模型与这次运行的 model settings（思考档位）。档位会被模型悄悄忽略时报 InvalidInput（llm.check_thinking）：
+        """模型与这次运行的 model settings（思考档位、要回思考摘要）。档位会被模型悄悄忽略时报 InvalidInput（llm.check_thinking）：
         agent.toml 里写了不能运行的模型或档位、配置删了 provider、依赖升级后模型 profile 变了，都在这里让运行当场失败
         （读资源树时已记成问题报给它）；每次都查而不分入口，成本只是读 profile。"""
         resolved = self._resolve_model(model)
         check_thinking(model, resolved, thinking)
-        return resolved, model_settings(thinking)
+        return resolved, model_settings(resolved, thinking)
 
     async def summarize(self, config: AgentDir, session_id: str, instructions: str, prompt: str) -> str:
         """用这份配置的模型做一次无工具的文本生成（压缩 session_id 这个会话的上下文）。不转发事件到前端。"""

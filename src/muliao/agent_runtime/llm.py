@@ -4,7 +4,7 @@
 import logging
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import anthropic
 import httpx2
@@ -12,11 +12,13 @@ import openai
 from google.genai import errors as google_errors
 from google.genai import types as google_types
 from pydantic_ai.concurrency import AbstractConcurrencyLimiter, ConcurrencyLimiter
-from pydantic_ai.models import Model
+from pydantic_ai.messages import ModelMessage, ModelResponse, ThinkingPart
+from pydantic_ai.models import Model, ModelRequestParameters
 from pydantic_ai.models.anthropic import AnthropicModel, AnthropicModelSettings
 from pydantic_ai.models.concurrency import ConcurrencyLimitedModel
 from pydantic_ai.models.google import GoogleModel
-from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
+from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel, OpenAIResponsesModelSettings
+from pydantic_ai.profiles import ModelProfile
 from pydantic_ai.providers import Provider
 from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.google import GoogleProvider
@@ -45,14 +47,59 @@ ANTHROPIC_CACHE_SETTINGS = AnthropicModelSettings(
 )
 
 
-def model_settings(thinking: Thinking) -> ModelSettings | None:
-    """agent 的思考档位对应的运行级 model settings。"default" 什么都不传；其余原样交给 pydantic_ai 统一的
-    ModelSettings.thinking（False 或 effort 档位），由它换算成各 provider 的参数（Anthropic 的 adaptive + effort、
-    OpenAI 兼容接口的 reasoning_effort 等），服务端不接受时如实报错。pydantic_ai 把运行级设置合并在模型自带的设置
-    （ANTHROPIC_CACHE_SETTINGS）之上，两者的键不重叠，互不覆盖。用之前先 check_thinking。"""
-    if thinking == "default":
-        return None
-    return ModelSettings(thinking=False if thinking == "off" else thinking)
+def model_settings(model: Model, thinking: Thinking) -> ModelSettings | None:
+    """agent 的思考档位在这个模型上对应的运行级 model settings，两件事：
+    - 档位："default" 不传；其余原样交给 pydantic_ai 统一的 ModelSettings.thinking（False 或 effort 档位），由它换算成
+      各 provider 的参数（Anthropic 的 adaptive + effort、OpenAI 兼容接口的 reasoning_effort 等），服务端不接受时如实报错。
+    - 要回思考的摘要（_thinking_shown）：会话页展示的思考就是它，不要的话提供方只回加密的思考块。"off" 不带。
+    pydantic_ai 把运行级设置合并在模型自带的设置（ANTHROPIC_CACHE_SETTINGS）之上，键不重叠，互不覆盖。用之前先
+    check_thinking。"""
+    if thinking == "off":
+        return ModelSettings(thinking=False)
+    level = ModelSettings() if thinking == "default" else ModelSettings(thinking=thinking)
+    return {**level, **_thinking_shown(model.profile, thinking)} or None  # type: ignore[return-value]
+
+
+def _thinking_shown(profile: ModelProfile, thinking: Thinking) -> ModelSettings:
+    """让提供方在思考块里带上可读的摘要所需的设置（#603）；没有这种开关、或这次请求不思考的模型为空。原始的思考过程
+    哪家都不给，给的是摘要；计费不变（按完整的思考算）。按 pydantic_ai 推断的 profile 判断，与 check_thinking 同一个依据。
+    - Anthropic（https://platform.claude.com/docs/en/build-with-claude/thinking 「Controlling thinking display」）：
+      Claude Opus 4.7 起的模型 display 默认是 omitted（正文为空、只有签名），要 summarized 才回摘要。display 只能写在
+      thinking 对象里，所以连 type 一起给：adaptive，只在 pydantic_ai 自己也会发 adaptive（给了档位）或不传时服务端
+      本来就按 adaptive 思考（thinking_enabled_by_default）的模型上给，不改变思考与否；effort 仍由统一的档位换算。
+      只支持 budget 的旧模型默认就回摘要，默认不思考的模型在 "default" 下不去打开它。
+    - OpenAI Responses 的推理模型：reasoning.summary 不给就没有摘要；Chat Completions 接口没有这个设置（不读这个键）。
+    - Google：给了档位时 pydantic_ai 已带 include_thoughts。"""
+    if profile.get("anthropic_supports_adaptive_thinking", False):
+        if thinking == "default" and not profile.get("thinking_enabled_by_default", False):
+            return ModelSettings()
+        return AnthropicModelSettings(anthropic_thinking={"type": "adaptive", "display": "summarized"})
+    if profile.get("openai_supports_reasoning", False):
+        return OpenAIResponsesModelSettings(openai_reasoning_summary="auto")
+    return ModelSettings()
+
+
+class _AnthropicModel(AnthropicModel):
+    """发给 Anthropic 的历史里不带它接不回去的思考：没有签名的（生成到一半被停止，sessions 把这半截原样存了库）和别家
+    模型的（会话中途换了模型）。思考块只能连签名原样传回；这两种 pydantic_ai 会改成一段 `<thinking>…</thinking>` 的
+    助手文字发出去，而 claude-fable-5-2 把历史里出现的这种文字当成套取推理过程，整次请求拒答（refusal_category
+    reasoning_extraction，11-11 实测 4/4；opus-5-5、sonnet-5-5 不拒）——那个会话此后每次请求都带着它、每次都被拒。
+    只改发出去的这一份：库里的历史与会话页照常保留这段思考。"""
+
+    def prepare_messages(
+        self, messages: list[ModelMessage], model_request_parameters: ModelRequestParameters | None = None
+    ) -> list[ModelMessage]:
+        return super().prepare_messages([self._replayable(m) for m in messages], model_request_parameters)
+
+    def _replayable(self, message: ModelMessage) -> ModelMessage:
+        if not isinstance(message, ModelResponse):
+            return message
+        kept = [
+            p
+            for p in message.parts
+            if not isinstance(p, ThinkingPart) or (p.provider_name == self.system and p.signature)
+        ]
+        return message if len(kept) == len(message.parts) else replace(message, parts=kept)
 
 
 def check_thinking(name: str, model: Model, thinking: Thinking) -> None:
@@ -126,7 +173,7 @@ KINDS: dict[ProviderType, ProviderKind] = {
     "anthropic": ProviderKind(
         official_base_url="https://api.anthropic.com",
         provider=lambda key, url: AnthropicProvider(api_key=key, base_url=url),
-        model=lambda name, provider, cfg: AnthropicModel(
+        model=lambda name, provider, cfg: _AnthropicModel(
             name, provider=provider, settings=ANTHROPIC_CACHE_SETTINGS if cfg.prompt_cache else None
         ),
         model_names=_sdk_model_names,
