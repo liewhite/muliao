@@ -44,7 +44,6 @@ from muliao.sessions.transcript import (
     annotate_approvals,
     annotate_asks,
     annotate_threads,
-    checked_times,
     to_items,
 )
 from muliao.sessions.waits import Wait, waits_of_in
@@ -145,13 +144,11 @@ class SessionService:
         items = annotate_approvals(
             annotate_asks(
                 annotate_threads(
-                    checked_times(
-                        [
-                            item.model_copy(update={"message_id": message_id})
-                            for message_id, message, created_at in shown
-                            for item in to_items([message], self._renders, saved_at=created_at)
-                        ]
-                    ),
+                    [
+                        item.model_copy(update={"message_id": message_id})
+                        for message_id, message, created_at in shown
+                        for item in to_items([message], self._renders, saved_at=created_at)
+                    ],
                     call_threads,
                 ),
                 answerable=asks.answerable.keys(),

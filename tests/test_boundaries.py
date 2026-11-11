@@ -118,12 +118,6 @@ RUN_TYPES = {
 AGENTS_TABLES: dict[str, set[str]] = {
     # 目录（身份；配置只在资源目录的 agent.toml）
     "Agent": {"service", "active"},
-    # #498 之前存在库里的 AI 资源：没有代码再读，表留到 #503 删
-    "RoleRow": set(),
-    "AgentRulesRow": set(),
-    "Item": set(),
-    "ItemFile": set(),
-    "Revision": set(),
 }
 
 
@@ -349,14 +343,14 @@ async def test_a_transaction_writing_two_domains_tables_fails(container, make_ag
     import pytest
     from sqlalchemy import update
 
-    from muliao.agents.tables import Item
+    from muliao.agents.tables import Agent
     from muliao.notifications.tables import Notification
 
     await make_agent("alpha")
     with pytest.raises(RuntimeError, match="several domains"):
         async with container.db.transaction() as s:
             s.add(Notification(title="t", body="b", session_id=None))
-            await s.execute(update(Item).values(description="x"))
+            await s.execute(update(Agent).values(deleting_by=None))
 
 
 async def test_a_domain_and_the_task_table_may_be_written_together(container):

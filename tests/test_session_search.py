@@ -1,8 +1,5 @@
-"""会话按关键字搜索（#254）：消息的可搜索文字（sessions.history.searchable_text）与回填它的迁移。"""
+"""会话按关键字搜索（#254）：消息的可搜索文字（sessions.history.searchable_text）。"""
 
-import sqlite3
-
-from alembic import command
 from pydantic_ai.messages import (
     ImageUrl,
     ModelRequest,
@@ -14,12 +11,8 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from muliao.platform.db import _migration_engine, alembic_config, migrate
-from muliao.sessions.codec import dump_message
 from muliao.sessions.conventions import attach_run_context
 from muliao.sessions.history import searchable_text
-
-BEFORE_MESSAGE_TEXTS = "29411a27d5ec"
 
 
 def _messages():
@@ -57,31 +50,3 @@ def test_searchable_text_keeps_what_was_said_and_called_but_not_results_thoughts
         '{"path": "broken',
     ]
     assert searchable_text(results) == ""
-
-
-def test_message_texts_are_backfilled_like_new_messages_and_dropped_on_downgrade(tmp_path):
-    path = tmp_path / "m.db"
-    migrate(path)
-    with _migration_engine(path).begin() as connection:
-        command.downgrade(alembic_config(connection), BEFORE_MESSAGE_TEXTS)
-    messages = _messages()
-    with sqlite3.connect(path) as conn:
-        conn.execute(
-            "insert into sessions (id, agent_id, title, origin, kind, created_at, updated_at) "
-            "values ('s1', 'a1', 't', 'user', 'chat', '2026-01-01', '2026-01-01')"
-        )
-        for i, m in enumerate(messages, start=1):
-            conn.execute(
-                "insert into messages (id, session_id, task_id, payload, created_at) values (?, 's1', 1, ?, '2026-01-01')",
-                (i, dump_message(m)),
-            )
-    migrate(path)
-    with sqlite3.connect(path) as conn:
-        rows = dict(conn.execute("select message_id, text from message_texts"))
-    # 没有文字的消息（只有工具结果）没有这一行
-    assert rows == {1: searchable_text(messages[0]), 2: searchable_text(messages[1])}
-    with _migration_engine(path).begin() as connection:
-        command.downgrade(alembic_config(connection), BEFORE_MESSAGE_TEXTS)
-    with sqlite3.connect(path) as conn:
-        assert conn.execute("select name from sqlite_master where name = 'message_texts'").fetchall() == []
-        assert conn.execute("select count(*) from messages").fetchone() == (3,)

@@ -198,7 +198,7 @@ async def deletion_actor_in(s: AsyncSession, agent_id: str) -> str | None:
 
 
 async def remove_in(s: AsyncSession, agent_id: str) -> None:
-    """删除 agent 的行（它的资源目录已由删除流程删掉；#498 之前的旧表行随之级联删除）。"""
+    """删除 agent 的行（它的资源目录已由删除流程删掉）。"""
     await s.delete(await _row_in(s, agent_id))
 
 
@@ -288,8 +288,7 @@ class AgentService:
             try:
                 await asyncio.to_thread(_write_new_agent, directory, file, access)
                 async with self._db.transaction() as s:
-                    # description / model 是待 #503 删的旧镜像列（NOT NULL），只填空串：配置只在 agent.toml
-                    agent = Agent(id=agent_id, name=name, description="", model="")
+                    agent = Agent(id=agent_id, name=name)
                     s.add(agent)
                     await s.flush()
                     self.workspace(agent_id).mkdir(parents=True, exist_ok=True)

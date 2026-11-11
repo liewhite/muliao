@@ -202,25 +202,6 @@ def annotate_threads(items: list[Item], call_threads: Mapping[str, str]) -> list
     ]
 
 
-def checked_times(items: list[Item]) -> list[Item]:
-    """去掉不可信的开始时间：结果早于调用开始的。这是 10-20 之前的历史——那时一整轮在结束时才一次提交，回复那一行的
-    保存时间是这一轮结束的时间，不是工具开始执行的时间。"""
-    ends = {
-        i.tool_call_id: i.at
-        for i in items
-        if i.type in ("tool_result", "tool_error") and i.tool_call_id is not None and i.at is not None
-    }
-    return [
-        item.model_copy(update={"at": None})
-        if item.type == "tool_call"
-        and item.at is not None
-        and item.tool_call_id in ends
-        and ends[item.tool_call_id] < item.at
-        else item
-        for item in items
-    ]
-
-
 def _call_view(part: ToolCallPart, renders: ToolRenders) -> View | None:
     render = renders.get(part.tool_name)
     if render is None:

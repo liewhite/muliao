@@ -11,16 +11,12 @@ from muliao.platform.tables import agent_ref, session_ref
 
 
 class RunKind(StrEnum):
-    """哪一类运行用掉的 token（agent_runtime 的两个模型调用入口各对应一个，另有两个只在历史行里出现的值）。"""
+    """哪一类运行用掉的 token（agent_runtime 的两个模型调用入口各对应一个）。"""
 
     # 会话的一次运行（AgentRuntime.run_steps）
     RUN = "run"
     # 上下文压缩的一次总结（summarize）
     COMPACTION = "compaction"
-    # 已删除的每 N 步强制反思（#116）：不再产生，只为读出保留的历史账目行
-    REFLECTION = "reflection"
-    # 已删除的临时 agent（#183，改为委派给自己）：不再产生，只为读出保留的历史账目行
-    TEMP_AGENT = "temp_agent"
 
 
 class ModelUsage(Base):
