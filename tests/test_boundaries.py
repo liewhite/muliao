@@ -269,9 +269,11 @@ def test_issue_fields_change_only_inside_the_change_unit():
     fields = set(Issue.__table__.columns.keys())
     problems = []
     for path in sorted(SRC.rglob("*.py")):
-        if (
-            path.relative_to(SRC).as_posix() in ("issues/change.py", "issues/tables.py")
-            or "migrations" in path.parts
+        where = path.relative_to(SRC)
+        # 拿得到 Issue 行的：issues 包本身，与经 issues.tables 序列化它的 HTTP 层
+        if where.as_posix() in ("issues/change.py", "issues/tables.py") or (
+            where.parts[0] != "issues"
+            and not any(name.startswith("muliao.issues.tables") for _, name in _imports(path))
         ):
             continue
         for node in ast.walk(ast.parse(path.read_text())):
@@ -279,13 +281,14 @@ def test_issue_fields_change_only_inside_the_change_unit():
             if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
                 targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             problems += [
-                f"{path.relative_to(SRC)}:{node.lineno} sets .{t.attr}"
+                f"{where}:{node.lineno} sets .{t.attr}"
                 for t in targets
-                if isinstance(t, ast.Attribute) and t.attr in fields and path.parts[-2] == "issues"
+                if isinstance(t, ast.Attribute) and t.attr in fields
             ]
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-                if node.func.id in ("Issue", "IssueActivity"):
-                    problems.append(f"{path.relative_to(SRC)}:{node.lineno} constructs {node.func.id}")
+            if isinstance(node, ast.Call):
+                name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+                if name in ("Issue", "IssueActivity"):
+                    problems.append(f"{where}:{node.lineno} constructs {name}")
     assert not problems, "\n".join(problems)
 
 

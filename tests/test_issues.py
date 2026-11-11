@@ -12,16 +12,26 @@ from muliao.agents.api import USER
 from muliao.agents.events import AgentDeleting
 from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.issues.activity import (
+    HAPPENINGS,
+    Activity,
     Arrival,
     AssigneeChanged,
     Change,
     Commented,
     Created,
     DependencyChange,
+    DependencyFinished,
     DependsOnChanged,
+    DescriptionEdited,
     EventPosted,
     OwnerChanged,
+    PriorityChanged,
+    RunFailure,
     StatusChanged,
+    Stopped,
+    TitleChanged,
+    Unsettled,
+    stored,
 )
 from muliao.issues.api import SESSION_NOTE, ActivityKind, IssuePriority, IssueStatus, WorkState
 from muliao.issues.graph import cycle_through
@@ -39,6 +49,8 @@ from muliao.issues.rules import (
     recipient,
     stalled,
 )
+from muliao.issues.tables import IssueActivity
+from muliao.platform.db import utcnow
 from muliao.platform.messaging import Delivery
 from muliao.sessions.api import IssueOrigin, Origin, OriginNotes
 from muliao.sessions.tables import Mail, Session
@@ -311,6 +323,54 @@ def test_the_agent_that_handed_an_issue_to_the_user_is_the_last_assigner():
     assert handed_by("creator", ["a", None]) is None
     assert handed_by(None, []) is None
     assert handed_by("creator", [SYSTEM_ACTOR]) is None
+
+
+_STORED_SHAPES = [
+    (Created(), ("created", None, None)),
+    (Commented(body="hi"), ("comment", "hi", None)),
+    (DescriptionEdited(), ("description", None, None)),
+    (TitleChanged(change=Change(before="a", to="b")), ("title", None, {"from": "a", "to": "b"})),
+    (
+        StatusChanged(change=Change(before=BACKLOG, to=DONE)),
+        ("status", None, {"from": "backlog", "to": "done"}),
+    ),
+    (
+        PriorityChanged(change=Change(before=IssuePriority.NONE, to=IssuePriority.HIGH)),
+        ("priority", None, {"from": "none", "to": "high"}),
+    ),
+    (AssigneeChanged(change=Change(before="a", to=None)), ("assignee", None, {"from": "a", "to": None})),
+    (OwnerChanged(change=Change(before=None, to="b")), ("owner", None, {"from": None, "to": "b"})),
+    (
+        DependsOnChanged(change=Change(before=[1], to=[1, 2])),
+        ("depends_on", None, {"from": [1], "to": [1, 2]}),
+    ),
+    (
+        DependencyFinished(change=DependencyChange(issue=3, before="in_progress", to="done")),
+        ("dependency", None, {"issue": 3, "from": "in_progress", "to": "done"}),
+    ),
+    (RunFailure(body="boom"), ("run_failed", "boom", None)),
+    (Unsettled(), ("unsettled", None, None)),
+    (Stopped(change=Arrival(to="a")), ("stopped", None, {"from": None, "to": "a"})),
+    (
+        EventPosted(body="x", change=Arrival(to="trigger t")),
+        ("event", "x", {"from": None, "to": "trigger t"}),
+    ),
+]
+
+
+@pytest.mark.parametrize(("what", "row"), _STORED_SHAPES)
+def test_each_kind_of_activity_keeps_its_stored_shape(what, row):
+    """库里已有的行按这个形状存（kind、body、change JSON）：改了类型的字段名或别名，旧行就读不回来了。"""
+    assert stored(what) == row
+    kind, body, change = row
+    read = Activity.of(
+        IssueActivity(id=1, created_at=utcnow(), actor="a", kind=kind, body=body, change=change)
+    )
+    assert read.what == what
+
+
+def test_the_stored_shapes_cover_every_kind():
+    assert {type(what) for what, _ in _STORED_SHAPES} == set(HAPPENINGS)
 
 
 def test_what_a_change_brings_is_read_from_its_activities():

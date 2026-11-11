@@ -494,7 +494,7 @@ class IssueService:
                     assignee=assignee,
                     depends_on=depends_on,
                 )
-        if change.recorded:
+        if change.changed:
             log.info(
                 "issue updated", extra={"issue_id": issue_id, "actor": actor, "status": change.issue.status}
             )

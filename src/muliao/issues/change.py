@@ -5,7 +5,7 @@
 issue 行，期间只经单元改字段（`set_*` / `apply`）、记动态（`record`）；正常退出时统一结算：
 
 - 投递与通知：按构造时声明的 `Routing` —— `BY_RULES` 按 rules.recipient 判定投给谁（IssueDelivery），`Direct(agent)`
-  直接投给这个 agent（issue_stop 的收尾消息），`RECORD_ONLY` 只记时间线（运行失败、删除 agent 的清理）；
+  直接投给这个 agent（issue_stop 的收尾消息、请停滞的 agent 表态的 Unsettled），`RECORD_ONLY` 只记时间线（运行失败、删除 agent 的清理）；
 - 放行下游：这次的状态变更让 issue 进入 done / cancelled（rules.finishing）时，每个下游各开一个单元记一条
   DependencyFinished，按同一条规则投递——不再等别的上游时，这就是让它开工的那封信。
 
@@ -61,7 +61,8 @@ class ByRules:
 
 @dataclass(frozen=True)
 class Direct:
-    """直接投给这个 agent，不按 rules.recipient 判定（issue_stop 的收尾消息投给被停下的 agent，不论 issue 的新状态）。"""
+    """直接投给这个 agent，不按 rules.recipient 判定：issue_stop 的收尾消息投给被停下的 agent，不论 issue 的新状态；
+    运行结束后请停滞的 agent 表态（Unsettled），它记在那个 issue 会话名下，按「自己会话里的动作不投回」会被挡掉。"""
 
     agent: str
 
@@ -129,7 +130,12 @@ class IssueChange:
         self._issue = issue
         self.actor = actor
         self.session_id = session_id
-        self.recorded: list[IssueActivity] = []
+        self._recorded: list[IssueActivity] = []
+
+    @property
+    def changed(self) -> bool:
+        """这次修改记下了动态（有字段真的变了，或记了评论等）。"""
+        return bool(self._recorded)
 
     @property
     def issue(self) -> Issue:
@@ -149,7 +155,7 @@ class IssueChange:
             session_id=self.session_id,
         )
         self._s.add(row)
-        self.recorded.append(row)
+        self._recorded.append(row)
         # 时间线上多一条就是 issue 变了：updated_at 只在这里更新
         self._issue.updated_at = row.created_at
         return row
@@ -248,10 +254,10 @@ class IssueChanges:
         await self._settle_in(s, change, routing)
 
     async def _settle_in(self, s: AsyncSession, change: IssueChange, routing: Routing) -> None:
-        if not change.recorded or isinstance(routing, RecordOnly):
+        if not change.changed or isinstance(routing, RecordOnly):
             return
         await s.flush()
-        happened = [Activity.of(row) for row in change.recorded]
+        happened = [Activity.of(row) for row in change._recorded]
         issue, actor, session_id = change.issue, change.actor, change.session_id
         to = routing.agent if isinstance(routing, Direct) else None
         await self._delivery.post_in(s, issue, actor, session_id, happened, to=to)
