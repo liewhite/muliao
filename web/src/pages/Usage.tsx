@@ -106,7 +106,7 @@ function Daily({ days }: { days: Usage[] }) {
 export default function UsagePage() {
   const [window_, setWindow] = useState<WindowKey>('7')
   const agents = useAgents()
-  const usage = useLoad('usage', async () => {
+  const usage = useLoad(async () => {
     const [since, until] = windowOf(WINDOWS[window_].days)
     const [total, byAgent, byModel, byDay] = await Promise.all([
       api.usage(since, until, []),

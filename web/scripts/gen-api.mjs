@@ -1,5 +1,5 @@
-// 从后端的接口描述（openapi.json，后端测试保证它与接口一致）生成前端类型 src/schema.d.ts；
-// scripts/gen-api.test.mjs 保证提交的生成结果与描述一致。用法：npm run gen:api
+// 从后端的接口描述（openapi.json，后端测试保证它与接口一致）生成前端类型 src/schema.d.ts，与每个 GET 接口读哪些数据
+// src/reads.ts（路由上的 x-reads）；scripts/gen-api.test.mjs 保证提交的生成结果与描述一致。用法：npm run gen:api
 //
 // openapi-typescript 7.13 的 peer 依赖写的是 TypeScript 5，项目用 6：package.json 的 overrides 让它用项目的
 // TypeScript（它只用编译器 API 打印类型，实测生成正常）。它声明支持 TS 6 之后删掉这条 override。
@@ -10,6 +10,7 @@ import openapiTS, { astToString } from 'openapi-typescript'
 
 const SPEC = new URL('../openapi.json', import.meta.url)
 export const OUTPUT = new URL('../src/schema.d.ts', import.meta.url)
+export const READS_OUTPUT = new URL('../src/reads.ts', import.meta.url)
 
 const HEADER = '// 由 scripts/gen-api.mjs 从 openapi.json 生成，不要手改\n\n'
 
@@ -64,6 +65,19 @@ export async function generate() {
   return HEADER + astToString(await openapiTS(relaxRequestDefaults(spec)))
 }
 
+/** 每个 GET 接口声明读哪些数据（后端 api.deps.reads 写进 x-reads）：路径模板 → 类别。前端请求它就订阅这些类别的 changed */
+export function readsOf(spec) {
+  const entries = Object.entries(spec.paths)
+    .filter(([, ops]) => ops.get?.['x-reads'] !== undefined)
+    .map(([path, ops]) => `  '${path}': [${ops.get['x-reads'].map((r) => `'${r}'`).join(', ')}],`)
+  return `${HEADER}export const READS = {\n${entries.join('\n')}\n} as const\n`
+}
+
+export async function generateReads() {
+  return readsOf(JSON.parse(await readFile(SPEC, 'utf8')))
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   await writeFile(OUTPUT, await generate())
+  await writeFile(READS_OUTPUT, await generateReads())
 }

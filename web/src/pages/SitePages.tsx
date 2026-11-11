@@ -32,7 +32,7 @@ function PageCard({ page }: { page: SitePage }) {
 /** 页面列表；给了 agent 只列它的（agent 详情页），否则按 agent 分组列全部。都按最近更新排 */
 export function SitePageList({ agent }: { agent?: AgentId }) {
   const agents = useAgents()
-  const pages = useLoad(null, () => api.pages(), [])
+  const pages = useLoad(() => api.pages(), [])
   return (
     <Loading state={pages}>
       {(all) => {
@@ -75,7 +75,7 @@ export function SitePageView() {
   const agent = asAgentId(useRouteParam('agent'))
   const name = useRouteParam('name')
   const agents = useAgents()
-  const pages = useLoad(null, () => api.pages(), [])
+  const pages = useLoad(() => api.pages(), [])
   // 刷新时递增：iframe 换 key 重新加载
   const [version, setVersion] = useState(0)
   const page = pages.data?.find((p) => p.agent_id === agent && p.name === name)

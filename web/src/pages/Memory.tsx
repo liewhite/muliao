@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Button, Card, toast } from '@heroui/react'
 import { ChevronDown, ChevronRight, Trash2 } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { api, type AgentId, type AssetOf, type Memory } from '../api'
+import { GLOBAL_MEMORY, api, type AgentId, type AssetOf, type Memory } from '../api'
 import { useDraft } from '../drafts'
 import { AssetAccess } from './assetParts'
 import {
@@ -20,16 +20,13 @@ import {
 } from '../ui'
 import { useLoad } from '../load'
 
-/** 全局记忆的名字（后端 agents/permissions.py 的 GLOBAL_MEMORY）：base 固定收录，不能删 */
-export const GLOBAL_MEMORY = 'global'
-
 /** 一块记忆是哪一块：平台的按名字（owner 为 null），agent 的私有记忆按它所属的 agent（name 只是显示用的 agent 名） */
 type MemoryRef = { name: string; owner: AgentId | null }
 
 /** 一块记忆：编辑正文、保存（写的是它的文件）。agent 随时会改它：随 changed 重新拉取，保存带打开时的版本 */
 export function MemoryEditor({ memory: ref, hint }: { memory: MemoryRef; hint: string }) {
   const { name, owner } = ref
-  const memory = useLoad('agents', () => (owner === null ? api.memory(name) : api.agentMemory(owner)), [name, owner])
+  const memory = useLoad(() => (owner === null ? api.memory(name) : api.agentMemory(owner)), [name, owner])
   return <Loading state={memory}>{(m) => <MemoryDraft latest={m} hint={hint} />}</Loading>
 }
 
@@ -172,7 +169,7 @@ export function MemoryTab({ assets }: { assets: AssetOf<'memory'>[] }) {
 
 /** agent 页的记忆：它名下的记忆块（私有记忆）逐块编辑；全局与共享记忆在资产页 */
 export function AgentMemories({ agent }: { agent: AgentId }) {
-  const assets = useLoad('agents', () => api.assets(), [])
+  const assets = useLoad(() => api.assets(), [])
   return (
     <Loading state={assets}>
       {(all) => {

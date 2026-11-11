@@ -1,6 +1,7 @@
 // 接口类型取自 schema.d.ts（由后端的 OpenAPI 描述生成，见 scripts/gen-api.mjs），这里只起名字、补上品牌类型
 
 import type { components, paths } from './schema'
+import { READS } from './reads'
 
 export type Schemas = components['schemas']
 
@@ -30,11 +31,14 @@ export type SessionListItem = WithAgentId<Schemas['SessionListItem'], 'agent_id'
 /** 一条通知（不叫 Notification：那是浏览器的全局对象） */
 export type AppNotification = Schemas['NotificationOut']
 
-// 下面三个值与两个路由（sessionRoute、issues.ts 的 issueRoute）前后端各写一份，tests/test_frontend_contract.py 核对
+// 下面四个值与两个路由（sessionRoute、issues.ts 的 issueRoute）前后端各写一份，tests/test_frontend_contract.py 核对
 /** 指代用户的那个值（与后端 agents.api.USER 一致）：issue 的指派人、资源修改的作者等 */
 export const USER = 'user'
 /** issue 时间线上系统自己的动作（删除 agent 时的清理）的 actor（与后端 issues.rules.SYSTEM_ACTOR 一致） */
 export const SYSTEM_ACTOR = 'system'
+
+/** 全局记忆的名字（与后端 agents.permissions.GLOBAL_MEMORY 一致）：base 固定收录，不能删 */
+export const GLOBAL_MEMORY = 'global'
 
 /** 引用文件的地址前缀（与后端 muliao.files.FILES_PATH 一致）：回答里只有指向这里的图片会被渲染 */
 export const FILES_PATH = '/api/files'
@@ -149,7 +153,11 @@ function withQuery(path: string, query?: Query): string {
 // 401 时通知应用跳转登录页
 export const unauthorizedEvent = new EventTarget()
 
-/** 所有请求的唯一出口：统一的 401 处理与错误信息 */
+// 请求的时限：服务端或网络卡住时报错，而不是让等它的操作（按钮）一直转。传文件（上传、录音、导入导出、预览）按大小与网速可能很久
+export const REQUEST_TIMEOUT_MS = 30_000
+const FILE_TIMEOUT_MS = 600_000
+
+/** 所有请求的唯一出口：统一的时限、401 处理与错误信息 */
 async function send<T>(
   method: string,
   path: string,
@@ -158,12 +166,21 @@ async function send<T>(
   // 响应体是文件（如 .skill 包）：成功时交出响应本身，由调用方读 Blob 与响应头
   raw = false,
 ): Promise<T> {
-  const resp = await fetch(withQuery(path, query), {
-    method,
-    credentials: 'same-origin',
-    headers: body === undefined ? undefined : { 'Content-Type': body.type },
-    body: body?.data,
-  })
+  const timeoutMs = raw || body?.data instanceof Blob ? FILE_TIMEOUT_MS : REQUEST_TIMEOUT_MS
+  let resp: Response
+  try {
+    resp = await fetch(withQuery(path, query), {
+      method,
+      credentials: 'same-origin',
+      headers: body === undefined ? undefined : { 'Content-Type': body.type },
+      body: body?.data,
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'TimeoutError')
+      throw new Error(`请求超时（${timeoutMs / 1000} 秒没有响应）：${method} ${path}`, { cause: e })
+    throw e
+  }
   if (resp.status === 401 && path !== '/api/auth/login') {
     unauthorizedEvent.dispatchEvent(new Event('unauthorized'))
   }
@@ -224,7 +241,43 @@ export function call<P extends Path, M extends MethodOf<P>>(
   })
   // 只有接口描述里有 JSON 请求体的调用才发请求体
   const body = given.body === undefined ? undefined : { type: 'application/json', data: JSON.stringify(given.body) }
+  if (method === 'get') {
+    for (const into of starting ? [starting] : collecting) READS_OF[path as GetPath].forEach((r) => into.add(r))
+  }
   return send(method.toUpperCase(), url, given.query, body)
+}
+
+// ---- 一份数据读了哪些类别：由接口声明（后端路由上的 x-reads，生成在 reads.ts），前端不手写 ----
+
+/** 数据的类别（schema.Resource：后端的领域与任务）：任何一方改了它，服务端都发 changed，读它的数据重新拉取（load.ts） */
+export type Resource = Schemas['ChangedEvent']['resource']
+
+type GetPath = { [P in Path]: 'get' extends MethodOf<P> ? P : never }[Path]
+// 每个 GET 接口都声明了读什么：生成的 READS 少了哪个接口、写了不认识的类别，这里编译失败
+const READS_OF: { readonly [P in GetPath]: readonly Resource[] } = READS
+
+// 正在加载的各份数据的读集（collectReads），与此刻正在同步开始的那一份
+const collecting = new Set<Set<Resource>>()
+let starting: Set<Resource> | null = null
+
+/**
+ * 执行 load，把它发出的 GET 请求读的类别记进 into（加载开始就能看到已发出的那些）。load 同步开始时发出的请求（`() => api.x()`、
+ * Promise.all 里的）只记进它自己；await 之后才发的分不清是谁发的，记进此刻在加载的每一份：多记只会多拉一次，不会漏。
+ */
+export async function collectReads<T>(load: () => Promise<T>, into: Set<Resource>): Promise<T> {
+  collecting.add(into)
+  let loading: Promise<T>
+  starting = into
+  try {
+    loading = load()
+  } finally {
+    starting = null
+  }
+  try {
+    return await loading
+  } finally {
+    collecting.delete(into)
+  }
 }
 
 /** 把 AgentId 换回接口里的 string：品牌类型去掉品牌后必须就是接口推出的类型 */

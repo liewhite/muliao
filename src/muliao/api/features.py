@@ -3,7 +3,7 @@
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from muliao.api.deps import C
+from muliao.api.deps import C, reads
 from muliao.sessions.api import MIN_COMPACTION_THRESHOLD_TOKENS
 
 router = APIRouter()
@@ -18,7 +18,7 @@ class FeaturesOut(BaseModel):
     min_compaction_threshold_tokens: int
 
 
-@router.get("/features")
+@router.get("/features", openapi_extra=reads())
 async def features(c: C) -> FeaturesOut:
     """服务端配置决定的界面行为：可选能力与界面要展示的默认值。"""
     return FeaturesOut(

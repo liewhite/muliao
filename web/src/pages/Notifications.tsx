@@ -3,7 +3,6 @@ import { Card } from '@heroui/react'
 import { ChevronRight } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { api, type AppNotification } from '../api'
-import { useServerEvents } from '../events'
 import { useReturnState } from '../nav'
 import { EmptyHint, Loading, Page, formatTime } from '../ui'
 import { useLoad } from '../load'
@@ -33,11 +32,8 @@ function NotificationCard({ n }: { n: AppNotification }) {
 
 export default function Notifications() {
   const from = useReturnState()
-  const notifications = useLoad(null, () => api.notifications(), [])
   // 只在有新通知（或重连）时重新拉取，不随 notifications 的每次变化：自己标的已读不重拉，列表里的未读标记留到下次加载
-  useServerEvents((e) => {
-    if (e.type === 'connected' || e.type === 'notification') void notifications.reload()
-  })
+  const notifications = useLoad(() => api.notifications(), [], (e) => e.type === 'connected' || e.type === 'notification')
 
   // 看到了就是已读：只标到这次列出的最新一条，之后才到的保持未读；列表里的未读标记保留到下次加载，让用户看出哪些是新的
   const newest = notifications.data?.find((n) => n.unread)?.id

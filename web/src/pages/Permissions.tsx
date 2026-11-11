@@ -176,7 +176,7 @@ export function RulesInput({
 
 /** 规则补全的候选：全部资产（含工具）及每种的 `use:kind:*` */
 function useCandidates(): string[] {
-  const assets = useLoad('agents', () => api.assets(), [])
+  const assets = useLoad(() => api.assets(), [])
   return ruleCandidates(assets.data ?? [])
 }
 
@@ -192,10 +192,10 @@ export function PermissionsInput({
   value: PermissionValue
   onChange: (v: PermissionValue) => void
 }) {
-  const roles = useLoad('agents', () => api.roles(), [])
+  const roles = useLoad(() => api.roles(), [])
   const candidates = useCandidates()
   const key = JSON.stringify(value)
-  const reach = useLoad('agents', () => api.previewAgent({ agent_id: agentId, ...value }), [agentId, key])
+  const reach = useLoad(() => api.previewAgent({ agent_id: agentId, ...value }), [agentId, key])
   return (
     <div className="flex flex-col gap-3">
       <div className="text-sm font-medium">角色与规则</div>
@@ -267,9 +267,7 @@ function RoleFields({
   set: (patch: Partial<RoleInput>) => void
 }) {
   const candidates = useCandidates()
-  const reach = useLoad(
-    'agents',
-    () => api.previewRole({ name, allow: value.allow, deny: value.deny }),
+  const reach = useLoad(() => api.previewRole({ name, allow: value.allow, deny: value.deny }),
     [name, JSON.stringify([value.allow, value.deny])],
   )
   return (
@@ -422,7 +420,7 @@ function RoleCard({ role }: { role: Role }) {
 
 /** 角色：内置角色（base、admin）的固定规则只读、可编辑部分可改，不能删；自建角色可增删改。每个角色列出收录的资产与分给的 agent */
 export function Roles() {
-  const roles = useLoad('agents', () => api.roles(), [])
+  const roles = useLoad(() => api.roles(), [])
   const [formKey, setFormKey] = useState(0)
   return (
     <Page title="角色">

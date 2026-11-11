@@ -40,7 +40,7 @@ import {
   useAgents,
   useConfirm,
 } from '../ui'
-import { errorMessage, refreshShown, useLoad } from '../load'
+import { useLoad } from '../load'
 
 /** 某种方式的触发器：收窄后 config 与 status 都是这种方式的类型 */
 type TriggerOf<K extends TriggerKindName> = Extract<Trigger, { kind: K }>
@@ -261,7 +261,7 @@ function PrecheckEditor({ precheck, onChange }: { precheck: Precheck | null; onC
 
 function RouteInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   // 地址格式的说明只在后端一份（与给 agent 的工具说明相同，是英文）
-  const help = useLoad(null, () => api.routeHelp(), [])
+  const help = useLoad(() => api.routeHelp(), [])
   return (
     <TextInput
       label="投递目标"
@@ -403,7 +403,7 @@ function TriggerSessions({ trigger }: { trigger: Trigger }) {
 
 function SessionList({ triggerId }: { triggerId: number }) {
   const from = useReturnState()
-  const sessions = useLoad('sessions', () => api.sessions({ trigger_id: triggerId, limit: 50 }), [triggerId])
+  const sessions = useLoad(() => api.sessions({ trigger_id: triggerId, limit: 50 }), [triggerId])
   return (
     <Loading state={sessions}>
       {(list) =>
@@ -428,24 +428,17 @@ function SessionList({ triggerId }: { triggerId: number }) {
 
 /** 启用开关：卡片和详情里共用；失败用 toast 提示（卡片上没有放错误的位置） */
 function EnableSwitch({ trigger }: { trigger: Trigger }) {
-  const [busy, setBusy] = useState(false)
-  async function toggle(enabled: boolean) {
-    setBusy(true)
-    try {
-      await api.updateTrigger(trigger.id, { enabled })
-      await refreshShown()
-    } catch (e) {
-      toast.danger(`${enabled ? '启用' : '停用'}「${trigger.name}」失败：${errorMessage(e)}`)
-    } finally {
-      setBusy(false)
-    }
-  }
+  const action = useAction()
   return (
     <ToggleSwitch
       label={`启用触发器「${trigger.name}」`}
       isSelected={trigger.enabled}
-      isDisabled={busy}
-      onChange={(enabled) => void toggle(enabled)}
+      isDisabled={action.busy}
+      onChange={(enabled) =>
+        void action.run(() => api.updateTrigger(trigger.id, { enabled }), {
+          toast: `${enabled ? '启用' : '停用'}「${trigger.name}」`,
+        })
+      }
     />
   )
 }
@@ -918,7 +911,7 @@ function FinishedTrigger({ trigger }: { trigger: Trigger }) {
 }
 
 function FinishedTriggers() {
-  const finished = useLoad('triggers', () => api.triggers(true), [])
+  const finished = useLoad(() => api.triggers(true), [])
   const agents = useAgents().data
   const [openId, setOpenId] = useState<number | null>(null)
   return (
@@ -945,8 +938,8 @@ function FinishedTriggers() {
 
 /** 自动发起会话的入口：定时、webhook……方式的差异只在各自的配置与操作。按 agent 分组的卡片网格，点卡片看详情 */
 export default function Triggers() {
-  const triggers = useLoad('triggers', () => api.triggers(), [])
-  const kinds = useLoad(null, () => api.triggerKinds(), [])
+  const triggers = useLoad(() => api.triggers(), [])
+  const kinds = useLoad(() => api.triggerKinds(), [])
   const agents = useAgents()
   // 详情跟着列表走：重新加载后显示最新内容，删掉后自动关闭
   const [openId, setOpenId] = useState<number | null>(null)

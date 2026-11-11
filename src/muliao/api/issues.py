@@ -7,7 +7,7 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from muliao.agents.api import USER
-from muliao.api.deps import C
+from muliao.api.deps import C, reads
 from muliao.api.fieldlock import check_base
 from muliao.issues.api import HAPPENINGS, Activity, IssuePriority, IssueStatus, IssueWork, NewIssue, WorkState
 from muliao.issues.tables import Issue
@@ -151,7 +151,7 @@ async def _out(c: C, issue: Issue) -> IssueOut:
     return IssueOut.of(issue, (await c.issues.work([issue]))[issue.id])
 
 
-@router.get("/issues")
+@router.get("/issues", openapi_extra=reads("issues", "sessions", "tasks"))
 async def list_issues(
     c: C,
     status: list[IssueStatus] | None = Query(None),
@@ -178,7 +178,7 @@ async def create_issue(c: C, body: IssueCreate) -> IssueOut:
     return await _out(c, issue)
 
 
-@router.get("/issues/{issue_id}")
+@router.get("/issues/{issue_id}", openapi_extra=reads("issues", "sessions", "tasks"))
 async def get_issue(c: C, issue_id: int) -> IssueDetailOut:
     detail = await c.issues.get(issue_id)
     return IssueDetailOut(

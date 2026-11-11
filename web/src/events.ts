@@ -76,16 +76,12 @@ export function liveItems(events: RunEvent[]): Item[] {
 /**
  * 连上了（前端自己产生），第一次连接与重连都算：订阅建立之前、断线期间都可能错过事件，页面要重新拉取。
  * 第一次也要算：页面的首次请求可能早于订阅建立，中间的事件（如运行结束）两边都没有，页面会一直停在旧状态。
+ * 在这条连接的第一次心跳时发，不在 onopen：服务端先建好订阅再发心跳（api/app.py 的 /events），而响应头早于订阅，
+ * 按 onopen 重新拉取可能落在订阅建立之前。
  */
 export interface ConnectedEvent {
   type: 'connected'
 }
-
-/**
- * 数据的类别（schema.Resource：后端的领域与任务）。任何一方（这个页面、别的页面、agent、触发器、推送通知上的操作）改了它，
- * 服务端都发 changed（schema.ChangedEvent；由别的数据派生的类别也由后端发），展示它的页面据此重新拉取（load.useLoad）
- */
-export type Resource = Schemas['ChangedEvent']['resource']
 
 /** 服务端定时发的心跳（api/app.py），只用来判断连接是否还活着，不交给页面 */
 type HeartbeatEvent = Schemas['HeartbeatEvent']
@@ -129,6 +125,8 @@ const WATCHDOG_MS = 5000
 const listeners = new Set<Listener>()
 let source: EventSource | null = null
 let lastMessageAt = 0
+// 当前这条连接是否已经发过 connected（第一次心跳时发）
+let announced = false
 // 心跳间隔来自服务端的心跳；收到第一个之前不判断
 let heartbeatSeconds: number | null = null
 let watchdog: ReturnType<typeof setInterval> | null = null
@@ -140,10 +138,10 @@ const outdatedSubscribers = new Set<() => void>()
 function connect() {
   source = new EventSource('/api/events')
   lastMessageAt = Date.now()
-  source.onopen = () => {
-    emit({ type: 'connected' })
-  }
+  announced = false
   source.onerror = (e) => {
+    // 这条连接断了：EventSource 自己重连上之后的第一次心跳再发 connected
+    announced = false
     // 网络错误时 EventSource 自己重连（readyState 回到 CONNECTING）；非 200 响应会让它永久关闭，由看门狗重建。
     // 关闭的原因可能是登录过期（401）：用一次普通请求走统一的 401 处理（回到登录页）
     if ((e.currentTarget as EventSource).readyState === EventSource.CLOSED) {
@@ -160,6 +158,10 @@ function connect() {
       else if (!outdated && isOutdated(loadedUiVersion, event.ui_version)) {
         outdated = true
         outdatedSubscribers.forEach((s) => s())
+      }
+      if (!announced) {
+        announced = true
+        emit({ type: 'connected' })
       }
       return
     }

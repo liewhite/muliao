@@ -58,7 +58,7 @@ import { AttachButton, AttachmentList, PendingUploads, useUploads, type Uploads 
 import { appendTranscript, useVoiceInput, type VoiceInput } from '../voice'
 import { VoiceButton } from '../VoiceButton'
 import { isSendShortcut, SEND_HINT } from '../sendKey'
-import { isTaskOf, liveItems, mergeLive, useServerEvents, withoutCovered, type RunEvent } from '../events'
+import { isTaskOf, liveItems, mergeLive, useServerEvents, withoutCovered, type PageEvent, type RunEvent } from '../events'
 import { STATUS_LABEL, issueRoute } from '../issues'
 import { useReturnState, useRouteParam } from '../nav'
 import { cacheHitPercent, contextText, formatTokens } from '../usage'
@@ -72,7 +72,7 @@ import { useLoad } from '../load'
  */
 function IssueTitle({ issueId, fallback }: { issueId: number; fallback: string }) {
   const from = useReturnState()
-  const detail = useLoad('issues', () => api.issue(issueId), [issueId])
+  const detail = useLoad(() => api.issue(issueId), [issueId])
   const issue = detail.data?.issue
   return (
     <Link
@@ -843,6 +843,13 @@ function UsageLine({ context, usage }: Pick<SessionDetail, 'context' | 'usage'>)
   )
 }
 
+/** 会话页按哪些事件重新拉取：连上了（之前可能丢了事件），这个会话又保存了一步，或它的运行、压缩的状态变了 */
+function refetchesSession(e: PageEvent, id: string): boolean {
+  if (e.type === 'connected') return true
+  if (e.type === 'changed' || e.session_id !== id) return false
+  return e.type === 'saved' || isTaskOf(e, 'run', 'compaction')
+}
+
 /** 用户看过了这个会话：指向它的通知标为已读（会话的未读由通知派生），标记本身幂等 */
 function markSessionRead(id: string) {
   void api.markRead(id).catch((e) => console.error('marking session read failed', e))
@@ -852,8 +859,9 @@ export default function SessionView() {
   const id = useRouteParam('id')
   const navigate = useNavigate()
   const confirm = useConfirm()
-  // 整份会话（含全部历史，大的有几 MB）不随任何会话的 changed 重新拉取：按这个会话自己的事件（下面）刷新
-  const detail = useLoad(null, () => api.session(id), [id])
+  // 整份会话（含全部历史，大的有几 MB）不随任何会话的 changed 重新拉取：只按这个会话自己的事件刷新（连上了、又保存了一步、
+  // 运行或压缩的状态变了），用户的操作之后照常一起刷新（load.refreshShown）
+  const detail = useLoad(() => api.session(id), [id], (e) => refetchesSession(e, id))
   const [live, setLive] = useState<RunEvent[]>([])
   const [draft, setDraft] = useState('')
   const uploads = useUploads()
@@ -867,21 +875,15 @@ export default function SessionView() {
     else void send(content).then((ok) => ok || setDraft(content))
   })
 
+  // 实时流与已读：重新拉取由上面的 Loader 负责（又保存了一步：新快照换成新的一段，合并时丢掉上一段的事件）
   useServerEvents((e) => {
-    if (e.type === 'connected') {
-      setLive([])
-      void detail.reload()
-    } else if (e.type !== 'changed' && e.session_id === id) {
+    if (e.type === 'connected') setLive([])
+    else if (e.type !== 'changed' && e.session_id === id) {
       if (e.type === 'run') setLive((prev) => [...withoutCovered(detail.data?.live ?? null, prev, e), e])
-      // 又保存了一步：重新拉取历史；新快照换成新的一段，合并时丢掉上一段的事件
-      else if (e.type === 'saved') void detail.reload()
       // 看着它时又来了指向它的通知（会话的未读由通知派生）：用户已经在看，直接标记已读
       else if (e.type === 'notification') markSessionRead(id)
-      else if (isTaskOf(e, 'run', 'compaction')) {
-        // 运行状态变化后以数据库为准重新拉取，清空临时流
-        if (e.status !== 'running') setLive([])
-        void detail.reload()
-      }
+      // 运行结束后以数据库为准，清空临时流
+      else if (isTaskOf(e, 'run', 'compaction') && e.status !== 'running') setLive([])
     }
   })
 
@@ -913,7 +915,6 @@ export default function SessionView() {
       // 发送过程中又改了输入框就保留新内容
       setDraft((current) => (current === shown ? '' : current))
       uploads.removeMany(sent.keys)
-      await detail.reload()
     }
     return ok
   }
@@ -925,9 +926,7 @@ export default function SessionView() {
       confirmLabel: '删除',
       danger: true,
     })
-    if (ok && (await action.run(() => api.deleteSession(id)))) {
-      navigate(parentRoute)
-    }
+    if (ok) await action.run(() => api.deleteSession(id), { leave: () => navigate(parentRoute) })
   }
 
   const session = detail.data?.session
@@ -949,7 +948,7 @@ export default function SessionView() {
             size="sm"
             variant="secondary"
             isDisabled={action.busy}
-            onPress={() => void action.run(() => api.compact(id).then(() => detail.reload()))}
+            onPress={() => void action.run(() => api.compact(id))}
             aria-description="把早期对话压缩成摘要，减少发给模型的上下文"
           >
             <Archive className="size-4" />
@@ -986,9 +985,7 @@ export default function SessionView() {
               busy={action.busy}
               active={detail.data !== undefined && detail.data.state !== 'idle'}
               onSend={() => void send()}
-              onStop={() =>
-                void action.run(() => api.stop(id).then(detail.reload))
-              }
+              onStop={() => void action.run(() => api.stop(id))}
             />
           </div>
         </div>
@@ -997,8 +994,8 @@ export default function SessionView() {
       <Loading state={detail}>
         {(d) => {
           const ctx: SessionContext = {
-            answer: (callId, answers) => api.answer(id, callId, answers).then(() => detail.reload()),
-            approve: (callId, choice) => api.approve(id, callId, choice).then(() => detail.reload()),
+            answer: (callId, answers) => api.answer(id, callId, answers),
+            approve: (callId, choice) => api.approve(id, callId, choice),
             threads: new Map(d.threads.map((t) => [t.id, t])),
             view: 'history',
           }
@@ -1022,7 +1019,7 @@ export default function SessionView() {
               {d.mail.map((m) => (
                 <MailNote key={m.id} mail={m} ctx={ctx} />
               ))}
-              {d.run && <RunStatus run={d.run} onRetry={(tid) => void action.run(() => api.retryTask(tid)).then(() => detail.reload())} />}
+              {d.run && <RunStatus run={d.run} onRetry={(tid) => void action.run(() => api.retryTask(tid))} />}
               {shownLive.length > 0 && (
                 <div className="flex flex-col gap-3 opacity-90">
                   <Blocks items={liveItems(shownLive)} ctx={{ ...ctx, view: 'live' }} />
@@ -1034,8 +1031,8 @@ export default function SessionView() {
                 actions={{
                   agentId: d.session.agent_id,
                   busy: action.busy,
-                  // 结束、停止之后占用要等结局交回才释放，那时的运行会让页面重新拉取；这里先拉一次显示即时的状态
-                  run: (fn) => void action.run(() => fn().then(() => detail.reload())),
+                  // 结束、停止之后占用要等结局交回才释放，那时的运行会让页面重新拉取；操作之后先拉一次显示即时的状态
+                  run: (fn) => void action.run(fn),
                 }}
               />
               <UnlinkedThreads threads={unlinkedThreads([...d.items, ...liveItems(shownLive)], d.threads)} />

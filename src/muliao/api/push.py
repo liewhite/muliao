@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Response
 from pydantic import BaseModel
 
-from muliao.api.deps import C
+from muliao.api.deps import C, reads
 
 router = APIRouter()
 
@@ -25,7 +25,7 @@ class VapidOut(BaseModel):
     public_key: str
 
 
-@router.get("/push/vapid")
+@router.get("/push/vapid", openapi_extra=reads())
 async def vapid_key(c: C) -> VapidOut:
     return VapidOut(public_key=c.vapid.public_key_b64)
 

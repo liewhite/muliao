@@ -6,7 +6,7 @@ import { api } from './api'
 import { Loader, useLoader } from './load'
 
 // 通知变了（谁标的已读、写下新通知都一样）就重新拉取，见 load.Loader
-const unread = new Loader('notifications', async () => (await api.unreadNotifications()).count)
+const unread = new Loader(async () => (await api.unreadNotifications()).count)
 
 function setBadge(count: number) {
   // Badging API 不是所有浏览器都有（如 Firefox）；没有就只显示导航上的数字

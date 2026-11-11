@@ -204,7 +204,7 @@ function NewSkill() {
 
 /** 已有的 skill：agent 随时会改它，随 changed 重新拉取，保存带打开时的版本 */
 function ExistingSkill({ name }: { name: string }) {
-  const loaded = useLoad('agents', () => api.skill(name), [name])
+  const loaded = useLoad(() => api.skill(name), [name])
   return (
     <Page title={name} back={SKILLS}>
       <Loading state={loaded}>{(s) => <SkillDraft latest={s} />}</Loading>
@@ -248,7 +248,7 @@ function SkillDraft({ latest }: { latest: Skill }) {
 
   async function remove() {
     const ok = await confirm({ title: `删除 skill「${name}」？`, confirmLabel: '删除', danger: true })
-    if (ok && (await action.run(() => api.deleteAsset('skill', name)))) navigate(SKILLS)
+    if (ok) await action.run(() => api.deleteAsset('skill', name), { leave: () => navigate(SKILLS) })
   }
 
   return (

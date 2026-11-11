@@ -54,7 +54,7 @@ import {
   useAction,
   useAgents,
 } from '../ui'
-import { errorMessage, useLoad } from '../load'
+import { useLoad } from '../load'
 
 type View = 'board' | 'list' | 'graph'
 // 「所有项目」选项的 id；查询时映射为不过滤
@@ -475,33 +475,26 @@ export default function Issues() {
   const [view, changeView] = useStoredState(VIEW_KEY, oneOf<View>(['board', 'list', 'graph'], 'board'))
   // 按负责项目筛选：看一个项目的全部 issue（含已完成、已取消）
   const [owner, setOwner] = useState(ALL_OWNERS)
-  const loaded = useLoad('issues', () => api.issues(owner === ALL_OWNERS ? undefined : owner), [owner])
+  const loaded = useLoad(() => api.issues(owner === ALL_OWNERS ? undefined : owner), [owner])
   // 拖拽后先在本地挪动，接口返回、重新拉取之后以服务端为准；连着拖几张时每张各占一项
   const [moving, setMoving] = useState<ReadonlyMap<number, PendingMove>>(new Map())
   const issues = loaded.data && moveIssues(loaded.data, moving)
-  // 拖拽失败的错误：留到下一轮拖拽（之前的都已结束）开始时才清掉，不被同时进行的另一次冲掉
-  const [moveError, setMoveError] = useState<string | null>(null)
+  // 拖拽：失败用 toast 提示（连着拖几张时各自报，不互相冲掉）；成功后等看板重新拉取落下才撤掉本地挪动
+  const move = useAction()
   const [graphScope, changeGraphScope] = useStoredState(GRAPH_SCOPE_KEY, oneOf<GraphScope>(['open', 'all'], 'open'))
   const onMove = (id: number, status: IssueStatus) => {
     const pending: PendingMove = { status, at: new Date().toISOString() }
-    if (moving.size === 0) setMoveError(null)
     setMoving((prev) => new Map(prev).set(id, pending))
     void (async () => {
-      try {
-        await api.updateIssue(id, { status })
-      } catch (e) {
-        setMoveError(errorMessage(e))
-      } finally {
-        // 本地挪动要留到看得到服务端的结果：changed 带来的重新拉取可能还没到，这里直接取一次
-        await loaded.reload()
-        // 同一张又被拖了一次：那一次还在提交，留着它的
-        setMoving((prev) => {
-          if (prev.get(id) !== pending) return prev
-          const next = new Map(prev)
-          next.delete(id)
-          return next
-        })
-      }
+      // 本地挪动留到看得到服务端的结果：成功时 run 等正在显示的看板重新拉取落下；失败时服务端没变，直接撤掉
+      await move.run(() => api.updateIssue(id, { status }), { toast: `把 #${id} 移到「${STATUS_LABEL[status]}」` })
+      // 同一张又被拖了一次：那一次还在提交，留着它的
+      setMoving((prev) => {
+        if (prev.get(id) !== pending) return prev
+        const next = new Map(prev)
+        next.delete(id)
+        return next
+      })
     })()
   }
   const toolbar = (
@@ -534,7 +527,6 @@ export default function Issues() {
         leading={[{ id: ALL_OWNERS, label: '所有项目' }]}
       />
       <NewIssueForm />
-      <ErrorAlert error={moveError} />
     </div>
   )
   return (

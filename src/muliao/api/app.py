@@ -36,8 +36,8 @@ from muliao.api import (
     workspace,
 )
 from muliao.api.auth import COOKIE_NAME, MAX_AGE_SECONDS, Auth, LoginThrottle, require_auth
-from muliao.api.deps import C
-from muliao.api.events import HeartbeatEvent, ServerEvent, derived_changes
+from muliao.api.deps import C, reads
+from muliao.api.events import HeartbeatEvent, ServerEvent
 from muliao.config import AuthConfig
 from muliao.container import Container
 from muliao.errors import (
@@ -160,14 +160,14 @@ def _private_routes() -> APIRouter:
     router.include_router(features.router)
     router.include_router(sites.router)
 
-    @router.get("/auth/me", status_code=204)
+    @router.get("/auth/me", status_code=204, openapi_extra=reads())
     async def me() -> None:
         return None
 
     # FastAPI 的 SSE：每条 data 按 ServerEvent 校验并序列化，OpenAPI 里登记为事件流的条目类型，前端类型由此生成。
     # 断线重连的间隔用浏览器的默认值（几秒），连接是否还活着由心跳与前端的看门狗判断。FastAPI 自己空闲时发的
     # `: ping` 注释行只防代理断开，EventSource 不把注释交给页面，所以心跳仍然需要
-    @router.get("/events", response_class=EventSourceResponse)
+    @router.get("/events", response_class=EventSourceResponse, openapi_extra=reads())
     async def events(request: Request, c: C) -> AsyncIterator[ServerEvent]:
         heartbeat = _heartbeat(request.app.state.ui_version)
         async with c.bus.subscribe() as sub:
@@ -183,8 +183,6 @@ def _private_routes() -> APIRouter:
                     yield heartbeat
                     continue
                 yield event
-                for derived in derived_changes(event):
-                    yield derived
 
     return router
 

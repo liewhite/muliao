@@ -232,10 +232,7 @@ function Issue({ detail }: { detail: IssueDetail }) {
     void change.run(() => api.updateIssue(issue.id, body))
   const remove = async () => {
     if (!(await confirm({ title: `删除 #${issue.id}？`, body: '评论与时间线一起删除，agent 的会话保留。', danger: true }))) return
-    await change.run(async () => {
-      await api.deleteIssue(issue.id)
-      navigate('/issues')
-    })
+    await change.run(() => api.deleteIssue(issue.id), { leave: () => navigate('/issues') })
   }
   const postComment = () => {
     // 快捷键不经过按钮的禁用状态：请求进行中再按一次不能重复发表
@@ -387,7 +384,7 @@ function Issue({ detail }: { detail: IssueDetail }) {
 export default function IssueView() {
   const id = useRouteParam('id')
   const issueId = Number(id)
-  const detail = useLoad('issues', () => api.issue(issueId), [issueId])
+  const detail = useLoad(() => api.issue(issueId), [issueId])
   // 看到了 issue 就看到了请你审核它的通知（与打开会话一样）
   useEffect(() => {
     void api

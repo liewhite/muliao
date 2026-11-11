@@ -51,20 +51,30 @@ import type { Draft } from './drafts'
 
 // ---- 数据操作 ----
 
-/** 包装一个用户操作：执行中 busy，失败时记录错误（由 ErrorAlert 展示）；成功后等正在显示的数据重新拉取完（load.refreshShown）
- * 才结束，按钮不会在旧数据上又变得可点。返回是否成功。 */
+export interface ActionOptions {
+  /** 失败时用 toast 提示「<toast>失败：<原因>」，不记进 error（没有放 ErrorAlert 的位置时用，如卡片上的开关、看板拖拽） */
+  toast?: string
+  /** 成功后离开这个页面（如删掉了它展示的东西）：不再重新拉取正在显示的（里面有已经不在的数据），要去的页面挂载时
+   * 自己拉取，共用的列表由 changed 带来。路由切换在 transition 里、不是同步卸载，所以不是「先离开再刷新」 */
+  leave?: () => void
+}
+
+/** 包装一个用户操作：执行中 busy，失败时记录错误（由 ErrorAlert 展示，或按 options.toast 提示）；成功后等正在显示的数据
+ * 重新拉取完（load.refreshShown）才结束，按钮不会在旧数据上又变得可点。操作只管做完，重新拉取不归它。返回是否成功。 */
 export function useAction() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const run = useCallback(async (action: () => Promise<unknown>) => {
+  const run = useCallback(async (action: () => Promise<unknown>, options: ActionOptions = {}) => {
     setBusy(true)
-    setError(null)
+    if (options.toast === undefined) setError(null)
     try {
       await action()
-      await refreshShown()
+      if (options.leave) options.leave()
+      else await refreshShown()
       return true
     } catch (e) {
-      setError(errorMessage(e))
+      if (options.toast === undefined) setError(errorMessage(e))
+      else toast.danger(`${options.toast}失败：${errorMessage(e)}`)
       return false
     } finally {
       setBusy(false)
@@ -74,7 +84,7 @@ export function useAction() {
 }
 
 // agent 列表：选择器、id→名称显示等各处共用一份，不各自请求、不逐层传递
-const agentList = new Loader('agents', () => api.agents())
+const agentList = new Loader(() => api.agents())
 
 /** agent 列表（各处共用一份，随 agents 的变化重新拉取） */
 export function useAgents(): LoadState<Agent[]> {

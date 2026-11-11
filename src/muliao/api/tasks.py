@@ -6,7 +6,7 @@ from typing import Literal
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
-from muliao.api.deps import C
+from muliao.api.deps import C, reads
 from muliao.notifications.api import DELIVER_TASK
 from muliao.platform.tables import EVENT_TASK, TaskStatus
 from muliao.platform.tasks import TaskView
@@ -49,7 +49,7 @@ class TaskOut(BaseModel):
         )
 
 
-@router.get("/tasks")
+@router.get("/tasks", openapi_extra=reads("tasks"))
 async def list_tasks(
     c: C, status: TaskStatus | None = None, limit: int = Query(100, ge=1, le=500)
 ) -> list[TaskOut]:

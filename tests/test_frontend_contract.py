@@ -1,10 +1,11 @@
 """前后端各写一份的常量与路由：前端（web/src）的值必须与后端的唯一来源一致。接口里的类型由 OpenAPI 生成，这里管的是
-不在接口类型里的那几个值（指代用户的值、系统 actor、文件地址前缀、通知点开的页面路由）。"""
+不在接口类型里的那几个值（指代用户的值、系统 actor、文件地址前缀、全局记忆的名字、通知点开的页面路由）。"""
 
 import re
 from pathlib import Path
 
 from muliao.agents.api import USER
+from muliao.agents.permissions import GLOBAL_MEMORY
 from muliao.files.api import FILES_PATH
 from muliao.issues.rules import SYSTEM_ACTOR
 from muliao.notifications.tables import Notification
@@ -31,6 +32,7 @@ def test_frontend_constants_match_the_backend():
     assert _const("api.ts", "USER") == USER
     assert _const("api.ts", "SYSTEM_ACTOR") == SYSTEM_ACTOR
     assert _const("api.ts", "FILES_PATH") == FILES_PATH
+    assert _const("api.ts", "GLOBAL_MEMORY") == GLOBAL_MEMORY
 
 
 def test_notification_urls_are_the_frontend_routes():

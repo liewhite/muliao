@@ -23,7 +23,7 @@ from muliao.agents.api import (
     ToolSpec,
     UsedAsset,
 )
-from muliao.api.deps import C
+from muliao.api.deps import C, reads
 from muliao.api.fieldlock import check_base
 
 router = APIRouter()
@@ -109,7 +109,7 @@ async def _out(c: C, a: AgentInfo) -> AgentOut:
     return AgentOut.of(await c.agents.view(a.id))
 
 
-@router.get("/agent-defaults")
+@router.get("/agent-defaults", openapi_extra=reads())
 async def agent_defaults(c: C) -> AgentDefaults:
     """新建 agent 时表单预填的值：创建时套用的同一份缺省（AgentSpec 的字段缺省，模型取 AgentService.defaults），
     前端不另写一份。"""
@@ -205,7 +205,7 @@ class RoleIn(BaseModel):
     deny: list[str]
 
 
-@router.get("/roles")
+@router.get("/roles", openapi_extra=reads("agents"))
 async def list_roles(c: C) -> list[RoleOut]:
     """全部角色：内置在前，自建的按名称。"""
     return [RoleOut.of(v) for v in await c.distribution.views()]
@@ -263,7 +263,7 @@ async def delete_role(c: C, name: str) -> None:
     await c.distribution.delete(name)
 
 
-@router.get("/agents")
+@router.get("/agents", openapi_extra=reads("agents"))
 async def list_agents(c: C) -> list[AgentOut]:
     return [AgentOut.of(v) for v in await c.agents.list_views()]
 
@@ -283,7 +283,7 @@ async def create_agent(c: C, body: AgentCreate) -> AgentOut:
     return await _out(c, await c.agents.create(spec, actor=USER))
 
 
-@router.get("/agents/{agent_id}")
+@router.get("/agents/{agent_id}", openapi_extra=reads("agents"))
 async def get_agent(c: C, agent_id: str) -> AgentOut:
     # 正在删除的按不存在处理
     return AgentOut.of(await c.agents.view(agent_id))
@@ -337,7 +337,7 @@ class AgentAssetsOut(BaseModel):
     mcp: list[McpAssetOut]
 
 
-@router.get("/agents/{agent_id}/assets")
+@router.get("/agents/{agent_id}/assets", openapi_extra=reads("agents"))
 async def agent_assets(c: C, agent_id: str) -> AgentAssetsOut:
     """agent 能用的记忆、skill、secret、MCP server 与各自的来源（不含 secret 的值），加上记忆合并后放进指令的样子。"""
     used = await c.distribution.assets(agent_id)

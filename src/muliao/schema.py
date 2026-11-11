@@ -34,26 +34,29 @@ Domain = Literal[
 ]
 
 
-# 前端按类别重新拉取的数据：各领域，加上任务（平台的任务表随任何领域的事务写，不按表发，由任务状态事件派生，见
-# api.events.derived_changes）
+# 数据的类别：GET 接口声明自己读哪些（api.deps.reads），写了就发 changed，前端据此重新拉取。各领域，加上任务（平台的
+# 任务表：任务列表、会话与 issue 上的工作状态读它）
 Resource = Domain | Literal["tasks"]
 
 
+def resource_of(table: str) -> Resource:
+    """一张表属于哪类数据：所属领域，平台的任务表是 tasks。"""
+    domain = _domains()[table]
+    return "tasks" if domain == _SHARED else domain  # type: ignore[return-value]
+
+
 class ChangedEvent(BaseModel):
-    """一类数据变了（推给前端 SSE，展示它的页面从接口重新拉取）：写过一个领域的表的事务提交后发（platform.db 的
-    after_commit），平台自己改 AI 资源文件后也以 agents 发（agents.source）；接口输出里由别的数据派生的部分，SSE 接口
-    补发受影响的类别（api.events.derived_changes）。不管是谁改的：页面自己、agent、触发器、推送通知上的操作都一样。"""
+    """一类数据变了（推给前端 SSE，读它的接口所在的页面重新拉取）：写过表的事务提交后按类别发（platform.db 的
+    after_commit）；资源文件（不在库里）有改动时以 agents 发（agents.source 的 watch）。不管是谁改的：页面自己、agent、
+    触发器、推送通知上的操作都一样。"""
 
     type: Literal["changed"] = "changed"
     resource: Resource
 
 
 def changes_of(tables: frozenset[str]) -> list[ChangedEvent]:
-    """写了这些表，哪些领域的数据变了（按领域名）。"""
-    domains = _domains()
-    return [
-        ChangedEvent.model_validate({"resource": d}) for d in sorted({domains[t] for t in tables} - {_SHARED})
-    ]
+    """写了这些表，哪些类别的数据变了。"""
+    return [ChangedEvent(resource=r) for r in sorted({resource_of(t) for t in tables})]
 
 
 def single_domain_writes(tables: frozenset[str]) -> None:

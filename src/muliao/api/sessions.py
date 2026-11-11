@@ -4,7 +4,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Query, Response
 from pydantic import BaseModel, Field
 
-from muliao.api.deps import C
+from muliao.api.deps import C, reads
 from muliao.api.files import FileOut
 from muliao.api.tasks import TaskOut
 from muliao.api.usage import UsageCounts
@@ -252,7 +252,7 @@ class ReplyIn(BaseModel):
     approvals: dict[str, ApprovalChoice] = {}
 
 
-@router.get("/sessions")
+@router.get("/sessions", openapi_extra=reads("notifications", "sessions", "tasks"))
 async def list_sessions(
     c: C,
     agent_id: str | None = None,
@@ -290,7 +290,9 @@ async def start_session(c: C, body: StartIn) -> SessionOut:
     return out
 
 
-@router.get("/sessions/{session_id}")
+@router.get(
+    "/sessions/{session_id}", openapi_extra=reads("files", "notifications", "sessions", "tasks", "usage")
+)
 async def get_session(c: C, session_id: str) -> SessionDetail:
     view = await c.sessions.detail(session_id)
     session, *threads = await session_outs(c, [view.session, *view.threads])

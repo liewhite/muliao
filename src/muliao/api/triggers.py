@@ -7,7 +7,7 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from muliao.agents.api import AgentNames
-from muliao.api.deps import C
+from muliao.api.deps import C, reads
 from muliao.api.fieldlock import check_base
 from muliao.platform.values import KEEP
 from muliao.triggers.api import (
@@ -199,17 +199,17 @@ def _out_of(view: TriggerView, names: AgentNames) -> TriggerOut:
     )
 
 
-@router.get("/trigger-kinds")
+@router.get("/trigger-kinds", openapi_extra=reads())
 async def trigger_kinds(c: C) -> list[TriggerKindOut]:
     return [TriggerKindOut.of(k) for k in c.triggers.kinds.values()]
 
 
-@router.get("/trigger-routes/help")
+@router.get("/trigger-routes/help", openapi_extra=reads())
 async def route_help() -> RouteHelpOut:
     return RouteHelpOut(address_help=ADDRESS_HELP)
 
 
-@router.get("/triggers")
+@router.get("/triggers", openapi_extra=reads("agents", "sessions", "tasks", "triggers"))
 async def list_triggers(
     c: C, finished: bool = Query(False, description="列已结束的（跑完的一次性触发器）而不是还会触发的")
 ) -> list[TriggerOut]:

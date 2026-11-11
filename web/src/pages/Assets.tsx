@@ -58,7 +58,7 @@ export default function Assets() {
   const kindParam = params.get('kind')
   const kind: AssetKind = isKind(kindParam) ? kindParam : 'skill'
   const owner = ownerFilterOf(params.get('owner'))
-  const assets = useLoad('agents', () => api.assets(), [])
+  const assets = useLoad(() => api.assets(), [])
   const agents = useAgents()
   const set = (patch: Record<string, string>) => setParams({ kind, owner, ...patch }, { replace: true })
 

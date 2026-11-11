@@ -18,7 +18,7 @@ function byDay(entries: HistoryEntry[]): [string, HistoryEntry[]][] {
 export function HistoryList({ agent }: { agent: AgentId }) {
   const [input, setInput] = useState('')
   const [query, setQuery] = useState('')
-  const history = useLoad('history', () => api.agentHistory(agent, query || undefined), [agent, query])
+  const history = useLoad(() => api.agentHistory(agent, query || undefined), [agent, query])
 
   return (
     <div className="flex flex-col gap-3">

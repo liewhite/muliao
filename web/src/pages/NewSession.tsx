@@ -37,7 +37,7 @@ export default function NewSession() {
   const agent = chosen ?? agents.data?.find((a) => a.is_default)?.id ?? null
   const [prompt, setPrompt] = useState('')
   const [thresholdText, setThresholdText] = useState('')
-  const features = useLoad(null, loadFeatures, [])
+  const features = useLoad(loadFeatures, [])
   // 默认值与下限没取到时输入框禁用、只能留空（用默认）
   const threshold = features.data ? parseThreshold(thresholdText, features.data.min_compaction_threshold_tokens) : null
   const uploads = useUploads()

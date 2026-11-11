@@ -14,7 +14,7 @@ from fastapi import APIRouter
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from muliao.api.deps import C
+from muliao.api.deps import C, reads
 from muliao.files.api import UNTRUSTED_CONTENT_HEADERS
 from muliao.workspace.api import Entry, GrantInfo, WorkspaceFile
 
@@ -37,7 +37,7 @@ class EntryOut(BaseModel):
         return cls(name=e.name, is_dir=e.is_dir, size=e.size, modified=e.modified, inline=e.inline)
 
 
-@router.get("/agents/{agent_id}/workspace")
+@router.get("/agents/{agent_id}/workspace", openapi_extra=reads("agents"))
 async def list_workspace(c: C, agent_id: str, path: str = "") -> list[EntryOut]:
     """列出工作目录里 path（相对工作目录，空为根）这一层：目录在前，各自按名称排序。"""
     await c.agents.get_active(agent_id)
@@ -45,7 +45,7 @@ async def list_workspace(c: C, agent_id: str, path: str = "") -> list[EntryOut]:
     return [EntryOut.of(e) for e in entries]
 
 
-@router.get("/agents/{agent_id}/workspace/file")
+@router.get("/agents/{agent_id}/workspace/file", openapi_extra=reads("agents"))
 async def read_workspace_file(c: C, agent_id: str, path: str) -> FileResponse:
     """工作目录里一个文件的内容。"""
     await c.agents.get_active(agent_id)
@@ -93,7 +93,7 @@ class ScriptGrantOut(BaseModel):
         )
 
 
-@router.get("/script-grants")
+@router.get("/script-grants", openapi_extra=reads("workspace"))
 async def list_script_grants(c: C) -> list[ScriptGrantOut]:
     """skill 脚本的「始终允许」（#531），新的在前。"""
     return [ScriptGrantOut.of(g) for g in await c.script_grants.list()]

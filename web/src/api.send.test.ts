@@ -32,6 +32,15 @@ describe('send decodes responses by HTTP status and type', () => {
     await expect(api.memory('global')).rejects.toThrow(SyntaxError)
   })
 
+  it('gives every request a time limit and says so when it runs out', async () => {
+    const fetch = vi.fn(async (_url: string, init: RequestInit) => {
+      expect(init.signal).toBeInstanceOf(AbortSignal)
+      throw new DOMException('timed out', 'TimeoutError')
+    })
+    vi.stubGlobal('fetch', fetch)
+    await expect(api.issues()).rejects.toThrow(/请求超时（30 秒没有响应）：GET \/api\/issues/)
+  })
+
   it('fails when a response without a declared body has one', async () => {
     respond(202, '<html>proxy page</html>', { 'Content-Type': 'text/html' })
     await expect(api.stop('s1')).rejects.toThrow(/unexpected non-JSON body/)

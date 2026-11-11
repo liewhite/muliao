@@ -89,9 +89,7 @@ export default function Sessions() {
     const timer = setTimeout(() => setKeyword(text.trim()), 300)
     return () => clearTimeout(timer)
   }, [text])
-  const sessions = useLoad(
-    'sessions',
-    () =>
+  const sessions = useLoad(() =>
       api.sessions({
         origin: FILTERS[filter].origins ?? undefined,
         q: keyword === '' ? undefined : keyword,

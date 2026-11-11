@@ -39,7 +39,7 @@ const STATUS_COLOR: Record<TaskStatus, 'danger' | 'success' | 'warning' | 'accen
 export function Tasks() {
   const from = useReturnState()
   const [filter, setFilter] = useState<StatusFilter>('failed')
-  const tasks = useLoad('tasks', () => api.tasks(STATUS_FILTERS[filter].status), [filter])
+  const tasks = useLoad(() => api.tasks(STATUS_FILTERS[filter].status), [filter])
   const agents = useAgents()
   const action = useAction()
   return (
@@ -195,7 +195,7 @@ export function Settings() {
 /** skill 脚本的「始终允许」：在审批处点「始终允许」记下的，逐条可撤销（撤销后同一调用重新要批准） */
 function ScriptGrants() {
   const from = useReturnState()
-  const grants = useLoad('workspace', () => api.scriptGrants(), [])
+  const grants = useLoad(() => api.scriptGrants(), [])
   const agents = useAgents()
   const confirm = useConfirm()
   const action = useAction()

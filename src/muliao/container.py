@@ -228,6 +228,7 @@ class Assembly:
                 root.start_soon(_loop, "mail", self.mail.run_forever)
                 root.start_soon(_loop, "checks", self.work.run_forever)
                 root.start_soon(_loop, "retention", self.retention.run_forever)
+                root.start_soon(_loop, "assets", self.assets.watch)
                 try:
                     yield
                 finally:

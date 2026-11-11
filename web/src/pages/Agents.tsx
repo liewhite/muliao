@@ -170,8 +170,8 @@ function ModelInput({
   const sep = value.indexOf(':')
   const provider = sep > 0 ? value.slice(0, sep) : null
   const model = sep > 0 ? value.slice(sep + 1) : ''
-  const providers = useLoad(null, () => api.providers(), [])
-  const models = useLoad(null, () => (provider ? api.providerModels(provider) : Promise.resolve([])), [provider])
+  const providers = useLoad(() => api.providers(), [])
+  const models = useLoad(() => (provider ? api.providerModels(provider) : Promise.resolve([])), [provider])
   const listed = models.data ?? []
   return (
     <div className="flex flex-col gap-2">
@@ -322,7 +322,7 @@ function AgentEditForm({ agent, current }: { agent: AgentId; current: AgentInput
 
 export function AgentCreate() {
   const navigate = useNavigate()
-  const defaults = useLoad(null, () => api.agentDefaults(), [])
+  const defaults = useLoad(() => api.agentDefaults(), [])
   return (
     <Page title="新建 agent" back="/agents">
       <Card>
@@ -349,7 +349,7 @@ export function AgentDetail() {
   const id = asAgentId(useRouteParam('id'))
   const navigate = useNavigate()
   const confirm = useConfirm()
-  const agent = useLoad('agents', () => api.agent(id), [id])
+  const agent = useLoad(() => api.agent(id), [id])
   const [tab, setTab] = useState<Key>('config')
   const action = useAction()
   const name = agent.data?.name ?? id
@@ -361,9 +361,7 @@ export function AgentDetail() {
       confirmLabel: '删除',
       danger: true,
     })
-    if (ok && (await action.run(() => api.deleteAgent(id)))) {
-      navigate('/agents')
-    }
+    if (ok) await action.run(() => api.deleteAgent(id), { leave: () => navigate('/agents') })
   }
 
   async function toggleArchived(on: boolean) {

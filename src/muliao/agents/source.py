@@ -8,6 +8,7 @@
   规则校验（agents.asset_files.vet，#500、#578）再原子写入，界面与文件工具对同一份内容结论一致。
 - 平台的其余写入（vault_set 加密、导入 skill 整个目录、建 / 改名 / 删 agent、改 access.toml、删除与转移）在 writing() 里
   做：与读共用一把锁，读-改-写串行；agent.toml 的规则在 AgentFile 与 check_agent，access.toml 的在 access_file。
+- 「资源文件变了」只由 watch() 看文件系统得出（平台自己写的、agent 用 shell 改的、用户在别处改的都算），不按谁写了逐处通知。
 """
 
 from __future__ import annotations
@@ -20,6 +21,8 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from watchfiles import awatch
+
 from muliao.agents import asset_files
 from muliao.agents.active import agent_names_in
 from muliao.agents.agent_file import AGENT_FILE, AgentFile, Thinking
@@ -28,7 +31,7 @@ from muliao.agents.kinds import StoredKind
 from muliao.agents.permissions import GLOBAL_MEMORY, ToolTable
 from muliao.errors import InvalidInput
 from muliao.platform.db import Database
-from muliao.platform.fs import write_atomic
+from muliao.platform.fs import real, write_atomic
 
 log = logging.getLogger(__name__)
 
@@ -51,7 +54,7 @@ class AssetSource:
         memory_max_chars: int,
         # (模型, 思考档位) 在当前配置下不能运行时报 InvalidInput（agent_runtime.llm.ModelRegistry.check）
         model_checker: Callable[[str, Thinking], None],
-        # 平台自己改完资源文件之后调用（组合根给前端发 agents 的数据变了，schema.ChangedEvent）
+        # 资源文件有改动时调用（watch；组合根给前端发 agents 的数据变了，schema.ChangedEvent）
         changed: Callable[[], None],
         # 内置工具表（组合根装好工具集后才 bind；快照带着它）
         tools: ToolTable,
@@ -153,5 +156,17 @@ class AssetSource:
                 yield await self._current()
             finally:
                 self._key = None
-                # 失败的写也可能改过文件（再改回去），一律通知
-                self._changed()
+
+    async def watch(self) -> None:
+        """常驻：资源目录里的文件有改动（隐藏的文件与目录除外，同 fingerprint）就通知一次，密集的改动合成一批。"""
+        # 文件系统报的是真实路径（如 macOS 的 /private/var）；报来不在其下的不按隐藏筛，多通知一次无害
+        root = real(self.root)
+
+        def visible(_change: object, path: str) -> bool:
+            p = Path(path)
+            return not p.is_relative_to(root) or not any(
+                part.startswith(".") for part in p.relative_to(root).parts
+            )
+
+        async for _batch in awatch(root, watch_filter=visible, debounce=200, step=50):
+            self._changed()
