@@ -222,8 +222,8 @@ class Assembly:
             await self._prepare()
             async with self.jobs.running(), anyio.create_task_group() as root:
                 root.start_soon(_loop, "worker", self.worker.run_forever)
-                root.start_soon(_loop, "due", self.trigger_domain.due.run_forever)
-                root.start_soon(_loop, "streams", self.trigger_domain.streams.run_forever)
+                for name, loop in self.trigger_domain.loops():
+                    root.start_soon(_loop, name, loop)
                 root.start_soon(_loop, "mail", self.mail.run_forever)
                 root.start_soon(_loop, "checks", self.work.run_forever)
                 root.start_soon(_loop, "retention", self.retention.run_forever)

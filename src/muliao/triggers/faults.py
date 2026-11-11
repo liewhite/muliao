@@ -129,7 +129,8 @@ class Faults:
     async def alert_in(
         self, s: AsyncSession, trigger: Trigger, *, title: str, letter: str, summary: str
     ) -> None:
-        """告诉触发器所属的 agent（新会话，letter 说明出了什么错、怎么处理）；投不进去时退回给用户推送（title 与 summary）。"""
+        """告诉触发器所属的 agent（新会话，letter 说明出了什么错、怎么处理）；投不进去时退回给用户推送（title 与 summary）。
+        不先查自己的 agent 是否可用：它已归档或正在删除时 routed_in 报错，靠的就是这个退给用户（如一次性触发器到点时 agent 已归档）。"""
         sender = Sender.of(trigger, f"{trigger.name} {title} · {local_time(self._clock(), self._tz)}")
         try:
             routed = await routed_in(s, sender, DEFAULT, letter)

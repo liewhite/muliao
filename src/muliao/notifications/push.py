@@ -21,7 +21,7 @@ from muliao.platform.tasks import Commit, TaskQueue, no_commit
 
 log = logging.getLogger(__name__)
 
-# 推送一条通知到一台设备的任务种类（组合根为它登记 DeliverHandler）
+# 推送一条通知到一台设备的任务种类（DeliverHandler 由 NotificationDomain.handlers 给出，组合根交给 worker 登记）
 DELIVER_TASK = "deliver"
 
 
