@@ -129,7 +129,7 @@ class Steps:
         state.notices = notices
 
     def begin(self, state: RunState, taken: Sequence[Mail], opening: Content) -> None:
-        """开头取走的信件与交给模型的内容（sessions.consumer 交出之后）：第一条请求交出时随它进入 taken（_took）。"""
+        """开头取走的信件与交给模型的内容（sessions.consumer 交出之后）：第一条请求交出时随它进入 taken（_took_request）。"""
         state.opening = Opening(list(taken), opening)
 
     def _took_request(self, state: RunState, request: ModelRequest) -> None:
