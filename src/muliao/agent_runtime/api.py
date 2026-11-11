@@ -1,5 +1,5 @@
 """agent 运行时的公开接口（docs/architecture.md 2.1）：会话运行的端口——逐步驱动一次运行（结局为 Finished / Paused，工具用 defer_call 挂起；不交出模型库的运行类型）、运行时写下的消息约定
-（工具交回给用户的文件与图片；会话自己的约定在 sessions.conventions）、工具组合（MCP 的配置归 agent 领域，见 agents.api）。
+（工具交回给用户的文件与图片；会话自己的约定在 sessions.conventions）、思考块里给人看的文字（thinking_text）、工具组合（MCP 的配置归 agent 领域，见 agents.api）。
 具体的工具在各自的领域（如 workspace 的文件与 shell、web）。别的领域只经这里使用它。"""
 
 from muliao.agent_runtime.attachments import copy_to_workspace, references
