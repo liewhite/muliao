@@ -94,7 +94,7 @@ class Steps:
             started=lambda notices: self._started(state, notices),
             took=lambda new: state.unsaved.extend(new),
             before_request=lambda request: self._before_request(state, request, run_context),
-            after_response=lambda: self._save(state, [], consumed=[]),
+            after_response=lambda: self._save(state, None, consumed=[]),
             on_text=lambda kind, text: self._live.publish_delta(
                 state.session.id, state.session.agent_id, kind, text
             ),
@@ -145,7 +145,7 @@ class Steps:
             # 只挂在本次运行新增的第一条请求上（重发的那条已经在库里，不改它——改了它，它之前的历史就不再是同一个
             # 前缀，缓存全废）。运行上下文已经挂出去了（压缩后续跑）时，notices 单独挂在下一条新请求上
             attach_run_context(request, context)
-        await self._save(state, [request], consumed=state.taken)
+        await self._save(state, request, consumed=state.taken)
         if state.last_row is None:
             raise RuntimeError(f"run {state.run_id} saved a request without a row")
         if attaching:
@@ -195,15 +195,15 @@ class Steps:
             if requested:
                 await record_approvals_in(s, state.session.id, requested)
 
-    async def _save(
-        self, state: RunState, request: Sequence[ModelRequest], *, consumed: Sequence[Mail]
-    ) -> None:
+    async def _save(self, state: RunState, request: ModelRequest | None, *, consumed: Sequence[Mail]) -> None:
         """一步：运行已交出、还没保存的消息（state.unsaved）接上这次请求（模型回复之后保存时没有），与它们带上的信件
         （记为已处理）在同一个事务里提交。提交之后到清空 unsaved 之间没有挂起点，被停止时不会把已提交的再存一遍：原生取消
         只在事务之外发出（sessions.stopping），提交后只有登记的 when_committed 动作会 await（platform.db），而 save_in 不登记
         ——给它加上了就要在这里重新考虑重复保存。"""
         async with self._db.transaction() as s:
-            await self.save_in(s, state, [*state.unsaved, *request], consumed=consumed)
+            await self.save_in(
+                s, state, [*state.unsaved, *([] if request is None else [request])], consumed=consumed
+            )
         state.unsaved.clear()
 
     async def save_tail_in(self, s: AsyncSession, state: RunState) -> None:
