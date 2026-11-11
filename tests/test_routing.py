@@ -276,6 +276,12 @@ async def test_the_default_route_is_checked_when_set_and_again_when_its_target_i
     with pytest.raises(InvalidInput, match="route target not found or gone"):
         await container.triggers.fire(trigger.id, "x")
 
+    # 内容全被 `@route` 分走、没有一段落到默认目标，默认目标照样校验（#602）：激活时停用并记原因
+    await container.triggers.fire_activated(trigger.id, "@route agent:alpha\nfor alpha")
+    after = await container.triggers.get_by_name("feed")
+    assert not after.enabled and "route target not found or gone" in (after.disabled_reason or "")
+    assert await _sessions(container) == []
+
 
 async def test_an_address_without_content_is_still_checked(container, make_agent):
     alpha = await make_agent("alpha")
