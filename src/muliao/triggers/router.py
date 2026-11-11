@@ -19,7 +19,6 @@ from typing import assert_never
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.api import named_agent_in
-from muliao.errors import CorruptState
 from muliao.issues.api import issue_exists_in, issue_recipient
 from muliao.issues.events import PostIssueEvent
 from muliao.platform.ids import new_id
@@ -27,12 +26,12 @@ from muliao.platform.messaging import Command
 from muliao.sessions.api import (
     Accepted,
     NewConversation,
-    Origin,
     Recipient,
     Refusal,
     Refused,
     SenderMail,
     SessionKey,
+    TriggerOrigin,
     agent_refusal_in,
     receive_command_in,
 )
@@ -52,30 +51,12 @@ from muliao.triggers.targets import (
 log = logging.getLogger(__name__)
 
 
-def sender_ref(trigger_id: int) -> str:
-    """触发器在会话领域里的身份（origin_ref）：它的 id。只在这里拼，由 trigger_of 解。"""
-    return str(trigger_id)
-
-
-def trigger_of(session_id: str, origin_ref: str | None) -> int:
-    """触发器发起的会话（origin 是 Origin.TRIGGER）的触发器 id：缺了是存下的数据坏了。"""
-    if origin_ref is None:
-        raise CorruptState(f"trigger session {session_id} has no trigger id (origin_ref)")
-    try:
-        return int(origin_ref)
-    except ValueError:
-        raise CorruptState(
-            f"trigger session {session_id} has a malformed trigger id (origin_ref {origin_ref!r})"
-        ) from None
-
-
 @dataclass(frozen=True)
 class Sender:
-    """事件的发送方，一个触发器：会话领域里的身份（origin, origin_ref），它所属的 agent（默认目标、issue 时间线上的
+    """事件的发送方，一个触发器：在会话领域里的身份（只交出自己的 id，编号格式归会话领域），它所属的 agent（默认目标、issue 时间线上的
     actor），来源的描述（issue 时间线上显示，如 "trigger slack-live"），新开会话与续写的会话新建时的标题。"""
 
-    origin: Origin
-    origin_ref: str
+    origin: TriggerOrigin
     agent_id: str
     source: str
     title: str
@@ -85,8 +66,7 @@ class Sender:
     def of(cls, trigger: Trigger, title: str) -> Sender:
         """触发器作为发送方；title 是这次新开的会话的标题（续写的会话新建时用触发器名）。"""
         return cls(
-            origin=Origin.TRIGGER,
-            origin_ref=sender_ref(trigger.id),
+            origin=TriggerOrigin(trigger_id=trigger.id),
             agent_id=trigger.agent_id,
             source=f"trigger {trigger.name}",
             title=title,
@@ -298,7 +278,7 @@ async def routed_in(
             return Routed(command=command, recipient=issue_recipient(issue_id), session_id=None)
         case other:
             assert_never(other)
-    mail = SenderMail(origin=sender.origin, origin_ref=sender.origin_ref, content=content, session=session)
+    mail = SenderMail(sender=sender.origin, content=content, session=session)
     match await receive_command_in(s, mail):
         case Accepted(command=command, recipient=recipient, session_id=session_id):
             return Routed(command=command, recipient=recipient, session_id=session_id)

@@ -2157,3 +2157,71 @@ def test_triggers_keep_the_last_recipient_handle_and_downgrade_keeps_only_sessio
         }
     assert back["a"] == ("s1", {"next_run_at": "x", "skipped": skipped})
     assert back["b"] == (None, {})
+
+
+def test_unfinished_session_events_get_structured_origins_and_downgrade_restores_them(tmp_path):
+    """#632：没成功的 RunEnded / RunFailed / Receive 投递换成结构化来源，RunEnded 的三个布尔换成 waiting_on；做完的不动。
+    降级反算回旧形状。"""
+    import json
+
+    from alembic import command
+
+    from muliao.platform.db import _migration_engine
+
+    path = tmp_path / "m.db"
+    migrate(path, "f4c1a9d27e83")
+    t = "2026-01-01 00:00:00"
+    ended = {"session_id": "s", "origin": "issue", "origin_ref": "7", "paused": True, "asked_user": False}
+    approval = {**ended, "origin": "user", "origin_ref": None, "asked_user": True, "needs_approval": True}
+    failed = {"session_id": "s", "origin": "trigger", "origin_ref": "3", "error": "e"}
+    receive = {"mail": {"origin": "issue", "origin_ref": "9", "content": "x", "session": "s"}}
+    rows = [
+        ("session.run_ended", ended, "pending"),
+        ("session.run_ended", approval, "failed"),
+        ("session.run_failed", failed, "running"),
+        ("session.receive", receive, "pending"),
+        ("session.run_ended", ended, "done"),
+    ]
+    with sqlite3.connect(path) as conn:
+        conn.executemany(
+            "insert into tasks (kind, lane, payload, status, attempts, not_before, created_at) "
+            "values ('event', 'l', ?, ?, 0, ?, ?)",
+            [(json.dumps({"type": k, "receiver": "r", "id": "m", "data": d}), s, t, t) for k, d, s in rows],
+        )
+    migrate(path)
+
+    def payloads() -> list[dict]:
+        with sqlite3.connect(path) as conn:
+            return [json.loads(p)["data"] for (p,) in conn.execute("select payload from tasks order by id")]
+
+    up = payloads()
+    assert up[0] == {
+        "session_id": "s",
+        "origin": {"kind": "issue", "issue_id": 7},
+        "waiting_on": ["ask_agent"],
+    }
+    assert up[1]["origin"] == {"kind": "user"} and up[1]["waiting_on"] == ["ask_user", "approval"]
+    assert up[2] == {"session_id": "s", "origin": {"kind": "trigger", "trigger_id": 3}, "error": "e"}
+    assert up[3] == {"mail": {"sender": {"kind": "issue", "issue_id": 9}, "content": "x", "session": "s"}}
+    assert up[4] == ended
+    # 换算后的形状就是现在的事件模型
+    from muliao.sessions.events import RunEnded, RunFailed, SenderMail
+
+    base = {
+        "session_title": "t",
+        "agent_id": "a",
+        "agent_name": "a",
+        "run_id": 1,
+        "answer": "",
+        "stopped": False,
+    }
+    RunEnded.model_validate({**base, **up[0], "awaited": True})
+    RunFailed.model_validate({**up[2], "agent_id": "a", "agent_name": "a", "run_id": 1})
+    SenderMail.model_validate(up[3]["mail"])
+
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "f4c1a9d27e83")
+    down = payloads()
+    assert down[0] == {**ended, "needs_approval": False}
+    assert down[1] == approval
+    assert down[2] == failed and down[3] == receive and down[4] == ended

@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.api import AgentArchived, Availability, agent_in, availability_in, runnable_agent_in
 from muliao.config import MIN_COMPACTION_THRESHOLD_TOKENS
-from muliao.errors import Conflict, Forbidden, InvalidInput, NotFound
+from muliao.errors import Conflict, CorruptState, Forbidden, InvalidInput, NotFound
 from muliao.files.api import FileMeta, load_metas
 from muliao.platform.db import utcnow
 from muliao.platform.ids import new_id
@@ -39,7 +39,15 @@ from muliao.sessions.events import (
 )
 from muliao.sessions.lanes import keyed_receive_lane, receive_lane
 from muliao.sessions.mailbox import open_asks_in, post_in
-from muliao.sessions.origins import RULES, Origin
+from muliao.sessions.origins import (
+    RULES,
+    DelegationOrigin,
+    IssueOrigin,
+    Origin,
+    TriggerOrigin,
+    UserOrigin,
+    origin_of,
+)
 from muliao.sessions.pending import CallResult
 from muliao.sessions.questions import QuestionAnswer, UserAnswered, answer_result
 from muliao.sessions.tables import TITLE_LENGTH, Mail, MailKind, Session
@@ -47,6 +55,21 @@ from muliao.sessions.tables import TITLE_LENGTH, Mail, MailKind, Session
 log = logging.getLogger(__name__)
 
 _TITLE_MAX = 60
+
+
+@dataclass(frozen=True)
+class FromParent:
+    """委派来的信：发送方是父会话（会话领域内部，对外的来源是 DelegationOrigin，父会话在 parent_session_id）。"""
+
+    parent_session_id: str
+
+    @property
+    def kind(self) -> Origin:
+        return Origin.DELEGATION
+
+
+# 一封来信的具体发送方（会话领域内部）：用户、委派方（父会话）、别的领域的发送方
+type From = UserOrigin | FromParent | TriggerOrigin | IssueOrigin
 
 
 def default_title(text: str) -> str:
@@ -89,11 +112,10 @@ class Inbound:
     会话领域之外只用三种入口各自的类型：别的领域的 SenderMail、界面的 UserMessage；委派由 Threads.send 与 Delegations.dispatch 在领域内部构造。
 
     session 就是各入口自己的目标：已有会话的 id 时在其中继续；NewConversation（别的领域）、NewChat（用户）时新建会话；
-    SessionKey 时按发送方定位（没有就新建）。origin_ref 标识具体的发送方：触发器 id、issue id、委派方（父）会话 id；用户为 None。
+    SessionKey 时按发送方定位（没有就新建）。sender 是具体的发送方：用户、委派方（父会话）、触发器、issue。
     """
 
-    origin: Origin
-    origin_ref: str | None
+    sender: From
     content: str
     session: str | NewConversation | SessionKey | NewChat
     # 用户是否在等它的回答（处理它的运行结束时推送）
@@ -111,8 +133,7 @@ class Inbound:
 def _inbound_of_mail(mail: SenderMail) -> Inbound:
     """别的领域的来信：没有人在等。"""
     return Inbound(
-        origin=mail.origin,
-        origin_ref=mail.origin_ref,
+        sender=mail.sender,
         content=mail.content,
         session=mail.session,
         awaited=False,
@@ -134,8 +155,7 @@ class UserMessage:
 
     def inbound(self) -> Inbound:
         return Inbound(
-            origin=Origin.USER,
-            origin_ref=None,
+            sender=UserOrigin(),
             content=self.content,
             session=self.session,
             awaited=True,
@@ -152,32 +172,37 @@ class Received:
     mail: list[Mail]
 
 
-def _sender_of(session: Session) -> tuple[Origin, str | None]:
+def _sender_of(session: Session) -> From:
     """会话的发起方。委派会话的发起方就是它的父会话（存在 parent_session_id，不另存副本）。"""
-    if RULES[session.origin].from_parent:
-        return session.origin, session.parent_session_id
-    return session.origin, session.origin_ref
+    match origin := origin_of(session):
+        case DelegationOrigin():
+            if session.parent_session_id is None:
+                raise CorruptState(f"delegated session {session.id} has no parent")
+            return FromParent(session.parent_session_id)
+        case UserOrigin() | TriggerOrigin() | IssueOrigin():
+            return origin
+        case other:
+            assert_never(other)
 
 
-def _may_continue(session: Session, origin: Origin, origin_ref: str | None) -> bool:
+def _may_continue(session: Session, sender: From) -> bool:
     """续写规则：用户可以在任何会话里继续；其他来源只能续写自己发起的会话。"""
-    return RULES[origin].writes_anywhere or _sender_of(session) == (origin, origin_ref)
+    return RULES[sender.kind].writes_anywhere or _sender_of(session) == sender
 
 
-async def create_session(
-    s: AsyncSession, *, origin: Origin, origin_ref: str | None, spec: NewSession
-) -> Session:
+async def create_session(s: AsyncSession, *, sender: From, spec: NewSession) -> Session:
     """新建会话的唯一实现（receive 与 ask_agent 占用 thread 都经过这里）。"""
     await runnable_agent_in(s, spec.agent_id)
-    is_thread = RULES[origin].from_parent
+    is_thread = isinstance(sender, FromParent)
     if (spec.parent_session_id is not None) != is_thread or (spec.thread is not None) != is_thread:
         raise ValueError(
-            f"only delegation creates threads, each with a parent and a name; got {origin} creating a "
+            f"only delegation creates threads, each with a parent and a name; got {sender.kind} creating a "
             f"session with parent {spec.parent_session_id} and name {spec.thread!r}"
         )
-    if is_thread and spec.parent_session_id != origin_ref:
+    if isinstance(sender, FromParent) and spec.parent_session_id != sender.parent_session_id:
         raise ValueError(
-            f"delegated session must be created by its parent {spec.parent_session_id}, not {origin_ref}"
+            f"delegated session must be created by its parent {spec.parent_session_id}, "
+            f"not {sender.parent_session_id}"
         )
     threshold = spec.compaction_threshold_tokens
     if threshold is not None and threshold < MIN_COMPACTION_THRESHOLD_TOKENS:
@@ -190,24 +215,21 @@ async def create_session(
         agent_id=spec.agent_id,
         # 发送方给的标题（如 issue 标题）可能比列宽长，在这里统一截断
         title=_shorten(spec.title, TITLE_LENGTH),
-        origin=origin,
-        # 委派的发起方即 parent_session_id
-        origin_ref=None if is_thread else origin_ref,
+        origin=sender.kind,
+        # 只有别的领域的发送方在库里有编号；委派的发起方即 parent_session_id
+        origin_ref=sender.ref if isinstance(sender, TriggerOrigin | IssueOrigin) else None,
         parent_session_id=spec.parent_session_id,
         thread=spec.thread,
         compaction_threshold_tokens=spec.compaction_threshold_tokens,
     )
 
 
-async def keyed_session_in(s: AsyncSession, origin: Origin, origin_ref: str, agent_id: str) -> Session | None:
+async def _keyed_session_in(s: AsyncSession, inbound: Inbound, agent_id: str) -> Session | None:
     """按发送方定位的会话（SessionKey）：这个发送方给这个 agent 开过的最新一个顶层会话（规则在 directory.keyed_rows_among）。"""
-    return (await keyed_rows_among(s, origin, [origin_ref], agent_id)).get((origin_ref, agent_id))
-
-
-def _key_ref(inbound: Inbound) -> str:
-    if not RULES[inbound.origin].identified or inbound.origin_ref is None:
-        raise ValueError(f"only a sender with an identity can address a session by key, got {inbound.origin}")
-    return inbound.origin_ref
+    sender = inbound.sender
+    if not isinstance(sender, TriggerOrigin | IssueOrigin):
+        raise ValueError(f"only a sender with an identity can address a session by key, got {sender.kind}")
+    return (await keyed_rows_among(s, [sender], agent_id)).get((sender, agent_id))
 
 
 async def _resolve_answers(
@@ -288,7 +310,7 @@ async def check_in(s: AsyncSession, inbound: Inbound) -> Checked | Refused:
         return refused or Checked(None, attachments)
     if isinstance(inbound.session, SessionKey):
         key = inbound.session
-        session = await keyed_session_in(s, inbound.origin, _key_ref(inbound), key.agent_id)
+        session = await _keyed_session_in(s, inbound, key.agent_id)
         if session is None:
             refused = await agent_refusal_in(s, key.agent_id)
             return refused or Checked(None, attachments)
@@ -296,10 +318,10 @@ async def check_in(s: AsyncSession, inbound: Inbound) -> Checked | Refused:
         session = await s.get(Session, inbound.session)
         if session is None:
             return Refused(Refusal.GONE, f"session {inbound.session!r} not found")
-    if not _may_continue(session, inbound.origin, inbound.origin_ref):
+    if not _may_continue(session, inbound.sender):
         log.warning(
             "continuation refused",
-            extra={"session_id": session.id, "origin": inbound.origin, "origin_ref": inbound.origin_ref},
+            extra={"session_id": session.id, "sender": repr(inbound.sender)},
         )
         return Refused(
             Refusal.NOT_YOURS,
@@ -329,7 +351,7 @@ def receive_lane_of(command: Receive) -> str:
     mail = command.mail
     match mail.session:
         case SessionKey(agent_id=agent_id):
-            return keyed_receive_lane(mail.origin, mail.origin_ref, agent_id)
+            return keyed_receive_lane(mail.sender.kind, mail.sender.ref, agent_id)
         case NewConversation(id=session_id) | str(session_id):
             return receive_lane(session_id)
         case other:
@@ -364,7 +386,7 @@ async def receive_command_in(s: AsyncSession, mail: SenderMail) -> Accepted | Re
         case str(session_id) | NewConversation(id=session_id):
             return Accepted(command, ToSession(session_id=session_id), session_id)
         case SessionKey(agent_id=agent_id):
-            recipient = ToKeyed(origin=mail.origin, origin_ref=mail.origin_ref, agent_id=agent_id)
+            recipient = ToKeyed(sender=mail.sender, agent_id=agent_id)
             return Accepted(command, recipient, None if session is None else session.id)
         case other:
             assert_never(other)
@@ -406,7 +428,7 @@ async def receive_into(s: AsyncSession, queue: TaskQueue, inbound: Inbound, chec
                 )
             case other:
                 assert_never(other)
-        session = await create_session(s, origin=inbound.origin, origin_ref=inbound.origin_ref, spec=spec)
+        session = await create_session(s, sender=inbound.sender, spec=spec)
     session.updated_at = utcnow()
     mail = []
     if inbound.answers or inbound.approvals:
@@ -417,7 +439,7 @@ async def receive_into(s: AsyncSession, queue: TaskQueue, inbound: Inbound, chec
                 queue,
                 session.id,
                 kind=MailKind.ANSWER,
-                origin=inbound.origin,
+                origin=inbound.sender.kind,
                 content="",
                 answers={k: v.model_dump() for k, v in answers.items()},
                 awaited=inbound.awaited,
@@ -430,7 +452,7 @@ async def receive_into(s: AsyncSession, queue: TaskQueue, inbound: Inbound, chec
                 queue,
                 session.id,
                 kind=MailKind.MESSAGE,
-                origin=inbound.origin,
+                origin=inbound.sender.kind,
                 content=inbound.content,
                 attachments=inbound.attachments,
                 awaited=inbound.awaited,
@@ -439,6 +461,6 @@ async def receive_into(s: AsyncSession, queue: TaskQueue, inbound: Inbound, chec
         )
     log.info(
         "message received",
-        extra={"session_id": session.id, "origin": inbound.origin, "origin_ref": inbound.origin_ref},
+        extra={"session_id": session.id, "sender": repr(inbound.sender)},
     )
     return Received(session, mail)

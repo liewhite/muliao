@@ -3,6 +3,7 @@
 
 import re
 from datetime import datetime
+from typing import assert_never
 from zoneinfo import ZoneInfo
 
 from pydantic_ai import FunctionToolset, RunContext
@@ -12,7 +13,7 @@ from muliao.errors import InvalidInput
 from muliao.platform.text_edit import truncate
 from muliao.platform.tooling import TOOL_MAX_RETRIES, Access, RunScope, declared
 from muliao.sessions.info import SessionInfo
-from muliao.sessions.origins import Origin
+from muliao.sessions.origins import DelegationOrigin, IssueOrigin, Origin, TriggerOrigin, UserOrigin
 from muliao.sessions.recall import Entry, SessionRecall
 
 SESSION_READ = "session_read"
@@ -77,7 +78,13 @@ def indented(text: str) -> str:
 
 def place(session: SessionInfo, parent_session_id: str | None) -> str:
     """会话从哪来：来源、发送方身份（issue 号等），thread 再加上名字与父会话 id 前缀。"""
-    where = session.origin.value + (f" #{session.origin_ref}" if session.origin_ref else "")
+    match session.origin:
+        case TriggerOrigin(trigger_id=n) | IssueOrigin(issue_id=n):
+            where = f"{session.origin.kind.value} #{n}"
+        case UserOrigin() | DelegationOrigin():
+            where = session.origin.kind.value
+        case other:
+            assert_never(other)
     if session.thread is not None:
         where += f" thread {session.thread!r} of {(parent_session_id or '(deleted)')[:8]}"
     return where

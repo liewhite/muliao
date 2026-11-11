@@ -31,8 +31,7 @@ from muliao.sessions.activity import WorkState, work_states_in
 from muliao.sessions.answers import AgentAnswer, AgentAnswered
 from muliao.sessions.directory import among_in
 from muliao.sessions.holds import hold_delegation_in
-from muliao.sessions.inbound import Inbound, receive
-from muliao.sessions.origins import Origin
+from muliao.sessions.inbound import FromParent, Inbound, receive
 from muliao.sessions.runs import latest_runs_among
 from muliao.sessions.sources import thread_source
 from muliao.sessions.tables import Session
@@ -96,8 +95,7 @@ class Delegations:
             s,
             self._queue,
             Inbound(
-                origin=Origin.DELEGATION,
-                origin_ref=parent_id,
+                sender=FromParent(parent_id),
                 content=prompt,
                 session=child.id,
                 # 没有人等 thread 的回答：结局交回发起方，由它处理

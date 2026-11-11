@@ -10,7 +10,6 @@ from muliao.api.tasks import TaskOut
 from muliao.api.usage import UsageCounts
 from muliao.container import Container
 from muliao.errors import CorruptState, InvalidInput
-from muliao.issues.api import issue_of
 from muliao.sessions.api import (
     ApprovalChoice,
     ApprovalWait,
@@ -25,63 +24,28 @@ from muliao.sessions.api import (
     Origin,
     QuestionAnswer,
     RunEvent,
+    SessionOrigin,
+    TriggerOrigin,
     UserMessage,
     Wait,
     WakeWait,
     WorkState,
     call_result,
+    origin_of,
     parse_source,
 )
 from muliao.sessions.tables import Compaction, Mail, MailKind, MailState, Session
-from muliao.triggers.api import sender_ref, trigger_of
 from muliao.workspace.api import JobInfo
 from muliao.workspace.tables import JobStatus
 
 router = APIRouter()
 
 
-class UserOrigin(BaseModel):
-    kind: Literal[Origin.USER]
-
-
-class DelegationOrigin(BaseModel):
-    """发起方是父会话：见 SessionOut.parent_session_id 与 thread。"""
-
-    kind: Literal[Origin.DELEGATION]
-
-
-class TriggerOrigin(BaseModel):
-    kind: Literal[Origin.TRIGGER]
-    trigger_id: int
-
-
-class IssueOrigin(BaseModel):
-    kind: Literal[Origin.ISSUE]
-    issue_id: int
-
-
-# 会话的来源与发起方：存储里的 origin_ref 由各发送方领域解成结构化的 id，前端不认识它的格式
-SessionOrigin = Annotated[
-    UserOrigin | DelegationOrigin | TriggerOrigin | IssueOrigin, Field(discriminator="kind")
-]
-
-
-def origin_of(s: Session) -> SessionOrigin:
-    match s.origin:
-        case Origin.USER:
-            return UserOrigin(kind=Origin.USER)
-        case Origin.DELEGATION:
-            return DelegationOrigin(kind=Origin.DELEGATION)
-        case Origin.TRIGGER:
-            return TriggerOrigin(kind=Origin.TRIGGER, trigger_id=trigger_of(s.id, s.origin_ref))
-        case Origin.ISSUE:
-            return IssueOrigin(kind=Origin.ISSUE, issue_id=issue_of(s.id, s.origin_ref))
-
-
 class SessionOut(BaseModel):
     id: str
     agent_id: str
     title: str
+    # 会话的来源与发起方（会话领域给出的结构化来源，前端不认识库里的编号格式）
     origin: SessionOrigin
     # 委派产生的子会话：父会话与 thread 名
     parent_session_id: str | None
@@ -301,13 +265,13 @@ async def list_sessions(
     offset: int = Query(0, ge=0),
 ) -> list[SessionListItem]:
     """工作状态不是 idle 的会话（在全部符合筛选的会话里，不只是这一页）置顶，其余按最近更新排序。"""
-    origin_ref = None
+    sender = None
     if trigger_id is not None:
         if origin is not None:
             raise InvalidInput("give either trigger_id or origin, not both")
-        origin, origin_ref = [Origin.TRIGGER], sender_ref(trigger_id)
+        sender = TriggerOrigin(trigger_id=trigger_id)
     listed = await c.sessions.list(
-        agent_id=agent_id, origins=origin, origin_ref=origin_ref, keyword=q, limit=limit, offset=offset
+        agent_id=agent_id, origins=origin, sender=sender, keyword=q, limit=limit, offset=offset
     )
     outs = await session_outs(c, [x.session for x in listed])
     return [SessionListItem(**o.model_dump(), state=x.state) for o, x in zip(outs, listed, strict=True)]

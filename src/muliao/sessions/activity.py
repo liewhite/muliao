@@ -20,7 +20,7 @@ from muliao.sessions.events import Recipient, ToKeyed, ToSender, ToSession
 from muliao.sessions.holds import active_among, with_active_among
 from muliao.sessions.lanes import keyed_receive_lane, receive_lane, session_lane
 from muliao.sessions.mailbox import open_asks_among
-from muliao.sessions.origins import Origin
+from muliao.sessions.origins import Sender
 from muliao.sessions.questions import Question
 from muliao.sessions.tables import Session, SessionHold
 
@@ -128,20 +128,15 @@ class SessionActivity:
         """一批句柄的 recipient_in，按顺序；查询次数与句柄数无关（触发器列表一次要几百个，事务持有全局写锁）。"""
         direct = {r.session_id for r in recipients if isinstance(r, ToSession)}
         existing = set(await among_in(s, direct)) if direct else set()
-        # 按 key 与按发送方的：每种来源一次查出这些发送方开出的会话，(发送方身份, agent) -> 会话
-        refs: dict[Origin, set[str]] = {}
-        for r in recipients:
-            if isinstance(r, ToKeyed | ToSender):
-                refs.setdefault(r.origin, set()).add(r.origin_ref)
-        keyed = {origin: await keyed_rows_among(s, origin, list(rs)) for origin, rs in refs.items()}
-        states = await work_states_in(
-            s, self._queue, list(direct | {x.id for rows in keyed.values() for x in rows.values()})
-        )
+        # 按 key 与按发送方的：一次查出这些发送方开出的会话，(发送方, agent) -> 会话
+        senders = {r.sender for r in recipients if isinstance(r, ToKeyed | ToSender)}
+        keyed = await keyed_rows_among(s, senders)
+        states = await work_states_in(s, self._queue, list(direct | {x.id for x in keyed.values()}))
         # 按 key 定位、会话还没建出来的：信还排着就算 running（信一投就建出会话开始处理）
         unbuilt = [
-            keyed_receive_lane(r.origin, r.origin_ref, r.agent_id)
+            keyed_receive_lane(r.sender.kind, r.sender.ref, r.agent_id)
             for r in recipients
-            if isinstance(r, ToKeyed) and (r.origin_ref, r.agent_id) not in keyed[r.origin]
+            if isinstance(r, ToKeyed) and (r.sender, r.agent_id) not in keyed
         ]
         pending = await self._queue.busy_lanes(s, unbuilt) if unbuilt else set()
 
@@ -149,14 +144,14 @@ class SessionActivity:
             match recipient:
                 case ToSession(session_id=session_id):
                     return RecipientState(states[session_id], session_id if session_id in existing else None)
-                case ToKeyed(origin=origin, origin_ref=ref, agent_id=agent_id):
-                    session = keyed[origin].get((ref, agent_id))
+                case ToKeyed(sender=sender, agent_id=agent_id):
+                    session = keyed.get((sender, agent_id))
                     if session is not None:
                         return RecipientState(states[session.id], session.id)
-                    lane = keyed_receive_lane(origin, ref, agent_id)
+                    lane = keyed_receive_lane(sender.kind, sender.ref, agent_id)
                     return RecipientState(WorkState.RUNNING if lane in pending else WorkState.IDLE, None)
-                case ToSender(origin=origin, origin_ref=ref):
-                    ids = [x.id for (r, _), x in keyed[origin].items() if r == ref]
+                case ToSender(sender=sender):
+                    ids = [x.id for (r, _), x in keyed.items() if r == sender]
                     for wanted in (WorkState.RUNNING, WorkState.WAITING):
                         if busy := [x for x in ids if states[x] == wanted]:
                             return RecipientState(wanted, busy[0])
@@ -167,13 +162,13 @@ class SessionActivity:
         return [state_of(r) for r in recipients]
 
     async def keyed_work_states_in(
-        self, s: AsyncSession, origin: Origin, keys: Collection[tuple[str, str]]
-    ) -> dict[tuple[str, str], WorkState | None]:
-        """按发送方定位的会话（events.SessionKey）的工作状态，key 是 (origin_ref, agent id)：会话存在时是它的状态；还没
+        self, s: AsyncSession, keys: Collection[tuple[Sender, str]]
+    ) -> dict[tuple[Sender, str], WorkState | None]:
+        """按发送方定位的会话（events.SessionKey）的工作状态，key 是 (发送方, agent id)：会话存在时是它的状态；还没
         建出来、但按 key 投给它的来信还没投递时是 running；否则 None（与 recipients_in 的 ToKeyed 同一条规则）。"""
         keys = list(keys)
         found = await self.recipients_in(
-            s, [ToKeyed(origin=origin, origin_ref=ref, agent_id=agent) for ref, agent in keys]
+            s, [ToKeyed(sender=sender, agent_id=agent) for sender, agent in keys]
         )
         return {
             k: None if r.session_id is None and r.state == WorkState.IDLE else r.state

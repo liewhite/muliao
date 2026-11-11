@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from muliao.errors import Conflict, InvalidInput
-from muliao.sessions.api import Origin
+from muliao.sessions.api import TriggerOrigin
 from muliao.triggers.once import OnceKind
 from muliao.triggers.precheck import Precheck
 from muliao.triggers.service import trigger_in
@@ -59,7 +59,7 @@ async def test_once_fires_at_its_time_and_is_then_finished_with_its_session(cont
     [finished] = await container.triggers.list(finished=True)
     assert finished.id == trigger.id and finished.finished_at is not None
     sessions = await container.sessions.list(
-        agent_id=None, origins=[Origin.TRIGGER], origin_ref=str(trigger.id), limit=10, offset=0
+        agent_id=None, origins=None, sender=TriggerOrigin(trigger_id=trigger.id), limit=10, offset=0
     )
     assert [s.session.id for s in sessions] == [(await container.triggers.view(finished)).last_session_id]
 
@@ -172,7 +172,7 @@ async def test_running_a_once_trigger_by_hand_does_not_use_up_its_firing(contain
         and (await container.triggers.view(finished)).last_session_id != manual
     )
     history = await container.sessions.list(
-        agent_id=None, origins=[Origin.TRIGGER], origin_ref=str(trigger.id), limit=10, offset=0
+        agent_id=None, origins=None, sender=TriggerOrigin(trigger_id=trigger.id), limit=10, offset=0
     )
     assert {s.session.id for s in history} == {
         manual,

@@ -523,6 +523,22 @@ def test_path_identity_is_computed_only_in_platform_fs():
     assert offenders == []
 
 
+def test_only_sessions_handle_the_stored_origin_ref():
+    """来源编号在库里的格式归会话领域（归属表第 8 行，#632）：别的领域只交出、读回结构化的来源（TriggerOrigin、IssueOrigin，
+    sessions.origins.origin_of 一处解析），不碰存储里的 origin_ref 与 ref。"""
+    offenders = []
+    for path in SRC.rglob("*.py"):
+        if {"sessions", "migrations", "webui"} & set(path.relative_to(SRC).parts):
+            continue
+        for node in ast.walk(ast.parse(path.read_text())):
+            # ref：TriggerOrigin / IssueOrigin 在库里的编号，同样只给会话领域用
+            if (isinstance(node, ast.Attribute) and node.attr in ("origin_ref", "ref")) or (
+                isinstance(node, ast.keyword) and node.arg == "origin_ref"
+            ):
+                offenders.append(f"{path.relative_to(SRC)}:{node.lineno}")
+    assert offenders == []
+
+
 def test_file_tools_read_and_write_text_only_through_platform_fs():
     """文件工具的文本读写只经 platform.fs（read_text / write_text / write_atomic）：Python 默认的文本读会把 CRLF 换成 LF、
     解码失败抛 UnicodeDecodeError 打崩整次运行（#570）。"""

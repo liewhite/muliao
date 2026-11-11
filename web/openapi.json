@@ -5223,15 +5223,17 @@
           "kind": {
             "type": "string",
             "const": "delegation",
-            "title": "Kind"
+            "title": "Kind",
+            "default": "delegation"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
           "kind"
         ],
         "title": "DelegationOrigin",
-        "description": "发起方是父会话：见 SessionOut.parent_session_id 与 thread。"
+        "description": "发起方是父会话（存在会话的 parent_session_id，不在来源里另存一份）。"
       },
       "DelegationWait": {
         "properties": {
@@ -5959,13 +5961,15 @@
           "kind": {
             "type": "string",
             "const": "issue",
-            "title": "Kind"
+            "title": "Kind",
+            "default": "issue"
           },
           "issue_id": {
             "type": "integer",
             "title": "Issue Id"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
           "kind",
@@ -8628,30 +8632,7 @@
             "title": "Title"
           },
           "origin": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/UserOrigin"
-              },
-              {
-                "$ref": "#/components/schemas/DelegationOrigin"
-              },
-              {
-                "$ref": "#/components/schemas/TriggerOrigin"
-              },
-              {
-                "$ref": "#/components/schemas/IssueOrigin"
-              }
-            ],
-            "title": "Origin",
-            "discriminator": {
-              "propertyName": "kind",
-              "mapping": {
-                "delegation": "#/components/schemas/DelegationOrigin",
-                "issue": "#/components/schemas/IssueOrigin",
-                "trigger": "#/components/schemas/TriggerOrigin",
-                "user": "#/components/schemas/UserOrigin"
-              }
-            }
+            "$ref": "#/components/schemas/SessionOrigin"
           },
           "parent_session_id": {
             "anyOf": [
@@ -8721,6 +8702,31 @@
         "title": "SessionListItem",
         "description": "会话列表里的一行：多一个只在列表里算的工作状态（在运行 / 在等后台任务、委派或用户回答 / 空闲；会话页看\nSessionDetail.run）。"
       },
+      "SessionOrigin": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/UserOrigin"
+          },
+          {
+            "$ref": "#/components/schemas/DelegationOrigin"
+          },
+          {
+            "$ref": "#/components/schemas/TriggerOrigin"
+          },
+          {
+            "$ref": "#/components/schemas/IssueOrigin"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "kind",
+          "mapping": {
+            "delegation": "#/components/schemas/DelegationOrigin",
+            "issue": "#/components/schemas/IssueOrigin",
+            "trigger": "#/components/schemas/TriggerOrigin",
+            "user": "#/components/schemas/UserOrigin"
+          }
+        }
+      },
       "SessionOut": {
         "properties": {
           "id": {
@@ -8736,30 +8742,7 @@
             "title": "Title"
           },
           "origin": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/UserOrigin"
-              },
-              {
-                "$ref": "#/components/schemas/DelegationOrigin"
-              },
-              {
-                "$ref": "#/components/schemas/TriggerOrigin"
-              },
-              {
-                "$ref": "#/components/schemas/IssueOrigin"
-              }
-            ],
-            "title": "Origin",
-            "discriminator": {
-              "propertyName": "kind",
-              "mapping": {
-                "delegation": "#/components/schemas/DelegationOrigin",
-                "issue": "#/components/schemas/IssueOrigin",
-                "trigger": "#/components/schemas/TriggerOrigin",
-                "user": "#/components/schemas/UserOrigin"
-              }
-            }
+            "$ref": "#/components/schemas/SessionOrigin"
           },
           "parent_session_id": {
             "anyOf": [
@@ -9944,13 +9927,15 @@
           "kind": {
             "type": "string",
             "const": "trigger",
-            "title": "Kind"
+            "title": "Kind",
+            "default": "trigger"
           },
           "trigger_id": {
             "type": "integer",
             "title": "Trigger Id"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
           "kind",
@@ -10172,9 +10157,11 @@
           "kind": {
             "type": "string",
             "const": "user",
-            "title": "Kind"
+            "title": "Kind",
+            "default": "user"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
           "kind"

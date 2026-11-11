@@ -67,10 +67,11 @@ from muliao.issues.tables import (
 from muliao.platform.db import Database, utcnow
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tasks import Commit, no_commit
+from muliao.platform.text_edit import truncate
 from muliao.platform.values import KEEP, Keep
 from muliao.sessions.api import (
     Halted,
-    Origin,
+    IssueOrigin,
     SessionActivity,
     StopSession,
     WorkState,
@@ -81,6 +82,8 @@ from muliao.sessions.events import RunEnded, RunFailed, SessionDeleted
 log = logging.getLogger(__name__)
 
 TITLE_MAX = 300
+# 运行失败记进时间线的正文（错误原文）最多这么多字符，全文在任务页
+RUN_FAILED_BODY_MAX = 500
 
 
 def _session_events_lane(event: RunFailed | SessionDeleted) -> str:
@@ -228,9 +231,9 @@ class IssueService:
         """issue 会话里的一次运行结束了：issue 指派给这个 agent、却因此停滞（还是 in_progress，会话空闲）时，以它的名义记一条
         UNSETTLED 并投进那个会话，请它表态（rules.ask_to_settle）。停在挂起的调用上、被用户停止的不问；会话已经又有事要做
         （信箱里还有信、在等后台任务）时不算停滞，不问。其他来源的会话、已被删除的 issue 不处理。"""
-        if event.origin != Origin.ISSUE or event.stopped or event.paused:
+        if not isinstance(event.origin, IssueOrigin) or event.stopped or event.waiting_on:
             return no_commit
-        issue_id = conversation.issue_of(event.session_id, event.origin_ref)
+        issue_id = event.origin.issue_id
 
         async def commit(s: AsyncSession) -> None:
             issue = await s.get(Issue, issue_id)
@@ -279,9 +282,9 @@ class IssueService:
         """issue 会话里的运行最终失败：在 issue 时间线上以该 agent 的名义记一笔（失败的是它的运行）。通知用户由通知领域
         订阅 RunFailed 做，这里不重复发。不投递这条动态、不改状态：投进会话就是自动重试，永久性的错误会陪它无限循环；
         之后有新动态时照常投递、唤醒它。其他来源的会话、已被删除的 issue 不处理。"""
-        if event.origin != Origin.ISSUE:
+        if not isinstance(event.origin, IssueOrigin):
             return no_commit
-        issue_id = conversation.issue_of(event.session_id, event.origin_ref)
+        issue_id = event.origin.issue_id
 
         async def commit(s: AsyncSession) -> None:
             issue = await s.get(Issue, issue_id)
@@ -293,7 +296,14 @@ class IssueService:
             # 正常情况下同一会话的 SessionDeleted 排在后面（_session_events_lane）；投递失败后被人工重试时可能已在删除之后，
             # 那时不再指向它（之后不会再有它的 SessionDeleted 来置空）。会话只会从存在变为删除，本事务里检查没有竞态。
             session = event.session_id if await session_in(s, event.session_id) is not None else None
-            self._record(s, issue, event.agent_id, session, ActivityKind.RUN_FAILED, body=event.summary)
+            self._record(
+                s,
+                issue,
+                event.agent_id,
+                session,
+                ActivityKind.RUN_FAILED,
+                body=truncate(event.error.strip(), RUN_FAILED_BODY_MAX),
+            )
             log.info("issue run failure recorded", extra={"issue_id": issue_id, "run_id": event.run_id})
 
         return commit

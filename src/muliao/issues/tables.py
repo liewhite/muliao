@@ -46,7 +46,7 @@ class ActivityKind(StrEnum):
     DEPENDS_ON = "depends_on"
     # 一个上游完成（done / cancelled）：change 为 {"issue": 上游 id, "from": 原状态, "to": 新状态}
     DEPENDENCY = "dependency"
-    # 某个 agent 在它这个 issue 的会话里的运行最终失败了：actor 是该 agent，body 是错误摘要（RunFailed.summary）
+    # 某个 agent 在它这个 issue 的会话里的运行最终失败了：actor 是该 agent，body 是截短的错误原文（RunFailed.error）
     RUN_FAILED = "run_failed"
     # 某个 agent 在它这个 issue 的会话里的一次运行结束了，issue 却还是 in_progress、没人在做（rules.stalled）：平台记下并投进
     # 那个会话，请它表态（做完、blocked，或用会话的等待手段挂起）。actor 是该 agent

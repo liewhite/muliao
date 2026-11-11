@@ -9,8 +9,8 @@ from sqlalchemy import select
 
 from muliao.errors import Conflict, Forbidden
 from muliao.platform.tables import TaskStatus
-from muliao.sessions.api import Origin
-from muliao.sessions.inbound import Inbound, NewSession, create_session, receive
+from muliao.sessions.api import Origin, UserOrigin
+from muliao.sessions.inbound import FromParent, Inbound, NewSession, create_session, receive
 from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.mailbox import queued_in
 from muliao.sessions.tables import Mail, Message, Session
@@ -409,8 +409,7 @@ async def test_user_may_continue_any_public_session_but_delegation_only_its_own_
                 s,
                 container.queue,
                 Inbound(
-                    origin=Origin.DELEGATION,
-                    origin_ref="someone-else",
+                    sender=FromParent("someone-else"),
                     content="x",
                     session=cron_session.id,
                     awaited=False,
@@ -420,8 +419,7 @@ async def test_user_may_continue_any_public_session_but_delegation_only_its_own_
         async with container.db.transaction() as s:
             await create_session(
                 s,
-                origin=Origin.USER,
-                origin_ref=None,
+                sender=UserOrigin(),
                 spec=NewSession(agent_id=alpha, title="t", parent_session_id=cron_session.id, thread="t"),
             )
 

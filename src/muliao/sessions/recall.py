@@ -179,6 +179,6 @@ class SessionRecall:
             for item in to_items([message], {}, saved_at=saved_at):
                 sender = None
                 if item.type == "user":
-                    sender = Origin.USER if _from_user(item, typed.get(run_id, [])) else info.origin
+                    sender = Origin.USER if _from_user(item, typed.get(run_id, [])) else info.origin.kind
                 entries.append(Entry(saved_at, item, sender))
         return Timeline(info, parent, entries)

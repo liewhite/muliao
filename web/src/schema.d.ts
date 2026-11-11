@@ -1929,7 +1929,7 @@ export interface components {
         };
         /**
          * DelegationOrigin
-         * @description 发起方是父会话：见 SessionOut.parent_session_id 与 thread。
+         * @description 发起方是父会话（存在会话的 parent_session_id，不在来源里另存一份）。
          */
         DelegationOrigin: {
             /**
@@ -3131,8 +3131,7 @@ export interface components {
             agent_id: string;
             /** Title */
             title: string;
-            /** Origin */
-            origin: components["schemas"]["UserOrigin"] | components["schemas"]["DelegationOrigin"] | components["schemas"]["TriggerOrigin"] | components["schemas"]["IssueOrigin"];
+            origin: components["schemas"]["SessionOrigin"];
             /** Parent Session Id */
             parent_session_id: string | null;
             /** Thread */
@@ -3153,6 +3152,7 @@ export interface components {
             updated_at: string;
             state: components["schemas"]["WorkState"];
         };
+        SessionOrigin: components["schemas"]["UserOrigin"] | components["schemas"]["DelegationOrigin"] | components["schemas"]["TriggerOrigin"] | components["schemas"]["IssueOrigin"];
         /** SessionOut */
         SessionOut: {
             /** Id */
@@ -3161,8 +3161,7 @@ export interface components {
             agent_id: string;
             /** Title */
             title: string;
-            /** Origin */
-            origin: components["schemas"]["UserOrigin"] | components["schemas"]["DelegationOrigin"] | components["schemas"]["TriggerOrigin"] | components["schemas"]["IssueOrigin"];
+            origin: components["schemas"]["SessionOrigin"];
             /** Parent Session Id */
             parent_session_id: string | null;
             /** Thread */

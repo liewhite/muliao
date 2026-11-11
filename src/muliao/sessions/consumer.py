@@ -44,7 +44,7 @@ from muliao.sessions.history import (
 from muliao.sessions.live import LiveSegments
 from muliao.sessions.loading import load_session
 from muliao.sessions.mailbox import audience_of, consumed_by_in, give_in, queued_in, wake_in
-from muliao.sessions.origins import OriginNotes
+from muliao.sessions.origins import OriginNotes, origin_of
 from muliao.sessions.questions import waiting_text
 from muliao.sessions.settlement import delegated_in, settle_failure_in
 from muliao.sessions.steps import CompactionDue, RunState, Steps
@@ -80,12 +80,14 @@ def paused_end(
     texts = [waiting_text(questions)] if questions else []
     if gated:
         texts.append(approval_waiting_text([_brief(c) for c in gated]))
+    waiting = {pending.DEFERRED_TOOLS[c.tool_name].name for c in calls}
+    if gated:
+        waiting.add(pending.AWAITING_APPROVAL.name)
     return RunEnd(
         answer="\n".join(texts),
-        paused=True,
-        asked_user=bool(questions),
         stopped=False,
-        approvals=tuple(c.tool_call_id for c in gated),
+        # 种类名就是 events.Waiting 的取值（测试守着）
+        waiting_on=tuple(sorted(waiting)),
         requested=requested,
     )
 
@@ -99,7 +101,7 @@ def _brief(call: ToolCallPart) -> str:
 def end_of(outcome: Finished | Paused) -> RunEnd:
     """模型运行的结局怎么收尾：最终回答，或停在挂起的调用上。"""
     if isinstance(outcome, Finished):
-        return RunEnd(answer=outcome.answer, paused=False, asked_user=False, stopped=False)
+        return RunEnd(answer=outcome.answer, stopped=False)
     if any(c.tool_name not in pending.DEFERRED_TOOLS for c in outcome.calls):
         # 只有 ask_user / ask_agent 会挂起；其他挂起说明工具与这里的约定不一致
         raise RuntimeError(f"run deferred unexpected tool calls: {[c.tool_name for c in outcome.calls]}")
@@ -122,7 +124,7 @@ def settled_end(history: list[ModelMessage], at: pending.Position) -> RunEnd:
     last = history[-1]
     if not isinstance(last, ModelResponse):
         raise RuntimeError(f"a settled run must end with a model response, history ends with {last!r}")
-    return RunEnd(answer=answer_text(last), paused=False, asked_user=False, stopped=False)
+    return RunEnd(answer=answer_text(last), stopped=False)
 
 
 class Consumer:
@@ -313,7 +315,7 @@ class Consumer:
             # 停在这次运行读出状态之前：它什么都没做。停止之后、它记为完成之前到的信没能唤醒运行（它还占着），
             # 由这里唤醒（停止后马上投信，如 issue_stop 的收尾消息）
             return self._finisher.wake(session_id)
-        return self._finisher.commit(state, RunEnd("", paused=False, asked_user=False, stopped=True))
+        return self._finisher.commit(state, RunEnd("", stopped=True))
 
 
 async def _adopted(s: AsyncSession, session_id: str, run_id: int) -> list[Mail]:
@@ -349,7 +351,7 @@ class RunHandler:
         退出信箱，不会在之后的运行里被悄悄执行。运行开始之后才到的不动：同一个事务里立即唤醒新的运行处理它们（如对
         同一 thread 的第二项委派），不等信箱对账。队列已把这次运行记为 failed，唤醒不会把它当成忙。
 
-        同一事务发布 RunFailed（通知领域据此通知用户，issue 看板在时间线上记一笔）。这个钩子自己失败时（worker 不带钩子记下
+        同一事务发布 RunFailed。这个钩子自己失败时（worker 不带钩子记下
         失败）不发：失败仍在任务页与日志里可见。"""
         if task.session_id is None or task.error is None:
             raise RuntimeError(f"run {task.id} has no session or no recorded error")
@@ -363,8 +365,7 @@ class RunHandler:
                 agent_id=agent.id,
                 agent_name=agent.name,
                 run_id=task.id,
-                origin=child.origin,
-                origin_ref=child.origin_ref,
+                origin=origin_of(child),
                 error=task.error,
             ),
         )

@@ -14,8 +14,7 @@ from muliao.platform.tasks import TaskQueue
 from muliao.sessions.activity import WorkState, work_states_in
 from muliao.sessions.directory import thread_in, threads_named_in, threads_of
 from muliao.sessions.history import latest_answers_among
-from muliao.sessions.inbound import Inbound, NewSession, Received, create_session, receive
-from muliao.sessions.origins import Origin
+from muliao.sessions.inbound import FromParent, Inbound, NewSession, Received, create_session, receive
 from muliao.sessions.runs import latest_runs_among, recorded_failure
 from muliao.sessions.tables import Session
 from muliao.sessions.thread_calls import record_call_in
@@ -77,8 +76,7 @@ class Threads:
             return existing
         return await create_session(
             s,
-            origin=Origin.DELEGATION,
-            origin_ref=parent_id,
+            sender=FromParent(parent_id),
             spec=NewSession(
                 agent_id=agent.id,
                 title=thread,
@@ -94,9 +92,7 @@ class Threads:
         调用（call_id）开出或续写了它（sessions.thread_calls）。"""
         child = await self.open(s, parent_id=parent_id, agent=agent, thread=thread)
         await record_call_in(s, parent_id, call_id, child.id)
-        inbound = Inbound(
-            origin=Origin.DELEGATION, origin_ref=parent_id, content=prompt, session=child.id, awaited=True
-        )
+        inbound = Inbound(sender=FromParent(parent_id), content=prompt, session=child.id, awaited=True)
         return await receive(s, self._queue, inbound)
 
     async def list_in(self, s: AsyncSession, parent_id: str) -> list[ThreadView]:

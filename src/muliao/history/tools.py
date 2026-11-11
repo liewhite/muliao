@@ -91,7 +91,8 @@ def overview_text(
     by_id = {d.session.id: d for d in activity.sessions}
     origins: dict[str, int] = {}
     for d in activity.sessions:
-        origins[d.session.origin.value] = origins.get(d.session.origin.value, 0) + 1
+        kind = d.session.origin.kind.value
+        origins[kind] = origins.get(kind, 0) + 1
     out = [f"# activity of {who} on {day} (local day, times local)", ""]
     out.append(
         f"## sessions ({len(activity.sessions)}"

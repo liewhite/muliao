@@ -35,7 +35,7 @@ from muliao.sessions.inbound import (
 )
 from muliao.sessions.live import LiveSegment, LiveSegments, RunItemEvent
 from muliao.sessions.mailbox import open_asks_in, visible_in
-from muliao.sessions.origins import Origin
+from muliao.sessions.origins import Origin, Sender
 from muliao.sessions.runs import latest_run
 from muliao.sessions.tables import Compaction, Mail, Session
 from muliao.sessions.thread_calls import call_threads_in
@@ -211,17 +211,17 @@ class SessionService:
         origins: Sequence[Origin] | None,
         limit: int,
         offset: int,
-        origin_ref: str | None = None,
+        sender: Sender | None = None,
         keyword: str | None = None,
     ) -> list[ListedSession]:
         """会话列表含全部会话（顶层会话与 thread）。工作状态不是 idle 的会话（在运行、
         在等后台任务/委派/用户回答，与 issue 看板、触发器同一条规则）置顶，其余按最近更新排序。
 
         置顶看的是筛选后的全部会话（不只是这一页），所以第一页就含全部进行中的会话：工作状态的查询次数与会话数无关，
-        代价是每个会话读一条最后的消息（挂起的提问）。origin_ref 是发起方在它那个 origin 里的身份（触发器的 id），
-        用来列出某个发起方开过的会话。keyword 只留标题或消息含有它的会话（directory.Listing）。
+        代价是每个会话读一条最后的消息（挂起的提问）。sender 只留这个发起方（如某个触发器）开过的会话，
+        与 origins 同时给时两个条件都要满足。keyword 只留标题或消息含有它的会话（directory.Listing）。
         """
-        listing = Listing(agent_id=agent_id, origins=origins, origin_ref=origin_ref, keyword=keyword)
+        listing = Listing(agent_id=agent_id, origins=origins, sender=sender, keyword=keyword)
         async with self._db.transaction() as s:
             ids = await listed_ids_in(s, listing)
             states = await work_states_in(s, self._queue, ids)
@@ -265,7 +265,7 @@ class SessionService:
                         reason,
                         extra={
                             "message_id": delivery.message_id,
-                            "origin": command.mail.origin,
+                            "sender": repr(inbound.sender),
                             "reason": detail,
                         },
                     )

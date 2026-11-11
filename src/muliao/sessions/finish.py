@@ -1,5 +1,5 @@
 """一次运行的收尾（与运行记为完成在同一个事务里），只写会话自己的数据：更新时间、委派的结清、唤醒下一次运行，并发布
-RunEnded（通知领域订阅它做推送，issue 看板订阅它请 agent 表态）。
+RunEnded。
 运行被用户停止时的委派结局与信箱由停止处理（sessions.halt），这里只做其余部分。"""
 
 from __future__ import annotations
@@ -14,9 +14,11 @@ from muliao.platform.db import utcnow
 from muliao.platform.messaging import Messaging
 from muliao.platform.tasks import Commit, TaskQueue
 from muliao.sessions.events import RunEnded as RunEndedEvent
+from muliao.sessions.events import Waiting
 from muliao.sessions.holds import has_active_in
 from muliao.sessions.loading import load_session
 from muliao.sessions.mailbox import consumed_by_in, queued_in, wake_in
+from muliao.sessions.origins import origin_of
 from muliao.sessions.settlement import settle_finished_in
 from muliao.sessions.steps import RunState
 
@@ -25,18 +27,18 @@ from muliao.sessions.steps import RunState
 class RunEnd:
     """一次运行怎么结束的。"""
 
-    # 给用户的回答：停在提问、等批准上时是问题与等批准的调用，停在等 agent 上时为空
+    # 给用户的回答：停在提问、等批准上时是问题与等批准的调用，只停在等 agent 上时为空
     answer: str
-    # 停在挂起的调用上（等用户回答提问、批准，或等被问的 agent）：工作还没做完
-    paused: bool
-    # 停下来等用户回答提问：要告诉用户
-    asked_user: bool
     stopped: bool
-    # 停下来等用户批准的调用 id：不论有没有人在等都要告诉用户
-    approvals: tuple[str, ...] = ()
+    # 停在哪几类挂起的调用上（不重复）：非空就是工作还没做完
+    waiting_on: tuple[Waiting, ...] = ()
     # 这次运行新请求批准的调用 id -> 工具定下的 pin：和历史的结尾一起记下（Steps.save_end，sessions.approvals）。从历史收尾时为空：那些调用
     # 正是按已记下的记录认出来的，pin 已在库里
     requested: Mapping[str, str] = field(default_factory=dict)
+
+    @property
+    def paused(self) -> bool:
+        return bool(self.waiting_on)
 
 
 class RunFinisher:
@@ -74,22 +76,18 @@ class RunFinisher:
             if state.messages:
                 session.updated_at = utcnow()
                 handled = [*await consumed_by_in(s, session.id, state.run_id), *state.adopted]
-                # 推送由通知领域订阅（运行结束后随即投递）
                 self._messaging.publish_in(
                     s,
                     RunEndedEvent(
                         session_id=session.id,
                         session_title=session.title,
-                        origin=session.origin,
-                        origin_ref=session.origin_ref,
+                        origin=origin_of(session),
                         agent_id=agent.id,
                         agent_name=agent.name,
                         run_id=state.run_id,
                         answer=end.answer,
                         stopped=end.stopped,
-                        paused=end.paused,
-                        asked_user=end.asked_user,
-                        needs_approval=bool(end.approvals),
+                        waiting_on=list(end.waiting_on),
                         awaited=any(m.awaited for m in handled),
                     ),
                 )

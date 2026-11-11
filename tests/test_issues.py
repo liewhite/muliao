@@ -29,7 +29,7 @@ from muliao.issues.rules import (
 )
 from muliao.issues.tables import IssueActivity
 from muliao.platform.messaging import Delivery
-from muliao.sessions.api import Origin, OriginNotes
+from muliao.sessions.api import IssueOrigin, Origin, OriginNotes
 from muliao.sessions.tables import Mail, Session
 from tests.scripted import scripted
 from tests.test_flow import deliver, drain, run_only, start
@@ -1132,7 +1132,7 @@ async def _notifications(container):
 
 
 async def test_a_failed_issue_run_is_recorded_on_the_timeline_and_notified(container, make_agent, models):
-    from muliao.sessions.events import FAILURE_SUMMARY_MAX
+    from muliao.issues.service import RUN_FAILED_BODY_MAX
 
     alpha = (await make_agent("alpha", model="m")).id
     models.models["m"] = _failing(400, times=1)
@@ -1143,7 +1143,8 @@ async def test_a_failed_issue_run_is_recorded_on_the_timeline_and_notified(conta
     failed = detail.activities[-1]
     assert failed.kind == ActivityKind.RUN_FAILED and failed.actor == alpha
     assert failed.body.startswith("ModelHTTPError") and "400" in failed.body
-    assert len(failed.body) == FAILURE_SUMMARY_MAX and failed.body.endswith("…")
+    kept, cut = failed.body.split("…[truncated: ")
+    assert len(kept) == RUN_FAILED_BODY_MAX and cut.endswith("more chars]")
     # 状态不变、不自动重试：失败的动态不投进会话
     assert detail.issue.status == PROGRESS
     [session] = await _issue_sessions(container)
@@ -1192,8 +1193,7 @@ async def test_a_run_failure_on_a_deleted_issue_is_ignored(container, make_agent
         agent_id=alpha,
         agent_name="alpha",
         run_id=1,
-        origin=Origin.ISSUE,
-        origin_ref="999",
+        origin=IssueOrigin(issue_id=999),
         error="Boom",
     )
     commit = await container.issues.on_run_failed(event, Delivery("m"))
@@ -1219,8 +1219,7 @@ async def test_a_run_failure_retried_after_its_session_was_deleted_does_not_poin
         agent_id=alpha,
         agent_name="alpha",
         run_id=1,
-        origin=Origin.ISSUE,
-        origin_ref=str(issue.id),
+        origin=IssueOrigin(issue_id=issue.id),
         error="Boom",
     )
     commit = await container.issues.on_run_failed(event, Delivery("m"))

@@ -22,10 +22,23 @@ from muliao.platform.bus import EventBus
 from muliao.platform.db import Database, when_committed_in
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tasks import Commit, TaskQueue, no_commit
+from muliao.platform.text_edit import truncate
 from muliao.sessions.api import SessionInfo, session_in
 from muliao.sessions.events import RunEnded, RunFailed, SessionDeleted, SessionRead
 
 log = logging.getLogger(__name__)
+
+# 运行失败的通知正文（错误原文）最多这么多字符，全文在任务页
+FAILURE_BODY_MAX = 500
+
+
+def _worth_pushing(event: RunEnded) -> bool:
+    """停下来等用户批准的总是推：没人在看的运行（触发器、issue）也只有用户能批准。其余的要处理过的信件里有用户在等的、
+    且有话要告诉用户：做完了，或停下来问用户；用户自己停止的、只在等别的 agent 的不推。"""
+    waiting = set(event.waiting_on)
+    if "approval" in waiting:
+        return True
+    return event.awaited and not event.stopped and (not waiting or "ask_user" in waiting)
 
 
 def session_events_lane(event: RunEnded | RunFailed | SessionRead | SessionDeleted) -> str:
@@ -82,11 +95,8 @@ class Notifications:
         return commit
 
     async def on_run_ended(self, event: RunEnded, _delivery: Delivery) -> Commit:
-        """推送一次运行的回答：处理过的信件里有用户在等的，且有话要告诉用户（做完了，或停下来问用户）；用户自己停止的
-        不推。停下来等用户批准的总是推：没人在看的运行（触发器、issue）也只有用户能批准。"""
-        if not event.needs_approval and (
-            not event.awaited or event.stopped or (event.paused and not event.asked_user)
-        ):
+        """推送一次运行的回答（推送规则只在这里，归属表第 9 行）。"""
+        if not _worth_pushing(event):
             return no_commit
 
         async def commit(s: AsyncSession) -> None:
@@ -116,7 +126,7 @@ class Notifications:
                 event.agent_id,
                 Notification(
                     title=f"{event.agent_name} · {session.title} 运行失败",
-                    body=event.summary,
+                    body=truncate(event.error.strip(), FAILURE_BODY_MAX),
                     session_id=event.session_id,
                 ),
             )

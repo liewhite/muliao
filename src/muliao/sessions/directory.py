@@ -8,11 +8,11 @@ from __future__ import annotations
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 
-from sqlalchemy import ColumnElement, or_, select
+from sqlalchemy import ColumnElement, and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.sessions.history import sessions_mentioning
-from muliao.sessions.origins import Origin
+from muliao.sessions.origins import Origin, Sender
 from muliao.sessions.tables import Session
 
 
@@ -67,27 +67,30 @@ async def of_agent_in(s: AsyncSession, agent_id: str) -> list[Session]:
 
 
 async def keyed_rows_among(
-    s: AsyncSession, origin: Origin, origin_refs: Collection[str], agent_id: str | None = None
-) -> dict[tuple[str, str], Session]:
-    """按发送方定位会话（events.SessionKey）的唯一规则：(发送方身份, agent id) -> 这个发送方给这个 agent 开过的最新
+    s: AsyncSession, senders: Collection[Sender], agent_id: str | None = None
+) -> dict[tuple[Sender, str], Session]:
+    """按发送方定位会话（events.SessionKey）的唯一规则：(发送方, agent id) -> 这个发送方给这个 agent 开过的最新
     一个顶层会话，一次查询。给出 agent_id 时只看这个 agent。委派开出的 thread 没有发送方身份（origin_ref 为 None，
     inbound.create_session），不会被按发送方定位到。"""
+    stored: dict[tuple[Origin, str], Sender] = {(x.kind, x.ref): x for x in senders}
+    if not stored:
+        return {}
+    refs: dict[Origin, list[str]] = {}
+    for origin, ref in stored:
+        refs.setdefault(origin, []).append(ref)
     query = (
         select(Session)
-        .where(
-            Session.origin == origin,
-            Session.origin_ref.in_(list(origin_refs)),
-        )
+        .where(or_(*(and_(Session.origin == o, Session.origin_ref.in_(r)) for o, r in refs.items())))
         .order_by(Session.created_at, Session.id)
     )
     if agent_id is not None:
         query = query.where(Session.agent_id == agent_id)
-    found: dict[tuple[str, str], Session] = {}
+    found: dict[tuple[Sender, str], Session] = {}
     for session in (await s.scalars(query)).all():
         if session.origin_ref is None:
             raise RuntimeError(f"keyed lookup matched session {session.id} without an origin_ref")
         # 按创建先后排序，后面的覆盖前面的：留下最新的
-        found[(session.origin_ref, session.agent_id)] = session
+        found[(stored[(session.origin, session.origin_ref)], session.agent_id)] = session
     return found
 
 
@@ -133,7 +136,7 @@ class Listing:
 
     agent_id: str | None = None
     origins: Sequence[Origin] | None = None
-    origin_ref: str | None = None
+    sender: Sender | None = None
     # 关键字：标题或任一条消息的可搜索文字（sessions.history.searchable_text：用户消息、回复、工具调用，不含工具结果）
     # 含有它，不区分 ASCII 大小写
     keyword: str | None = None
@@ -145,8 +148,9 @@ def _conditions(listing: Listing) -> list[ColumnElement[bool]]:
         conditions.append(Session.agent_id == listing.agent_id)
     if listing.origins is not None:
         conditions.append(Session.origin.in_(list(listing.origins)))
-    if listing.origin_ref is not None:
-        conditions.append(Session.origin_ref == listing.origin_ref)
+    if listing.sender is not None:
+        conditions.append(Session.origin == listing.sender.kind)
+        conditions.append(Session.origin_ref == listing.sender.ref)
     if listing.keyword is not None:
         conditions.append(
             or_(

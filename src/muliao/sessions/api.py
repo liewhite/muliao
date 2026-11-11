@@ -34,7 +34,17 @@ from muliao.sessions.inbound import (
 from muliao.sessions.info import SessionInfo, keyed_session_in, keyed_sessions_among, session_in
 from muliao.sessions.lanes import COMPACTION_TASK, RUN_TASK
 from muliao.sessions.live import LiveSegment, RunDeltaEvent, RunEvent, RunItemEvent, SavedEvent
-from muliao.sessions.origins import OWN_NOTES, Origin, OriginNotes
+from muliao.sessions.origins import (
+    OWN_NOTES,
+    DelegationOrigin,
+    IssueOrigin,
+    Origin,
+    OriginNotes,
+    SessionOrigin,
+    TriggerOrigin,
+    UserOrigin,
+    origin_of,
+)
 from muliao.sessions.pending import CallResult, call_result
 from muliao.sessions.questions import QuestionAnswer
 from muliao.sessions.recall import Activity, DaySession, RunFailure, SessionRecall, UserWords
@@ -52,6 +62,12 @@ __all__ = [
     "OWN_NOTES",
     "Origin",
     "OriginNotes",
+    "SessionOrigin",
+    "UserOrigin",
+    "DelegationOrigin",
+    "TriggerOrigin",
+    "IssueOrigin",
+    "origin_of",
     "SessionActivity",
     "Halted",
     "StopSession",
