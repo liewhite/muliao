@@ -389,7 +389,7 @@ def assemble(
             for k in (schedule_kind, once_kind, WebhookKind(settings.server.public_url), StreamKind())
         },
         tz,
-        vault,
+        commands,
         precheck,
         messaging,
         faults,

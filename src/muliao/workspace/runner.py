@@ -248,6 +248,7 @@ class JobRunner:
         return {j.id: await asyncio.to_thread(tail, self._log_file(j)) for j in jobs}
 
     def _log_file(self, job: Job) -> Path:
+        # 与起进程时的 AgentShell.cwd 同源（agents.workspace）；不起命令的读路径（job_status、对账）不经 prepare
         return self._workspace_of(job.agent_id) / job.log_path
 
     async def _close_unsupervised_in(

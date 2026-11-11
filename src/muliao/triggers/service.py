@@ -32,7 +32,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agents.api import AgentArchived, AgentNames, Vault, runnable_agent_in
+from muliao.agents.api import AgentArchived, AgentNames, runnable_agent_in
 from muliao.agents.events import AgentDeleting
 from muliao.errors import Conflict, DomainError, InvalidInput, NotFound
 from muliao.platform.db import Database, utcnow
@@ -64,6 +64,7 @@ from muliao.triggers.precheck import (
     set_precheck,
 )
 from muliao.triggers.tables import Trigger
+from muliao.workspace.api import AgentCommands
 
 log = logging.getLogger(__name__)
 
@@ -243,13 +244,13 @@ class TriggerService:
         db: Database,
         kinds: Mapping[str, TriggerKind],
         tz: ZoneInfo,
-        vault: Vault,
+        commands: AgentCommands,
         precheck: PrecheckRunner,
         messaging: Messaging,
         faults: Faults,
         clock: Clock = utcnow,
     ):
-        self._vault = vault
+        self._commands = commands
         self._precheck = precheck
         self._messaging = messaging
         self._faults = faults
@@ -295,8 +296,9 @@ class TriggerService:
 
     async def _check_secrets(self, agent_id: str, keys: list[str]) -> None:
         """前置检查与流式命令都是 agent 自己写的命令：创建或修改时就确认这些 secret 能交给命令（含 allow_shell），
-        配置错误在第一现场报出，而不是等到运行时一直失败。要读 vault（它自己开事务），不能在别的事务里调用。"""
-        await self._vault.resolve_many(agent_id, keys, shell=True)
+        配置错误在第一现场报出，而不是等到运行时一直失败。与运行时起命令是同一步（AgentCommands.prepare），核对与实际
+        不会分叉。要读 vault（它自己开事务），不能在别的事务里调用。"""
+        await self._commands.prepare(agent_id, keys, shell=True)
 
     async def _route_in(self, s: AsyncSession, address: str, agent_id: str) -> dict[str, Any] | None:
         """默认投递目标的文字地址解析成存储的形式（不合法时 InvalidInput）；新开自己的会话（默认）存为 None。"""

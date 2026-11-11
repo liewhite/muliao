@@ -532,7 +532,8 @@ def test_file_tools_read_and_write_text_only_through_platform_fs():
 def test_agent_commands_start_only_through_workspace_commands():
     """以 agent 身份起命令只经 workspace.commands.AgentCommands（#618）：secret、工作目录、写沙箱与被拒时的说明在那里一起
     拼好。别处直接用 platform.shell 起命令，就会各自再取一遍 secret 与沙箱（四处各写一遍时漏过拒绝说明）。"""
-    starters = {"muliao.platform.shell.spawn_bash", "muliao.platform.shell.run_bash"}
+    # 模块本身也算（`from muliao.platform import shell` 再调 shell.run_bash）；别处用 redact、kill_group 等按名导入
+    starters = {"muliao.platform.shell", "muliao.platform.shell.spawn_bash", "muliao.platform.shell.run_bash"}
     allowed = {SRC / "workspace" / "commands.py"}
     offenders = [
         f"{path.relative_to(SRC)}:{line} imports {name}"
