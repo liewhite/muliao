@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
-from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, RetryPromptPart
+from pydantic_ai.messages import ModelMessage, ModelRequest, RetryPromptPart
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agent_runtime.api import Redaction, StepHooks, with_notices
@@ -39,37 +39,33 @@ class CompactionDue(Exception):
 
 @dataclass
 class RunState:
-    """一次运行在进行中的状态（只在这次运行里用）。"""
+    """一次运行在进行中的状态（只在这次运行里用）。消费者建它，之后只由 Steps 改。"""
 
     run_id: int
     session: Session
     agent: AgentInfo
-    # 从历史末尾那条没得到回复的请求续跑：第一次请求是重发它，它已经在库里
-    resending: bool
-    # 运行中的历史里已经保存的条数（started 时按 pydantic-ai 规整后的历史定基准）
-    saved: int = 0
-    # 运行中的历史本身（pydantic-ai 的 ctx.state.message_history）：被停止时从它取回没保存的部分
-    live: list[ModelMessage] | None = None
+    # 发给模型的会话上下文：摘要与切点之后的历史，保存一步就接上这一步，压缩后从库里重新加载（Steps.compact）。
+    # 运行从它续跑，压缩按它判断（Steps.compaction_due）
+    context: SessionContext
+    # 这次运行处理过的信件：包括之前几次尝试里已经保存的（重试沿用同一个运行），以及接着别的运行保存的部分续跑时
+    # 那次运行处理过的（consumer._adopted）
+    handled: list[Mail]
+    # 这次运行保存的消息（包括之前几次尝试保存的），和最后保存的那一行
+    messages: list[ModelMessage]
+    last_row: Message | None
+    # 运行交出、还没保存的消息（agent_runtime.StepHooks）：一步保存提交前的那几条，和驱动结束时交出的末尾。被停止或
+    # 停在挂起的调用上时由 save_tail_in 保存
+    unsaved: list[ModelMessage] = field(default_factory=list)
     # 交给模型、等这一步保存时记为已处理的信件
     taken: list[Mail] = field(default_factory=list)
     # 开头交给模型的内容（标出其中哪些段是事件、检查），第一次请求保存前标上
     opening: Content | None = None
-    # 这次运行的运行上下文（agent_runtime.instructions.build_run_context），由消费者在运行开始时定下：挂到本次
-    # 新增的第一条请求上之后清空，一次运行只带一段
-    run_context: str = ""
     # 这次驱动的工具组在连接时发现的问题（RunScope.notices）：和运行上下文挂在同一条请求上（instructions.with_notices）。
     # 每次驱动（压缩后续跑会重新连接）由 started 覆盖，挂出去之后清空
     notices: Sequence[str] = ()
-    # 挂着这次运行的运行上下文的那条请求（消息 id）：运行中途压缩把它切进摘要时，消费者重新定下 run_context
+    # 挂着这次运行的运行上下文的那条请求（消息 id）：还没挂，或运行中途压缩把它切进了摘要时为 None，下一条新请求
+    # 挂一段（时间取那时）
     run_context_row: int | None = None
-    # 这次运行处理过的信件：包括之前几次尝试里已经保存的（重试沿用同一个运行），以及接着别的运行保存的部分续跑时
-    # 那次运行处理过的（consumer._adopted）
-    handled: list[Mail] = field(default_factory=list)
-    # 这次运行保存的消息（包括之前几次尝试保存的），和最后保存的那一行
-    messages: list[ModelMessage] = field(default_factory=list)
-    last_row: Message | None = None
-    # 即 sessions.history.SessionContext.stale_responses，加载上下文时更新
-    stale_responses: int | None = None
     # 压缩不下去了（保留窗口之外没有可压缩的，或刚压缩过仍超阈值）：这次运行不再因为上下文大小停下
     compaction_exhausted: bool = False
 
@@ -92,11 +88,13 @@ class Steps:
         self._content = content
         self._compactor = compactor
 
-    def hooks(self, state: RunState) -> StepHooks:
+    def hooks(self, state: RunState, run_context: Callable[[], str]) -> StepHooks:
+        """这次驱动的回调。run_context() 给出一段运行上下文（当前时间取调用时），挂在这次运行新增的第一条请求上。"""
         return StepHooks(
-            started=lambda messages, notices: self._started(state, messages, notices),
-            before_request=lambda request, messages: self._before_request(state, request, messages),
-            after_response=lambda response, messages: self._after_response(state, response, messages),
+            started=lambda notices: self._started(state, notices),
+            before_request=lambda request, new: self._before_request(state, request, new, run_context),
+            after_response=lambda new: self._after_response(state, new),
+            ended=lambda new: state.unsaved.extend(new),
             on_text=lambda kind, text: self._live.publish_delta(
                 state.session.id, state.session.agent_id, kind, text
             ),
@@ -117,20 +115,21 @@ class Steps:
             ),
         )
 
-    async def _started(self, state: RunState, messages: list[ModelMessage], notices: Sequence[str]) -> None:
-        state.live = messages
-        state.saved = len(messages)
+    async def _started(self, state: RunState, notices: Sequence[str]) -> None:
         state.notices = notices
 
+    def begin(self, state: RunState, taken: Sequence[Mail], opening: Content) -> None:
+        """开头取走的信件与交给模型的内容（sessions.consumer 交出之后）：第一次请求保存时把信件记为已处理，并在内容里
+        标出事件。pydantic-ai 把内容放进第一次请求的用户消息（下标从 0 起）。"""
+        state.taken = list(taken)
+        state.opening = opening
+
     async def _before_request(
-        self, state: RunState, request: ModelRequest, messages: list[ModelMessage]
+        self, state: RunState, request: ModelRequest, new: list[ModelMessage], run_context: Callable[[], str]
     ) -> None:
-        state.live = messages
-        if state.resending:
-            # pydantic-ai 取出历史末尾那条已保存的请求重发：它已经在库里，不改它、不再保存；信件留给下一次请求
-            state.resending = False
-            state.saved = len(messages) + 1
-            return
+        # 重发历史末尾那条已保存的请求时不回调这里（agent_runtime.StepHooks）：它已经在库里，不改它；信件与运行上下文
+        # 留给下一次请求
+        state.unsaved += new
         async with self._db.transaction() as s:
             taken = {t.id for t in state.taken}
             arrived = [m for m in await queued_in(s, state.session.id) if m.id not in taken]
@@ -141,65 +140,58 @@ class Steps:
             # 运行中途没有挂起的调用（调用只在运行结束时挂起），这时到达的回答都是迟到的
             state.taken += arrived
             append_content(request, await self._content.of(state.agent.id, arrived))
-        context = with_notices(state.run_context, state.notices)
+        attaching = state.run_context_row is None
+        context = with_notices(run_context() if attaching else "", state.notices)
         if context:
-            # 只挂在本次运行新增的第一条请求上。上面重发的那条已经在库里，不改它——改了它，它之前的历史就不再
-            # 是同一个前缀，缓存全废；那种情况下这段留给这次运行的下一条新请求。运行上下文已经挂出去了（压缩后
-            # 续跑）时，notices 单独挂在下一条新请求上
+            # 只挂在本次运行新增的第一条请求上（重发的那条已经在库里，不改它——改了它，它之前的历史就不再是同一个
+            # 前缀，缓存全废）。运行上下文已经挂出去了（压缩后续跑）时，notices 单独挂在下一条新请求上
             attach_run_context(request, context)
-        await self._save(state, [*messages[state.saved :], request], consumed=state.taken)
+        await self._save(state, [*state.unsaved, request], consumed=state.taken)
+        state.unsaved = []
         if state.last_row is None:
             raise RuntimeError(f"run {state.run_id} saved a request without a row")
-        if state.run_context:
-            state.run_context = ""
+        if attaching:
             state.run_context_row = state.last_row.id
         state.notices = ()
         self._live.step(state.session.id, state.last_row.id)
         state.handled += state.taken
         state.taken = []
-        state.saved = len(messages) + 1
-        if self._compaction_due(state, messages):
+        if self.compaction_due(state):
             # 全部已经保存：被停止时没有运行中的部分要补，停止从库里补齐历史（sessions.halt）
-            state.live = None
             raise CompactionDue()
 
-    async def compact(
-        self, state: RunState, config: AgentDir, fresh_run_context: Callable[[], str]
-    ) -> SessionContext:
-        """该压缩了（运行开头，或运行中途的 CompactionDue，触发它的请求已经保存）：用这次运行的配置快照（config）压缩，从库里
-        重新加载上下文（摘要 + 切点之后），并把这次运行的状态对上它，返回续跑用的上下文。挂着运行上下文的那条请求被压进
-        了摘要时，模型不再看得到它：下一条新请求重新挂一段（fresh_run_context()，时间取现在）。续跑是不是重发历史末尾
-        的请求（RunState.resending）由调用方定。"""
+    def compaction_due(self, state: RunState) -> bool:
+        """这次运行该停下压缩了吗（规则见 Compactor.verdict）：运行开头与每次请求保存之后都问这里。压缩不下去时这次运行
+        不再判断。"""
+        if state.compaction_exhausted:
+            return False
+        verdict = self._compactor.verdict(
+            state.session, state.context.messages, state.context.stale_responses
+        )
+        if verdict == Verdict.HOPELESS:
+            state.compaction_exhausted = True
+        return verdict == Verdict.DUE
+
+    async def compact(self, state: RunState, config: AgentDir) -> None:
+        """压缩（compaction_due 之后；运行中途时触发它的请求已经保存）：用这次运行的配置快照（config）压缩，从库里重新
+        加载上下文（摘要 + 切点之后）作为 state.context，运行从它续跑。挂着运行上下文的那条请求被压进了摘要时，模型不再
+        看得到它：下一条新请求重新挂一段。"""
         compacted = await self._compactor.compact(state.session, config)
         async with self._db.transaction() as s:
-            context = await load_context(s, state.session.id)
+            state.context = await load_context(s, state.session.id)
             compaction = await latest_compaction(s, state.session.id)
         if (
             compaction is not None
             and state.run_context_row is not None
             and state.run_context_row <= compaction.through_message_id
         ):
-            state.run_context = fresh_run_context()
             state.run_context_row = None
-        state.stale_responses = context.stale_responses
         state.compaction_exhausted = compacted == 0
-        return context
 
-    def _compaction_due(self, state: RunState, messages: list[ModelMessage]) -> bool:
-        """该停下压缩了（规则见 Compactor.verdict）。压缩不下去时这次运行不再判断。"""
-        if state.compaction_exhausted:
-            return False
-        verdict = self._compactor.verdict(state.session, messages, state.stale_responses)
-        if verdict == Verdict.HOPELESS:
-            state.compaction_exhausted = True
-        return verdict == Verdict.DUE
-
-    async def _after_response(
-        self, state: RunState, response: ModelResponse, messages: list[ModelMessage]
-    ) -> None:
-        state.live = messages
-        await self._save(state, messages[state.saved :], consumed=[])
-        state.saved = len(messages)
+    async def _after_response(self, state: RunState, new: list[ModelMessage]) -> None:
+        state.unsaved += new
+        await self._save(state, state.unsaved, consumed=[])
+        state.unsaved = []
 
     async def save_end(self, state: RunState, requested: Mapping[str, str]) -> None:
         """运行结束（还登记着可停止）：停在挂起的调用上时，挂起之外已经执行完的工具结果在最后一条请求里，和这次新请求
@@ -223,9 +215,9 @@ class Steps:
         - 被停止时（sessions.halt 的 first）：当前这一步已产生的部分（包括生成到一半的回答）原样存库，没出结果的调用与停止标记
           由同一事务里的停止从库里补齐。
         开头取走、还没随请求交给模型的信件（state.taken）不算处理过。"""
-        if state.live is not None and len(state.live) > state.saved:
-            await self.save_in(s, state, state.live[state.saved :], consumed=[])
-            state.saved = len(state.live)
+        if state.unsaved:
+            await self.save_in(s, state, state.unsaved, consumed=[])
+            state.unsaved = []
 
     async def save_in(
         self, s: AsyncSession, state: RunState, messages: Sequence[ModelMessage], *, consumed: Sequence[Mail]
@@ -246,6 +238,7 @@ class Steps:
             },
         )
         state.messages += stored
+        state.context = replace(state.context, messages=[*state.context.messages, *stored])
         if rows:
             state.last_row = rows[-1]
 

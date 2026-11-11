@@ -138,7 +138,6 @@ class SessionDomain:
             RunFinisher(queue, messaging),
             ports.runs,
             ports.halt,
-            compactor,
             notes,
         )
         return cls(
