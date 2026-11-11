@@ -18,7 +18,7 @@ from muliao.sessions.tables import SessionHold, ThreadCall
 
 
 @dataclass(frozen=True)
-class Delegation:
+class CallRecord:
     """thread_calls 的一行：一次开出或续写 thread 的调用，发起方有引用它的占用时就是一项委派。"""
 
     id: int
@@ -34,12 +34,12 @@ class Delegation:
 class Owed:
     """还没结清的委派与发起方引用它的 active 占用（结局经这个占用交回，sessions.work.deliver_in）。"""
 
-    delegation: Delegation
+    delegation: CallRecord
     hold: SessionHold
 
 
-def _delegation(row: ThreadCall) -> Delegation:
-    return Delegation(
+def _record(row: ThreadCall) -> CallRecord:
+    return CallRecord(
         id=row.id,
         parent_id=row.parent_session_id,
         thread_id=row.thread_session_id,
@@ -54,7 +54,7 @@ async def record_call_in(
     thread_id: str,
     *,
     check_seconds: float | None = None,
-) -> Delegation:
+) -> CallRecord:
     """记下这次调用开出或续写了这个 thread（委派的还带心跳间隔），返回这一行。同一次调用只记一次：续跑重新执行
     时已经记过（Threads.send 照常重放），记成别的样子是 bug。"""
     existing = await call_in(s, parent_id, call_id)
@@ -70,15 +70,15 @@ async def record_call_in(
     )
     s.add(row)
     await s.flush()
-    return _delegation(row)
+    return _record(row)
 
 
-async def call_in(s: AsyncSession, parent_id: str, call_id: str) -> Delegation | None:
+async def call_in(s: AsyncSession, parent_id: str, call_id: str) -> CallRecord | None:
     """这次调用记下的那一行（还没记过、或 thread 已删除时为 None）。"""
     row = await s.scalar(
         select(ThreadCall).where(ThreadCall.parent_session_id == parent_id, ThreadCall.call_id == call_id)
     )
-    return None if row is None else _delegation(row)
+    return None if row is None else _record(row)
 
 
 async def call_threads_in(s: AsyncSession, parent_id: str) -> dict[str, str]:
@@ -91,12 +91,12 @@ async def call_threads_in(s: AsyncSession, parent_id: str) -> dict[str, str]:
     return {call_id: thread_id for call_id, thread_id in rows.all()}
 
 
-async def delegations_among(s: AsyncSession, ids: Collection[int]) -> dict[int, Delegation]:
+async def delegations_among(s: AsyncSession, ids: Collection[int]) -> dict[int, CallRecord]:
     """这些委派行（thread 已删除的不在结果里），一次查询。"""
     if not ids:
         return {}
     rows = await s.scalars(select(ThreadCall).where(ThreadCall.id.in_(list(ids))))
-    return {row.id: _delegation(row) for row in rows.all()}
+    return {row.id: _record(row) for row in rows.all()}
 
 
 async def owed_in(s: AsyncSession, ids: Collection[int] | None = None) -> list[Owed]:

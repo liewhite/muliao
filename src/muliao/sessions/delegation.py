@@ -79,7 +79,8 @@ class Delegations:
         占用带上 call_id。awaited：用户是否在等发起方的回答。check_seconds：并发等待时的运行中检查间隔（阻塞等待的为
         None，不设超时）。"""
         if (existing := await call_in(s, parent_id, call_id)) is not None:
-            # 委派行、占用与信件在同一个事务里写下：有行就是已经发出过（thread 删除时行随之删除，那时调用早有结果）
+            # 委派行、占用与信件在同一个事务里写下：有行就是已经发出过。thread 被删除后行随之删除，这时重放（发出已提交、
+            # 那一步还没保存，期间 thread 跑完又被删掉，极少见）会重新发出一次
             child = await s.get(Session, existing.thread_id)
             if child is None:
                 raise RuntimeError(

@@ -137,7 +137,7 @@ class Mail(Base):
     # 幂等键：带同一个键的投信只投一次（命令按键去重，docs/architecture.md 3.4）
     dedupe_key: Mapped[str | None] = mapped_column(String(200))
     state: Mapped[MailState] = mapped_column(StrEnumType(MailState), default=MailState.QUEUED)
-    # 交给了哪次运行（归属见 docs/architecture.md 2.4 第 3 行，只经 sessions.mailbox.give_in 写）：投递运行时信箱里已有的、
+    # 交给了哪次运行（归属见 docs/architecture.md 2.4 第 3 行，只经 sessions.mailbox.give_in / consume_in 写）：投递运行时信箱里已有的、
     # 运行开头取走的、交给模型那一步保存的（这时 state 记为 consumed）。排着的信件之后被更新的运行取走时改指那次运行
     taken_by: Mapped[int | None] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"))
     # 索引：按日查各会话收到的信件（sessions.recall）

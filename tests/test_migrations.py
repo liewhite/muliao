@@ -2028,8 +2028,11 @@ def test_mail_records_its_run_and_delegations_are_referenced_by_row_and_downgrad
                 (3, "delegation:p:report", 0, "queued", None, t),
                 (4, None, 0, "queued", None, t),
                 (5, None, 0, "queued", None, t),
+                (6, None, 0, "discarded", None, t),
             ],
         )
+        # 末尾的信件已删除：重建 mail 后 id 6 也不复用
+        conn.execute("delete from mail where id = 6")
 
     migrate(path)
     with sqlite3.connect(path) as conn:
@@ -2051,7 +2054,7 @@ def test_mail_records_its_run_and_delegations_are_referenced_by_row_and_downgrad
             ("job:7", None, None),
         ]
         assert {p for (p,) in conn.execute("select payload from tasks")} == {"{}"}
-        assert conn.execute("select seq from sqlite_sequence where name = 'mail'").fetchone() == (5,)
+        assert conn.execute("select seq from sqlite_sequence where name = 'mail'").fetchone() == (6,)
 
     with _migration_engine(path).begin() as connection:
         command.downgrade(alembic_config(connection), "c0fe84d4f804")
@@ -2081,7 +2084,7 @@ def test_mail_records_its_run_and_delegations_are_referenced_by_row_and_downgrad
             {"through_mail_id": 4},
             {"through_mail_id": 0},
         ]
-        assert conn.execute("select seq from sqlite_sequence where name = 'mail'").fetchone() == (5,)
+        assert conn.execute("select seq from sqlite_sequence where name = 'mail'").fetchone() == (6,)
         # 还 active 却对不上行的委派占用：拒绝升级，什么都不改
         conn.execute("update session_holds set status = 'active' where holder = 'delegation:p:hold3'")
     with pytest.raises(RuntimeError, match="active delegation holds without their thread call"):

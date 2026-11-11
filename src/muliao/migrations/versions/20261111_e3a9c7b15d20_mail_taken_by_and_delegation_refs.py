@@ -20,7 +20,8 @@ Revises: c0fe84d4f804
 Create Date: 2026-11-11 20:30:00
 """
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 
 import sqlalchemy as sa
 from alembic import op
@@ -29,6 +30,17 @@ revision: str = "e3a9c7b15d20"
 down_revision: str | None = "c0fe84d4f804"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
+
+
+@contextmanager
+def _keeping_mail_sequence(conn: sa.Connection) -> Iterator[None]:
+    """batch 重建 mail 时 sqlite_sequence 会退回到现存最大 id：重建后写回原值，删掉的末尾 id 不被复用。"""
+    seq = conn.execute(sa.text("SELECT seq FROM sqlite_sequence WHERE name = 'mail'")).scalar()
+    yield
+    if seq is not None:
+        conn.execute(
+            sa.text("UPDATE sqlite_sequence SET seq = max(seq, :seq) WHERE name = 'mail'"), {"seq": seq}
+        )
 
 
 def upgrade() -> None:
@@ -56,8 +68,11 @@ def upgrade() -> None:
     conn.execute(sa.text("UPDATE tasks SET payload = '{}' WHERE kind = 'run'"))
 
     # 委派来的信件引用委派行
-    # 带具名外键的新列：重建 mail（几千行），保留 AUTOINCREMENT（id 不复用）
-    with op.batch_alter_table("mail", table_kwargs={"sqlite_autoincrement": True}) as batch:
+    # 带具名外键的新列：重建 mail（几千行）
+    with (
+        _keeping_mail_sequence(conn),
+        op.batch_alter_table("mail", table_kwargs={"sqlite_autoincrement": True}) as batch,
+    ):
         batch.add_column(sa.Column("delegation_id", sa.Integer(), nullable=True))
         batch.create_foreign_key(
             "fk_mail_delegation_id", "thread_calls", ["delegation_id"], ["id"], ondelete="SET NULL"
@@ -135,8 +150,11 @@ def downgrade() -> None:
         "ix_mail_correlation", "mail", ["correlation"], sqlite_where=sa.text("correlation IS NOT NULL")
     )
     op.drop_index("ix_mail_delegation_id", table_name="mail")
-    # 带外键的列 SQLite 不能原生删除：重建 mail，保留 AUTOINCREMENT（id 不复用）
-    with op.batch_alter_table("mail", table_kwargs={"sqlite_autoincrement": True}) as batch:
+    # 带外键的列 SQLite 不能原生删除：重建 mail
+    with (
+        _keeping_mail_sequence(conn),
+        op.batch_alter_table("mail", table_kwargs={"sqlite_autoincrement": True}) as batch,
+    ):
         batch.drop_constraint("fk_mail_delegation_id", type_="foreignkey")
         batch.drop_column("delegation_id")
 

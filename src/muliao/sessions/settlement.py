@@ -112,9 +112,9 @@ async def settle_failure_in(s: AsyncSession, queue: TaskQueue, session: Session,
     （reconcile_failures）。"""
     queued = [m for m in await delegated_mail_in(s, session.id, [MailState.QUEUED]) if m.taken_by == run.id]
     consumed = await delegated_mail_in(s, session.id, [MailState.CONSUMED])
-    owed = {o.delegation.id for o in await _owed_by(s, queued)}
     settled = await _settle_in(s, queue, session, [*consumed, *queued], Ending.FAILED, failure_of(run))
-    await discard_in(s, session.id, [m for m in queued if m.delegation_id in owed])
+    # 交给它的委派信件都退出信箱，不论这次是否交回了结局：已结清的（发起方被停止）也没人再要这项工作
+    await discard_in(s, session.id, queued)
     return settled
 
 
