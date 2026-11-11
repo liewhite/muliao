@@ -59,19 +59,23 @@ class KindSpec:
     is_directory: bool
     # 讲它的那一节
     section: Section
-    # 名字合这种资源的规则，否则 InvalidInput
-    check_name: Callable[[str], object]
+    # 名字的规则：(label, 名字)，不合时 InvalidInput（错误信息里用 label）；用 check_name 调
+    name_rule: Callable[[str, str], object]
+
+    def check_name(self, name: str) -> None:
+        """名字合这种资源的规则，否则 InvalidInput。"""
+        self.name_rule(self.label, name)
 
 
 _SPECS: dict[StoredKind, KindSpec] = {
-    StoredKind.SKILL: KindSpec("skill", "skills", "", True, "Skills", lambda n: validate_slug("skill", n)),
-    StoredKind.MCP: KindSpec(
-        "MCP server", "mcp", ".json", False, "MCP servers", lambda n: validate_slug("MCP server", n)
+    StoredKind.SKILL: KindSpec("skill", "skills", "", True, "Skills", validate_slug),
+    StoredKind.MCP: KindSpec("MCP server", "mcp", ".json", False, "MCP servers", validate_slug),
+    StoredKind.SECRET: KindSpec(
+        "secret", "secrets", ".toml", False, "Secrets", lambda _label, key: validate_key(key)
     ),
-    StoredKind.SECRET: KindSpec("secret", "secrets", ".toml", False, "Secrets", validate_key),
     # 平台的记忆：agent 删除或转移时挪来的私有记忆带着 agent 名（可以是中文），能当文件名就行；界面与文件工具新建的
     # 平台记忆另外要求是 slug（asset_files）
-    StoredKind.MEMORY: KindSpec("memory", "memory", ".md", False, "Memory", lambda n: file_name("memory", n)),
+    StoredKind.MEMORY: KindSpec("memory", "memory", ".md", False, "Memory", file_name),
 }
 
 _OTHER_LABELS = {Kind.TOOL: "built-in tool", Kind.PATH: "writable path"}

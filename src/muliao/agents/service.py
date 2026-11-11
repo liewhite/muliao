@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import shutil
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -293,8 +293,9 @@ class AgentService:
                 snapshot.tools,
                 lambda doc: access_file.set_agent_rules(doc, name, rules),
             )
-            undo = await asyncio.to_thread(_write_new_agent, snapshot.root / name, file, access)
+            directory = snapshot.root / name
             try:
+                await asyncio.to_thread(_write_new_agent, directory, file, access)
                 async with self._db.transaction() as s:
                     # description / model 是待 #503 删的旧镜像列（NOT NULL），只填空串：配置只在 agent.toml
                     agent = Agent(id=agent_id, name=name, description="", model="")
@@ -303,7 +304,8 @@ class AgentService:
                     self.workspace(agent_id).mkdir(parents=True, exist_ok=True)
                     info = info_of(agent)
             except BaseException:
-                await asyncio.to_thread(undo)
+                # 也包括写文件时被取消：撤回不依赖写到了哪一步（这个目录名在锁里查过没人占，_check_name_free）
+                await asyncio.to_thread(_remove_new_agent, directory, access)
                 raise
         log.info("agent created", extra={"agent": agent_id, "agent_name": name, "actor": actor})
         return info
@@ -335,15 +337,17 @@ class AgentService:
 
             # 与建 agent 同：access.toml 的改动先算好，不合法时不动目录
             access = await asyncio.to_thread(access_file.plan, snapshot.access_path, snapshot.tools, change)
-            undo = await asyncio.to_thread(_write_agent_update, directory, name, file, access)
+            old_toml = await asyncio.to_thread((directory.path / AGENT_FILE).read_text, encoding="utf-8")
+            moved: list[bool] = []
             try:
+                await asyncio.to_thread(_write_agent_update, directory, name, file, access, moved)
                 async with self._db.transaction() as s:
                     row = await active_row_in(s, agent_id)
                     row.name = name
                     await s.flush()
                     return info_of(row)
             except BaseException:
-                await asyncio.to_thread(undo)
+                await asyncio.to_thread(_restore_agent, directory, name, old_toml, access, moved)
                 raise
 
     async def set_default(self, agent_id: str, is_default: bool) -> AgentInfo:
@@ -419,49 +423,38 @@ class AgentService:
                 )
 
 
-def _write_new_agent(directory: Path, file: AgentFile, access: AccessEdit) -> Callable[[], None]:
-    """建 agent 的目录（agent.toml、空的私有记忆）并写入 access.toml 的改动，返回把它们都撤掉的函数；中途失败当场撤掉再报错。"""
+def _write_new_agent(directory: Path, file: AgentFile, access: AccessEdit) -> None:
+    """建 agent 的目录（agent.toml、空的私有记忆）并写入 access.toml 的改动。撤回是 _remove_new_agent。"""
     directory.mkdir(parents=True)
-    undo_access: Callable[[], None] | None = None
+    write_atomic(directory / AGENT_FILE, agent_file.dump(directory / AGENT_FILE, file))
+    write_atomic(directory / PRIVATE_MEMORY_FILE, "")
+    access.apply()
 
-    def undo() -> None:
-        if undo_access is not None:
-            undo_access()
-        assets.remove(directory)
 
-    try:
-        write_atomic(directory / AGENT_FILE, agent_file.dump(directory / AGENT_FILE, file))
-        write_atomic(directory / PRIVATE_MEMORY_FILE, "")
-        undo_access = access.apply()
-    except BaseException:
-        undo()
-        raise
-    return undo
+def _remove_new_agent(directory: Path, access: AccessEdit) -> None:
+    """撤回 _write_new_agent，不论它写到了哪一步。"""
+    access.revert()
+    assets.remove(directory)
 
 
 def _write_agent_update(
-    directory: AgentDir, name: str, file: AgentFile, access: AccessEdit
-) -> Callable[[], None]:
-    """改 agent 的文件，返回把它们改回去的函数。改名先挪目录（挪不了就什么都没改），再写 agent.toml 与 access.toml 的改动；后面
-    任何一步失败都当场改回去再报错。"""
-    source = directory.path
-    old_toml = (source / AGENT_FILE).read_text(encoding="utf-8")
-    target = source.parent / name
+    directory: AgentDir, name: str, file: AgentFile, access: AccessEdit, moved: list[bool]
+) -> None:
+    """改 agent 的文件：改名先挪目录（挪成了记进 moved），再写 agent.toml 与 access.toml 的改动。撤回是 _restore_agent。"""
+    target = directory.path.parent / name
     if name != directory.name:
-        assets.move(source, target)
-    undo_access: Callable[[], None] | None = None
+        assets.move(directory.path, target)
+        moved.append(True)
+    write_atomic(target / AGENT_FILE, agent_file.dump(target / AGENT_FILE, file))
+    access.apply()
 
-    def undo() -> None:
-        if undo_access is not None:
-            undo_access()
-        write_atomic(target / AGENT_FILE, old_toml)
-        if target != source:
-            target.rename(source)
 
-    try:
-        write_atomic(target / AGENT_FILE, agent_file.dump(target / AGENT_FILE, file))
-        undo_access = access.apply()
-    except BaseException:
-        undo()
-        raise
-    return undo
+def _restore_agent(
+    directory: AgentDir, name: str, old_toml: str, access: AccessEdit, moved: list[bool]
+) -> None:
+    """撤回 _write_agent_update，不论它写到了哪一步：access.toml 改回去（AccessEdit.revert），目录挪回原名，agent.toml 写回
+    原文。"""
+    access.revert()
+    if moved:
+        (directory.path.parent / name).rename(directory.path)
+    write_atomic(directory.path / AGENT_FILE, old_toml)

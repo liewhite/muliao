@@ -6,7 +6,7 @@
 （#573）。只引用了不存在的东西（没加载的 agent 目录、未知角色）只收窄：跳过那个引用、记一条问题，其余照常。
 纯函数，问题交给调用方（读树的 agents.assets、写前校验的 agents.asset_files）。
 写：界面上的角色与 agent 规则、建 / 改名 / 删 agent，都经 plan：先校验（现在的文件不合法时 Conflict，先修好它；改完
-不合法时 InvalidInput）、算出新内容，什么都不写；AccessEdit.apply 才写入并返回改回去的函数。用 tomlkit 读改写，人手写的注释与
+不合法时 InvalidInput）、算出新内容，什么都不写；AccessEdit.apply 才写入（期间被别处改过则 Conflict），后面的步骤失败时 revert 改回。用 tomlkit 读改写，人手写的注释与
 排版保留；调用方在 AssetSource.writing() 里串行调用。"""
 
 from __future__ import annotations
@@ -226,17 +226,23 @@ class AccessEdit:
     before: str | None
     after: str
 
-    def apply(self) -> Callable[[], None]:
-        """原子写入，返回把文件改回 before 的函数（调用方后面的步骤失败时用，仍在同一个 writing() 里）。同步 IO。"""
+    def apply(self) -> None:
+        """原子写入。文件已不是 plan 时读到的内容（期间被 shell 等改过）时 Conflict，不盖掉那次改动。同步 IO。"""
+        current = self.path.read_text(encoding="utf-8") if self.path.is_file() else None
+        if current != self.before:
+            raise Conflict(f"{self.path} was changed meanwhile; retry")
         write_atomic(self.path, self.after)
 
-        def undo() -> None:
-            if self.before is None:
-                self.path.unlink(missing_ok=True)
-            else:
-                write_atomic(self.path, self.before)
-
-        return undo
+    def revert(self) -> None:
+        """把 apply 写下的改回 before（调用方后面的步骤失败时用，仍在同一个 writing() 里）。文件不是 after（没 apply 过、已
+        改回、apply 时发现被别处改过）时不动它。同步 IO。"""
+        current = self.path.read_text(encoding="utf-8") if self.path.is_file() else None
+        if current != self.after:
+            return
+        if self.before is None:
+            self.path.unlink(missing_ok=True)
+        else:
+            write_atomic(self.path, self.before)
 
 
 def plan(path: Path, tools: ToolTable, change: Callable[[TOMLDocument], None]) -> AccessEdit:

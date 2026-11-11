@@ -279,10 +279,10 @@ export const api = {
   previewRole: (body: Schemas['RolePreviewIn']) => call('post', '/api/role-preview', { body }),
   /** 全部 AI 资源：内置工具在前，资源文件按种类、名称 */
   assets: () => branded<CatalogAsset[]>(call('get', '/api/assets')),
-  /** 把 skill / MCP server / secret / 记忆挪到另一个 owner（null 归平台）的目录下；内容与收录它的角色不变 */
   /** 删掉 skill（整个目录）/ MCP server / secret / 记忆的文件；全局记忆不能删 */
   deleteAsset: (kind: StoredKind, name: string) =>
     call('delete', '/api/assets/{kind}/{name}', { path: { kind, name } }),
+  /** 把 skill / MCP server / secret / 记忆挪到另一个 owner（null 归平台）的目录下；内容与收录它的角色不变 */
   transferAsset: (kind: StoredKind, name: string, owner: AgentId | null) =>
     call('put', '/api/assets/{kind}/{name}/owner', { path: { kind, name }, body: { owner } }),
   /** agent 的工作历史：不给 query 按日期倒序；给了按关键词检索 */

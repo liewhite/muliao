@@ -224,6 +224,47 @@ async def test_a_failed_rename_puts_the_files_back(container, make_agent, monkey
     assert (await container.agents.get(agent.id)).name == "alpha"
 
 
+async def test_a_failed_create_takes_back_its_directory_and_rules(container, monkeypatch):
+    """access.toml 已写入、之后的一步失败：目录删掉、access.toml 改回原文，同名的还能再建。"""
+    r = root(container)
+    access = r / "platform" / "access.toml"
+    before = access.read_text() if access.exists() else None
+    workspace = container.agents.workspace
+
+    def broken(agent_id):  # noqa: ANN001, ANN202
+        raise OSError("disk full")
+
+    monkeypatch.setattr(container.agents, "workspace", broken)
+    spec = AgentSpec(name="alpha", description="d", model="m", roles=["admin"])
+    with pytest.raises(OSError):
+        await container.agents.create(spec, actor="user")
+    assert not (r / "alpha").exists()
+    assert (access.read_text() if access.exists() else None) == before
+    monkeypatch.setattr(container.agents, "workspace", workspace)
+    assert (await container.agents.create(spec, actor="user")).name == "alpha"
+
+
+async def test_an_access_edit_does_not_overwrite_a_change_made_after_it_was_planned(container, tmp_path):
+    from muliao.agents import access_file
+
+    tools = (await container.assets.snapshot()).tools
+    path = tmp_path / "access.toml"
+    path.write_text("")
+    edit = access_file.plan(path, tools, lambda doc: access_file.delete_role(doc, "x"))
+    path.write_text('[roles.ops]\ndescription = "by hand"\n')
+    with pytest.raises(Conflict, match="changed meanwhile"):
+        edit.apply()
+    edit.revert()
+    assert "by hand" in path.read_text()
+
+
+async def test_the_global_memory_cannot_be_deleted(container):
+    await container.assets.ensure_global_memory()
+    with pytest.raises(InvalidInput, match="cannot be deleted"):
+        await container.catalog.delete(StoredKind.MEMORY, "global")
+    assert (root(container) / "platform" / "memory" / "global.md").exists()
+
+
 async def test_a_name_on_disk_but_not_loaded_cannot_be_created_again(container, make_agent):
     await make_agent("alpha")
     write(
