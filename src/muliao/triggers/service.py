@@ -41,7 +41,7 @@ from muliao.agents.api import (
     runnable_agent_in,
 )
 from muliao.agents.events import AgentDeleting
-from muliao.errors import Conflict, DomainError, Forbidden, InvalidInput, NotFound
+from muliao.errors import Conflict, CorruptState, DomainError, Forbidden, InvalidInput, NotFound
 from muliao.platform.db import Database, utcnow
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tasks import Clock, Commit
@@ -118,15 +118,11 @@ class Fired:
 
     # 每次投递交给的会话，按投递顺序；投进 issue 的、或要续写的会话还没建出来时为 None
     sessions: tuple[str | None, ...]
-    # 代表这次触发的那次投递的收件方（会话领域给的句柄）：会话已知的第一次投递，都不知道时是第一次投递。触发器记成
-    # last_target，防重叠问它忙不忙，界面上的 last_session_id 也由它问出来
+    # 代表这次触发的那次投递（_deliver_in 定）：会话已知的第一次投递，都不知道时是第一次投递。recipient 是它的收件方
+    # （会话领域给的句柄），触发器记成 last_target，防重叠问它忙不忙，界面上的 last_session_id 也由它问出来；session_id
+    # 是它的会话，回给调用方（webhook、立即运行），只投进了 issue、或续写的会话还没建出来时为 None
     recipient: Recipient
-
-    @property
-    def session_id(self) -> str | None:
-        """回给调用方（webhook、立即运行）的会话：开出或续写的第一个已知会话，就是 recipient 那次投递的会话；只投进了
-        issue、或续写的会话还没建出来时为 None。"""
-        return next((x for x in self.sessions if x is not None), None)
+    session_id: str | None
 
 
 class Skip(StrEnum):
@@ -296,8 +292,17 @@ def set_state(trigger: Trigger, **values: Any) -> None:
 
 
 def last_target(trigger: Trigger) -> Recipient | None:
-    """上一次触发的收件方（会话领域给的句柄）；从没触发过为 None。"""
-    return None if trigger.last_target is None else RECIPIENT.validate_python(trigger.last_target)
+    """上一次触发的收件方（会话领域给的句柄）；从没触发过为 None。存下的不合法是数据坏了（CorruptState）。"""
+    return None if trigger.last_target is None else _last_target(trigger)
+
+
+def _last_target(trigger: Trigger) -> Recipient:
+    try:
+        return RECIPIENT.validate_python(trigger.last_target)
+    except ValidationError as e:
+        raise CorruptState(
+            f"trigger {trigger.id} ({trigger.name}) has an invalid last_target: {trigger.last_target!r}"
+        ) from e
 
 
 async def previous_fire_state_in(
@@ -378,8 +383,11 @@ class TriggerService:
     async def views(self, triggers: list[Trigger]) -> list[TriggerView]:
         """触发器的读模型：行、它的触发方式给出的运行状态（TriggerKind.status）、解析好的前置检查与脚本出错，以及上一次
         触发现在对应的会话（问会话领域，一个事务）。"""
+        fired = [t for t in triggers if t.last_target is not None]
         async with self._db.transaction() as s:
-            sessions = [await self._last_session_in(s, t) for t in triggers]
+            states = await self._activity.recipients_in(s, [_last_target(t) for t in fired])
+        last = {t.id: state.session_id for t, state in zip(fired, states, strict=True)}
+        sessions = [last.get(t.id) for t in triggers]
         return [
             TriggerView(t, self.kind(t.kind).status(t), precheck_of(t), faults_of(t), session)
             for t, session in zip(triggers, sessions, strict=True)
@@ -387,9 +395,6 @@ class TriggerService:
 
     async def view(self, trigger: Trigger) -> TriggerView:
         return (await self.views([trigger]))[0]
-
-    async def _last_session_in(self, s: AsyncSession, trigger: Trigger) -> str | None:
-        return (await previous_fire_state_in(s, self._activity, trigger)).session_id
 
     async def _check_secrets(self, agent_id: str, keys: list[str]) -> None:
         """前置检查与流式命令都是 agent 自己写的命令：创建或修改时就确认这些 secret 能交给命令（含 allow_shell），
@@ -614,7 +619,11 @@ class TriggerService:
             )
             return None
         lead = next((r for r in plan.routed if r.session_id is not None), plan.routed[0])
-        fired = Fired(sessions=tuple(r.session_id for r in plan.routed), recipient=lead.recipient)
+        fired = Fired(
+            sessions=tuple(r.session_id for r in plan.routed),
+            recipient=lead.recipient,
+            session_id=lead.session_id,
+        )
         for r in plan.routed:
             self._messaging.send_in(s, r.command)
         trigger.last_fired_at = self._clock()

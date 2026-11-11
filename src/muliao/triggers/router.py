@@ -18,7 +18,7 @@ from typing import assert_never
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agents.api import Availability, agent_in, availability_in, named_agent_in
+from muliao.agents.api import named_agent_in
 from muliao.errors import CorruptState
 from muliao.issues.api import issue_exists_in, issue_recipient
 from muliao.issues.events import PostIssueEvent
@@ -33,6 +33,7 @@ from muliao.sessions.api import (
     Refused,
     SenderMail,
     SessionKey,
+    agent_refusal_in,
     receive_command_in,
 )
 from muliao.triggers.tables import Trigger
@@ -156,6 +157,16 @@ async def resolve_in(s: AsyncSession, address: str, sender_agent: str) -> Target
     return NewTo(agent_id=agent_id) if parsed.to == "new" else LatestOf(agent_id=agent_id)
 
 
+def _undeliverable(refused: Refused) -> Undeliverable:
+    return Undeliverable(_problem_of(refused.reason), f"route target: {refused.detail}")
+
+
+async def _issue_problem_in(s: AsyncSession, issue_id: int) -> Undeliverable | None:
+    if await issue_exists_in(s, issue_id):
+        return None
+    return Undeliverable(Problem.GONE, f"route target issue #{issue_id} not found")
+
+
 async def check_target_in(s: AsyncSession, target: Target) -> Undeliverable | None:
     """存成默认目标之前（创建、修改触发器）确认它现在投得进：别人的 agent 能运行、issue 存在。发送方自己的 agent 由发送方查。
     只是提前报错给配置的人；投递时 routed_in 照样再问接收的领域。"""
@@ -163,22 +174,10 @@ async def check_target_in(s: AsyncSession, target: Target) -> Undeliverable | No
         case NewTo(agent_id=None) | LatestOf(agent_id=None):
             return None
         case NewTo(agent_id=str(agent_id)) | LatestOf(agent_id=str(agent_id)):
-            match await availability_in(s, agent_id):
-                case Availability.RUNNABLE:
-                    return None
-                case Availability.ARCHIVED:
-                    name = (await agent_in(s, agent_id)).name
-                    return Undeliverable(
-                        Problem.ARCHIVED, f"route target: agent {name!r} is archived; unarchive it first"
-                    )
-                case Availability.GONE:
-                    return Undeliverable(Problem.GONE, f"route target: agent {agent_id!r} not found")
-                case other:
-                    assert_never(other)
+            refused = await agent_refusal_in(s, agent_id)
+            return None if refused is None else _undeliverable(refused)
         case IssueTo(issue_id=issue_id):
-            if await issue_exists_in(s, issue_id):
-                return None
-            return Undeliverable(Problem.GONE, f"route target issue #{issue_id} not found")
+            return await _issue_problem_in(s, issue_id)
         case other:
             assert_never(other)
 
@@ -291,8 +290,8 @@ async def routed_in(
         case LatestOf(agent_id=agent_id):
             session = SessionKey(agent_id=agent_id or sender.agent_id, title=sender.latest_title)
         case IssueTo(issue_id=issue_id):
-            if not await issue_exists_in(s, issue_id):
-                return Undeliverable(Problem.GONE, f"route target issue #{issue_id} not found")
+            if (problem := await _issue_problem_in(s, issue_id)) is not None:
+                return problem
             command = PostIssueEvent(
                 issue_id=issue_id, agent_id=sender.agent_id, source=sender.source, body=content
             )
@@ -303,7 +302,7 @@ async def routed_in(
     match await receive_command_in(s, mail):
         case Accepted(command=command, recipient=recipient, session_id=session_id):
             return Routed(command=command, recipient=recipient, session_id=session_id)
-        case Refused(reason=reason, detail=detail):
-            return Undeliverable(_problem_of(reason), f"route target: {detail}")
+        case Refused() as refused:
+            return _undeliverable(refused)
         case other:
             assert_never(other)

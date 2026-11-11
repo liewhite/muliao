@@ -22,7 +22,15 @@ from muliao.sessions.assembly import SessionDomain, SessionPorts
 from muliao.sessions.events import RECIPIENT, NewConversation, Recipient, SenderMail, SessionKey, ToSender
 from muliao.sessions.halt import Halted, StopSession
 from muliao.sessions.holds import registered_in as hold_registered_in
-from muliao.sessions.inbound import Accepted, NewChat, Refusal, Refused, UserMessage, receive_command_in
+from muliao.sessions.inbound import (
+    Accepted,
+    NewChat,
+    Refusal,
+    Refused,
+    UserMessage,
+    agent_refusal_in,
+    receive_command_in,
+)
 from muliao.sessions.info import SessionInfo, keyed_session_in, keyed_sessions_among, session_in
 from muliao.sessions.lanes import COMPACTION_TASK, RUN_TASK
 from muliao.sessions.live import LiveSegment, RunDeltaEvent, RunEvent, RunItemEvent, SavedEvent
@@ -84,6 +92,7 @@ __all__ = [
     "keyed_session_in",
     "keyed_sessions_among",
     "receive_command_in",
+    "agent_refusal_in",
     "Accepted",
     "Refused",
     "Refusal",

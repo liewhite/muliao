@@ -258,7 +258,8 @@ class Checked:
     attachments: list[FileMeta]
 
 
-async def _agent_refusal_in(s: AsyncSession, agent_id: str) -> Refused | None:
+async def agent_refusal_in(s: AsyncSession, agent_id: str) -> Refused | None:
+    """新来信能不能交给这个 agent（不能时是原因）：check_in 用它，别的领域提前校验（如触发器存默认目标时）也问它。"""
     match await availability_in(s, agent_id):
         case Availability.RUNNABLE:
             return None
@@ -283,13 +284,13 @@ async def check_in(s: AsyncSession, inbound: Inbound) -> Checked | Refused:
         raise InvalidInput("message must not be empty")
     attachments = await load_metas(s, inbound.attachments)
     if isinstance(inbound.session, (NewConversation, NewChat)):
-        refused = await _agent_refusal_in(s, inbound.session.agent_id)
+        refused = await agent_refusal_in(s, inbound.session.agent_id)
         return refused or Checked(None, attachments)
     if isinstance(inbound.session, SessionKey):
         key = inbound.session
         session = await keyed_session_in(s, inbound.origin, _key_ref(inbound), key.agent_id)
         if session is None:
-            refused = await _agent_refusal_in(s, key.agent_id)
+            refused = await agent_refusal_in(s, key.agent_id)
             return refused or Checked(None, attachments)
     else:
         session = await s.get(Session, inbound.session)
@@ -304,7 +305,7 @@ async def check_in(s: AsyncSession, inbound: Inbound) -> Checked | Refused:
             Refusal.NOT_YOURS,
             f"session {session.id} was not started by this sender; it may only continue its own sessions",
         )
-    refused = await _agent_refusal_in(s, session.agent_id)
+    refused = await agent_refusal_in(s, session.agent_id)
     return refused or Checked(session, attachments)
 
 

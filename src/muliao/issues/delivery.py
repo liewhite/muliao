@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agents.api import agent_names_in
+from muliao.agents.api import USER, agent_names_in
 from muliao.issues import conversation
 from muliao.issues.graph import links_in, snapshot
 from muliao.issues.render import delivery_message, issue_view
@@ -72,9 +72,10 @@ class IssueDelivery:
                 log.info(
                     "issue activity delivered", extra={"issue_id": issue.id, "agent": to, "actor": actor}
                 )
-            case Refused(reason=Refusal.ARCHIVED):
+            case Refused(reason=Refusal.ARCHIVED) if actor == USER:
                 # 已有 issue 的指派人或 owner 后来被归档：动态照常记进时间线（不让用户在这类 issue 上的评论、改动报错），
-                # 不投递，但要让用户知道：只有他能取消归档或改指派，否则 issue 一直停在那里没人接
+                # 不投递；用户自己的改动、评论没人接要当场告诉他（只有他能取消归档或改指派）。别人的动态（agent、触发器
+                # 的事件）只记日志：不然周期触发器投进这类 issue 会每个周期推一条，in_progress 的由看板的「停滞」标出
                 self._messaging.send_in(
                     s,
                     Notify(
@@ -85,6 +86,8 @@ class IssueDelivery:
                         issue_id=issue.id,
                     ),
                 )
+                log.info("issue activity not delivered: %s", result.detail, extra={"issue_id": issue.id})
+            case Refused(reason=Refusal.ARCHIVED):
                 log.info("issue activity not delivered: %s", result.detail, extra={"issue_id": issue.id})
             case Refused(reason=Refusal.GONE):
                 # agent 正在删除：删除流程会清理它在 issue 上的指派与 owner（on_agent_deleting），不投
