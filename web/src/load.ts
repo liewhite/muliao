@@ -24,7 +24,7 @@ export interface Loaded<T> extends LoadState<T> {
 /**
  * 哪些事件要重新拉取。默认（anyChange）：连上了（之前可能丢了事件），或任何一类数据变了。按更细的事件刷新的页面自己给
  * （会话页：整份历史几 MB，只按这个会话的事件；通知页：只在新通知时，留住这次的未读标记）；不随服务端数据变化、
- * 或重拉代价大的（可选模型要实时问 provider、文件预览、代码高亮）给 never。
+ * 或重拉代价大的（可选模型要实时问 provider、文件预览、代码高亮）必须给 never 本身（Loader.live 按它认，不要另写 () => false）。
  */
 export type RefetchOn = (e: PageEvent) => boolean
 
@@ -32,7 +32,8 @@ export const anyChange: RefetchOn = (e) => e.type === 'connected' || e.type === 
 
 export const never: RefetchOn = () => false
 
-// 收到事件后等这么久再拉：运行中的 agent 每步都在提交，一阵密集的 changed 合并成一次
+// 收到 changed 后等这么久再拉：运行中的 agent 每步都在提交，一阵密集的 changed 合并成一次；别的事件（连上了、页面自己
+// 按的细事件）不等
 export const REFETCH_DELAY_MS = 300
 
 // 有人在看、随服务端数据变化的 Loader：用户的操作成功后立即一起重新拉取（refreshShown）
@@ -47,9 +48,9 @@ export async function refreshShown(): Promise<void> {
 }
 
 /**
- * 一份数据：只让最新一次请求的结果落下（晚到的旧响应不能盖掉新值）；有人在看时听服务端事件，按 refetchOn 重新拉取（等
- * REFETCH_DELAY_MS 合并密集的事件，进行中最多再排一次，见 coalesced），没人看了就退订。重新拉取失败时保留已有数据、
- * 记下错误（Loading 照常显示已有内容）。
+ * 一份数据：只让最新一次请求的结果落下（晚到的旧响应不能盖掉新值）；有人在看时听服务端事件，按 refetchOn 重新拉取（changed
+ * 等 REFETCH_DELAY_MS 合并；进行中最多再排一次，见 coalesced），没人看了就退订。重新拉取失败时保留已有数据、记下错误
+ * （Loading 照常显示已有内容）。
  */
 export class Loader<T> {
   private state: LoadState<T> = { data: undefined, error: null, loading: true }
@@ -57,14 +58,16 @@ export class Loader<T> {
   private current: Promise<void> = Promise.resolve()
   private readonly subscribers = new Set<() => void>()
   private unlisten: (() => void) | null = null
-  private readonly refetch: { run: () => void; cancel: () => void }
+  private readonly refetchNow: () => void
+  private readonly refetchSoon: { run: () => void; cancel: () => void }
   private readonly load: () => Promise<T>
   private readonly refetchOn: RefetchOn
 
   constructor(load: () => Promise<T>, refetchOn: RefetchOn = anyChange) {
     this.load = load
     this.refetchOn = refetchOn
-    this.refetch = debounced(coalesced(this.reload), REFETCH_DELAY_MS)
+    this.refetchNow = coalesced(this.reload)
+    this.refetchSoon = debounced(this.refetchNow, REFETCH_DELAY_MS)
   }
 
   /** 发一次请求；被更新的一次盖过时也等到最新那次落下才返回 */
@@ -99,7 +102,9 @@ export class Loader<T> {
   subscribe = (onChange: () => void): (() => void) => {
     this.subscribers.add(onChange)
     if (this.subscribers.size === 1) {
-      this.unlisten = listenServerEvents((e) => this.refetchOn(e) && this.refetch.run())
+      this.unlisten = listenServerEvents((e) => {
+        if (this.refetchOn(e)) (e.type === 'changed' ? this.refetchSoon.run : this.refetchNow)()
+      })
       shown.add(this as Loader<unknown>)
       void this.reload()
     }
@@ -108,7 +113,7 @@ export class Loader<T> {
       if (this.subscribers.size === 0) {
         this.unlisten?.()
         this.unlisten = null
-        this.refetch.cancel()
+        this.refetchSoon.cancel()
         shown.delete(this as Loader<unknown>)
       }
     }

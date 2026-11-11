@@ -163,7 +163,14 @@ function SkillDraft({ latest }: { latest: Skill }) {
               保存
             </ActionButton>
             {Object.keys(doc.changes).length > 0 && (
-              <Button variant="ghost" isDisabled={action.busy} onPress={doc.discard}>
+              <Button
+                variant="ghost"
+                isDisabled={action.busy}
+                onPress={() => {
+                  doc.discard()
+                  action.setError(null)
+                }}
+              >
                 放弃修改
               </Button>
             )}

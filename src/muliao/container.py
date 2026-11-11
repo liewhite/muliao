@@ -290,11 +290,12 @@ def assemble(
     tz = ZoneInfo(settings.timezone)
     bus = EventBus()
 
-    def publish_changes(_tables: frozenset[str]) -> Callable[[], None]:
-        # 写过表的事务提交后：前端正在显示的页面重新拉取（不分哪类数据，#646）
-        return lambda: bus.publish(ChangedEvent())
-
-    db = Database(create_engine(settings.db_path), check_writes=check_writes, after_commit=publish_changes)
+    # 写过表的事务提交后：前端正在显示的页面重新拉取（不分哪类数据，#646）
+    db = Database(
+        create_engine(settings.db_path),
+        check_writes=check_writes,
+        after_commit=lambda: bus.publish(ChangedEvent()),
+    )
     live = LiveSegments(bus)
     queue = TaskQueue(db, retries=retries_of(settings.runtime))
     # 领域事件与定向命令：订阅与命令处理者在下面各领域构造之后登记

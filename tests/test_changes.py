@@ -45,7 +45,7 @@ async def test_one_change_per_transaction_whatever_it_wrote(container):
         assert _changed(sub) == 1
 
 
-async def test_any_change_to_asset_files_announces_agents(container):
+async def test_any_change_to_asset_files_announces_a_change(container):
     """不管谁改的（平台的写入口、agent 的 shell、用户在别处），资源文件变了就发。"""
     # 平台自己的写入口是原子写（隐藏的临时文件 rename 过去），也要报出来
     notes = container.settings.assets_dir / "platform" / "memory" / "notes.md"

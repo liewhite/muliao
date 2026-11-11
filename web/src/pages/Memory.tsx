@@ -67,7 +67,13 @@ function MemoryDraft({ latest, hint }: { latest: Memory; hint: string }) {
           保存记忆
         </ActionButton>
         {edited && (
-          <Button variant="ghost" onPress={doc.discard}>
+          <Button
+            variant="ghost"
+            onPress={() => {
+              doc.discard()
+              action.setError(null)
+            }}
+          >
             放弃修改
           </Button>
         )}

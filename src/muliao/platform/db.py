@@ -153,8 +153,8 @@ def when_committed_in(s: AsyncSession, action: Callable[[], Awaitable[None]]) ->
     s.info.setdefault(_WHEN_COMMITTED, []).append(action)
 
 
-# 一个事务写过的表名（提交前）-> 提交成功后要做的事
-AfterCommit = Callable[[frozenset[str]], Callable[[], None]]
+# 写过表的事务提交成功后要做的事
+AfterCommit = Callable[[], None]
 
 
 def _track_writes(s: AsyncSession) -> set[str]:
@@ -196,8 +196,7 @@ class Database:
         after_commit: AfterCommit | None = None,
     ):
         """check_writes：提交前拿到这个事务写过的表名（开发期断言，见 schema.single_domain_writes）。after_commit：
-        写过表的事务提交前拿到它写过的表名、给出提交成功后要做的事（组合根据此给前端发数据变了的事件，
-        schema.ChangedEvent）：算错了在提交前报错、回滚，提交之后只做不会失败的事。"""
+        写过表的事务提交成功后调用（组合根据此给前端发数据变了的事件 schema.ChangedEvent），只做不会失败的事。"""
         self.engine = engine
         self._check_writes = check_writes
         self._after_commit = after_commit
@@ -242,10 +241,9 @@ class Database:
                         tables = frozenset(written)
                         if self._check_writes is not None:
                             self._check_writes(tables)
-                        then = self._after_commit(tables) if tables and self._after_commit else None
                         committed = s.info.pop(_WHEN_COMMITTED, [])
-                    if then is not None:
-                        then()
+                    if tables and self._after_commit is not None:
+                        self._after_commit()
                 finally:
                     self._holder = None
         # 锁外、不屏蔽取消：它们可以开自己的事务，被取消时由各自处理（Messaging 的马上执行）
