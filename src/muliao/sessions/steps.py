@@ -92,9 +92,9 @@ class Steps:
         """这次驱动的回调。run_context() 给出一段运行上下文（当前时间取调用时），挂在这次运行新增的第一条请求上。"""
         return StepHooks(
             started=lambda notices: self._started(state, notices),
-            before_request=lambda request, new: self._before_request(state, request, new, run_context),
-            after_response=lambda new: self._after_response(state, new),
-            ended=lambda new: state.unsaved.extend(new),
+            took=lambda new: state.unsaved.extend(new),
+            before_request=lambda request: self._before_request(state, request, run_context),
+            after_response=lambda: self._save(state, [], consumed=[]),
             on_text=lambda kind, text: self._live.publish_delta(
                 state.session.id, state.session.agent_id, kind, text
             ),
@@ -125,11 +125,10 @@ class Steps:
         state.opening = opening
 
     async def _before_request(
-        self, state: RunState, request: ModelRequest, new: list[ModelMessage], run_context: Callable[[], str]
+        self, state: RunState, request: ModelRequest, run_context: Callable[[], str]
     ) -> None:
         # 重发历史末尾那条已保存的请求时不回调这里（agent_runtime.StepHooks）：它已经在库里，不改它；信件与运行上下文
         # 留给下一次请求
-        state.unsaved += new
         async with self._db.transaction() as s:
             taken = {t.id for t in state.taken}
             arrived = [m for m in await queued_in(s, state.session.id) if m.id not in taken]
@@ -146,8 +145,7 @@ class Steps:
             # 只挂在本次运行新增的第一条请求上（重发的那条已经在库里，不改它——改了它，它之前的历史就不再是同一个
             # 前缀，缓存全废）。运行上下文已经挂出去了（压缩后续跑）时，notices 单独挂在下一条新请求上
             attach_run_context(request, context)
-        await self._save(state, [*state.unsaved, request], consumed=state.taken)
-        state.unsaved = []
+        await self._save(state, [request], consumed=state.taken)
         if state.last_row is None:
             raise RuntimeError(f"run {state.run_id} saved a request without a row")
         if attaching:
@@ -188,11 +186,6 @@ class Steps:
             state.run_context_row = None
         state.compaction_exhausted = compacted == 0
 
-    async def _after_response(self, state: RunState, new: list[ModelMessage]) -> None:
-        state.unsaved += new
-        await self._save(state, state.unsaved, consumed=[])
-        state.unsaved = []
-
     async def save_end(self, state: RunState, requested: Mapping[str, str]) -> None:
         """运行结束（还登记着可停止）：停在挂起的调用上时，挂起之外已经执行完的工具结果在最后一条请求里，和这次新请求
         批准的调用（requested：调用 id -> pin，sessions.approvals）同一个事务提交。分开提交时，进程在两者之间退出会留下一个
@@ -203,11 +196,15 @@ class Steps:
                 await record_approvals_in(s, state.session.id, requested)
 
     async def _save(
-        self, state: RunState, messages: Sequence[ModelMessage], *, consumed: Sequence[Mail]
+        self, state: RunState, request: Sequence[ModelRequest], *, consumed: Sequence[Mail]
     ) -> None:
-        """一步：这些消息与它们带上的信件（记为已处理）在同一个事务里提交。"""
+        """一步：运行已交出、还没保存的消息（state.unsaved）接上这次请求（模型回复之后保存时没有），与它们带上的信件
+        （记为已处理）在同一个事务里提交。提交之后到清空 unsaved 之间没有挂起点，被停止时不会把已提交的再存一遍：原生取消
+        只在事务之外发出（sessions.stopping），提交后只有登记的 when_committed 动作会 await（platform.db），而 save_in 不登记
+        ——给它加上了就要在这里重新考虑重复保存。"""
         async with self._db.transaction() as s:
-            await self.save_in(s, state, messages, consumed=consumed)
+            await self.save_in(s, state, [*state.unsaved, *request], consumed=consumed)
+        state.unsaved.clear()
 
     async def save_tail_in(self, s: AsyncSession, state: RunState) -> None:
         """在调用方事务里保存运行中的历史里还没保存的部分，只在运行结束的那个事务里调用：
@@ -216,8 +213,8 @@ class Steps:
           由同一事务里的停止从库里补齐。
         开头取走、还没随请求交给模型的信件（state.taken）不算处理过。"""
         if state.unsaved:
-            await self.save_in(s, state, state.unsaved, consumed=[])
-            state.unsaved = []
+            await self.save_in(s, state, list(state.unsaved), consumed=[])
+            state.unsaved.clear()
 
     async def save_in(
         self, s: AsyncSession, state: RunState, messages: Sequence[ModelMessage], *, consumed: Sequence[Mail]

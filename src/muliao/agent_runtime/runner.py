@@ -107,21 +107,21 @@ class _Meter:
 class StepHooks:
     """逐步运行（AgentRuntime.run_steps）时消费者在每一步的两个点上介入（sessions.consumer）。
 
-    运行新增的每条消息恰好交出一次（交出之后归消费者保存）：每一步交出这一步新增的，运行以任何方式结束（跑完、停在
-    挂起的调用上、失败、被用户停止而取消）时交出还没交出的（ended）。交进来的历史（run_steps 的 history）已经保存，
-    不再交出；从末尾那条请求续跑时重发的就是它，同样不交出、不回调 before_request。"""
+    运行新增的每条消息恰好经 took 交出一次，交出之后归消费者保存：每次请求之前、每次回复之后交出这时新增的，驱动以
+    任何方式结束（跑完、停在挂起的调用上、失败、被用户停止而取消）时交出其余的。took 是同步的，交出与运行记下「交出到
+    哪」之间没有挂起点，被取消时不会有消息两边都不认。交进来的历史（run_steps 的 history）已经保存，不再交出；从末尾
+    那条请求续跑时重发的就是它，同样不交出、不回调 before_request。每次请求本身不经 took：before_request 把它和已交出的
+    一起保存，它在发出时才进运行的历史。"""
 
     # 运行开始、第一步之前。notices：工具组连接时发现、要并进这次运行上下文的问题（RunScope.notices，见
     # instructions.with_notices）
     started: Callable[[Sequence[str]], Awaitable[None]]
-
-    # 请求模型之前：new 是上一步之后新增、request 之前的消息（通常为空），request 还没发出，可以往里追加内容（新到的
-    # 信件），并把它们一起保存
-    before_request: Callable[[ModelRequest, list[ModelMessage]], Awaitable[None]]
-    # 模型回复之后，工具执行之前：new 是请求之后新增的消息，以这条回复结尾
-    after_response: Callable[[list[ModelMessage]], Awaitable[None]]
-    # 驱动结束（含被取消）：最后一步里还没交出的消息，如停在挂起的调用上时别的工具的结果、被停止时生成到一半的回答
-    ended: Callable[[list[ModelMessage]], None]
+    # 运行新增、交给消费者保存的消息
+    took: Callable[[list[ModelMessage]], None]
+    # 请求模型之前：request 还没发出，可以往里追加内容（新到的信件），并把它和已交出的消息一起保存
+    before_request: Callable[[ModelRequest], Awaitable[None]]
+    # 模型回复之后（回复已经交出），工具执行之前：保存已交出的消息
+    after_response: Callable[[], Awaitable[None]]
 
     # 流式展示（会话页）：模型回答与思考的文字增量、工具调用与结果（参数原样，由消费者脱敏，同保存）。都是完整保存之前的预览，保存后
     # 历史里有完整的一份；续跑时交回结果的挂起调用已在历史里，不再报告
@@ -225,7 +225,7 @@ class AgentRuntime:
         在那里并入新信件、保存这一步。可以停在挂起的工具调用上（工具调用了 defer_call，如 ask_user，见
         sessions.questions）：结局为 Paused；之后带着 deferred（`{调用 id: 结果}`，如用户的回答）再运行就从那里继续。
 
-        prompt 为 None 时从历史续跑：历史停在一条请求上就重发它（_resends），停在带工具调用的回复上就执行这些调用（pydantic-ai
+        prompt 为 None 时从历史续跑：历史停在一条请求上就重发它（不再交出它，StepHooks），停在带工具调用的回复上就执行这些调用（pydantic-ai
         的续跑语义）。交进来的历史要完整：除了挂起、待重放的，每个调用都已有结果（调用方补齐并存库）。pydantic-ai
         还是动手修补了时当场报错（_unrepaired）：只在内存里修补的历史和库里的对不上，之后的运行会在错位置上再补一次。
 
@@ -265,16 +265,7 @@ class AgentRuntime:
                     first = run.next_node
                     if not PaiAgent.is_user_prompt_node(first):
                         raise RuntimeError(f"agent run did not start with the user prompt node: {first!r}")
-                    await _step_through(
-                        run,
-                        first,
-                        hooks,
-                        resumed,
-                        scope.notices,
-                        history,
-                        _resends(prompt, history, deferred),
-                        meter,
-                    )
+                    await _step_through(run, first, hooks, resumed, scope.notices, history, meter)
                     result = run.result
         if result is None:
             raise RuntimeError("agent run ended without a result")
@@ -368,45 +359,49 @@ async def _step_through(
     resumed: frozenset[str],
     notices: Sequence[str],
     given: Sequence[ModelMessage],
-    resend: bool,
     meter: _Meter,
 ) -> None:
     """从用户 prompt 节点把运行逐步驱动到结束，在每次请求模型之前、模型回复之后回调 hooks，把运行新增的消息逐步交出
     （StepHooks）。notices 是这次驱动的 scope 里的那份列表：工具组在进入 iter 时已经构建、连接，到这里已经齐了。每次
-    回复后先记这次请求的用量再回调 after_response：它保存这一步、通知会话页重新拉取，拉到的累计就含这次请求。
+    回复后先记这次请求的用量再交出、回调 after_response：它保存这一步、通知会话页重新拉取，拉到的累计就含这次请求。
 
     交出到哪由 handed 记（运行中的历史 ctx.state.message_history 的下标）：pydantic-ai 开始运行时规整过交进来的历史
     （合并相邻请求；重发时取出末尾那条请求），条数可能和交进来的不同，所以基准在规整之后取；之后历史只在末尾追加。
-    下标只在这里用，不交出去；它和交出之间没有 await，被取消时没交出的都在 ended 里。"""
+    下标只在这里用，不交出去。是不是重发只问 pydantic-ai（第一次请求节点的 is_resuming_without_prompt）。"""
     node = await run.next(first)
-    if resend and not PaiAgent.is_model_request_node(node):
-        raise RuntimeError(f"expected to resend the last request, the run continues with {node!r}")
+    resend = PaiAgent.is_model_request_node(node) and node.is_resuming_without_prompt
     # 重发时 pydantic-ai 把末尾那条请求从历史里取出、放进第一次请求的节点，一起查
     _unrepaired(given, [*run.ctx.state.message_history, *([node.request] if resend else [])])
     handed = len(run.ctx.state.message_history)
+
+    def take() -> list[ModelMessage]:
+        nonlocal handed
+        new = run.ctx.state.message_history[handed:]
+        handed += len(new)
+        if new:
+            hooks.took(new)
+        return new
+
     await hooks.started(notices)
     try:
         while not isinstance(node, End):
             if PaiAgent.is_model_request_node(node):
-                new = run.ctx.state.message_history[handed:]
-                # 这条请求在发出时由 pydantic-ai 追加进历史：随这次回调交出
-                handed += len(new) + 1
+                if take() and resend:
+                    raise RuntimeError("messages appeared before resending the last request")
+                # 这条请求在发出时由 pydantic-ai 追加进历史：重发的那条已经保存，其余的由 before_request 保存
+                handed += 1
                 if resend:
-                    # 重发的是交进来的历史末尾那条，已经保存
                     resend = False
-                    if new:
-                        raise RuntimeError(f"messages appeared before resending the last request: {new!r}")
                 else:
-                    await hooks.before_request(node.request, new)
+                    await hooks.before_request(node.request)
                 async with node.stream(run.ctx) as stream:
                     await _forward_events(stream, hooks, resumed)
                 node = await run.next(node)
                 await meter.bill()
-                new = run.ctx.state.message_history[handed:]
-                handed += len(new)
+                new = take()
                 if not new or not isinstance(new[-1], ModelResponse):
                     raise RuntimeError(f"model request ended without a response, it added {new!r}")
-                await hooks.after_response(new)
+                await hooks.after_response()
             elif PaiAgent.is_call_tools_node(node):
                 async with node.stream(run.ctx) as stream:
                     await _forward_events(stream, hooks, resumed)
@@ -414,17 +409,7 @@ async def _step_through(
             else:
                 node = await run.next(node)
     finally:
-        hooks.ended(run.ctx.state.message_history[handed:])
-
-
-def _resends(
-    prompt: Sequence[UserContent] | None,
-    history: Sequence[ModelMessage],
-    deferred: Mapping[str, object] | None,
-) -> bool:
-    """这次运行的第一次请求是重发交进来的历史末尾那条请求：没有新 prompt、没有交回的挂起结果、历史停在一条请求上
-    （pydantic-ai 的续跑语义，UserPromptNode）。"""
-    return prompt is None and deferred is None and bool(history) and isinstance(history[-1], ModelRequest)
+        take()
 
 
 def _unrepaired(given: Sequence[ModelMessage], messages: Sequence[ModelMessage]) -> None:
