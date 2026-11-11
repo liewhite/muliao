@@ -326,7 +326,7 @@ class JobRunner:
     ) -> None:
         # 事务里不做文件 IO：进程已经结束，先读好输出的最后几行
         last = await asyncio.to_thread(tail, log_file)
-        refused = agent_shell.refusal(last)
+        refused = agent_shell.refusal(exit_code, last)
         async with self._db.transaction() as s:
             job = await s.get(Job, job_id)
             if job is None:

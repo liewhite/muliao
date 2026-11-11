@@ -350,7 +350,7 @@ class StreamRunner:
         logged = await anyio.to_thread.run_sync(tail, log_file)
         # 日志是追加的，末尾几行里可能有前几次启动（甚至改配置前那条命令）的报错：补说明只看这次的分隔行之后的整行
         # （分隔行已不在末尾几行里时，整段都是这次的）
-        refused = agent_shell.refusal(logged.rpartition(started)[2])
+        refused = agent_shell.refusal(code, logged.rpartition(started)[2])
         stderr_tail = logged[-_ERROR_TAIL_CHARS:].strip()
         return f"stream command exited with {code}: {stderr_tail}" + (
             "" if refused is None else f"\n{refused}"

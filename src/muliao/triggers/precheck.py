@@ -194,10 +194,9 @@ class PrecheckRunner:
             raise PrecheckFailed(f"precheck timed out after {self._timeout}s")
         if result.exit_code != 0:
             stderr = result.stderr[-_STDERR_TAIL_CHARS:].strip()
-            refused = agent_shell.refusal(stderr)
             raise PrecheckFailed(
                 f"precheck exited with {result.exit_code}: {stderr}"
-                + ("" if refused is None else f"\n{refused}")
+                + ("" if result.refusal is None else f"\n{result.refusal}")
             )
         size = len(result.stdout.encode())
         if size > self._max_bytes:

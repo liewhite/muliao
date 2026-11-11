@@ -1,14 +1,17 @@
 """以 agent 身份跑命令（#618）：run_shell 前台与后台任务、触发器的前置检查与 stream 都经这里起 agent 的命令。
 
 一条命令以谁的身份跑由三件事一起决定，只在这里拼：注入哪些 secret（Vault.resolve_many，shell 决定能不能注入
-allow_shell = false 的）、在哪个目录（agent 的工作目录）、关在什么写沙箱里（Confiner.of）；被沙箱拒绝的写在输出里
-补什么说明（denial_note）也随同一份沙箱给出。怎么起进程、读输出、杀进程组是 platform.shell 的事，这里不管。
+allow_shell = false 的）、在哪个目录（agent 的工作目录）、关在什么写沙箱里（Confiner.of）。命令失败时被沙箱拒绝的写
+补什么说明也只在这里定（AgentShell.refusal，按同一份沙箱）：跑到结束的命令随结果给出（CommandResult.refusal），起了不等
+的由调用方在它结束时拿退出码与输出来问；调用方只负责把说明拼在自己的报错后面。怎么起进程、读输出、杀进程组是
+platform.shell 的事，这里不管。
 
 MCP 的 stdio server 不走这里：它由 fastmcp 起（不是 bash），secret 按使用者解析、沙箱按使用者或 owner 取，组合根直接
 把 Confiner.of 注入给它（agent_runtime.mcp）。
 """
 
 import asyncio
+import dataclasses
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +20,13 @@ from muliao.agents.api import Vault
 from muliao.platform.sandbox import Confinement
 from muliao.platform.shell import ShellResult, run_bash, spawn_bash
 from muliao.workspace.writable import Confiner, denial_note
+
+
+@dataclass(frozen=True, kw_only=True)
+class CommandResult(ShellResult):
+    """AgentShell.run 的结果：在 ShellResult 之外带上被写沙箱拦下的写的说明（AgentShell.refusal），没有则 None。"""
+
+    refusal: str | None
 
 
 @dataclass(frozen=True)
@@ -50,9 +60,10 @@ class AgentShell:
         stdin: bytes | None = None,
         merge_stderr: bool = False,
         pipefail: bool = False,
-    ) -> ShellResult:
-        """跑到结束（前台 run_shell、前置检查），输出里的 secret 已替换。"""
-        return await run_bash(
+    ) -> CommandResult:
+        """跑到结束（前台 run_shell、前置检查），输出里的 secret 已替换，失败时带上沙箱拒绝的说明（看报错的那路输出：
+        merge_stderr 时是 stdout，否则 stderr）。"""
+        result = await run_bash(
             command,
             cwd=self.cwd,
             secrets=self.secrets,
@@ -62,10 +73,15 @@ class AgentShell:
             merge_stderr=merge_stderr,
             pipefail=pipefail,
         )
+        errors = result.stdout if merge_stderr else result.stderr
+        fields = {f.name: getattr(result, f.name) for f in dataclasses.fields(result)}
+        return CommandResult(**fields, refusal=self.refusal(result.exit_code, errors))
 
-    def refusal(self, output: str) -> str | None:
-        """命令输出（报错的那部分）里有被写沙箱拦下的写时补在它后面的说明，没有则 None（workspace.writable.denial_note）。"""
-        return denial_note(self._confinement, output)
+    def refusal(self, exit_code: int | None, output: str) -> str | None:
+        """命令结束后补在报错后面的说明：没成功（退出码非 0，或超时、被杀没有退出码）且输出（报错的那部分）里有被写沙箱
+        拦下的写时给出，否则 None（workspace.writable.denial_note）。退出码 0 不看：命令成功了，输出里引用的
+        「Operation not permitted」不是它失败的原因。spawn 起的命令（后台任务、stream）由调用方在它结束时来问。"""
+        return None if exit_code == 0 else denial_note(self._confinement, output)
 
 
 class AgentCommands:

@@ -282,7 +282,7 @@ async def _run_foreground(
         else f"{_KILLED} {timeout}s timeout"
     )
     output = truncate(result.stdout, limits.max_output_chars)
-    if (note := agent_shell.refusal(result.stdout)) is not None:
+    if (note := result.refusal) is not None:
         # 紧接在系统报错之后：输出以换行结尾就不再空一行
         output += note if output.endswith("\n") else f"\n{note}"
     if result.left_running:

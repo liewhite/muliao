@@ -489,6 +489,21 @@ async def test_run_shell_and_write_file_refuse_a_denied_path_and_leave_the_rest_
     assert not any(blocked.iterdir())
 
 
+async def test_only_a_failed_command_gets_the_note(container, make_agent, tmp_path):
+    """退出码 0 的命令输出里引用了被拒的报错（如 grep 日志）不补说明；同样的输出、命令失败才补（#636）。"""
+    blocked = tmp_path / "blocked"
+    blocked.mkdir()
+    me = await make_agent("worker")
+    await container.agents.update(me.id, AgentPatch(deny=[f"write:path:{blocked}"]), actor="user")
+    shell = await container.commands.prepare(me.id, [], shell=True)
+    quoted = f"echo 'touch: {blocked}/x: Operation not permitted'"
+    ok = await shell.run(quoted, timeout=30, merge_stderr=True)
+    failed = await shell.run(f"{quoted}; exit 2", timeout=30, merge_stderr=True)
+    assert ok.exit_code == 0 and "Operation not permitted" in ok.stdout and ok.refusal is None
+    assert failed.exit_code == 2 and failed.refusal is not None and "write:path" in failed.refusal
+    assert shell.refusal(0, failed.stdout) is None
+
+
 async def test_a_precheck_refused_a_write_gets_the_note_after_its_error(container, make_agent, tmp_path):
     from muliao.triggers.precheck import Precheck, PrecheckFailed, PrecheckRunner
 
