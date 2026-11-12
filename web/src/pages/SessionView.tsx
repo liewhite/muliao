@@ -470,17 +470,14 @@ function MailNote({ mail, ctx }: { mail: Mail; ctx: SessionContext }) {
   )
 }
 
-/** 最近一次运行（或压缩）还没正常结束：在跑、出错后在自动重试，或最终失败（可重试） */
+/** 最近一次运行还没正常结束：在跑（含出错后在自动重试），或最终失败（可重试）。手动压缩不算在内（接口不给） */
 function RunStatus({ run, onRetry }: { run: RunRecord; onRetry: () => void }) {
-  const what = run.kind === 'compaction' ? '压缩' : '运行'
   if (run.outcome === 'failed') {
     return (
       <div className="flex flex-col gap-2 rounded-xl bg-danger-soft p-3 text-sm text-danger-soft-foreground">
-        <div>{what}失败了（{formatTime(run.ended_at ?? run.started_at)}）</div>
+        <div>运行失败了（{formatTime(run.ended_at ?? run.started_at)}）</div>
         <pre className={CODE_BLOCK}>{run.error}</pre>
-        {run.kind === 'run' && (
-          <div className="text-xs">如果是上下文过长，先点右上角「压缩」，完成后再重试。重试从失败的那一步继续。</div>
-        )}
+        <div className="text-xs">如果是上下文过长，先点右上角「压缩」，完成后再重试。重试从失败的那一步继续。</div>
         <Button size="sm" variant="secondary" className="self-start" onPress={onRetry}>
           <RotateCcw className="size-4" />
           重试
@@ -491,7 +488,7 @@ function RunStatus({ run, onRetry }: { run: RunRecord; onRetry: () => void }) {
   if (run.ended_at !== null) return null
   return (
     <div className="flex items-center gap-2 self-end text-xs text-muted">
-      <Spinner size="sm" /> {run.error ? `出错了，正在自动重试（上次错误：${run.error}）` : `${what}中…`}
+      <Spinner size="sm" /> 运行中…
     </div>
   )
 }
