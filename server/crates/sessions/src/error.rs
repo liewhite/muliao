@@ -16,6 +16,9 @@ pub enum Error {
     Assets(muliao_assets::error::Error),
     #[error(transparent)]
     Files(FilesError),
+    /// 压缩时请模型总结失败
+    #[error("summarizing for compaction failed: {0}")]
+    Summarize(#[from] muliao_runtime::SummarizeError),
 }
 
 impl From<FilesError> for Error {
@@ -42,6 +45,11 @@ impl Error {
             Error::Domain(e) => Some(e),
             _ => None,
         }
+    }
+
+    /// 暂时性的失败（模型接口出错）：稍后原样重试可能就成。
+    pub fn is_transient(&self) -> bool {
+        matches!(self, Error::Summarize(muliao_runtime::SummarizeError::Run(e)) if e.is_transient())
     }
 }
 

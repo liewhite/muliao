@@ -5,6 +5,7 @@ pub mod activity;
 pub mod actor;
 pub mod answers;
 pub mod approvals;
+pub mod compaction;
 pub mod conventions;
 pub mod delegation;
 pub mod directory;
@@ -18,6 +19,7 @@ pub mod pending;
 pub mod runs;
 pub mod settlement;
 pub mod thread_calls;
+pub mod transcript;
 pub mod wakeups;
 pub mod work;
 
