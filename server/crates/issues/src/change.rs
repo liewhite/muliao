@@ -19,7 +19,7 @@ use muliao_sessions::events::BoxError;
 use muliao_sessions::inbound::{Refusal, Refused, SenderInbox};
 use rusqlite::Connection;
 
-use crate::activity::{Activity, Arrival, Change, DependencyChange, Happening, record_in};
+use crate::activity::{Activity, Arrival, Change, DependencyChange, Happening, record_in, timeline_in};
 use crate::conversation;
 use crate::error::{Error, Result, broken, invalid};
 use crate::graph::{Links, downstream_in, links_of_in, set_depends_on_in};
@@ -109,17 +109,47 @@ impl IssueChange<'_> {
         &self.issue
     }
 
-    /// 这次修改所在的事务（只读用；写字段经下面的方法）。
-    pub fn connection(&self) -> &Connection {
-        self.c
+    /// 这个 issue 的整条时间线（含这次已记下的）。
+    pub fn timeline(&self) -> Result<Vec<Activity>> {
+        timeline_in(self.c, self.issue.id)
     }
 
-    /// 记一条动态（时间线上多一条就是 issue 变了：updated_at 只在这里更新）。
-    pub fn record(&mut self, what: Happening) -> Result<Activity> {
+    /// 记一条动态（时间线上多一条就是 issue 变了：updated_at 只在这里更新）。只在本模块里用：属性变化必须经
+    /// set_* 与字段一起改，对外只给下面几种不改字段的记法。
+    fn record(&mut self, what: Happening) -> Result<Activity> {
         let a = record_in(self.c, self.issue.id, self.by, what)?;
         self.issue.updated_at = a.created_at;
         self.recorded.push(a.clone());
         Ok(a)
+    }
+
+    // 不改字段的动态
+
+    pub fn created(&mut self) -> Result<()> {
+        self.record(Happening::Created).map(drop)
+    }
+
+    pub fn comment(&mut self, body: String) -> Result<Activity> {
+        self.record(Happening::Comment { body })
+    }
+
+    pub fn run_failed(&mut self, body: String) -> Result<()> {
+        self.record(Happening::RunFailed { body }).map(drop)
+    }
+
+    pub fn unsettled(&mut self) -> Result<()> {
+        self.record(Happening::Unsettled).map(drop)
+    }
+
+    /// 停掉了 agent 在这个 issue 上的会话。
+    pub fn stopped(&mut self, agent_id: &str) -> Result<()> {
+        self.record(Happening::Stopped { change: Arrival { before: (), to: agent_id.to_owned() } }).map(drop)
+    }
+
+    /// 一个上游被删除：它已从依赖表里随之删掉，这里只记下前后的上游列表。
+    pub fn upstream_deleted(&mut self, before: Vec<i64>, deleted: i64) -> Result<()> {
+        let to = before.iter().copied().filter(|&i| i != deleted).collect();
+        self.record(Happening::DependsOn { change: Change::new(before, to) }).map(drop)
     }
 
     // 每个 set_* 只在值真的变了时改字段、记一条动态
@@ -156,16 +186,25 @@ impl IssueChange<'_> {
         Ok(())
     }
 
-    /// None 只用于系统清理（负责的 agent 被删除）。
-    pub fn set_owner(&mut self, owner: Option<&str>) -> Result<()> {
-        if owner != self.issue.owner.as_deref() {
-            if let Some(o) = owner {
-                runnable_agent_in(self.c, o)?;
-            }
-            let before = std::mem::replace(&mut self.issue.owner, owner.map(str::to_owned));
-            self.record(Happening::Owner { change: Change::new(before, owner.map(str::to_owned)) })?;
+    pub fn set_owner(&mut self, owner: &str) -> Result<()> {
+        if Some(owner) != self.issue.owner.as_deref() {
+            runnable_agent_in(self.c, owner)?;
+            self.change_owner(Some(owner.to_owned()))?;
         }
         Ok(())
+    }
+
+    /// 负责的 agent 被删除（系统清理）：不再有 owner。
+    pub fn clear_deleted_owner(&mut self) -> Result<()> {
+        if self.issue.owner.is_some() {
+            self.change_owner(None)?;
+        }
+        Ok(())
+    }
+
+    fn change_owner(&mut self, owner: Option<String>) -> Result<()> {
+        let before = std::mem::replace(&mut self.issue.owner, owner.clone());
+        self.record(Happening::Owner { change: Change::new(before, owner) }).map(drop)
     }
 
     pub fn set_priority(&mut self, priority: Priority) -> Result<()> {
@@ -200,7 +239,7 @@ impl IssueChange<'_> {
             self.set_status(s)?;
         }
         if let Some(o) = &p.owner {
-            self.set_owner(Some(o))?;
+            self.set_owner(o)?;
         }
         if let Some(pr) = p.priority {
             self.set_priority(pr)?;
@@ -209,11 +248,6 @@ impl IssueChange<'_> {
             self.set_assignee(a)?;
         }
         Ok(())
-    }
-
-    /// 记一条「停掉了 agent 在这个 issue 上的会话」。
-    pub fn record_stopped(&mut self, agent_id: &str) -> Result<()> {
-        self.record(Happening::Stopped { change: Arrival { before: (), to: agent_id.to_owned() } }).map(drop)
     }
 }
 

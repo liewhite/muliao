@@ -23,7 +23,7 @@ use muliao_sessions::tools::Stopper;
 use rusqlite::Connection;
 use serde::Serialize;
 
-use crate::activity::{self, Activity, Change, Happening, timeline_in};
+use crate::activity::{self, Activity, timeline_in};
 use crate::change::{Changes, NotifyIn, Patch, Routing, check_assignee, checked_title, snapshot};
 use crate::conversation;
 use crate::error::{Error, Result, conflict, invalid};
@@ -186,42 +186,46 @@ pub fn user_actions_in(
     agent_ids: Option<&[String]>,
     tz: Tz,
 ) -> Result<Vec<UserActions>> {
-    let rows = activity::query(
-        c,
-        "actor = ?1 AND created_at >= ?2 AND created_at < ?3 ORDER BY id",
-        rusqlite::params![Actor::User.as_str(), start, end],
-    )?;
-    let names = agent_names_in(c)?;
-    let mut grouped: Vec<(Issue, Vec<Activity>)> = Vec::new();
-    let mut at: BTreeMap<i64, usize> = BTreeMap::new();
-    for a in rows {
-        let n = match at.get(&a.issue_id) {
-            Some(&n) => n,
-            None => {
-                let issue = issue_in(c, a.issue_id)?;
-                let mine = agent_ids.is_none_or(|ids| {
-                    ids.iter()
-                        .any(|id| issue.owner.as_deref() == Some(id) || agent_of(issue.assignee.as_ref()) == Some(id))
-                });
-                if !mine {
-                    continue;
-                }
-                grouped.push((issue, Vec::new()));
-                at.insert(a.issue_id, grouped.len() - 1);
-                grouped.len() - 1
-            }
-        };
-        grouped[n].1.push(a);
+    // 时间经 rusqlite 的 chrono 转换传，和存下时同一种文字形式，按文字比较才对
+    let mut values: Vec<Box<dyn rusqlite::ToSql>> =
+        vec![Box::new(Actor::User.as_str().to_owned()), Box::new(start), Box::new(end)];
+    let mut filter = "actor = ?1 AND created_at >= ?2 AND created_at < ?3".to_owned();
+    if let Some(ids) = agent_ids {
+        let marks: Vec<String> = ids
+            .iter()
+            .map(|id| {
+                values.push(Box::new(id.clone()));
+                format!("?{}", values.len())
+            })
+            .collect();
+        let marks = marks.join(", ");
+        filter.push_str(&format!(
+            " AND issue_id IN (SELECT id FROM issues WHERE owner_agent_id IN ({marks}) OR assignee IN ({marks}))"
+        ));
     }
-    Ok(grouped
+    filter.push_str(" ORDER BY id");
+    let rows = activity::query(c, &filter, rusqlite::params_from_iter(values))?;
+    let names = agent_names_in(c)?;
+    // 按 issue 分组，组的先后按各自第一条动态
+    let mut grouped: Vec<(i64, Vec<Activity>)> = Vec::new();
+    for a in rows {
+        match grouped.iter_mut().find(|(id, _)| *id == a.issue_id) {
+            Some((_, acts)) => acts.push(a),
+            None => grouped.push((a.issue_id, vec![a])),
+        }
+    }
+    grouped
         .into_iter()
-        .map(|(issue, acts)| UserActions {
-            issue_id: issue.id,
-            title: issue.title,
-            status: issue.status,
-            lines: acts.iter().map(|a| render_activity(a, &names, tz)).collect(),
+        .map(|(id, acts)| {
+            let issue = issue_in(c, id)?;
+            Ok(UserActions {
+                issue_id: id,
+                title: issue.title,
+                status: issue.status,
+                lines: acts.iter().map(|a| render_activity(a, &names, tz)).collect(),
+            })
         })
-        .collect())
+        .collect()
 }
 
 /// issue 看板。克隆共享同一份。
@@ -276,9 +280,7 @@ impl Board {
         // 记在它自己的 issue 会话名下，却要投进那个会话：直接投给它（已确认它就是该接手的人），不走「自己会话里的动作不
         // 投回」的规则
         let by = By::agent(&e.agent_id, &e.session_id);
-        self.changes.open_in(tx, issue_id, &by, Routing::Direct(e.agent_id.clone()), |c| {
-            c.record(Happening::Unsettled).map(drop)
-        })?;
+        self.changes.open_in(tx, issue_id, &by, Routing::Direct(e.agent_id.clone()), |c| c.unsettled())?;
         tracing::info!(issue_id, run_id = e.run_id, "issue left unsettled, asked");
         Ok(())
     }
@@ -293,8 +295,7 @@ impl Board {
         }
         let by = By::agent(&e.agent_id, &e.session_id);
         let body = truncate(e.error.trim(), RUN_FAILED_BODY_MAX);
-        self.changes
-            .open_in(tx, issue_id, &by, Routing::RecordOnly, |c| c.record(Happening::RunFailed { body }).map(drop))?;
+        self.changes.open_in(tx, issue_id, &by, Routing::RecordOnly, |c| c.run_failed(body))?;
         tracing::info!(issue_id, run_id = e.run_id, "issue run failure recorded");
         Ok(())
     }
@@ -315,7 +316,7 @@ impl Board {
                     c.set_assignee(None)?;
                 }
                 if c.issue().owner.as_deref() == Some(agent_id) {
-                    c.set_owner(None)?;
+                    c.clear_deleted_owner()?;
                 }
                 Ok(())
             })?;
@@ -443,8 +444,7 @@ impl Board {
                 }
                 let mut created = Vec::new();
                 for id in &ids {
-                    let ((), issue) =
-                        changes.open_in(tx, *id, &by, Routing::ByRules, |c| c.record(Happening::Created).map(drop))?;
+                    let ((), issue) = changes.open_in(tx, *id, &by, Routing::ByRules, |c| c.created())?;
                     tracing::info!(issue_id = id, actor = by.actor.as_str(), "issue created");
                     created.push(issue);
                 }
@@ -502,28 +502,25 @@ impl Board {
         self.as_user(issue_id, move |c| {
             let issue = c.issue().clone();
             refuse(issue_id, cannot_review(issue.status, issue.assignee.as_ref()))?;
-            let timeline = timeline_in(c.connection(), issue_id)?;
+            let timeline = c.timeline()?;
             let Some(agent) = handed_by(&issue.creator, &timeline).map(str::to_owned) else {
                 return Err(conflict(format!(
                     "issue #{issue_id} was not handed to you by an agent: assign it to an agent yourself"
                 )));
             };
-            match runnable_agent_in(c.connection(), &agent).map_err(Error::from) {
-                Err(Error::Domain(d)) if d.kind == ErrorKind::NotFound => {
-                    return Err(conflict(format!(
-                        "the agent that handed issue #{issue_id} to you no longer exists: assign it to an agent yourself"
-                    )));
-                }
-                other => {
-                    other?;
-                }
-            }
-            c.record(Happening::Comment { body: reason })?;
-            c.apply(Patch {
+            c.comment(reason)?;
+            // 指派时查它还能不能运行：已删除的换成更明白的冲突（归档的本来就是冲突）
+            let back = Patch {
                 status: Some(Status::InProgress),
                 assignee: Some(Some(Assignee::Agent(agent))),
                 ..Patch::default()
-            })
+            };
+            match c.apply(back) {
+                Err(Error::Domain(d)) if d.kind == ErrorKind::NotFound => Err(conflict(format!(
+                    "the agent that handed issue #{issue_id} to you no longer exists: assign it to an agent yourself"
+                ))),
+                other => other,
+            }
         })
         .await
     }
@@ -554,7 +551,8 @@ impl Board {
     /// 会话（或它刚被删除）时没有可停的：只改状态、记评论，按规则投递，不为收尾新建会话。
     ///
     /// 先停后改：停止返回时停止事务已提交，之后投的信不会被它清掉。两个事务之间指派人被改了也不改目标：记的、收尾消息投的都
-    /// 是被停下的那个 agent。
+    /// 是被停下的那个 agent。从被停会话开出去的 thread 里调用时，那个 thread 随停止被逐层停掉，可能在第二个事务之前
+    /// 就被取消：会话停了而状态没改，调用方看不到结果（契约之外的用法，不另拦）。
     pub async fn stop(&self, by: By, issue_id: i64, status: Status, message: Option<String>) -> Result<Stopping> {
         if message.as_deref().is_some_and(|m| m.trim().is_empty()) {
             return Err(invalid("message must not be empty"));
@@ -592,11 +590,11 @@ impl Board {
             .write(move |tx| {
                 let ((), issue) = changes.open_in(tx, issue_id, &by, routing, |c| {
                     if stopped {
-                        c.record_stopped(&who)?;
+                        c.stopped(&who)?;
                     }
                     c.set_status(status)?;
                     if let Some(m) = message {
-                        c.record(Happening::Comment { body: m })?;
+                        c.comment(m)?;
                     }
                     Ok(())
                 })?;
@@ -614,8 +612,7 @@ impl Board {
         let changes = self.changes.clone();
         self.db
             .write(move |tx| {
-                let (a, _) =
-                    changes.open_in(tx, issue_id, &by, Routing::ByRules, |c| c.record(Happening::Comment { body }))?;
+                let (a, _) = changes.open_in(tx, issue_id, &by, Routing::ByRules, |c| c.comment(body))?;
                 tracing::info!(issue_id, actor = by.actor.as_str(), "issue commented");
                 Ok(a)
             })
@@ -633,10 +630,7 @@ impl Board {
                 model::delete_in(tx, issue_id)?;
                 for down in &downstream {
                     let old: Vec<i64> = before[down].depends_on.iter().map(|d| d.id).collect();
-                    let to: Vec<i64> = old.iter().copied().filter(|&i| i != issue_id).collect();
-                    changes.open_in(tx, *down, &By::user(), Routing::ByRules, |c| {
-                        c.record(Happening::DependsOn { change: Change::new(old, to) }).map(drop)
-                    })?;
+                    changes.open_in(tx, *down, &By::user(), Routing::ByRules, |c| c.upstream_deleted(old, issue_id))?;
                 }
                 tracing::info!(issue_id, ?downstream, "issue deleted");
                 Ok(())
