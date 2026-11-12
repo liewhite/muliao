@@ -45,7 +45,10 @@ fn parse_args() -> anyhow::Result<Option<Args>> {
 }
 
 fn default_web_dir() -> anyhow::Result<PathBuf> {
-    let exe = std::env::current_exe().context("locating this executable")?;
+    // 解开链接：服务入口（如 ~/.local/bin/muliao）是指向安装目录里这个程序的链接，前端在安装目录里（deploy/install.sh）
+    let exe = std::env::current_exe()
+        .and_then(|p| p.canonicalize())
+        .context("locating this executable")?;
     Ok(exe.parent().map(|d| d.join("web")).unwrap_or_else(|| PathBuf::from("web")))
 }
 

@@ -1,17 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- launchd 用户服务。把 /Users/YOU 换成实际 home。app/current 由 deploy/install.sh 维护（docs/deployment.md）。 -->
+<!-- launchd 用户服务。把 /Users/YOU 换成实际 home。程序是服务入口链接 ~/.local/bin/muliao，指向 ~/.muliao/app/current/muliao（docs/deployment.md）。 -->
 <plist version="1.0">
 <dict>
   <key>Label</key>
   <string>com.muliao</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/YOU/.muliao/app/current/muliao</string>
+    <string>/Users/YOU/.local/bin/muliao</string>
     <string>--config</string>
     <string>/Users/YOU/.muliao/config.toml</string>
-    <string>--web-dir</string>
-    <string>/Users/YOU/.muliao/app/current/web</string>
   </array>
   <key>WorkingDirectory</key>
   <string>/Users/YOU/.muliao</string>
