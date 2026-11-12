@@ -39,13 +39,3 @@ def test_notification_urls_are_the_frontend_routes():
     """通知点开的地址（推送与通知页共用，Notification.url）就是前端的会话页、issue 页路由。"""
     assert Notification(session_id="s1").url == _route("api.ts", "sessionRoute", "s1")
     assert Notification(session_id="s1", issue_id=7).url == _route("issues.ts", "issueRoute", "7")
-
-
-async def test_the_task_kinds_in_the_http_contract_are_exactly_the_registered_ones(container):
-    """前端按种类判断任务事件（web/src/events.ts 的 TaskKind 取自 OpenAPI）：接口里的种类必须恰好是 worker 登记了
-    处理器的那些，后端新增或改名时这里先失败，再重新生成前端类型。"""
-    import typing
-
-    from muliao.api.tasks import TaskKind
-
-    assert set(typing.get_args(TaskKind)) == container.queue.kinds

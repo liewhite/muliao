@@ -7,8 +7,9 @@ from sqlalchemy import select
 
 import muliao.notifications.webpush as webpush_module
 from muliao.errors import ServiceUnavailable, TransientError
+from muliao.notifications.deliver import DeliverHandler
 from muliao.notifications.inbox import push_message_in
-from muliao.notifications.push import DELIVER_TASK, DeliverHandler, Device, PushMessage
+from muliao.notifications.push import DELIVER_TASK, Device, PushMessage
 from muliao.notifications.tables import Notification, PushSubscription
 from muliao.notifications.webpush import WebPushDelivery
 from muliao.platform.tables import Task
@@ -34,7 +35,7 @@ def _message(url: str | None = None, issue_id: int | None = None, unread: int = 
 
 
 def _handler(container, pusher) -> DeliverHandler:  # noqa: ANN001
-    return DeliverHandler(container.db, push_message_in, pusher)
+    return DeliverHandler(container.db, pusher)
 
 
 def _webpush(container) -> WebPushDelivery:

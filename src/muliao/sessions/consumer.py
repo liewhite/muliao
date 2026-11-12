@@ -29,7 +29,7 @@ from muliao.sessions import pending
 from muliao.sessions.approvals import take_in as take_approvals_in
 from muliao.sessions.approvals import waiting_text as approval_waiting_text
 from muliao.sessions.codec import load_messages
-from muliao.sessions.content import Content, ContentBuilder
+from muliao.sessions.content import ContentBuilder
 from muliao.sessions.conventions import answer_text, is_stopped
 from muliao.sessions.events import RunFailed
 from muliao.sessions.finish import RunEnd, RunFinisher
@@ -47,21 +47,11 @@ from muliao.sessions.mailbox import audience_of, consumed_by_in, give_in, queued
 from muliao.sessions.origins import OriginNotes, origin_of
 from muliao.sessions.questions import waiting_text
 from muliao.sessions.settlement import delegated_in, settle_failure_in
-from muliao.sessions.steps import CompactionDue, RunState, Steps
+from muliao.sessions.steps import CompactionDue, Opening, RunState, Steps
 from muliao.sessions.stopping import StoppableRuns
 from muliao.sessions.tables import Mail
 
 log = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class Opening:
-    """一次运行开头要交给模型的（Consumer._opening，不改库）：取走的信件、停在挂起的调用上时那些调用与对它们的回答、
-    其余信件的内容。"""
-
-    queued: list[Mail]
-    paused: pending.Paused | None
-    content: Content
 
 
 @dataclass
@@ -288,18 +278,18 @@ class Consumer:
         """把开头的信件交给这次运行：返回交给模型的内容，以及挂起调用的结果（`{调用 id: 结果}`）。"""
         interrupted: dict[str, object] = {}
         answers = {} if opening.paused is None else opening.paused.answers
-        if opening.queued:
+        if opening.mail:
             # 开头取走的信件都交给了这次运行（mailbox.give_in），哪怕它在第一次保存之前就最终失败：失败的结清据此
             # 了结它们，也不会为它们再唤醒一次运行。批准在同一个事务里记为已交给运行执行：之前交过的不再执行
             async with self._db.transaction() as s:
-                await give_in(s, [m.id for m in opening.queued], state.run_id)
+                await give_in(s, [m.id for m in opening.mail], state.run_id)
                 interrupted = await take_approvals_in(s, state.session.id, answers)
         deferred = (
             None
             if opening.paused is None
             else pending.deferred_results(opening.paused.pending, answers, replaced=interrupted)
         )
-        self._steps.begin(state, opening.queued, opening.content)
+        self._steps.begin(state, opening)
         return (opening.content.items or None), deferred
 
     # ---- 停止（命令见 sessions.halt.SessionStopper）----

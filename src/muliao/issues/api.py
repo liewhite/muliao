@@ -2,14 +2,11 @@
 
 from muliao.issues.activity import HAPPENINGS, Activity
 from muliao.issues.assembly import IssueDomain
-from muliao.issues.rules import SESSION_NOTE
 from muliao.issues.service import IssueDetail, IssueService, IssueWork, NewIssue, UserActions
 from muliao.issues.tables import ActivityKind, IssuePriority, IssueStatus
-from muliao.sessions.api import WorkState
 
 __all__ = [
     "HAPPENINGS",
-    "SESSION_NOTE",
     "Activity",
     "ActivityKind",
     "IssueDetail",
@@ -20,5 +17,4 @@ __all__ = [
     "IssueWork",
     "NewIssue",
     "UserActions",
-    "WorkState",
 ]

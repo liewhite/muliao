@@ -9,8 +9,9 @@ from pathlib import Path
 
 from pydantic_ai import FunctionToolset
 
-from muliao.notifications.inbox import Notifications, push_message_in
-from muliao.notifications.push import DELIVER_TASK, DeliverHandler, PushSubscriptions
+from muliao.notifications.deliver import DeliverHandler
+from muliao.notifications.inbox import Notifications
+from muliao.notifications.push import DELIVER_TASK, PushSubscriptions
 from muliao.notifications.tools import notify_toolset
 from muliao.notifications.webpush import VapidKeys, WebPushDelivery
 from muliao.platform.bus import EventBus
@@ -42,9 +43,7 @@ class NotificationDomain(Parts):
             notifications=Notifications(db, queue, bus),
             push_subscriptions=subscriptions,
             vapid=vapid,
-            _handler=DeliverHandler(
-                db, push_message_in, WebPushDelivery(subscriptions, vapid, vapid_subject)
-            ),
+            _handler=DeliverHandler(db, WebPushDelivery(subscriptions, vapid, vapid_subject)),
         )
 
     def toolsets(self) -> Sequence[FunctionToolset[RunScope]]:
@@ -52,7 +51,7 @@ class NotificationDomain(Parts):
         return (notify_toolset(self.notifications),)
 
     def subscribe(self, messaging: Messaging) -> None:
-        """写下通知的订阅（运行结束、运行失败）、随会话已读与删除。"""
+        """写下通知的订阅（运行结束、运行失败）、随会话删除。"""
         self.notifications.subscribe(messaging)
 
     def handlers(self) -> Sequence[tuple[str, TaskHandler]]:

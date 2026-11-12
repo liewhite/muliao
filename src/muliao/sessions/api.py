@@ -10,8 +10,7 @@
 - 查询：session_in（SessionInfo）、SessionActivity（会话忙不忙；一批可能已删除的会话问 states_of_in，结果 SessionState）、SessionRecall（热历史：一段时间的会话活动与用户说的话，
   history 领域的 activity_overview 用；会话的时间线由本领域的 session_read 工具读）；
 - 会话在等的东西（Wait：后台任务、委派、到点唤醒、提问，随会话详情给出）；
-- 会话来源（Origin：发送方新建会话时给出）与 HTTP 层用的读模型、展示事件；
-- 会话领域的任务种类（RUN_TASK、COMPACTION_TASK、STOP_THREAD_TASK：HTTP 层把各领域的任务种类组成接口里的 TaskKind）。
+- 会话来源（Origin：发送方新建会话时给出）与 HTTP 层用的读模型、展示事件。
 """
 
 from muliao.sessions.activity import SessionActivity, SessionState, WorkState
@@ -30,7 +29,6 @@ from muliao.sessions.inbound import (
     UserMessage,
 )
 from muliao.sessions.info import SessionInfo, keyed_session_in, keyed_sessions_among, session_in
-from muliao.sessions.lanes import COMPACTION_TASK, RUN_TASK, STOP_THREAD_TASK
 from muliao.sessions.live import LiveSegment, RunDeltaEvent, RunEvent, RunItemEvent, SavedEvent
 from muliao.sessions.origins import (
     OWN_NOTES,
@@ -54,9 +52,6 @@ from muliao.sessions.waits import ApprovalWait, AskWait, DelegationWait, JobWait
 from muliao.sessions.work import CheckBeats, SessionWork, check_interval
 
 __all__ = [
-    "COMPACTION_TASK",
-    "RUN_TASK",
-    "STOP_THREAD_TASK",
     "OWN_NOTES",
     "Origin",
     "OriginNotes",

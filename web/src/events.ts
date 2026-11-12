@@ -91,14 +91,6 @@ export type PageEvent = Exclude<Schemas['ServerEvent'], HeartbeatEvent> | Connec
 
 type Listener = (e: PageEvent) => void
 
-/** 任务种类（后端 api/sessions.py 的 TaskKind，经 OpenAPI 生成）：按种类判断任务事件一律经 isTaskOf，后端给种类改名时
- * 这里编译失败，而不是悄悄不再匹配 */
-export type TaskKind = Schemas['TaskOut']['kind']
-
-/** 这是不是这几种任务之一的状态变化 */
-export const isTaskOf = (e: PageEvent, ...kinds: TaskKind[]): e is Schemas['TaskEvent'] =>
-  e.type === 'task' && (kinds as string[]).includes(e.kind)
-
 /** 这个页面跑的前端是否已经不是服务端当前的版本：页面加载后第一次心跳给出的版本，之后变了就是升级过 */
 export function isOutdated(loadedVersion: string | null, serverVersion: string | null): boolean {
   return loadedVersion !== null && serverVersion !== null && loadedVersion !== serverVersion

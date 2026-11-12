@@ -32,9 +32,10 @@ from muliao.issues.activity import (
     Unsettled,
     stored,
 )
-from muliao.issues.api import SESSION_NOTE, ActivityKind, IssuePriority, IssueStatus, WorkState
+from muliao.issues.api import ActivityKind, IssuePriority, IssueStatus
 from muliao.issues.graph import cycle_through
 from muliao.issues.rules import (
+    SESSION_NOTE,
     SYSTEM_ACTOR,
     Snapshot,
     ask_to_settle,
@@ -50,7 +51,7 @@ from muliao.issues.rules import (
 )
 from muliao.issues.tables import IssueActivity
 from muliao.platform.db import utcnow
-from muliao.sessions.api import IssueOrigin, Origin, OriginNotes
+from muliao.sessions.api import IssueOrigin, Origin, OriginNotes, WorkState
 from muliao.sessions.tables import Mail, Session
 from tests.scripted import scripted
 from tests.test_flow import drain, run_one, side_tasks, start

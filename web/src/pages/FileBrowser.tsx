@@ -28,7 +28,8 @@ export type DirSource = {
 }
 
 export function FileBrowser({ source, label, emptyText }: { source: DirSource; label: string; emptyText: string }) {
-  const root = useLoad(() => source.list(''), [source.id])
+  // 不随服务端事件重列（agent 干活时文件一直在变，列表跳动）：点刷新才重新读
+  const root = useLoad(() => source.list(''), [source.id], never)
   // 展开过的子目录的内容（键是相对路径）；收起时保留，再展开不重新请求，点刷新才重新读
   const [dirs, setDirs] = useState<Record<string, WorkspaceEntry[]>>({})
   const [expanded, setExpanded] = useState<Set<Key>>(new Set())

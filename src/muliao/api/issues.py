@@ -8,9 +8,10 @@ from pydantic import BaseModel, Field, create_model
 
 from muliao.agents.api import USER
 from muliao.api.deps import C
-from muliao.issues.api import HAPPENINGS, Activity, IssuePriority, IssueStatus, IssueWork, NewIssue, WorkState
+from muliao.issues.api import HAPPENINGS, Activity, IssuePriority, IssueStatus, IssueWork, NewIssue
 from muliao.issues.tables import Issue
 from muliao.platform.values import KEEP, Keep
+from muliao.sessions.api import WorkState
 
 router = APIRouter()
 

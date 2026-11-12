@@ -21,7 +21,7 @@ from pydantic_ai.models.openai import OpenAIResponsesModel
 from pydantic_ai.providers.openai import OpenAIProvider
 from sqlalchemy import select
 
-from muliao.agents.api import AGENT_REMOVAL_TASK
+from muliao.agents.lifecycle import AGENT_REMOVAL_TASK
 from muliao.notifications.push import DELIVER_TASK
 from muliao.notifications.webpush import WebPushDelivery
 from muliao.platform.tables import Task, TaskStatus
@@ -221,8 +221,8 @@ async def test_turn_runs_tools_persists_messages_and_queues_notification(
     assert (note.body, note.session_id, note.unread) == ("Noted!", session.id, True)
     assert await container.notifications.unread_count() == 1
 
-    # 看过了会话即看过了指向它的通知（SessionRead，返回时已投递）
-    await container.sessions.mark_read(session.id)
+    # 看过了会话即看过了指向它的通知
+    await container.notifications.mark_session_read(session.id)
     assert await container.notifications.unread_count() == 0
     assert await container.notifications.unread_sessions([session.id]) == set()
 
@@ -238,8 +238,8 @@ async def test_a_session_is_unread_only_while_a_notification_points_to_it(contai
     await drain(container)
     await container.notifications.notify(alpha, "t", "b", other.id)
     assert await container.notifications.unread_sessions([session.id, other.id]) == {session.id, other.id}
-    await container.sessions.mark_read(session.id)
-    await container.sessions.mark_read(session.id)
+    await container.notifications.mark_session_read(session.id)
+    await container.notifications.mark_session_read(session.id)
 
     assert [n.unread for n in await container.notifications.list(10)] == [True, False]
     assert await container.notifications.unread_sessions([session.id, other.id]) == {other.id}

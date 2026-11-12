@@ -55,10 +55,3 @@ class SessionDeleted(DomainEvent):
 
     session_id: str
     agent_id: str
-
-
-class SessionRead(DomainEvent):
-    """用户看过了这个会话（打开它、看着它时又有了新回答）。会话的未读就是指向它的未读通知（通知领域），标记
-    已读即把它们标为已读。"""
-
-    session_id: str

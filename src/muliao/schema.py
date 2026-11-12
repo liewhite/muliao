@@ -1,9 +1,5 @@
 """全部领域的表：Alembic 与迁移测试从这里拿到完整的 metadata（各领域的表定义在各自的 tables 模块里）。"""
 
-from typing import Literal
-
-from pydantic import BaseModel
-
 from muliao.agents import tables as agents  # noqa: F401
 from muliao.files import tables as files  # noqa: F401
 from muliao.history import tables as history  # noqa: F401
@@ -14,11 +10,3 @@ from muliao.sessions import tables as sessions  # noqa: F401
 from muliao.triggers import tables as triggers  # noqa: F401
 from muliao.usage import tables as usage  # noqa: F401
 from muliao.workspace import tables as workspace  # noqa: F401
-
-
-class ChangedEvent(BaseModel):
-    """服务端数据变了（推给前端 SSE，正在显示的页面重新拉取，#646 起不分类别）：写过表的事务提交后发（platform.db 的
-    after_commit）；资源文件（不在库里）有改动时也发（agents.source 的 watch）。不管是谁改的：页面自己、agent、触发器、
-    推送通知上的操作都一样。"""
-
-    type: Literal["changed"] = "changed"

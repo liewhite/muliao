@@ -6,7 +6,6 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field, TypeAdapter
 
-from muliao.agents.api import AgentNames
 from muliao.api.deps import C
 from muliao.platform.values import KEEP
 from muliao.triggers.api import (
@@ -132,10 +131,10 @@ class FiredOut(BaseModel):
 
 
 async def _out(c: C, t: Trigger) -> TriggerOut:
-    return _out_of(await c.triggers.view(t), await c.agents.names())
+    return _out_of(await c.triggers.view(t))
 
 
-def _out_of(view: TriggerView, names: AgentNames) -> TriggerOut:
+def _out_of(view: TriggerView) -> TriggerOut:
     t = view.trigger
     return _TRIGGER_OUT.validate_python(
         dict(
@@ -167,8 +166,7 @@ async def trigger_kinds(c: C) -> list[TriggerKindOut]:
 async def list_triggers(
     c: C, finished: bool = Query(False, description="列已结束的（跑完的一次性触发器）而不是还会触发的")
 ) -> list[TriggerOut]:
-    names = await c.agents.names()
-    return [_out_of(view, names) for view in await c.triggers.views(await c.triggers.list(finished=finished))]
+    return [_out_of(view) for view in await c.triggers.views(await c.triggers.list(finished=finished))]
 
 
 @router.post("/triggers", status_code=201)

@@ -395,7 +395,7 @@ export interface paths {
         put?: never;
         /**
          * Mark Read
-         * @description 标记会话已读；指向它的通知由通知领域随 SessionRead 标为已读。
+         * @description 标记会话已读：会话的未读就是指向它的未读通知，由通知领域标为已读（幂等，会话不存在时什么都不做）。
          */
         post: operations["mark_read_api_sessions__session_id__read_post"];
         delete?: never;
@@ -3360,7 +3360,7 @@ export interface components {
         };
         /**
          * TaskEvent
-         * @description 一个 task 的状态变化（前端据此从数据库重新拉取），由 worker 发出。
+         * @description 一个 task 的状态变化，由 worker 发出：前端据此从数据库重新拉取（会话页按 session_id 只认自己会话的，不分种类）。
          */
         TaskEvent: {
             /**
@@ -3369,27 +3369,16 @@ export interface components {
              * @constant
              */
             type: "task";
-            /** Task Id */
-            task_id: number;
-            /** Kind */
-            kind: string;
             status: components["schemas"]["TaskStatus"];
             /** Session Id */
             session_id: string | null;
-            /** Agent */
-            agent: string | null;
-            /** Error */
-            error: string | null;
         };
         /** TaskOut */
         TaskOut: {
             /** Id */
             id: number;
-            /**
-             * Kind
-             * @enum {string}
-             */
-            kind: "run" | "compaction" | "stop_thread" | "deliver" | "agent_removal";
+            /** Kind */
+            kind: string;
             /** Agent Id */
             agent_id: string | null;
             /** Session Id */

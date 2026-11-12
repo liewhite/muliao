@@ -25,6 +25,7 @@ from muliao.sessions.conventions import attach_run_context
 from muliao.sessions.history import SessionContext, append_in, latest_compaction, load_context
 from muliao.sessions.live import LiveSegments
 from muliao.sessions.mailbox import consume_in, queued_in
+from muliao.sessions.pending import Paused
 from muliao.sessions.tables import Mail, Message, Session
 from muliao.sessions.transcript import Item, call_item, result_item
 
@@ -35,9 +36,11 @@ _PREVIEW_CHARS = 2000
 
 @dataclass(frozen=True)
 class Opening:
-    """开头取走的信件与它们交给模型的内容（pydantic-ai 把内容放进第一次请求的用户消息）。"""
+    """一次运行开头要交给模型的（sessions.consumer 读出，不改库）：取走的信件、停在挂起的调用上时那些调用与对它们的
+    回答、其余信件交给模型的内容（pydantic-ai 把内容放进第一次请求的用户消息）。"""
 
     mail: list[Mail]
+    paused: Paused | None
     content: Content
 
 
@@ -128,9 +131,9 @@ class Steps:
     async def _started(self, state: RunState, notices: Sequence[str]) -> None:
         state.notices = notices
 
-    def begin(self, state: RunState, taken: Sequence[Mail], opening: Content) -> None:
+    def begin(self, state: RunState, opening: Opening) -> None:
         """开头取走的信件与交给模型的内容（sessions.consumer 交出之后）：第一条请求交出时随它进入 taken（_took_request）。"""
-        state.opening = Opening(list(taken), opening)
+        state.opening = opening
 
     def _took_request(self, state: RunState, request: ModelRequest) -> None:
         """运行交出要发出的请求（同步，与运行记下「交出到哪」之间没有挂起点）。第一条带着开头的内容：在它上面标出事件

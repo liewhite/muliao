@@ -5,7 +5,7 @@ import anyio
 import pytest
 from sqlalchemy import select, text
 
-from muliao.agents.api import AGENT_REMOVAL_TASK
+from muliao.agents.lifecycle import AGENT_REMOVAL_TASK
 from muliao.errors import Conflict
 from muliao.notifications.push import DELIVER_TASK
 from muliao.platform.db import utcnow

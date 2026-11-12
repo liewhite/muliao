@@ -1114,7 +1114,7 @@
     "/api/sessions/{session_id}/read": {
       "post": {
         "summary": "Mark Read",
-        "description": "标记会话已读；指向它的通知由通知领域随 SessionRead 标为已读。",
+        "description": "标记会话已读：会话的未读就是指向它的未读通知，由通知领域标为已读（幂等，会话不存在时什么都不做）。",
         "operationId": "mark_read_api_sessions__session_id__read_post",
         "parameters": [
           {
@@ -9324,14 +9324,6 @@
             "title": "Type",
             "default": "task"
           },
-          "task_id": {
-            "type": "integer",
-            "title": "Task Id"
-          },
-          "kind": {
-            "type": "string",
-            "title": "Kind"
-          },
           "status": {
             "$ref": "#/components/schemas/TaskStatus"
           },
@@ -9345,41 +9337,15 @@
               }
             ],
             "title": "Session Id"
-          },
-          "agent": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Agent"
-          },
-          "error": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Error"
           }
         },
         "type": "object",
         "required": [
-          "task_id",
-          "kind",
           "status",
-          "session_id",
-          "agent",
-          "error"
+          "session_id"
         ],
         "title": "TaskEvent",
-        "description": "一个 task 的状态变化（前端据此从数据库重新拉取），由 worker 发出。"
+        "description": "一个 task 的状态变化，由 worker 发出：前端据此从数据库重新拉取（会话页按 session_id 只认自己会话的，不分种类）。"
       },
       "TaskOut": {
         "properties": {
@@ -9389,13 +9355,6 @@
           },
           "kind": {
             "type": "string",
-            "enum": [
-              "run",
-              "compaction",
-              "stop_thread",
-              "deliver",
-              "agent_removal"
-            ],
             "title": "Kind"
           },
           "agent_id": {

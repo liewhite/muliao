@@ -1,29 +1,20 @@
 """任务页：平台任务队列的列表与手动重试（Container.tasks 是只转发这两个方法的 TaskAdmin）。"""
 
 from datetime import datetime
-from typing import Literal
 
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
-from muliao.agents.api import AGENT_REMOVAL_TASK
 from muliao.api.deps import C
-from muliao.notifications.api import DELIVER_TASK
 from muliao.platform.tables import TaskStatus
 from muliao.platform.tasks import TaskView
-from muliao.sessions.api import COMPACTION_TASK, RUN_TASK, STOP_THREAD_TASK
 
 router = APIRouter()
 
 
-# 任务种类：各领域在自己的 api 导出，这里组成接口契约（tests 检查它恰好是 worker 登记的种类）。进 OpenAPI 后前端
-# 按种类判断时用生成的类型（web/src/events.ts 的 TaskKind），后端改名时前端编译失败，而不是悄悄不再匹配
-TaskKind = Literal[RUN_TASK, COMPACTION_TASK, STOP_THREAD_TASK, DELIVER_TASK, AGENT_REMOVAL_TASK]
-
-
 class TaskOut(BaseModel):
     id: int
-    kind: TaskKind
+    kind: str
     agent_id: str | None
     session_id: str | None
     status: TaskStatus

@@ -338,8 +338,8 @@ async def compact(c: C, session_id: str) -> CompactOut:
 
 @router.post("/sessions/{session_id}/read", status_code=204)
 async def mark_read(c: C, session_id: str) -> None:
-    """标记会话已读；指向它的通知由通知领域随 SessionRead 标为已读。"""
-    await c.sessions.mark_read(session_id)
+    """标记会话已读：会话的未读就是指向它的未读通知，由通知领域标为已读（幂等，会话不存在时什么都不做）。"""
+    await c.notifications.mark_session_read(session_id)
 
 
 @router.delete("/sessions/{session_id}", status_code=204)

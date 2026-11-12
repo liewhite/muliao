@@ -54,7 +54,7 @@ class AssetSource:
         memory_max_chars: int,
         # (模型, 思考档位) 在当前配置下不能运行时报 InvalidInput（agent_runtime.llm.ModelRegistry.check）
         model_checker: Callable[[str, Thinking], None],
-        # 资源文件有改动时调用（watch；组合根给前端发数据变了，schema.ChangedEvent）
+        # 资源文件有改动时调用（watch；组合根给前端发数据变了，platform.bus.ChangedEvent）
         changed: Callable[[], None],
         # 内置工具表（组合根装好工具集后才 bind；快照带着它）
         tools: ToolTable,

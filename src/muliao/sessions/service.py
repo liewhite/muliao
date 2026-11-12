@@ -18,7 +18,6 @@ from muliao.sessions.codec import load_messages
 from muliao.sessions.compaction import Compactor, context_tokens
 from muliao.sessions.deletion import delete_sessions
 from muliao.sessions.directory import Listing, listed_ids_in, listed_page_in, threads_of
-from muliao.sessions.events import SessionRead
 from muliao.sessions.halt import Halted, StopSession
 from muliao.sessions.history import compactions_in, context_of, transcript_rows_in
 from muliao.sessions.inbound import Received, UserMessage, receive
@@ -209,13 +208,6 @@ class SessionService:
             active = [x for x in ids if states[x] != WorkState.IDLE]
             page = await listed_page_in(s, listing, active, limit=limit, offset=offset)
             return [ListedSession(x, states[x.id]) for x in page]
-
-    async def mark_read(self, session_id: str) -> None:
-        """用户看过了会话：发布 SessionRead（会话的未读就是指向它的未读通知，通知领域据此把它们标为已读；会话不存在时
-        NotFound）。"""
-        async with self._db.transaction() as s:
-            await self._get(s, session_id)
-            await self._messaging.publish_in(s, SessionRead(session_id=session_id))
 
     async def delete(self, session_id: str) -> None:
         """用户删除会话（规则见 deletion.delete_sessions）。"""

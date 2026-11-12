@@ -37,7 +37,7 @@ from muliao.history.api import HistoryLog
 from muliao.history.tools import history_toolset
 from muliao.issues.api import IssueDomain, IssueService
 from muliao.notifications.api import NotificationDomain, Notifications, PushSubscriptions, VapidKeys
-from muliao.platform.bus import EventBus, EventFeed
+from muliao.platform.bus import ChangedEvent, EventBus, EventFeed
 from muliao.platform.checks import WorkWatcher
 from muliao.platform.db import Database, create_engine, migrate
 from muliao.platform.messaging import Messaging
@@ -46,7 +46,6 @@ from muliao.platform.sandbox import sandbox_for
 from muliao.platform.tasks import Retries, RetryPolicy, TaskAdmin, TaskQueue
 from muliao.platform.wiring import Loop, Parts, Toolsets
 from muliao.platform.worker import Worker, register_handlers
-from muliao.schema import ChangedEvent
 from muliao.sessions.api import OWN_NOTES, OriginNotes, SessionDomain, SessionPorts, SessionService
 from muliao.sessions.compaction import Compactor
 from muliao.sessions.consumer import Consumer

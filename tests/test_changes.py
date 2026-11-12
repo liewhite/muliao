@@ -1,4 +1,4 @@
-"""给前端的「数据变了」（schema.ChangedEvent）：写过表的事务提交后发，资源文件有改动时也发。"""
+"""给前端的「数据变了」（platform.bus.ChangedEvent）：写过表的事务提交后发，资源文件有改动时也发。"""
 
 import anyio
 import pytest
@@ -6,9 +6,8 @@ import pytest
 from muliao.agents.source import visible_change
 from muliao.notifications.push import DELIVER_TASK
 from muliao.notifications.tables import Notification
-from muliao.platform.bus import Subscriber
+from muliao.platform.bus import ChangedEvent, Subscriber
 from muliao.platform.fs import write_atomic
-from muliao.schema import ChangedEvent
 
 
 def _changed(sub: Subscriber) -> int:

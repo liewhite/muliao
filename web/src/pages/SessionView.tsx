@@ -58,7 +58,7 @@ import { AttachButton, AttachmentList, PendingUploads, useUploads, type Uploads 
 import { appendTranscript, useVoiceInput, type VoiceInput } from '../voice'
 import { VoiceButton } from '../VoiceButton'
 import { isSendShortcut, SEND_HINT } from '../sendKey'
-import { isTaskOf, liveItems, mergeLive, useServerEvents, withoutCovered, type PageEvent, type RunEvent } from '../events'
+import { liveItems, mergeLive, useServerEvents, withoutCovered, type PageEvent, type RunEvent } from '../events'
 import { STATUS_LABEL, issueRoute } from '../issues'
 import { useReturnState, useRouteParam } from '../nav'
 import { cacheHitPercent, contextText, formatTokens } from '../usage'
@@ -843,11 +843,12 @@ function UsageLine({ context, usage }: Pick<SessionDetail, 'context' | 'usage'>)
   )
 }
 
-/** 会话页按哪些事件重新拉取：连上了（之前可能丢了事件），这个会话又保存了一步，或它的运行、压缩的状态变了 */
+/** 会话页按哪些事件重新拉取：连上了（之前可能丢了事件），这个会话又保存了一步，或它的任何任务（运行、压缩、后台任务
+ * 结局的投递等）状态变了 */
 function refetchesSession(e: PageEvent, id: string): boolean {
   if (e.type === 'connected') return true
   if (e.type === 'changed' || e.session_id !== id) return false
-  return e.type === 'saved' || isTaskOf(e, 'run', 'compaction')
+  return e.type === 'saved' || e.type === 'task'
 }
 
 /** 用户看过了这个会话：指向它的通知标为已读（会话的未读由通知派生），标记本身幂等 */
@@ -860,7 +861,7 @@ export default function SessionView() {
   const navigate = useNavigate()
   const confirm = useConfirm()
   // 整份会话（含全部历史，大的有几 MB）不随任何会话的 changed 重新拉取：只按这个会话自己的事件刷新（连上了、又保存了一步、
-  // 运行或压缩的状态变了），用户的操作之后照常一起刷新（load.refreshShown）
+  // 它的任务状态变了），用户的操作之后照常一起刷新（load.refreshShown）
   const detail = useLoad(() => api.session(id), [id], (e) => refetchesSession(e, id))
   const [live, setLive] = useState<RunEvent[]>([])
   const [draft, setDraft] = useState('')
@@ -882,10 +883,17 @@ export default function SessionView() {
       if (e.type === 'run') setLive((prev) => [...withoutCovered(detail.data?.live ?? null, prev, e), e])
       // 看着它时又来了指向它的通知（会话的未读由通知派生）：用户已经在看，直接标记已读
       else if (e.type === 'notification') markSessionRead(id)
-      // 运行结束后以数据库为准，清空临时流
-      else if (isTaskOf(e, 'run', 'compaction') && e.status !== 'running') setLive([])
     }
   })
+
+  // 重新拉取到的快照里没有进行中的运行（运行或压缩结束了）：以数据库为准，清空临时流。快照生成后才开始的运行，
+  // 已收到的事件被清掉时下一条事件接不上（mergeLive 的 gap），会再拉一次
+  // （渲染时按「快照换了」调整，React 推荐的做法，不用 effect）
+  const [snapshot, setSnapshot] = useState(detail.data)
+  if (detail.data !== snapshot) {
+    setSnapshot(detail.data)
+    if (detail.data?.live === null) setLive([])
+  }
 
   // 中途打开或重新拉取时以快照为准，从这一段的开头显示，再接上经 SSE 收到、快照里还没有的事件
   const merged = mergeLive(detail.data?.live ?? null, live)

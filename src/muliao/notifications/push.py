@@ -1,12 +1,9 @@
 """推送：把收件箱（notifications.inbox）里的通知推到用户的设备。设备是浏览器推送订阅（push_subscriptions，只在这里
-读写）；每条通知给每台设备排一个 deliver task（schedule_in），由任务队列驱动 DeliverHandler 推送，重试只重推这一台。
-
-推送不碰收件箱的表：推送内容由收件箱给出（组合根注入的 MessageSource，返回 PushMessage）；推送实现（Pusher，
-现有 Web Push）只收值对象 Device 与 PushMessage，不收 ORM 对象。"""
+读写）；每条通知给每台设备排一个 deliver task（schedule_in），由任务队列驱动 notifications.deliver.DeliverHandler 推送，
+重试只重推这一台。推送实现（Pusher，现有 Web Push）只收值对象 Device 与 PushMessage，不收 ORM 对象。"""
 
 import hashlib
 import logging
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -16,12 +13,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from muliao.errors import InvalidInput
 from muliao.notifications.tables import PushSubscription
 from muliao.platform.db import Database
-from muliao.platform.tables import Task
-from muliao.platform.tasks import Commit, TaskQueue, no_commit
+from muliao.platform.tasks import TaskQueue
 
 log = logging.getLogger(__name__)
 
-# 推送一条通知到一台设备的任务种类（DeliverHandler 由 NotificationDomain.handlers 声明）
+# 推送一条通知到一台设备的任务种类（deliver.DeliverHandler 由 NotificationDomain.handlers 声明）
 DELIVER_TASK = "deliver"
 
 
@@ -48,10 +44,6 @@ class PushMessage:
     issue_id: int | None
     # 投递时的未读通知数，用作应用角标
     unread: int
-
-
-# 推送时在这个事务里读通知内容（实现：notifications.inbox.push_message_in）；通知已被删除时为 None
-MessageSource = Callable[[AsyncSession, int], Awaitable[PushMessage | None]]
 
 
 class Pusher(Protocol):
@@ -118,42 +110,3 @@ async def schedule_in(
             session_id=session_id,
             payload={"notification_id": notification_id, "endpoint": endpoint},
         )
-
-
-class DeliverHandler:
-    """每个 deliver task 把一条通知推到一台设备。"""
-
-    # 推送完成后没有别的数据引用它
-    prunable = True
-
-    def __init__(self, db: Database, message_in: MessageSource, pusher: Pusher):
-        self._db = db
-        self._message_in = message_in
-        self._pusher = pusher
-
-    async def failed_in(self, s: AsyncSession, task: Task) -> None:
-        """失败只需可见（任务记录、日志），没有等着结果的一方。"""
-
-    async def execute(self, task: Task) -> Commit:
-        notification_id = task.payload["notification_id"]
-        endpoint = task.payload["endpoint"]
-        async with self._db.transaction() as s:
-            message = await self._message_in(s, notification_id)
-            if message is None:
-                # 通知随它指向的会话删除（订阅 SessionDeleted），deliver task 不随之删除：还在排队的执行时到这里跳过
-                log.info(
-                    "notification deleted before delivery, not pushing",
-                    extra={"notification_id": notification_id, "session_id": task.session_id},
-                )
-                return no_commit
-            device = await device_in(s, endpoint)
-            if device is None:
-                # 排队之后设备退订了，或者上一条通知发现它已失效并删除了它
-                log.info(
-                    "push subscription removed before delivery, not pushing",
-                    extra={"notification_id": notification_id, "session_id": task.session_id},
-                )
-                return no_commit
-        # 推送实现自己记录真实结果（送达、失效删除、被拒）
-        await self._pusher.send(device, message)
-        return no_commit

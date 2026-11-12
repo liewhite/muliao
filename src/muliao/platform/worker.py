@@ -67,17 +67,8 @@ class Worker:
         """这个 worker 处理的任务种类（组合根登记的处理器）。"""
         return frozenset(self._handlers)
 
-    def _publish(self, task: Task, status: TaskStatus, error: str | None = None) -> None:
-        self._bus.publish(
-            TaskEvent(
-                task_id=task.id,
-                kind=task.kind,
-                status=status,
-                session_id=task.session_id,
-                agent=task.agent_id,
-                error=error,
-            )
-        )
+    def _publish(self, task: Task, status: TaskStatus) -> None:
+        self._bus.publish(TaskEvent(status=status, session_id=task.session_id))
 
     async def run_forever(self) -> None:
         """领取并执行所有可领取的 task，不设并发上限：同一 lane 内的顺序与互斥由队列保证（_claimable），task 本身
@@ -166,7 +157,7 @@ class Worker:
         except Exception:
             # 记账本身失败（如 task 已被删除）：留下完整上下文，不能让异常无人接收
             log.exception("could not record task failure: %s", error, extra=ctx)
-            self._publish(task, TaskStatus.FAILED, error)
+            self._publish(task, TaskStatus.FAILED)
             return
         if failed.status == TaskStatus.FAILED:
             log.error("task failed: %s", error, exc_info=exc, extra=ctx)
@@ -174,4 +165,4 @@ class Worker:
             log.warning(
                 "task failed transiently, retry scheduled at %s: %s", failed.not_before, error, extra=ctx
             )
-        self._publish(task, failed.status, error)
+        self._publish(task, failed.status)

@@ -40,7 +40,7 @@ describe('anyChange', () => {
   it('refetches after connecting or when any data changed, whoever changed it', () => {
     expect(anyChange({ type: 'connected' })).toBe(true)
     expect(anyChange({ type: 'changed' })).toBe(true)
-    const task = { type: 'task', task_id: 1, kind: 'run', status: 'done', session_id: 's', agent: 'a', error: null } as const
+    const task = { type: 'task', status: 'done', session_id: 's' } as const
     expect(anyChange(task)).toBe(false)
   })
 })

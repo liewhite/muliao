@@ -21,16 +21,19 @@ Event = BaseModel
 
 
 class TaskEvent(BaseModel):
-    """一个 task 的状态变化（前端据此从数据库重新拉取），由 worker 发出。"""
+    """一个 task 的状态变化，由 worker 发出：前端据此从数据库重新拉取（会话页按 session_id 只认自己会话的，不分种类）。"""
 
     type: Literal["task"] = "task"
-    task_id: int
-    kind: str
     status: TaskStatus
     session_id: str | None
-    # 系统通知的投递没有所属 agent
-    agent: str | None
-    error: str | None
+
+
+class ChangedEvent(BaseModel):
+    """服务端数据变了（推给前端 SSE，正在显示的页面重新拉取，#646 起不分类别）：写过表的事务提交后发（platform.db 的
+    after_commit）；资源文件（不在库里）有改动时也发（agents.source 的 watch）。不管是谁改的：页面自己、agent、触发器、
+    推送通知上的操作都一样。"""
+
+    type: Literal["changed"] = "changed"
 
 
 class SubscriptionEnded(Exception):

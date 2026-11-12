@@ -3,7 +3,7 @@
 取内容，deliver task 只引用通知与一台设备。
 
 Notifications 写下通知（notify、别的领域在自己事务里调的 notify_in、订阅 RunEnded 与 RunFailed），提供通知页与未读数，
-随会话已读（订阅 SessionRead）与删除（订阅 SessionDeleted）。订阅都在发布方的事务里执行。
+随会话删除（订阅 SessionDeleted）；用户看过会话或 issue 时 HTTP 层直接调 mark_session_read / mark_issue_read。订阅都在发布方的事务里执行。
 
 会话的未读不另存：有指向它的未读通知就是未读（unread_sessions）。需要用户看的只有这几种：用户在等的回答与提问
 （RunEnded）、agent 主动通知（Notify，如 notify_user、issue 交给用户）、运行最终失败（RunFailed）。
@@ -24,7 +24,7 @@ from muliao.platform.messaging import Messaging
 from muliao.platform.tasks import TaskQueue
 from muliao.platform.text_edit import truncate
 from muliao.sessions.api import session_in
-from muliao.sessions.events import RunEnded, RunFailed, SessionDeleted, SessionRead
+from muliao.sessions.events import RunEnded, RunFailed, SessionDeleted
 
 log = logging.getLogger(__name__)
 
@@ -63,7 +63,6 @@ class Notifications:
         messaging.subscribe(RunEnded, self.on_run_ended)
         messaging.subscribe(RunFailed, self.on_run_failed)
         messaging.subscribe(SessionDeleted, self.on_session_deleted)
-        messaging.subscribe(SessionRead, self.on_session_read)
 
     async def notify_in(self, s: AsyncSession, request: Notify) -> None:
         """别的领域给用户发一条通知（并排上推送），在它自己的事务里（触发器的告警兜底、定时被挡、issue 交给用户）。"""
@@ -122,13 +121,14 @@ class Notifications:
         """指向被删会话的通知随它删除。"""
         await s.execute(delete(Notification).where(Notification.session_id == event.session_id))
 
-    async def on_session_read(self, s: AsyncSession, event: SessionRead) -> None:
-        """看过了会话即看过了指向它的通知。"""
-        await s.execute(
-            update(Notification)
-            .where(Notification.session_id == event.session_id, Notification.unread.is_(True))
-            .values(unread=False)
-        )
+    async def mark_session_read(self, session_id: str) -> None:
+        """用户看过了会话（打开它、看着它时又有了新回答）：指向它的通知标为已读（会话的未读就是这些通知）。"""
+        async with self._db.transaction() as s:
+            await s.execute(
+                update(Notification)
+                .where(Notification.session_id == session_id, Notification.unread.is_(True))
+                .values(unread=False)
+            )
 
     async def mark_issue_read(self, issue_id: int) -> None:
         """用户打开了 issue：请他审核这个 issue 的通知标为已读（与打开会话标记指向会话的通知一样）。"""
@@ -172,7 +172,7 @@ async def _unread_count_in(s: AsyncSession) -> int:
 
 
 async def push_message_in(s: AsyncSession, notification_id: int) -> PushMessage | None:
-    """推送时的内容（push.MessageSource）：通知本身与此刻的未读数；通知已被删除时为 None。"""
+    """推送时的内容（deliver.DeliverHandler 用）：通知本身与此刻的未读数；通知已被删除时为 None。"""
     notification = await s.get(Notification, notification_id)
     if notification is None:
         return None

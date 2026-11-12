@@ -192,7 +192,7 @@ class Database:
         *,
         after_commit: AfterCommit | None = None,
     ):
-        """after_commit：写过表的事务提交成功后调用（组合根据此给前端发数据变了的事件 schema.ChangedEvent），只做不会失败的事。"""
+        """after_commit：写过表的事务提交成功后调用（组合根据此给前端发数据变了的事件 platform.bus.ChangedEvent），只做不会失败的事。"""
         self.engine = engine
         self._after_commit = after_commit
         self._factory = async_sessionmaker(engine, expire_on_commit=False)
