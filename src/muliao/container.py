@@ -345,7 +345,7 @@ def assemble(
         vault=vault,
         distribution=distribution,
         messaging=messaging,
-        blockers=ports.deletion_blockers,
+        blockers=ports.archive_blockers,
     )
     notification_domain = NotificationDomain.build(
         db=db,

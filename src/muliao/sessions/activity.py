@@ -128,6 +128,6 @@ class SessionActivity:
         states = await work_states_in(s, self._queue, [x.id for x in found.values()])
         return {k: states[found[k].id] if k in found else None for k in keys}
 
-    async def blocks_agent_deletion_in(self, s: AsyncSession, agent_id: str) -> bool:
-        """删除这个 agent 时会被删除的会话里有忙的（归档 agent 前的检查，与删除时的判断同一条规则）。"""
+    async def blocks_agent_archiving_in(self, s: AsyncSession, agent_id: str) -> bool:
+        """归档前的检查：它的会话里有忙的（与删除 agent 时删它的会话的判断同一条规则）。"""
         return bool(await sessions_blocking_agent_deletion_in(s, self._queue, agent_id))

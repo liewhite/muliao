@@ -212,7 +212,7 @@ async def test_check_ins_do_not_wake_a_stopped_session(container, make_agent, mo
 
 
 async def test_a_busy_session_found_while_deleting_rolls_the_whole_deletion_back(
-    container, make_agent, models, monkeypatch
+    container, make_agent, models
 ):
     """会话领域在删除 agent 的事务里删它的会话，发现忙的就报冲突：标记与别的领域的清理一起回滚，agent 原样留着。"""
     session, job, _recorder, agent = await start_job(container, make_agent, models, "sleep 30")
@@ -220,10 +220,6 @@ async def test_a_busy_session_found_while_deleting_rolls_the_whole_deletion_back
         name="t", agent_id=agent.id, kind="schedule", prompt="p", config={"cron": "0 9 * * *"}
     )
 
-    async def not_busy(_s, _agent_id):  # noqa: ANN202  前置检查放过去
-        return False
-
-    monkeypatch.setattr(container.agent_lifecycle, "_blockers", {"sessions": not_busy})
     with pytest.raises(Conflict, match="busy"):
         await container.agent_lifecycle.delete(agent.id, actor="user")
 
@@ -267,6 +263,7 @@ async def test_nothing_can_be_written_for_an_agent_being_deleted(container, make
     agent = await make_agent("alpha")
     await container.skills.write("mine", "d", "b", version=None, owner=agent.id)
     await container.skills.write("free", "d", "b", version=None, owner=None)
+    await container.vault.set("MY_KEY", "v", "", actor="user", owner=agent.id)
     memory = (await container.memory.read_private(agent.id)).version
     await container.agent_lifecycle.delete(agent.id, actor="user")
 
@@ -275,6 +272,7 @@ async def test_nothing_can_be_written_for_an_agent_being_deleted(container, make
         lambda: container.memory.put_private(agent.id, "- x", version=memory),
         lambda: container.skills.write("new", "d", "b", version=None, owner=agent.id),
         lambda: container.vault.set("NEW_KEY", "v", "", actor="user", owner=agent.id),
+        lambda: container.vault.set("MY_KEY", "v2", "", actor="user", owner=None),
         lambda: container.mcp.add("new", spec, owner=agent.id, probe=False),
         lambda: container.catalog.transfer(StoredKind.SKILL, "free", agent.id),
     ):

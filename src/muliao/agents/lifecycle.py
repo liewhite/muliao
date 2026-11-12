@@ -1,7 +1,7 @@
 """删除 agent（docs/architecture.md 第 10 节）：agent 领域发起、各领域清理自己的数据的流程。这里只编排 agent 领域各部分的
 接口（目录 agents.service、资源目录 agents.assets、分发 agents.access），不直接碰它们的表。
 
-1. delete：它的会话有忙的，就拒绝（与删除会话同一条规则）；否则在一个事务里把 agent 标为正在删除（不再出现在列表与
+1. delete：在一个事务里把 agent 标为正在删除（不再出现在列表与
    名称解析里，各领域的写入口按不存在处理，见 agents.active）、发布 AgentDeleting（各领域的订阅者在
    这个事务里清理自己引用它的数据，这里不列举是谁；会话领域删除它的全部会话，有忙的就整个回滚），并排上删除文件的任务。
 2. 删除文件的任务（AGENT_REMOVAL_TASK，AgentRemoval）：删除工作目录与它的资源目录（`assets/<名>/`）和 access.toml 里
@@ -49,7 +49,7 @@ AGENT_REMOVAL_TASK = "agent_removal"
 
 # 归档这个 agent 会打断的工作还在进行（别的领域的只读查询，组合根注入，如它的会话忙）。删除不用它：删除时会话领域在
 # 同一事务里删它的会话、按同一条规则拒绝忙的（sessions.deletion）
-DeletionBlocker = Callable[[AsyncSession, str], Awaitable[bool]]
+ArchiveBlocker = Callable[[AsyncSession, str], Awaitable[bool]]
 
 
 class AgentLifecycle:
@@ -59,7 +59,7 @@ class AgentLifecycle:
         source: AssetSource,
         queue: TaskQueue,
         messaging: Messaging,
-        blockers: Mapping[str, DeletionBlocker],
+        blockers: Mapping[str, ArchiveBlocker],
     ):
         self._db = db
         self._source = source
@@ -112,7 +112,7 @@ class AgentLifecycle:
         return info
 
     async def _blocking_in(self, s: AsyncSession, agent_id: str) -> list[str]:
-        """还在挡着删除的查询的名字（空表示可以删除）。"""
+        """还在挡着归档的查询的名字（空表示可以归档）。"""
         return [name for name, blocked in self._blockers.items() if await blocked(s, agent_id)]
 
 

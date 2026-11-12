@@ -273,9 +273,8 @@ class Snapshot:
             raise NotFound(f"agent {agent_id!r} not found")
         if agent is None:
             reasons = [f"{p.path}: {p.reason}" for p in self.problems if p.owner == agent_id]
-            name = self.names.get(agent_id, agent_id)
             raise NotFound(
-                f"agent {name!r} has no loadable directory in {self.root}"
+                f"agent {self.names[agent_id]!r} has no loadable directory in {self.root}"
                 + (f" ({'; '.join(reasons)})" if reasons else "")
                 + "; fix its agent.toml first"
             )

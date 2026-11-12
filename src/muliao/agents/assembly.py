@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pydantic_ai import FunctionToolset
 
 from muliao.agents.distribution import Distribution
-from muliao.agents.lifecycle import AGENT_REMOVAL_TASK, AgentLifecycle, AgentRemoval, DeletionBlocker
+from muliao.agents.lifecycle import AGENT_REMOVAL_TASK, AgentLifecycle, AgentRemoval, ArchiveBlocker
 from muliao.agents.secret_tools import vault_toolset
 from muliao.agents.secrets import Vault
 from muliao.agents.service import AgentService
@@ -41,7 +41,7 @@ class AgentDomain(Parts):
         vault: Vault,
         distribution: Distribution,
         messaging: Messaging,
-        blockers: Mapping[str, DeletionBlocker],
+        blockers: Mapping[str, ArchiveBlocker],
     ) -> AgentDomain:
         lifecycle = AgentLifecycle(db, assets, queue, messaging, blockers)
         return cls(

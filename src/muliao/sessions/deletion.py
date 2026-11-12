@@ -31,7 +31,7 @@ async def delete_sessions(
         # 错误也会交还给模型，不带 id；定位信息记在日志里
         log.info("session deletion refused: busy", extra={"session_id": session_id})
         raise Conflict(
-            "the session is busy (a run is queued or running, or background jobs or delegated work are still "
+            "a session to be deleted is busy (a run is queued or running, or background jobs or delegated work are still "
             "going); stop it first, then delete"
         )
     for session in doomed.values():

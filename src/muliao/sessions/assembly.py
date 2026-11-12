@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 from pydantic_ai import FunctionToolset
 
 from muliao.agent_runtime.api import AgentRuntime, Toolbox
-from muliao.agents.api import AgentService, DeletionBlocker
+from muliao.agents.api import AgentService, ArchiveBlocker
 from muliao.files.api import FileStore
 from muliao.platform.checks import PeriodicCheck
 from muliao.platform.db import Database
@@ -107,9 +107,9 @@ class SessionPorts(Parts):
         )
 
     @property
-    def deletion_blockers(self) -> Mapping[str, DeletionBlocker]:
+    def archive_blockers(self) -> Mapping[str, ArchiveBlocker]:
         """删除（或归档）agent 时会话领域的检查：它的会话有忙的就拦下（组合根交给 agents.api.AgentLifecycle）。"""
-        return {"sessions": self.activity.blocks_agent_deletion_in}
+        return {"sessions": self.activity.blocks_agent_archiving_in}
 
     def toolsets(self) -> Sequence[FunctionToolset[RunScope]]:
         return self._tools

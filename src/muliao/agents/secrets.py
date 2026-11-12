@@ -82,7 +82,8 @@ class Vault:
             existing = writable(snapshot, _KIND, key, actor)
             if allow_shell is None:
                 allow_shell = True if existing is None else _file(existing).allow_shell
-            path = existing.path if existing is not None else snapshot.path_of(_KIND, key, owner)
+            # 已有的也按 owner 重算：正在删除的 agent 名下的不再写（Snapshot.owner_dir）
+            path = snapshot.path_of(_KIND, key, existing.owner if existing is not None else owner)
             content = secret_file(SecretFile(description, ciphertext, allow_shell))
             await asyncio.to_thread(write_atomic, path, content)
         # 别的 agent 可能依赖它：记录谁改了哪个 key（不记值）
