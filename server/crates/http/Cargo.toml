@@ -18,6 +18,29 @@ muliao-notifications = { workspace = true }
 muliao-issues = { workspace = true }
 muliao-triggers = { workspace = true }
 muliao-history = { workspace = true }
+axum = { workspace = true }
+bytes = "1"
+chrono = { workspace = true }
+futures = { workspace = true }
+hmac = "0.12"
+mime_guess = "2"
+percent-encoding = "2"
+rusqlite = { workspace = true }
+serde = { workspace = true }
+serde_html_form = "0.4"
+serde_json = { workspace = true }
+sha2 = "0.10"
+subtle = "2"
+tokio = { workspace = true }
+tokio-util = { version = "0.7", features = ["io"] }
+tracing = { workspace = true }
+utoipa = { workspace = true }
+utoipa-axum = "0.3"
+
+[dev-dependencies]
+http-body-util = "0.1"
+tempfile = { workspace = true }
+tower = { version = "0.5", features = ["util"] }
 
 [lints]
 workspace = true
