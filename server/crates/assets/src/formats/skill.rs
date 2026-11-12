@@ -199,7 +199,13 @@ pub fn compose(current: Option<&str>, name: &str, description: &str, body: &str)
         }
         None => String::new(),
     };
-    let quote = |s: &str| serde_json::to_string(s).expect("a string serializes");
+    // U+2028/2029 在 YAML 双引号里算换行会被折叠，JSON 不转义它们，这里转义
+    let quote = |s: &str| {
+        serde_json::to_string(s)
+            .expect("a string serializes")
+            .replace('\u{2028}', "\\u2028")
+            .replace('\u{2029}', "\\u2029")
+    };
     let text =
         format!("---\nname: {}\ndescription: {}\n{kept}---\n\n{}\n", quote(name), quote(&description), body.trim());
     parse_frontmatter(&text, name)?;

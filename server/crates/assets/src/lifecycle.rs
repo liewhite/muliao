@@ -33,7 +33,7 @@ pub type ArchiveBlocker = Arc<dyn Fn(&Connection, &str) -> Result<bool> + Send +
 pub struct AgentLifecycle {
     db: Arc<Database>,
     source: Arc<AssetSource>,
-    /// 各 agent 的工作目录所在（`<这里>/<id>`，同 [`crate::service::AgentService::workspace`]）
+    /// 各 agent 的工作目录所在（[`crate::service::workspace_of`]）
     workspaces_dir: PathBuf,
     hooks: Arc<Vec<DeletionHook>>,
     blockers: Arc<Vec<(String, ArchiveBlocker)>>,
@@ -71,16 +71,21 @@ impl AgentLifecycle {
         let removal = tokio::spawn(remove_files(
             self.db.clone(),
             self.source.clone(),
-            self.workspaces_dir.join(agent_id),
+            crate::service::workspace_of(&self.workspaces_dir, agent_id),
             agent_id.to_owned(),
         ));
-        removal.await.unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic()))
+        match removal.await {
+            Ok(done) => done,
+            Err(e) if e.is_panic() => std::panic::resume_unwind(e.into_panic()),
+            // 服务关停时被取消：停在正在删除，下次启动接着删
+            Err(e) => Err(std::io::Error::other(format!("removing the agent's files was interrupted: {e}")).into()),
+        }
     }
 
     /// 启动时：接着删停在正在删除的 agent（上次删文件失败或服务中途重启）。失败的记 error，下次启动再试。
     pub async fn resume_deletions(&self) -> Result<()> {
         for (agent_id, _) in self.db.read(agents::deleting_in).await? {
-            let workspace = self.workspaces_dir.join(&agent_id);
+            let workspace = crate::service::workspace_of(&self.workspaces_dir, &agent_id);
             if let Err(e) = remove_files(self.db.clone(), self.source.clone(), workspace, agent_id.clone()).await {
                 tracing::error!(agent = %agent_id, error = %e, "removing the files of a deleted agent failed again");
             }

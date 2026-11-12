@@ -86,6 +86,8 @@ struct Parser<'a> {
     problems: Vec<AccessProblem>,
     roles: Roles,
     rules: BTreeMap<String, AgentRules>,
+    /// 读过的 [agents.*] 节名（NFC）：同一个名字的两种写法不依赖 agent 表也认得出（写入口校验时没有 agent 表）
+    sections: HashSet<String>,
 }
 
 fn builtin_roles(tools: &ToolTable) -> Roles {
@@ -108,7 +110,14 @@ struct Entry {
 
 impl<'a> Parser<'a> {
     fn new(agents: &'a BTreeMap<String, String>, tools: &'a ToolTable) -> Self {
-        Self { agents, tools, problems: Vec::new(), roles: builtin_roles(tools), rules: BTreeMap::new() }
+        Self {
+            agents,
+            tools,
+            problems: Vec::new(),
+            roles: builtin_roles(tools),
+            rules: BTreeMap::new(),
+            sections: HashSet::new(),
+        }
     }
 
     fn problem(&mut self, reason: String, agent_id: Option<String>) {
@@ -234,9 +243,7 @@ impl<'a> Parser<'a> {
         if !unknown.is_empty() {
             self.invalid(format!("{what}: roles {unknown:?} are not defined in [roles]"));
         }
-        if let Some(id) = &agent_id
-            && self.rules.contains_key(id)
-        {
+        if !self.sections.insert(nfc(name)) {
             // 两节写法不同（NFC 与 NFD）却是同一个 agent：后一节盖掉前一节会悄悄丢掉它的 deny，所以整份作废
             self.invalid(format!(
                 "{what}: another [agents.*] section already names this agent (same name, other encoding)"
@@ -575,6 +582,8 @@ allow = []
         let agents = BTreeMap::from([("caf\u{e9}".to_owned(), "a1".to_owned())]);
         let text = "[agents.\"caf\u{e9}\"]\ndeny = [\"use:tool:read_file\"]\n[agents.\"cafe\u{301}\"]\nallow = []\n";
         assert!(!parse(Some(text), &agents, &tools()).readable);
+        // 写入口没有 agent 表，照样拦下
+        assert!(vet(None, text, &tools(), &["tool:read_file".to_owned()]).is_err());
     }
 
     #[test]

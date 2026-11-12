@@ -71,7 +71,7 @@ impl AgentService {
     }
 
     pub fn workspace(&self, agent_id: &str) -> PathBuf {
-        self.workspaces_dir.join(agent_id)
+        workspace_of(&self.workspaces_dir, agent_id)
     }
 
     /// 启动时：数据库里已没有、还留着工作目录（删除时没删干净）的 agent 记录出来，由人决定是否清理（不阻止启动）。
@@ -240,6 +240,11 @@ impl AgentService {
         let snapshot = self.source.snapshot().await?;
         Ok(self.list().await?.into_iter().map(|a| view_of(&snapshot, a)).collect())
     }
+}
+
+/// agent 的工作目录：`<workspaces_dir>/<id>`。
+pub fn workspace_of(workspaces_dir: &Path, agent_id: &str) -> PathBuf {
+    workspaces_dir.join(agent_id)
 }
 
 /// 名字要没被资源目录里已有的目录占着（大小写不敏感的文件系统上只差大小写也算）；own 是这个 agent 现在的目录名。
