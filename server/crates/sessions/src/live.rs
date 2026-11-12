@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use muliao_platform::bus::{Bus, ServerEvent};
+use muliao_platform::db::Tx;
 use muliao_platform::text::truncate;
 use muliao_platform::tool_views::truncated;
 use serde::Serialize;
@@ -54,7 +55,8 @@ pub struct LiveSegment {
     pub events: Vec<RunEventEnvelope>,
 }
 
-/// 运行中又保存了一步（SSE 事件名 `saved`）：历史有了新内容，实时事件换成新的一段。
+/// 这个会话的历史或运行状态变了（SSE 事件名 `saved`）：运行中又保存了一步（实时事件换成新的一段），或运行记录变了
+/// （运行或压缩开始、结束、失败、停止、重试）。会话页只按它重新拉取：整份会话可能有几 MB，不随全局的 changed 拉。
 #[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
 pub struct SavedEvent {
     pub session_id: String,
@@ -64,6 +66,11 @@ pub struct SavedEvent {
 pub struct Live {
     bus: Arc<Bus>,
     segments: Arc<Mutex<HashMap<String, LiveSegment>>>,
+}
+
+fn publish_saved(bus: &Bus, session_id: &str) {
+    let saved = SavedEvent { session_id: session_id.to_owned() };
+    bus.publish(ServerEvent { kind: "saved", data: serde_json::to_value(saved).expect("saved events serialize") });
 }
 
 fn new_segment(after: Option<i64>) -> LiveSegment {
@@ -87,9 +94,13 @@ impl Live {
     /// 一次请求已经保存（事务已提交）：之后的事件属于新的一段。
     pub(crate) fn step(&self, session_id: &str, after_message_id: i64) {
         self.segments.lock().expect("live lock").insert(session_id.to_owned(), new_segment(Some(after_message_id)));
-        let saved = SavedEvent { session_id: session_id.to_owned() };
-        self.bus
-            .publish(ServerEvent { kind: "saved", data: serde_json::to_value(saved).expect("saved events serialize") });
+        publish_saved(&self.bus, session_id);
+    }
+
+    /// 这个事务改了会话的运行记录：提交后发 `saved`。
+    pub(crate) fn saved_on_commit(&self, tx: &mut Tx<'_>, session_id: &str) {
+        let (bus, session_id) = (self.bus.clone(), session_id.to_owned());
+        tx.on_commit(move || publish_saved(&bus, &session_id));
     }
 
     pub(crate) fn end(&self, session_id: &str) {

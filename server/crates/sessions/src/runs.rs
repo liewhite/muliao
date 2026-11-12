@@ -1,13 +1,16 @@
 //! 运行记录（`runs` 表的唯一读写处）：会话 actor 的一次运行或一次手动压缩，开始时写下、结束时记结局。信件交给了哪次
 //! 运行、消息由哪次运行保存都指向它；没结束的就是停在半路（重启后接着跑）。最终失败记在这里，会话页据此显示错误与
-//! 「重试」。
+//! 「重试」。写运行记录的都要给 [`Live`]：提交后发 `saved`，看着这个会话的页面重新拉取。
 
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
+use muliao_platform::db::Tx;
+
 use crate::error::{Result, broken};
+use crate::live::Live;
 use crate::mailbox::placeholders;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
@@ -111,34 +114,40 @@ fn query(c: &Connection, filter: &str, params: impl rusqlite::Params) -> Result<
 }
 
 /// 开始一次运行，返回它的编号。同一会话同时只有一个没结束的（actor 串行），已有就是 bug。
-pub fn start_in(c: &Connection, session_id: &str, kind: RunKind) -> Result<i64> {
+pub fn start_in(tx: &mut Tx<'_>, live: &Live, session_id: &str, kind: RunKind) -> Result<i64> {
     if kind == RunKind::Run
-        && let Some(r) = unfinished_in(c, session_id)?
+        && let Some(r) = unfinished_in(tx, session_id)?
     {
         panic!("session {session_id} starts a run while run {} is unfinished", r.id);
     }
-    c.execute(
+    tx.execute(
         "INSERT INTO runs (session_id, kind, started_at) VALUES (?1, ?2, ?3)",
         params![session_id, kind.as_str(), Utc::now()],
     )?;
-    Ok(c.last_insert_rowid())
+    let id = tx.last_insert_rowid();
+    live.saved_on_commit(tx, session_id);
+    Ok(id)
 }
 
 /// 记下结局。
-pub fn end_in(c: &Connection, run_id: i64, outcome: Outcome, error: Option<&str>) -> Result<()> {
-    let n = c.execute(
-        "UPDATE runs SET ended_at = ?1, outcome = ?2, error = ?3 WHERE id = ?4 AND ended_at IS NULL",
-        params![Utc::now(), outcome.as_str(), error, run_id],
-    )?;
-    if n != 1 {
-        return Err(broken(format!("run {run_id} ended twice or does not exist")));
-    }
+pub fn end_in(tx: &mut Tx<'_>, live: &Live, run_id: i64, outcome: Outcome, error: Option<&str>) -> Result<()> {
+    let session_id: Option<String> = tx
+        .query_row(
+            "UPDATE runs SET ended_at = ?1, outcome = ?2, error = ?3 WHERE id = ?4 AND ended_at IS NULL \
+             RETURNING session_id",
+            params![Utc::now(), outcome.as_str(), error, run_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let session_id = session_id.ok_or_else(|| broken(format!("run {run_id} ended twice or does not exist")))?;
+    live.saved_on_commit(tx, &session_id);
     Ok(())
 }
 
 /// 手动重试一次最终失败的运行：它重新算作没结束（同一个编号，交给它的信与它保存的消息都还指向它）。
-pub fn reopen_in(c: &Connection, run_id: i64) -> Result<()> {
-    c.execute("UPDATE runs SET ended_at = NULL, outcome = NULL, error = NULL WHERE id = ?1", [run_id])?;
+pub fn reopen_in(tx: &mut Tx<'_>, live: &Live, run: &RunRecord) -> Result<()> {
+    tx.execute("UPDATE runs SET ended_at = NULL, outcome = NULL, error = NULL WHERE id = ?1", [run.id])?;
+    live.saved_on_commit(tx, &run.session_id);
     Ok(())
 }
 
@@ -148,11 +157,13 @@ pub fn unfinished_in(c: &Connection, session_id: &str) -> Result<Option<RunRecor
 }
 
 /// 停止：没结束的运行记为停止（actor 已经放下它，或它停在两次重试之间）。
-pub fn stop_unfinished_in(c: &Connection, session_id: &str) -> Result<Vec<i64>> {
-    let ids: Vec<i64> =
-        query(c, "session_id = ?1 AND kind = 'run' AND ended_at IS NULL", [session_id])?.iter().map(|r| r.id).collect();
+pub fn stop_unfinished_in(tx: &mut Tx<'_>, live: &Live, session_id: &str) -> Result<Vec<i64>> {
+    let ids: Vec<i64> = query(tx, "session_id = ?1 AND kind = 'run' AND ended_at IS NULL", [session_id])?
+        .iter()
+        .map(|r| r.id)
+        .collect();
     for id in &ids {
-        end_in(c, *id, Outcome::Stopped, None)?;
+        end_in(tx, live, *id, Outcome::Stopped, None)?;
     }
     Ok(ids)
 }

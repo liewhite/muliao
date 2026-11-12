@@ -141,12 +141,13 @@ impl World {
     /// 一次运行：投 mail（发送方 from 的消息），交给运行并保存 messages，按 outcome 结束（None 为还在跑）。
     async fn run(&self, session: &str, from: Option<(Origin, &str)>, messages: Vec<Message>, outcome: Option<Outcome>) {
         let (session, waker) = (session.to_owned(), self.waker.clone());
+        let live = muliao_sessions::live::Live::new(std::sync::Arc::new(muliao_platform::bus::Bus::new(16)));
         let from = from.map(|(o, t)| (o, t.to_owned()));
         self.db
             .write(move |tx| {
                 let mail =
                     from.map(|(o, t)| post_in(tx, &waker, &session, NewMail::message(o, t, true))).transpose()?;
-                let run = start_in(tx, &session, RunKind::Run)?;
+                let run = start_in(tx, &live, &session, RunKind::Run)?;
                 if let Some(m) = mail {
                     give_in(tx, &[m], run)?;
                     consume_in(tx, &[m], run)?;
@@ -154,7 +155,7 @@ impl World {
                 append_in(tx, &session, run, &messages)?;
                 if let Some(o) = outcome {
                     let error = (o == Outcome::Failed).then_some("model said no\n  twice");
-                    end_in(tx, run, o, error)?;
+                    end_in(tx, &live, run, o, error)?;
                 }
                 Ok::<_, muliao_sessions::error::Error>(())
             })

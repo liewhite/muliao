@@ -566,8 +566,29 @@ fn every_route_is_described() {
     let ops: usize = json["paths"].as_object().unwrap().values().map(|p| p.as_object().unwrap().len()).sum();
     // Python 版 84 个，删了任务页 2 个、加了会话重试 1 个；资源的删除从一个通用路径拆到四种资源各自的路径（加 3 个）
     assert_eq!(ops, 86);
+    // 引用都能解析：参数里用到的类型 utoipa 不自动登记进 components（要 `#[param(inline)]`）
+    fn refs<'a>(v: &'a Value, out: &mut Vec<&'a str>) {
+        match v {
+            Value::Object(m) => m.iter().for_each(|(k, v)| match (k.as_str(), v) {
+                ("$ref", Value::String(r)) => out.push(r),
+                _ => refs(v, out),
+            }),
+            Value::Array(a) => a.iter().for_each(|v| refs(v, out)),
+            _ => {}
+        }
+    }
+    let mut all = Vec::new();
+    refs(&json, &mut all);
+    for r in all {
+        let name = r.strip_prefix("#/components/schemas/").unwrap_or(r);
+        assert!(json["components"]["schemas"].get(name).is_some(), "dangling reference {r}");
+    }
+    // operationId 取自处理函数名，前端生成类型要求它全局唯一（不同模块里的同名函数会撞）
+    let mut ids = std::collections::BTreeSet::new();
     for (path, item) in json["paths"].as_object().unwrap() {
         for (method, op) in item.as_object().unwrap() {
+            let id = op["operationId"].as_str().unwrap();
+            assert!(ids.insert(id), "{method} {path}: operationId {id} is used twice");
             let declared: Vec<&str> = op["parameters"]
                 .as_array()
                 .map(|ps| ps.iter().filter(|p| p["in"] == "path").map(|p| p["name"].as_str().unwrap()).collect())

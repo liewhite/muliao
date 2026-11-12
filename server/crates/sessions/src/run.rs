@@ -222,7 +222,7 @@ pub(crate) async fn execute(
 
 /// 开头的事务：取（或接着）这次运行的记录，读出状态；被打断的那一步补上「被中断」的结果。
 async fn begin(core: &Core, session_id: &str) -> Result<Begun> {
-    let session_id = session_id.to_owned();
+    let (session_id, live) = (session_id.to_owned(), core.live.clone());
     core.db
         .write(move |tx| {
             let session = directory::get_in(tx, &session_id)?.unwrap_or_else(|| {
@@ -230,7 +230,7 @@ async fn begin(core: &Core, session_id: &str) -> Result<Begun> {
             });
             let run_id = match runs::unfinished_in(tx, &session_id)? {
                 Some(r) => r.id,
-                None => runs::start_in(tx, &session_id, RunKind::Run)?,
+                None => runs::start_in(tx, &live, &session_id, RunKind::Run)?,
             };
             let queued = queued_in(tx, &session_id)?;
             // 信箱里已有的信交给这次运行，哪怕它在交给模型之前就最终失败：失败的结清据此了结它们带来的委派，也不会为它们再唤醒
@@ -328,8 +328,11 @@ fn settled_end(begun: &Begun) -> Result<RunEnd> {
 /// 收尾：记下结局、结清做完的委派、发布 RunEnded（end 为 None 是没事可做的空收尾：只记结局）。
 async fn finish(core: &Core, begun: &Begun, end: Option<RunEnd>) -> Result<()> {
     let (run_id, session_id, adopted) = (begun.run_id, begun.session.id.clone(), begun.adopted.clone());
-    let (waker, events, agent_name) = (core.waker.clone(), core.events.clone(), begun.agent_name.clone());
-    core.db.write(move |tx| finish_in(tx, &waker, &events, run_id, &session_id, &agent_name, &adopted, end)).await
+    let (waker, events, live) = (core.waker.clone(), core.events.clone(), core.live.clone());
+    let agent_name = begun.agent_name.clone();
+    core.db
+        .write(move |tx| finish_in(tx, &waker, &events, &live, run_id, &session_id, &agent_name, &adopted, end))
+        .await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -337,13 +340,14 @@ fn finish_in(
     tx: &mut Tx<'_>,
     waker: &Waker,
     events: &Events,
+    live: &Live,
     run_id: i64,
     session_id: &str,
     agent_name: &str,
     adopted: &[Mail],
     end: Option<RunEnd>,
 ) -> Result<()> {
-    runs::end_in(tx, run_id, Outcome::Done, None)?;
+    runs::end_in(tx, live, run_id, Outcome::Done, None)?;
     let saved = history::saved_by_in(tx, session_id, run_id)?;
     let Some(end) = end.filter(|_| !saved.is_empty()) else { return Ok(()) };
     let session = directory::get_in(tx, session_id)?

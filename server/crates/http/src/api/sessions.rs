@@ -34,7 +34,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(stop))
         .routes(routes!(compact))
         .routes(routes!(retry))
-        .routes(routes!(mark_read))
+        .routes(routes!(mark_session_read))
 }
 
 #[derive(Serialize, ToSchema)]
@@ -405,7 +405,7 @@ async fn retry(State(s): State<AppState>, Path(session_id): Path<String>) -> Api
 
 /// 标记会话已读：会话的未读就是指向它的未读通知，由通知领域标为已读（幂等，会话不存在时什么都不做）。
 #[utoipa::path(post, path = "/api/sessions/{session_id}/read", tag = "sessions", responses((status = 204)))]
-async fn mark_read(State(s): State<AppState>, Path(session_id): Path<String>) -> ApiResult<StatusCode> {
+async fn mark_session_read(State(s): State<AppState>, Path(session_id): Path<String>) -> ApiResult<StatusCode> {
     s.services.notifications.mark_session_read(&session_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

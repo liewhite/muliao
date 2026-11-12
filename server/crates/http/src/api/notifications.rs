@@ -16,7 +16,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list_notifications))
         .routes(routes!(unread))
-        .routes(routes!(mark_read))
+        .routes(routes!(mark_notifications_read))
         .routes(routes!(mark_issue_read))
         .routes(routes!(vapid_key))
         .routes(routes!(subscribe))
@@ -62,7 +62,7 @@ pub struct MarkReadIn {
 
 #[utoipa::path(post, path = "/api/notifications/read", tag = "notifications", request_body = MarkReadIn,
     responses((status = 204)))]
-async fn mark_read(State(s): State<AppState>, Json(body): Json<MarkReadIn>) -> ApiResult<StatusCode> {
+async fn mark_notifications_read(State(s): State<AppState>, Json(body): Json<MarkReadIn>) -> ApiResult<StatusCode> {
     s.services.notifications.mark_read(body.through_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

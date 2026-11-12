@@ -158,6 +158,7 @@ struct World {
     ended: Arc<Mutex<Vec<RunEnded>>>,
     failed: Arc<Mutex<Vec<RunFailed>>>,
     release: Arc<tokio::sync::Notify>,
+    bus: Arc<Bus>,
     flaky_calls: Arc<Mutex<u32>>,
 }
 
@@ -264,7 +265,7 @@ async fn world() -> World {
         renders: toolbox.renders(),
         redaction: toolbox.redaction(),
         tz,
-        bus,
+        bus: bus.clone(),
     });
     let actors = Actors::start(core, wakes);
     stopper.bind(actors.clone());
@@ -272,6 +273,7 @@ async fn world() -> World {
     let service = SessionService::new(db.clone(), waker, actors.clone(), events, live, toolbox.renders(), 1_000_000);
     World {
         _dir: dir,
+        bus,
         db,
         script,
         _server: server,
@@ -475,6 +477,26 @@ async fn a_final_failure_is_recorded_and_can_be_retried() {
     assert_eq!(texts(w.history(&s).await.last().unwrap())[0], "这次好了");
     let view = w.service.detail(&s).await.unwrap();
     assert!(view.run.is_none(), "the retried run ended normally");
+}
+
+#[tokio::test]
+async fn run_record_changes_tell_the_session_page() {
+    let w = world().await;
+    w.script.push(bad_request());
+    let s = w.new_chat("会失败").await;
+    assert_eq!(w.settled(&s).await, WorkState::Idle);
+    let mut events = w.bus.subscribe();
+    w.script.push(bad_request());
+    w.service.retry(&s).await.unwrap();
+    assert_eq!(w.settled(&s).await, WorkState::Idle);
+    // 重试又失败了：没有保存新的一步，会话页照样要知道重新开始与再次失败（运行记录变了）
+    let mut saved = 0;
+    while let Ok(Ok(e)) = tokio::time::timeout(std::time::Duration::from_millis(200), events.next()).await {
+        if e.kind == "saved" && e.data["session_id"] == s.as_str() {
+            saved += 1;
+        }
+    }
+    assert_eq!(saved, 2, "reopened and failed again");
 }
 
 #[tokio::test]

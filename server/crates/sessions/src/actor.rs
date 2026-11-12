@@ -389,13 +389,13 @@ async fn run_with_retries(
 /// 收尾：委派不结清，发起方的运行中检查会如实说，由它停掉 thread。返回有没有运行记录可记。
 async fn fail(core: &Core, id: &str, error: &str) -> bool {
     tracing::error!(session_id = id, error, "run failed");
-    let (session_id, message, waker, events) =
-        (id.to_owned(), error.to_owned(), core.waker.clone(), core.events.clone());
+    let (session_id, message, waker, events, live) =
+        (id.to_owned(), error.to_owned(), core.waker.clone(), core.events.clone(), core.live.clone());
     let full = core
         .db
         .write(move |tx| {
             let Some(run) = runs::unfinished_in(tx, &session_id)? else { return Ok(false) };
-            runs::end_in(tx, run.id, Outcome::Failed, Some(&message))?;
+            runs::end_in(tx, &live, run.id, Outcome::Failed, Some(&message))?;
             let session = directory::get_in(tx, &session_id)?
                 .ok_or_else(|| not_found(format!("session {session_id} not found")))?;
             settle_failure_in(tx, &waker, &session, run.id, &message)?;
@@ -421,11 +421,11 @@ async fn fail(core: &Core, id: &str, error: &str) -> bool {
     }
     if let Err(e) = full {
         tracing::error!(session_id = id, error = %e, "settling a failed run failed; recording the failure alone");
-        let (session_id, message) = (id.to_owned(), error.to_owned());
+        let (session_id, message, live) = (id.to_owned(), error.to_owned(), core.live.clone());
         let alone = core
             .db
             .write(move |tx| match runs::unfinished_in(tx, &session_id)? {
-                Some(run) => runs::end_in(tx, run.id, Outcome::Failed, Some(&message)).map(|()| true),
+                Some(run) => runs::end_in(tx, &live, run.id, Outcome::Failed, Some(&message)).map(|()| true),
                 None => Ok(false),
             })
             .await;
@@ -439,7 +439,7 @@ async fn fail(core: &Core, id: &str, error: &str) -> bool {
 
 /// 手动重试：最近一次运行最终失败、没有在跑的运行时，把它重新算作没结束（actor 随后接着跑）。
 async fn reopen(core: &Core, id: &str) -> Result<()> {
-    let id = id.to_owned();
+    let (id, live) = (id.to_owned(), core.live.clone());
     core.db
         .write(move |tx| {
             directory::get_in(tx, &id)?.ok_or_else(|| not_found(format!("session {id:?} not found")))?;
@@ -447,7 +447,7 @@ async fn reopen(core: &Core, id: &str) -> Result<()> {
                 return Err(conflict("the session is running"));
             }
             match runs::latest_in(tx, &id)? {
-                Some(r) if r.failed() => runs::reopen_in(tx, r.id),
+                Some(r) if r.failed() => runs::reopen_in(tx, &live, &r),
                 _ => Err(conflict("the latest run of this session did not fail; nothing to retry")),
             }
         })
@@ -456,7 +456,7 @@ async fn reopen(core: &Core, id: &str) -> Result<()> {
 
 /// 手动压缩（没在跑时）：记一条压缩的运行记录，失败也记在上面。
 async fn compact(core: &Core, id: &str) -> Result<usize> {
-    let session_id = id.to_owned();
+    let (session_id, live) = (id.to_owned(), core.live.clone());
     let (run_id, agent_id) = core
         .db
         .write(move |tx| {
@@ -464,7 +464,7 @@ async fn compact(core: &Core, id: &str) -> Result<usize> {
                 .ok_or_else(|| not_found(format!("session {session_id:?} not found")))?;
             // 正在删除的 agent 的会话不再新排工作（与来信同一条规则）
             muliao_assets::agents::active_agent_in(tx, &session.agent_id)?;
-            Ok::<_, Error>((runs::start_in(tx, &session_id, RunKind::Compaction)?, session.agent_id))
+            Ok::<_, Error>((runs::start_in(tx, &live, &session_id, RunKind::Compaction)?, session.agent_id))
         })
         .await?;
     let result = async {
@@ -473,11 +473,12 @@ async fn compact(core: &Core, id: &str) -> Result<usize> {
     }
     .await;
     let error = result.as_ref().err().map(|e| e.to_string());
+    let live = core.live.clone();
     let ended = core
         .db
         .write(move |tx| {
             let outcome = if error.is_some() { Outcome::Failed } else { Outcome::Done };
-            runs::end_in(tx, run_id, outcome, error.as_deref())
+            runs::end_in(tx, &live, run_id, outcome, error.as_deref())
         })
         .await;
     if let Err(e) = ended {

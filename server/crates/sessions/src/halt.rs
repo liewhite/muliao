@@ -50,7 +50,8 @@ pub(crate) async fn halt(
 ) -> Result<Halted> {
     let (run_id, mut messages) = unsaved;
     core.redaction.messages(&mut messages);
-    let (session_id, waker, events) = (session_id.to_owned(), core.waker.clone(), core.events.clone());
+    let (session_id, waker, events, live) =
+        (session_id.to_owned(), core.waker.clone(), core.events.clone(), core.live.clone());
     core.db
         .write(move |tx| {
             let Some(session) = directory::get_in(tx, &session_id)? else {
@@ -63,7 +64,7 @@ pub(crate) async fn halt(
                 history::append_in(tx, &session_id, run_id, &messages)?;
             }
             close_history_in(tx, &session_id, run_id)?;
-            let stopped_runs = runs::stop_unfinished_in(tx, &session_id)?;
+            let stopped_runs = runs::stop_unfinished_in(tx, &live, &session_id)?;
             let cleared = clear_in(tx, &session_id)?;
             let answer = history::latest_answer(tx, &session_id)?;
             let (settled, discarded) = settle_stopped_in(tx, &waker, &session, &answer)?;

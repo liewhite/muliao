@@ -26,6 +26,7 @@ pub struct UsageQuery {
     pub until: DateTime<FixedOffset>,
     /// 分组维度（可以重复给）；不给就只有一行总计
     #[serde(default)]
+    #[param(inline)]
     pub group_by: Vec<UsageGroup>,
 }
 

@@ -57,8 +57,9 @@ pub struct Notification {
     pub created_at: DateTime<Utc>,
 }
 
-/// 点开通知打开的页面：交给用户审核的 issue，否则通知关于的会话；都没有时为 None（推送点开看通知页）。
-fn url_of(session_id: Option<&str>, issue_id: Option<i64>) -> Option<String> {
+/// 点开通知打开的页面：交给用户审核的 issue，否则通知关于的会话；都没有时为 None（推送点开看通知页）。是前端的路由，
+/// 由 crates/muliao/tests/frontend_contract.rs 与前端核对。
+pub fn url_of(session_id: Option<&str>, issue_id: Option<i64>) -> Option<String> {
     match (issue_id, session_id) {
         (Some(issue), _) => Some(format!("/issues/{issue}")),
         (None, Some(session)) => Some(format!("/sessions/{session}")),
