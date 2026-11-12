@@ -16,7 +16,8 @@ CREATE TABLE notifications (
 );
 CREATE INDEX ix_notifications_session ON notifications (session_id);
 CREATE INDEX ix_notifications_issue ON notifications (issue_id);
-CREATE INDEX ix_notifications_unread ON notifications (unread);
+-- 未读数、标已读只看未读的那几行
+CREATE INDEX ix_notifications_unread ON notifications (id) WHERE unread;
 
 -- 浏览器推送订阅（一台设备一行）。endpoint 的完整路径即订阅凭据，不进日志
 CREATE TABLE push_subscriptions (

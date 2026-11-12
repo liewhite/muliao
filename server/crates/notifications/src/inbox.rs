@@ -122,18 +122,11 @@ pub fn unread_count_in(c: &Connection) -> rusqlite::Result<i64> {
 
 /// 这些会话里未读的：有指向它的未读通知（会话列表、会话页用）。
 pub fn unread_sessions_in(c: &Connection, session_ids: &[String]) -> rusqlite::Result<BTreeSet<String>> {
-    let mut unread = BTreeSet::new();
-    // SQLite 一条语句的参数个数有上限（32766），列表一页远小于它；分批只为不对调用方设限
-    for chunk in session_ids.chunks(500) {
-        let marks = vec!["?"; chunk.len()].join(", ");
-        let mut stmt = c.prepare(&format!(
-            "SELECT DISTINCT session_id FROM notifications WHERE unread AND session_id IN ({marks})"
-        ))?;
-        for id in stmt.query_map(params_from_iter(chunk), |r| r.get::<_, String>(0))? {
-            unread.insert(id?);
-        }
-    }
-    Ok(unread)
+    // 调用方一次传一页会话列表，远小于 SQLite 一条语句的参数上限（32766）
+    let marks = vec!["?"; session_ids.len()].join(", ");
+    let mut stmt =
+        c.prepare(&format!("SELECT DISTINCT session_id FROM notifications WHERE unread AND session_id IN ({marks})"))?;
+    stmt.query_map(params_from_iter(session_ids), |r| r.get::<_, String>(0))?.collect()
 }
 
 /// 通知的写入与查询。克隆共享同一份。
