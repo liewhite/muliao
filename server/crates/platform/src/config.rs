@@ -213,12 +213,8 @@ fn default_max_audio_bytes() -> u64 {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct RuntimeConfig {
-    /// 暂时性失败的重试：第 n 次尝试失败后等 base·2^(n-1) 秒、封顶 max_delay，用完尝试次数即最终失败
-    pub task_max_attempts: u32,
-    pub task_retry_base_seconds: f64,
-    pub task_retry_max_delay_seconds: f64,
-    /// 外部服务不可用（模型接口、推送服务 5xx/429、连不上）的重试次数单独设：故障常持续几分钟到半小时
-    pub outage_retry_max_attempts: u32,
+    // 没有重试次数的配置：会话运行与推送的暂时性失败都在约 30 分钟的窗口里退避重试（各自领域的常量）。Python 版的
+    // task_max_attempts、task_retry_*、outage_retry_max_attempts 随任务队列删掉，写了按未知键报错
     /// 发给模型的上下文超过此值，就在步与步之间压缩早期上下文（下限 1000）
     pub compaction_threshold_tokens: u64,
     /// 压缩时保留最近这么多步原文不压缩
@@ -236,10 +232,6 @@ pub struct RuntimeConfig {
 impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
-            task_max_attempts: 5,
-            task_retry_base_seconds: 5.0,
-            task_retry_max_delay_seconds: 300.0,
-            outage_retry_max_attempts: 12,
             compaction_threshold_tokens: 100_000,
             compaction_keep_steps: 10,
             memory_max_chars: 4000,
@@ -457,10 +449,6 @@ impl Raw {
             at_least(&mut e, "transcription.max_bytes", t.max_bytes, 1);
         }
         let r = &self.runtime;
-        at_least(&mut e, "runtime.task_max_attempts", r.task_max_attempts, 1);
-        positive(&mut e, "runtime.task_retry_base_seconds", r.task_retry_base_seconds);
-        positive(&mut e, "runtime.task_retry_max_delay_seconds", r.task_retry_max_delay_seconds);
-        at_least(&mut e, "runtime.outage_retry_max_attempts", r.outage_retry_max_attempts, 1);
         at_least(&mut e, "runtime.compaction_threshold_tokens", r.compaction_threshold_tokens, 1000);
         at_least(&mut e, "runtime.compaction_keep_steps", r.compaction_keep_steps, 1);
         at_least(&mut e, "runtime.memory_max_chars", r.memory_max_chars, 100);
