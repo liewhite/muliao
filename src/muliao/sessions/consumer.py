@@ -352,7 +352,7 @@ class RunHandler:
         同一 thread 的第二项委派）。队列已把这次运行记为 failed，唤醒不会把它当成忙。
 
         同一事务发布 RunFailed。这个钩子（含 RunFailed 的订阅者）自己失败时整个回滚，worker 不带钩子记下失败：
-        失败仍在任务页与日志里可见，但委派不结清、唤醒也没做，等它的发起方一直挂着，要用户停止（没有补做的对账）。"""
+        失败仍在任务页与日志里可见，但委派不结清、唤醒也没做，不补做（没有对账）：发起方的运行中检查会如实说，由它停掉 thread。"""
         if task.session_id is None or task.error is None:
             raise RuntimeError(f"run {task.id} has no session or no recorded error")
         child, agent = await load_session(s, task.session_id)

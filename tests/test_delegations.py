@@ -368,8 +368,11 @@ def test_check_text_follows_the_threads_work_state_and_offers_stop_thread():
     assert "still working" in check_text(child, agent, WorkState.RUNNING, running, now, 30)
     # 最近一次运行做完了但在等自己开出的工作：照工作状态说在等，不是还排着
     assert "waiting for work it started" in check_text(child, agent, WorkState.WAITING, done, now, 30)
-    # 最终失败的收尾钩子自己出错时唤醒随它回滚：thread 此刻空闲，委派还没开始处理（不是错误）
     assert "queued and has not started" in check_text(child, agent, WorkState.IDLE, done, now, 30)
+    # 最终失败的收尾钩子自己出错时结清随它回滚：thread 空闲、最近一次运行失败，如实说不会自己继续，建议停掉
+    failed = run(5, TaskStatus.FAILED, 1)
+    text = check_text(child, agent, WorkState.IDLE, failed, now, 30)
+    assert "will not continue on its own" in text and "stop_thread(thread='review'" in text
     # 被停止时如实说明，附上停止前说的话
     assert "was stopped" in _event_text("review", agent.name, Ending.STOPPED, "")
 

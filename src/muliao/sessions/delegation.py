@@ -253,7 +253,12 @@ def check_text(
             return f"{who} is still working on your task ({minutes}m{seconds:02d}s so far).\n{keep}"
         case WorkState.RUNNING if run is not None and run.pending and run.attempts:
             doing = f"is waiting to run again (attempt {run.attempts} so far)"
+        case WorkState.IDLE if run is not None and run.failed:
+            # 最终失败的收尾钩子自己出错时，结清与唤醒随收尾一起回滚：委派不会自己结束，如实说，让发起方能自己停
+            return (
+                f"{who} failed on its last run and will not continue on its own; its failure was not handed back to "
+                f"you. Call stop_thread(thread={name!r}, agent={agent.name!r}) to settle it."
+            )
         case WorkState.RUNNING | WorkState.IDLE:
-            # idle 也会出现：最终失败的收尾钩子自己出错时，唤醒随收尾一起回滚，委派信件排着、直到下一封信或用户停止
             doing = "has your task queued and has not started on it yet"
     return f"{who} {doing}. {keep}"
