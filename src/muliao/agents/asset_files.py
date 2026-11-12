@@ -101,6 +101,10 @@ def _check(
             f"{head}/ is not an existing agent's directory; agent directories are made by create_agent",
             "Layout",
         )
+    if owner in snapshot.deleting:
+        raise _Rejected(
+            f"agent {head!r} is being deleted; nothing can be written into its directory", "Layout"
+        )
     try:
         place = place_of(rest, not platform)
     except Misplaced as e:

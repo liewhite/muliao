@@ -230,7 +230,7 @@ async def get_private_memory(c: C, agent_id: str) -> MemoryOut:
 @router.put("/agents/{agent_id}/memory")
 async def put_private_memory(c: C, agent_id: str, body: MemoryIn) -> MemoryOut:
     """整体改写 agent 的私有记忆（没有时新建）。只有它自己用；规则不按名字指它。"""
-    await c.agents.get_active(agent_id)
+    # 正在删除的 agent 由资源快照拒绝（Snapshot.owner_dir）
     return _memory_out(c, await c.memory.put_private(agent_id, body.content, version=body.version))
 
 

@@ -435,7 +435,7 @@ async def test_an_unparsable_access_toml_keeps_the_last_rules_and_reports_to_the
 
 def test_an_unparsable_access_toml_without_an_earlier_read_leaves_only_the_fixed_parts(tmp_path):
     write(tmp_path / "platform" / "access.toml", "[agents.alpha\n")
-    snapshot = load_tree(tmp_path, {}, 4000, None, ToolTable.of([]))
+    snapshot = load_tree(tmp_path, {}, frozenset(), 4000, None, ToolTable.of([]))
     assert snapshot.rules == {}
     [problem] = snapshot.problems
     assert "only the fixed parts of built-in roles apply" in problem.reason
@@ -455,7 +455,7 @@ def test_hidden_entries_are_ignored(tmp_path):
     (tmp_path / ".git").mkdir()
     write(tmp_path / ".DS_Store", "x")
     write(tmp_path / "platform" / "memory" / ".swp", "x")
-    snapshot = load_tree(tmp_path, {}, 4000, None, ToolTable.of([]))
+    snapshot = load_tree(tmp_path, {}, frozenset(), 4000, None, ToolTable.of([]))
     assert snapshot.problems == ()
 
 

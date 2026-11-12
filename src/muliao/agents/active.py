@@ -6,8 +6,9 @@
   自己用，别的领域用 agents.service 的 `*_agent_in`。
 - 名称：agent_names_in（含正在删除的）。
 
-agent 只会从可用变为正在删除、再变为不存在。为某个 agent 写数据（包括它的资产与记忆）之前，在写入的同一事务里
-检查它还可用（agents.service.active_agent_in）：事务串行，检查通过的写入一定落在删除标记之前，被删除流程一起删掉。
+agent 只会从可用变为正在删除、再变为不存在。为某个 agent 写数据库之前，在写入的同一事务里检查它还可用
+（agents.service.active_agent_in）：事务串行，检查通过的写入一定落在删除标记之前，被删除流程一起删掉。它的资源文件由资源快照
+拦：快照带着正在删除的名单（deleting_in，agents.assets.Snapshot.deleting），往它目录里写一律拒绝。
 """
 
 from dataclasses import dataclass
@@ -98,3 +99,8 @@ class AgentNames:
 async def agent_names_in(s: AsyncSession) -> AgentNames:
     """在调用方的事务里取全部 agent（含正在删除的）的名称：展示用，也是读资源树时按 id 对上 agent 目录的依据（agents.source）。"""
     return AgentNames({agent_id: name for agent_id, name in await s.execute(select(Agent.id, Agent.name))})
+
+
+async def deleting_in(s: AsyncSession) -> frozenset[str]:
+    """正在删除的 agent 的 id：资源快照据此不再往它们的目录里写（agents.assets.Snapshot.deleting）。"""
+    return frozenset(await s.scalars(select(Agent.id).where(~LIVE)))

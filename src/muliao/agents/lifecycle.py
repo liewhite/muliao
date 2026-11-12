@@ -2,7 +2,7 @@
 接口（目录 agents.service、资源目录 agents.assets、分发 agents.access），不直接碰它们的表。
 
 1. delete：它的会话有忙的，就拒绝（与删除会话同一条规则）；否则在一个事务里把 agent 标为正在删除（不再出现在列表与
-   名称解析里，各领域的写入口按不存在处理，见 agents.service.active_agent_in）、发布 AgentDeleting（各领域的订阅者在
+   名称解析里，各领域的写入口按不存在处理，见 agents.active）、发布 AgentDeleting（各领域的订阅者在
    这个事务里清理自己引用它的数据，这里不列举是谁；会话领域删除它的全部会话，有忙的就整个回滚），并排上删除文件的任务。
 2. 删除文件的任务（AGENT_REMOVAL_TASK，AgentRemoval）：删除工作目录与它的资源目录（`assets/<名>/`）和 access.toml 里
    它的那一节，再删除这一行；它名下分发出去的资源（agents.access.Sharing.shared）先挪到平台目录（别的 agent 还在用）。
@@ -47,7 +47,8 @@ log = logging.getLogger(__name__)
 # 删除 agent 的文件与这一行（AgentRemoval）
 AGENT_REMOVAL_TASK = "agent_removal"
 
-# 删除（或归档）这个 agent 会打断的工作还在进行（别的领域的只读查询，组合根注入，如它的会话忙）
+# 归档这个 agent 会打断的工作还在进行（别的领域的只读查询，组合根注入，如它的会话忙）。删除不用它：删除时会话领域在
+# 同一事务里删它的会话、按同一条规则拒绝忙的（sessions.deletion）
 DeletionBlocker = Callable[[AsyncSession, str], Awaitable[bool]]
 
 
@@ -73,15 +74,10 @@ class AgentLifecycle:
         # 删除文件的任务一直失败
         snapshot = await self._source.snapshot()
         await asyncio.to_thread(_plan_retire, snapshot, agent.name)
-        # 会话的状态是别的领域的数据：检查、标记与各领域的清理在同一个事务里，之间插不进新工作
+        # 标记与各领域的清理在同一个事务里，之间插不进新工作；忙不忙由会话领域在删它的会话时查（与删除会话同一条规则），
+        # 忙就 Conflict、整个事务回滚
         async with self._db.transaction() as s:
             await deletable_in(s, agent_id)
-            blocking = await self._blocking_in(s, agent_id)
-            if blocking:
-                log.info("agent deletion refused: busy", extra={"agent": agent_id, "blocked_by": blocking})
-                raise Conflict(
-                    f"agent {agent.name!r} is working right now; stop its sessions first, then delete"
-                )
             await mark_deleting_in(s, agent_id, actor)
             await self._messaging.publish_in(s, AgentDeleting(agent_id=agent_id))
             self._queue.enqueue(

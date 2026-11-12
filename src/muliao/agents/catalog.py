@@ -17,7 +17,7 @@ from muliao.agents.kinds import Kind, StoredKind, as_kind, label
 from muliao.agents.permissions import GLOBAL_MEMORY, ToolSpec
 from muliao.agents.secrets_format import SecretFile
 from muliao.agents.source import AssetSource
-from muliao.errors import Conflict, InvalidInput, NotFound
+from muliao.errors import Conflict, InvalidInput
 
 log = logging.getLogger(__name__)
 
@@ -112,8 +112,8 @@ class AssetCatalog:
             asset = snapshot.asset(kind, name)
             if asset.owner == owner:
                 raise InvalidInput(f"{label(kind)} {name!r} already belongs to {snapshot.owner_label(owner)}")
-            if owner is not None and owner not in snapshot.agents:
-                raise NotFound(f"agent {owner!r} not found")
+            # 目标 owner 不存在、正在删除或目录没加载时 NotFound（Snapshot.owner_dir）
+            target = snapshot.path_of(kind, name, owner)
             copies = snapshot.shadowed[kind].get(name, ())
             if owner is not None and copies:
                 # 平台那份遮住着 agent 目录里的同名副本（#502）：转给 agent 后就是 agent 之间同名，两边都不加载
@@ -122,5 +122,5 @@ class AssetCatalog:
                     f"{[str(p) for p in copies]}; once it belongs to an agent, the copies would clash with it and "
                     "none would load. Rename or remove the copies first"
                 )
-            await asyncio.to_thread(assets.move, asset.path, snapshot.path_of(kind, name, owner))
+            await asyncio.to_thread(assets.move, asset.path, target)
         log.info("asset transferred", extra={"kind": kind, "asset": name, "owner": owner})

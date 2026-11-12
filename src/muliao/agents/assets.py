@@ -203,6 +203,9 @@ class Snapshot:
     root: Path
     # 数据库里的 agent（id → 名字，含正在删除的）：目录读坏、没加载的 agent 也知道自己的目录该叫什么（own_dir）
     names: Mapping[str, str]
+    # 正在删除的 agent 的 id：它们的目录照常读（删除流程与标记后还在跑的运行要用），但不再往里写（owner_dir、写入口
+    # asset_files.vet），免得写成功后随目录静默消失
+    deleting: frozenset[str]
     # 加载成功的 agent 目录，按 id
     agents: Mapping[str, AgentDir]
     # 每种按名字认的资源，按名字（记忆只有平台的）
@@ -266,6 +269,8 @@ class Snapshot:
         """agent 加载成功的目录（它的配置：描述、模型、思考档位、分组的唯一来源）。没加载（agent.toml 坏了、目录名对不上
         等）时 NotFound，带上报给它的问题：这时它不能运行，要先修好文件。"""
         agent = self.agents.get(agent_id)
+        if agent is None and agent_id not in self.names:
+            raise NotFound(f"agent {agent_id!r} not found")
         if agent is None:
             reasons = [f"{p.path}: {p.reason}" for p in self.problems if p.owner == agent_id]
             name = self.names.get(agent_id, agent_id)
@@ -277,9 +282,11 @@ class Snapshot:
         return agent
 
     def owner_dir(self, owner: str | None) -> Path:
-        """owner（agent 的 id，None 为平台）的目录。agent 没有加载成功的目录时 NotFound。"""
+        """owner（agent 的 id，None 为平台）的目录：新写的东西放在这里。agent 正在删除、或没有加载成功的目录时 NotFound。"""
         if owner is None:
             return self.root / PLATFORM
+        if owner in self.deleting:
+            raise NotFound(f"agent {self.names[owner]!r} is being deleted; nothing can be written for it")
         return self.loaded_agent(owner).path
 
     def owner_label(self, owner: str | None) -> str:
@@ -336,6 +343,7 @@ class _Reader:
         self,
         root: Path,
         known: Mapping[str, str],
+        deleting: frozenset[str],
         memory_max_chars: int,
         last: Snapshot | None,
         tools: ToolTable,
@@ -343,6 +351,7 @@ class _Reader:
         self.root = root
         self.tools = tools
         self.known = known
+        self.deleting = deleting
         self.memory_max_chars = memory_max_chars
         self.last = last
         self.problems: list[Problem] = []
@@ -418,6 +427,7 @@ class _Reader:
         return Snapshot(
             self.root,
             dict(self.known),
+            self.deleting,
             agents,
             {kind: self.resolved(kind) for kind in StoredKind},
             self.private,
@@ -552,11 +562,17 @@ class _Reader:
 
 
 def load_tree(
-    root: Path, known: Mapping[str, str], memory_max_chars: int, last: Snapshot | None, tools: ToolTable
+    root: Path,
+    known: Mapping[str, str],
+    deleting: frozenset[str],
+    memory_max_chars: int,
+    last: Snapshot | None,
+    tools: ToolTable,
 ) -> Snapshot:
-    """读整棵树。known 是数据库里的 agent（id → 名字，含正在删除的）：agent 目录按 agent.toml 的 id 对上它们。last 是上一份
+    """读整棵树。known 是数据库里的 agent（id → 名字，含正在删除的）：agent 目录按 agent.toml 的 id 对上它们；deleting 是其中
+    正在删除的（Snapshot.deleting）。last 是上一份
     快照（本进程还没读过为 None）：access.toml 整个读不出来时沿用它的角色与规则。同步 IO，调用方放到线程里。"""
-    return _Reader(root, known, memory_max_chars, last, tools).read()
+    return _Reader(root, known, deleting, memory_max_chars, last, tools).read()
 
 
 def fingerprint(root: Path) -> tuple[tuple[str, int, int], ...]:

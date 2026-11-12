@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import select
 
 import muliao.agents.service
+from muliao.agents.api import AssetRejected, McpTransport, StoredKind, mcp_config
 from muliao.agents.tables import Agent
 from muliao.errors import Conflict, NotFound
 from muliao.platform.tables import Task, TaskStatus
@@ -130,8 +131,10 @@ async def test_an_agent_marked_for_deletion_receives_no_new_mail(container, make
 
 async def test_an_agent_with_a_busy_session_is_not_deleted(container, make_agent, models):
     session, job, _recorder, agent = await start_job(container, make_agent, models, "sleep 30")
-    with pytest.raises(Conflict, match="working"):
+    with pytest.raises(Conflict, match="busy"):
         await container.agent_lifecycle.delete(agent.id, actor="user")
+    # 整个删除回滚：没有停在正在删除
+    assert agent.id in [a.id for a in await container.agents.list()]
     await container.stopper(session.id)
     await drain(container)
     await wait_until_done(container, job.id)
@@ -256,6 +259,36 @@ async def test_agent_names_cover_agents_being_deleted_and_label_deleted_ones(con
 
     await drain(container)
     assert (await container.agents.names())[agent.id] == f"(deleted agent {agent.id})"
+
+
+async def test_nothing_can_be_written_for_an_agent_being_deleted(container, make_agent):
+    """标记删除之后、删除文件的任务跑完之前，往它名下写（私有记忆、新建 skill / secret / MCP、转给它）当场 NotFound，
+    改它目录里已有的文件被写入口拒绝：不会写成功、随后随目录静默消失。"""
+    agent = await make_agent("alpha")
+    await container.skills.write("mine", "d", "b", version=None, owner=agent.id)
+    await container.skills.write("free", "d", "b", version=None, owner=None)
+    memory = (await container.memory.read_private(agent.id)).version
+    await container.agent_lifecycle.delete(agent.id, actor="user")
+
+    spec = mcp_config(transport=McpTransport.HTTP, url="http://x")
+    for write in (
+        lambda: container.memory.put_private(agent.id, "- x", version=memory),
+        lambda: container.skills.write("new", "d", "b", version=None, owner=agent.id),
+        lambda: container.vault.set("NEW_KEY", "v", "", actor="user", owner=agent.id),
+        lambda: container.mcp.add("new", spec, owner=agent.id, probe=False),
+        lambda: container.catalog.transfer(StoredKind.SKILL, "free", agent.id),
+    ):
+        with pytest.raises(NotFound, match="being deleted"):
+            await write()
+    skill = (await container.assets.snapshot()).asset(StoredKind.SKILL, "mine").path / "SKILL.md"
+    with pytest.raises(AssetRejected, match="being deleted"):
+        await container.assets.write({skill: skill.read_text() + "more\n"})
+
+    snapshot = await container.assets.snapshot()
+    assert [n for n in ("new", "free") if snapshot.get(StoredKind.SKILL, n) is None] == ["new"]
+    assert snapshot.get(StoredKind.SKILL, "free").owner is None
+    assert snapshot.get(StoredKind.SECRET, "NEW_KEY") is None
+    assert snapshot.get(StoredKind.MCP, "new") is None
 
 
 async def test_agent_whose_private_memory_was_deleted_can_still_be_deleted(container, make_agent):

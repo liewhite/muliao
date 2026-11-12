@@ -24,7 +24,7 @@ from pathlib import Path
 from watchfiles import awatch
 
 from muliao.agents import asset_files
-from muliao.agents.active import agent_names_in
+from muliao.agents.active import agent_names_in, deleting_in
 from muliao.agents.agent_file import AGENT_FILE, AgentFile, Thinking
 from muliao.agents.assets import Problem, Snapshot, fingerprint, load_tree
 from muliao.agents.kinds import StoredKind
@@ -77,11 +77,16 @@ class AssetSource:
     async def _current(self) -> Snapshot:
         async with self._db.transaction() as s:
             known = (await agent_names_in(s)).by_id
-        key = (await asyncio.to_thread(fingerprint, self.root), tuple(sorted(known.items())))
+            deleting = await deleting_in(s)
+        key = (
+            await asyncio.to_thread(fingerprint, self.root),
+            tuple(sorted(known.items())),
+            tuple(sorted(deleting)),
+        )
         if key == self._key and self._snapshot is not None:
             return self._snapshot
         snapshot = await asyncio.to_thread(
-            load_tree, self.root, known, self.memory_max_chars, self._snapshot, self._tools
+            load_tree, self.root, known, deleting, self.memory_max_chars, self._snapshot, self._tools
         )
         snapshot = self._checked(snapshot)
         self._key, self._snapshot = key, snapshot

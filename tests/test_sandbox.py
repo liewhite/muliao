@@ -258,7 +258,7 @@ async def test_an_agent_writes_its_workspace_the_defaults_and_its_grants_minus_p
             ("~/proj",),
             ("~/proj/secret",),
             agent,
-            load_tree(tree, {}, 4000, None, ToolTable.of([])),
+            load_tree(tree, {}, frozenset(), 4000, None, ToolTable.of([])),
         )
 
     confiner = Confiner(sandbox, lambda a: tmp_path / "ws" / a, scope_of, home=home, private=())
