@@ -108,7 +108,7 @@ class SessionPorts(Parts):
 
     @property
     def archive_blockers(self) -> Mapping[str, ArchiveBlocker]:
-        """删除（或归档）agent 时会话领域的检查：它的会话有忙的就拦下（组合根交给 agents.api.AgentLifecycle）。"""
+        """归档 agent 前会话领域的检查：它的会话有忙的就拦下（组合根交给 agents.api.AgentLifecycle）。"""
         return {"sessions": self.activity.blocks_agent_archiving_in}
 
     def toolsets(self) -> Sequence[FunctionToolset[RunScope]]:

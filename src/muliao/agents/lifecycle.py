@@ -8,7 +8,7 @@
    它的那一节，再删除这一行；它名下分发出去的资源（agents.access.Sharing.shared）先挪到平台目录（别的 agent 还在用）。
    文件不在数据库事务里，所以单独成一个可重试的任务；重做时已不在的文件跳过。
 
-归档（set_archived）是可以来回切换的停用：同样只在它空闲时做（与删除同一组检查），之后给它派新工作的入口都拒绝
+归档（set_archived）是可以来回切换的停用：同样只在它空闲时做（与删除时删它的会话同一条规则），之后给它派新工作的入口都拒绝
 （agents.active.runnable_row_in），数据都留着。
 """
 
@@ -91,7 +91,7 @@ class AgentLifecycle:
         log.info("agent deletion started", extra={"agent": agent_id, "actor": actor})
 
     async def set_archived(self, agent_id: str, archived: bool) -> AgentInfo:
-        """归档（或取消归档）；已是目标状态时不做任何事。归档要求它不是系统默认 agent、且空闲（与删除同一组检查，忙时
+        """归档（或取消归档）；已是目标状态时不做任何事。归档要求它不是系统默认 agent、且空闲（与删除时删它的会话同一条规则，忙时
         Conflict）。检查与标记之间排上的运行照常做完，只是之后的新工作被拒绝；已校验、还没投进会话的来信在投递时被丢弃
         （sessions.service.on_receive，与删除相同）。不查谁在归档：归档只在界面上做。"""
         if archived:
