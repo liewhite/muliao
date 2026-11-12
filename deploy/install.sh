@@ -25,7 +25,7 @@ git -C "$SRC" clean -q -ffdx -e server/target -e web/node_modules
 sha=$(git -C "$SRC" rev-parse HEAD)
 say "building $REF ($sha)"
 
-(cd "$SRC/server" && cargo build --release --locked -p muliao -p muliao-migrate)
+(cd "$SRC/server" && cargo build --release --locked -p muliao-server -p muliao-migrate)
 (cd "$SRC/web" && npm ci --no-audit --no-fund --loglevel=error && npm run build)
 
 dest=$APP/$(date +%Y%m%d-%H%M%S)-$(echo "$sha" | cut -c1-10)
