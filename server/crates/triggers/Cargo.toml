@@ -7,11 +7,29 @@ publish.workspace = true
 [dependencies]
 muliao-platform = { workspace = true }
 muliao-assets = { workspace = true }
-muliao-runtime = { workspace = true }
 muliao-sessions = { workspace = true }
 muliao-workspace = { workspace = true }
 muliao-notifications = { workspace = true }
-muliao-issues = { workspace = true }
+agenter = { workspace = true }
+chrono = { workspace = true }
+chrono-tz = { workspace = true }
+croner = { workspace = true }
+rusqlite = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+# 前置检查 changed 模式给 agent 的差异（unified diff）
+similar = "2"
+
+[dev-dependencies]
+muliao-files = { workspace = true }
+muliao-runtime = { workspace = true }
+reqwest = { workspace = true }
+tempfile = { workspace = true }
 
 [lints]
 workspace = true
