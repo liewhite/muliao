@@ -2,7 +2,7 @@
 //!
 //! 用法：`muliao-migrate <旧库> <新库> [-c 配置文件] [--no-verify]`
 //! - 新库不能已存在；中途失败不留半个库（先写 `<新库>.partial`，成功才改名）。
-//! - 报告写到 `<新库>.report.md`，同时打印出来。有转不了的消息或检查发现问题时退出码为 1。
+//! - 报告写到 `<新库>.report.md`，同时打印出来。检查发现问题时退出码为 1；有转不了的消息时不写新库、报错退出。
 //! - 检查要用配置文件（默认 ~/.muliao/config.toml）里的密码、vault 等装配新版；`--no-verify` 只迁不查。
 
 mod copy;
@@ -66,7 +66,7 @@ async fn main() -> anyhow::Result<()> {
     std::fs::write(&path, &text).with_context(|| format!("writing {}", path.display()))?;
     println!("{text}");
     eprintln!("report: {}", path.display());
-    if !report.message_failures.is_empty() || !report.problems.is_empty() {
+    if !report.problems.is_empty() {
         std::process::exit(1);
     }
     Ok(())

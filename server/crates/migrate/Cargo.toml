@@ -12,6 +12,8 @@ path = "src/main.rs"
 muliao-platform = { workspace = true }
 muliao-sessions = { workspace = true }
 muliao-workspace = { workspace = true }
+muliao-files = { workspace = true }
+muliao-runtime = { workspace = true }
 # 新库的表结构（MIGRATIONS）与检查时装配的新版服务都来自组合根
 muliao-server = { workspace = true }
 agenter = { workspace = true }

@@ -2,15 +2,30 @@
 //! 各 agent 的工作历史，以及 agent、触发器、通知、用量、始终允许等列表页，任何一个不是 200 都记成问题。
 //!
 //! 副本与真实环境隔开，启动不产生副作用：
-//! - 数据目录是临时目录（工作目录为空、新的推送密钥），附件目录链接到真的（只读用）；
-//! - 副本里停用全部触发器、删掉推送订阅；没结束的运行记为失败（不续跑：续跑会调模型、起 MCP 进程）；正在删除的 agent
-//!   从副本里去掉（否则启动时会接着删它的资源文件，资源目录是真的）；
+//! 页面之外，每个会话还走一遍「发给模型」的路：加载上下文、展开附件、拼出 Anthropic 与 OpenAI 两种请求体（不发出去），并核对
+//! 历史里没有缺结果的工具调用。迁过来的会话下次运行就走这条路，转不了的旧形状会让它再也跑不动。
+//!
+//! 副本与真实环境隔开，启动不产生副作用：
+//! - 数据目录是临时目录（工作目录为空、新的推送密钥）；附件目录是真目录，只把真的附件分片子目录逐个链接进来（不链 tmp：
+//!   文件存储启动时会清空 tmp，那是线上服务上传中的临时文件）；
+//! - 副本里停用全部触发器、删掉推送订阅；进行中的都收掉，启动时不接着做：没结束的运行记为失败（续跑会调模型、起 MCP
+//!   进程）、排着的信丢弃、还占着的占用清掉、在跑的后台任务记为被中断；正在删除的 agent 取消删除标记（否则启动时会接着删
+//!   它的资源文件，资源目录是真的）；
 //! - 模型地址换成本机一个不通的端口，不配网页搜索和语音。
 //!
-//! 续跑本身（迁成「没结束」的运行在新版里接着跑）不在这里验，留给并行试跑（#689）。
+//! 新版接手进行中的东西（续跑、叫醒、收尾后台任务）不在这里验，留给并行试跑（#689）。
 
 use std::net::SocketAddr;
 use std::path::Path;
+use std::sync::Arc;
+
+use agenter::anthropic::AnthropicModel;
+use agenter::openai_responses::OpenAIResponsesModel;
+use agenter::{Message, ModelRequest};
+use muliao_files::FileStore;
+use muliao_platform::db::Database;
+use muliao_runtime::attachments::for_model;
+use muliao_sessions::{conventions, history};
 
 use anyhow::{Context, bail};
 use chrono::Utc;
@@ -39,8 +54,15 @@ fn isolate(db: &Path) -> anyhow::Result<Vec<String>> {
         [now],
     )?;
     done.push(format!("没结束的运行 {n} 个记为失败（不续跑）"));
-    let n = conn.execute("DELETE FROM agents WHERE deleting_by IS NOT NULL", [])?;
-    done.push(format!("去掉正在删除的 agent {n} 个"));
+    let n = conn.execute("UPDATE mail SET state = 'discarded' WHERE state = 'queued'", [])?;
+    done.push(format!("排着的信 {n} 封丢弃"));
+    let n =
+        conn.execute("UPDATE session_holds SET status = 'cleared', ended_at = ?1 WHERE status = 'active'", [now])?;
+    done.push(format!("还占着的占用 {n} 个清掉"));
+    let n = conn.execute("UPDATE jobs SET status = 'interrupted', finished_at = ?1 WHERE status = 'running'", [now])?;
+    done.push(format!("在跑的后台任务 {n} 个记为被中断"));
+    let n = conn.execute("UPDATE agents SET deleting_by = NULL WHERE deleting_by IS NOT NULL", [])?;
+    done.push(format!("正在删除的 agent {n} 个取消删除标记"));
     Ok(done)
 }
 
@@ -90,6 +112,66 @@ fn ids(db: &Path, sql: &str) -> anyhow::Result<Vec<String>> {
         .collect())
 }
 
+/// 附件目录：真目录里的分片子目录（内容按 sha256 前两位分）逐个链接过来，别的（tmp）不链。
+fn link_file_shards(real: &Path, copy: &Path) -> anyhow::Result<()> {
+    std::fs::create_dir_all(copy)?;
+    let Ok(entries) = std::fs::read_dir(real) else { return Ok(()) };
+    for e in entries {
+        let e = e?;
+        let name = e.file_name();
+        let shard = name.to_str().is_some_and(|n| n.len() == 2 && n.bytes().all(|b| b.is_ascii_hexdigit()));
+        if shard && e.file_type()?.is_dir() {
+            std::os::unix::fs::symlink(e.path(), copy.join(&name))?;
+        }
+    }
+    Ok(())
+}
+
+/// 每个会话走一遍「发给模型」的路（见模块说明），不发出去。
+async fn check_model_requests(db_path: &Path, files_dir: &Path, report: &mut Report) -> anyhow::Result<()> {
+    let db = Arc::new(Database::open(db_path, Arc::new(|| {}))?);
+    let store = FileStore::open(db.clone(), files_dir.to_path_buf(), u64::MAX)?;
+    let http = reqwest::Client::new();
+    let claude = AnthropicModel::new(http.clone(), DEAD_MODEL_URL, "k", "m");
+    let gpt = OpenAIResponsesModel::new(http, DEAD_MODEL_URL, "k", "m");
+    let settings = agenter::Settings::default();
+    let sessions = ids(db_path, "SELECT id FROM sessions ORDER BY updated_at DESC")?;
+    let mut failed = 0;
+    for id in &sessions {
+        let sid = id.clone();
+        let loaded = db
+            .read(move |c| -> muliao_sessions::error::Result<_> {
+                let all: Vec<Message> = history::transcript_in(c, &sid, None)?.into_iter().map(|s| s.message).collect();
+                conventions::unanswered_calls(&all)?;
+                history::load_context(c, &sid)
+            })
+            .await;
+        let problem = match loaded {
+            Err(e) => Some(format!("loading: {e}")),
+            Ok(context) => match for_model(&store, &context.messages).await {
+                Err(e) => Some(format!("expanding attachments: {e}")),
+                Ok(messages) => {
+                    let req = ModelRequest { system: "s", messages: &messages, tools: &[], settings: &settings };
+                    [claude.request_body(&req).err(), gpt.request_body(&req).err()]
+                        .into_iter()
+                        .flatten()
+                        .next()
+                        .map(|e| format!("building the request: {e}"))
+                }
+            },
+        };
+        if let Some(p) = problem {
+            failed += 1;
+            report.problems.push(format!("会话 {id} 发给模型的路走不通：{p}"));
+        }
+    }
+    report.checks.push(format!(
+        "发给模型的路（加载上下文、展开附件、拼两种请求体、工具调用都有结果）：{} 个会话，失败 {failed} 个",
+        sessions.len()
+    ));
+    Ok(())
+}
+
 struct Client {
     base: String,
     http: reqwest::Client,
@@ -136,15 +218,12 @@ pub async fn verify(new_db: &Path, config: &Path, report: &mut Report) -> anyhow
     std::fs::copy(new_db, &db).with_context(|| format!("copying {}", new_db.display()))?;
 
     let mut settings = Settings::load(config).with_context(|| format!("loading {}", config.display()))?;
-    let real_files = settings.files_dir();
-    if real_files.is_dir() {
-        std::os::unix::fs::symlink(&real_files, data.join("files"))?;
-    }
+    link_file_shards(&settings.files_dir(), &data.join("files"))?;
     for done in isolate(&db)? {
         report.checks.push(format!("检查用的副本：{done}"));
     }
     check_grant_keys(&db, report)?;
-    settings.data_dir = data;
+    settings.data_dir = data.clone();
     settings.log_file = None;
     settings.web = None;
     settings.transcription = None;
@@ -205,6 +284,8 @@ pub async fn verify(new_db: &Path, config: &Path, report: &mut Report) -> anyhow
         report,
     )
     .await;
+
+    check_model_requests(&db, &data.join("files"), report).await?;
 
     server.abort();
     app.bus.close();

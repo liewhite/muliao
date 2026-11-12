@@ -6,8 +6,10 @@
 //! - 旧库的表结构 Rust 版大多照搬，行原样迁，时间统一改写成 Rust 版写库的格式（[`utc`]）。
 //! - 任务队列没有了：旧的运行、压缩任务成为运行记录（`runs`），id 不变（消息、信件按它引用）；推送任务不迁。旧库清理过的
 //!   任务，它保存的消息还在，按消息补一条运行记录。
-//! - 不迁切换那一刻还在进行中的东西：没处理的信、还占着的占用（在跑的后台任务、等着的委派、到点唤醒）、还没批准的调用；
-//!   在跑的后台任务记为被中断。在跑的运行照迁成「没结束」，新版启动后按续跑的规则接着跑。
+//! - 切换那一刻还在进行中的东西也照迁（两版的表与状态含义相同）：在跑的运行迁成「没结束」、排着的信、还占着的占用（在跑的
+//!   后台任务、等着的委派、到点唤醒）、还在等批准的调用。新版启动时照服务重启的规则接手：续跑停在半路的会话、叫醒有信的
+//!   会话、把上次没收尾的后台任务记为被中断并告诉 agent、到点照常唤醒。只有排着还没开始的运行任务不迁：新版凭排着的信叫醒
+//!   会话，用不到它。
 
 use std::path::Path;
 
@@ -135,7 +137,7 @@ fn before_messages() -> Vec<Step> {
                         AND session_id NOT IN (SELECT id FROM main.sessions)",
                 ),
                 (
-                    "还没开始的（进行中的东西不迁）",
+                    "排着还没开始的（新版凭排着的信叫醒会话，用不到它）",
                     "SELECT count(*) FROM old.tasks WHERE kind IN ('run', 'compaction')
                         AND session_id IN (SELECT id FROM main.sessions) AND status NOT IN ('done', 'failed', 'running')",
                 ),
@@ -163,7 +165,7 @@ fn before_messages() -> Vec<Step> {
 }
 
 /// 消息之后的各步（信件、委派等引用运行与会话）。
-fn after_messages(now: &str) -> Vec<Step> {
+fn after_messages() -> Vec<Step> {
     let s = LIVE_SESSIONS;
     vec![
         Step {
@@ -209,18 +211,12 @@ fn after_messages(now: &str) -> Vec<Step> {
                     state,
                     CASE WHEN taken_by IN (SELECT id FROM main.runs) THEN taken_by END,
                     utc(created_at)
-                FROM old.mail WHERE state != 'queued' AND session_id IN {s}"
+                FROM old.mail WHERE session_id IN {s}"
             ),
-            skipped: vec![
-                (
-                    "会话已不存在",
-                    "SELECT count(*) FROM old.mail WHERE session_id NOT IN (SELECT id FROM main.sessions)",
-                ),
-                (
-                    "还没处理的信（进行中的东西不迁）",
-                    "SELECT count(*) FROM old.mail WHERE session_id IN (SELECT id FROM main.sessions) AND state = 'queued'",
-                ),
-            ],
+            skipped: vec![(
+                "会话已不存在",
+                "SELECT count(*) FROM old.mail WHERE session_id NOT IN (SELECT id FROM main.sessions)",
+            )],
             changed: vec![
                 (
                     "交给的运行已不存在（置空）",
@@ -244,33 +240,26 @@ fn after_messages(now: &str) -> Vec<Step> {
                 SELECT id, session_id, holder,
                     CASE WHEN thread_call_id IN (SELECT id FROM main.thread_calls) THEN thread_call_id END,
                     call_id, awaited, status, utc(created_at), utc(ended_at)
-                FROM old.session_holds WHERE status != 'active' AND session_id IN {s}"
+                FROM old.session_holds WHERE session_id IN {s}"
             ),
-            skipped: vec![
-                (
-                    "会话已不存在",
-                    "SELECT count(*) FROM old.session_holds WHERE session_id NOT IN (SELECT id FROM main.sessions)",
-                ),
-                (
-                    "还占着的（在跑的后台任务、等着的委派或唤醒；进行中的东西不迁）",
-                    "SELECT count(*) FROM old.session_holds
-                        WHERE session_id IN (SELECT id FROM main.sessions) AND status = 'active'",
-                ),
-            ],
+            skipped: vec![(
+                "会话已不存在",
+                "SELECT count(*) FROM old.session_holds WHERE session_id NOT IN (SELECT id FROM main.sessions)",
+            )],
             changed: vec![],
         },
         Step {
             table: "wakeups",
             source: "wakeups",
             old_count: "SELECT count(*) FROM old.wakeups",
-            insert: "INSERT INTO main.wakeups (id, holder, session_id, due_at, note, created_at)
+            insert: format!(
+                "INSERT INTO main.wakeups (id, holder, session_id, due_at, note, created_at)
                 SELECT id, holder, session_id, utc(due_at), note, utc(created_at) FROM old.wakeups
-                WHERE holder IN (SELECT holder FROM main.session_holds WHERE holder IS NOT NULL)"
-                .into(),
+                WHERE session_id IN {s}"
+            ),
             skipped: vec![(
-                "还在等的唤醒，或会话已不存在（进行中的东西不迁）",
-                "SELECT count(*) FROM old.wakeups
-                    WHERE holder NOT IN (SELECT holder FROM main.session_holds WHERE holder IS NOT NULL)",
+                "会话已不存在",
+                "SELECT count(*) FROM old.wakeups WHERE session_id NOT IN (SELECT id FROM main.sessions)",
             )],
             changed: vec![],
         },
@@ -281,39 +270,27 @@ fn after_messages(now: &str) -> Vec<Step> {
             insert: format!(
                 "INSERT INTO main.approval_requests (id, session_id, call_id, pin, created_at, taken_at)
                 SELECT id, session_id, call_id, pin, utc(created_at), utc(taken_at) FROM old.approval_requests
-                WHERE taken_at IS NOT NULL AND session_id IN {s}"
+                WHERE session_id IN {s}"
             ),
-            skipped: vec![
-                (
-                    "会话已不存在",
-                    "SELECT count(*) FROM old.approval_requests WHERE session_id NOT IN (SELECT id FROM main.sessions)",
-                ),
-                (
-                    "还在等批准的（进行中的东西不迁）",
-                    "SELECT count(*) FROM old.approval_requests
-                        WHERE session_id IN (SELECT id FROM main.sessions) AND taken_at IS NULL",
-                ),
-            ],
+            skipped: vec![(
+                "会话已不存在",
+                "SELECT count(*) FROM old.approval_requests WHERE session_id NOT IN (SELECT id FROM main.sessions)",
+            )],
             changed: vec![],
         },
         Step {
             table: "jobs",
             source: "jobs",
             old_count: "SELECT count(*) FROM old.jobs",
-            insert: format!(
+            insert:
                 "INSERT INTO main.jobs (id, session_id, agent_id, command, secrets, status, exit_code, log_path, pid,
                     check_seconds, started_at, finished_at)
-                SELECT id, session_id, agent_id, command, secrets,
-                    CASE status WHEN 'running' THEN 'interrupted' ELSE status END,
-                    exit_code, log_path, pid, check_seconds, utc(started_at),
-                    CASE status WHEN 'running' THEN '{now}' ELSE utc(finished_at) END
+                SELECT id, session_id, agent_id, command, secrets, status, exit_code, log_path, pid, check_seconds,
+                    utc(started_at), utc(finished_at)
                 FROM old.jobs"
-            ),
+                    .into(),
             skipped: vec![],
-            changed: vec![(
-                "迁移时还在跑的：记为被中断（进程不会被杀，发起的会话不再收到它的结局）",
-                "SELECT count(*) FROM old.jobs WHERE status = 'running'",
-            )],
+            changed: vec![],
         },
         Step {
             table: "script_grants",
@@ -501,13 +478,24 @@ fn copy_messages(tx: &Transaction, report: &mut Report) -> anyhow::Result<TableR
         stopped += tx.execute("UPDATE main.runs SET outcome = 'stopped' WHERE id = ?1 AND outcome = 'done'", [run])?;
     }
     report.message_notes = notes;
-    let failed: i64 = report.message_failures.values().map(|v| v.len() as i64).sum();
+    // 历史中间少一条可能让工具调用与结果对不上，那个会话就再也跑不了：有转不了的就整个不迁，先把转换补上
+    if !report.message_failures.is_empty() {
+        let lines: Vec<String> = report
+            .message_failures
+            .iter()
+            .map(|(why, ids)| format!("{why}: {} (e.g. ids {:?})", ids.len(), &ids[..ids.len().min(5)]))
+            .collect();
+        bail!("some messages could not be converted, nothing was written:\n{}", lines.join("\n"));
+    }
+    if old_rows - new_rows != gone {
+        bail!("messages: {old_rows} old rows, {new_rows} copied, but only {gone} belong to sessions that are gone");
+    }
     Ok(TableReport {
         table: "messages".into(),
         source: "messages（逐条转换，可搜索文字重新生成）".into(),
         old_rows,
         new_rows,
-        skipped: vec![("会话已不存在".into(), gone), ("转不了（见下方）".into(), failed)],
+        skipped: vec![("会话已不存在".into(), gone)],
         changed: vec![("被停止的运行：结局记为 stopped".into(), stopped as i64)],
     })
 }
@@ -543,7 +531,6 @@ pub fn migrate(old: &Path, new: &Path, report: &mut Report) -> anyhow::Result<()
     conn.pragma_update(None, "foreign_keys", true)?;
     conn.execute("ATTACH DATABASE ?1 AS old", [format!("file:{}?mode=ro", uri_path(old))])
         .with_context(|| format!("opening {} read-only", old.display()))?;
-    let now = format_utc(Utc::now());
     {
         let tx = conn.transaction()?;
         // 外键在提交时一起查（会话的父会话可能排在后面）
@@ -553,7 +540,7 @@ pub fn migrate(old: &Path, new: &Path, report: &mut Report) -> anyhow::Result<()
         }
         let messages = copy_messages(&tx, report)?;
         report.tables.push(messages);
-        for step in &after_messages(&now) {
+        for step in &after_messages() {
             report.tables.push(run_step(&tx, step)?);
         }
         for (table, why) in DROPPED {
@@ -663,11 +650,14 @@ mod tests {
         assert_eq!(q("SELECT group_concat(id || ':' || run_id, ',') FROM messages"), "1:1,2:99");
         assert_eq!(q("SELECT CAST(count(*) AS TEXT) FROM message_texts"), "2");
         assert_eq!(q("SELECT created_at FROM sessions"), "2026-11-01 00:00:00.123456+00:00");
-        // 进行中的不迁
-        assert_eq!(q("SELECT group_concat(id) FROM mail"), "1");
-        assert_eq!(q("SELECT group_concat(id) FROM session_holds"), "1");
-        assert_eq!(q("SELECT group_concat(id) FROM approval_requests"), "1");
-        assert_eq!(q("SELECT status || '|' || (finished_at IS NOT NULL) FROM jobs WHERE id = 2"), "interrupted|1");
+        // 进行中的照迁：排着的信、还占着的占用、等批准的调用、在跑的后台任务（新版启动时接手）
+        assert_eq!(
+            q("SELECT group_concat(id || ':' || state || ':' || coalesce(taken_by, '-'), ',') FROM mail"),
+            "1:consumed:1,2:queued:-"
+        );
+        assert_eq!(q("SELECT group_concat(id || ':' || status, ',') FROM session_holds"), "1:released,2:active");
+        assert_eq!(q("SELECT group_concat(id) FROM approval_requests"), "1,2");
+        assert_eq!(q("SELECT status || '|' || (finished_at IS NULL) FROM jobs WHERE id = 2"), "running|1");
         // JSON 文字 null → 空值；不存在的会话置空
         assert_eq!(q("SELECT precheck FROM triggers"), "NULL");
         assert_eq!(

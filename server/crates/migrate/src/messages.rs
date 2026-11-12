@@ -346,7 +346,8 @@ fn tool_return(p: &Value, raw: Option<&str>, notes: &mut Notes) -> Result<ToolRe
             note(notes, "tool result made up when stopped (marked as made up)");
             meta.insert(MADE_UP.into(), json!("stopped"));
         }
-        "success" | "failed" => {
+        // 被用户拒绝的调用（denied）：Rust 版拒绝的结果就是一段普通文字，同成功的一样记结束时间
+        "success" | "failed" | "denied" => {
             if let Some(at) = time(&p["timestamp"]) {
                 meta.insert(FINISHED_AT.into(), json!(at.to_rfc3339_opts(SecondsFormat::Micros, true)));
             }
@@ -356,10 +357,10 @@ fn tool_return(p: &Value, raw: Option<&str>, notes: &mut Notes) -> Result<ToolRe
             note(notes, "tool result outcome interrupted (marked as made up)");
             meta.insert(MADE_UP.into(), json!("interrupted"));
         }
-        other => {
-            note(notes, format!("tool result outcome {other} (kept in metadata)"));
-            meta.insert("outcome".into(), json!(other));
-        }
+        other => return Err(format!("unknown tool result outcome {other}")),
+    }
+    if outcome == "denied" {
+        note(notes, "tool result denied by the user (became a plain result)");
     }
     Ok(ToolResult {
         call_id: s(&p["tool_call_id"]),

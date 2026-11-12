@@ -27,7 +27,7 @@ pub struct Report {
     /// 旧库里整张不迁的表与原因
     pub dropped_tables: Vec<(String, i64, String)>,
     pub message_notes: Notes,
-    /// 转不了的消息：原因 → 消息 id
+    /// 转不了的消息：原因 → 消息 id（有就不迁，见 copy::copy_messages）
     pub message_failures: BTreeMap<String, Vec<i64>>,
     /// 迁完后的检查（verify）：做了什么 → 结果；问题单列
     pub checks: Vec<String>,
@@ -68,15 +68,6 @@ impl Report {
         let _ = writeln!(w, "\n## 消息转换说明（pydantic-ai → agenter）\n");
         for (what, n) in &self.message_notes {
             let _ = writeln!(w, "- {what}：{n}");
-        }
-        if self.message_failures.is_empty() {
-            let _ = writeln!(w, "\n转不了的消息：无。");
-        } else {
-            let _ = writeln!(w, "\n### 转不了的消息（没迁）\n");
-            for (why, ids) in &self.message_failures {
-                let head: Vec<String> = ids.iter().take(5).map(i64::to_string).collect();
-                let _ = writeln!(w, "- {why}：{} 条（如 {}）", ids.len(), head.join(", "));
-            }
         }
         if !self.checks.is_empty() || !self.problems.is_empty() {
             let _ = writeln!(w, "\n## 迁完后的检查\n");
