@@ -21,7 +21,7 @@ export interface MergedLive {
 
 /**
  * 以快照为准（这一段从开头起的全部事件），再接上之后经 SSE 收到、快照里还没有的同一段事件；别的段的事件丢弃
- * （上一段已保存，在历史里）。没有快照（运行已结束或还没开始）时保留已收到的事件，由随后的任务状态事件清空；
+ * （上一段已保存，在历史里）。没有快照（运行已结束或还没开始）时保留已收到的事件，由重新拉回的、没有进行中运行的快照清空（SessionView）；
  * 收到的事件不是从这一段的开头起（快照生成时这一段还没开始、SSE 连上时已经开始了），同样是缺口。
  */
 export function mergeLive(snapshot: LiveSegment | null, current: RunEvent[]): MergedLive {

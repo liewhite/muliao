@@ -843,8 +843,8 @@ function UsageLine({ context, usage }: Pick<SessionDetail, 'context' | 'usage'>)
   )
 }
 
-/** 会话页按哪些事件重新拉取：连上了（之前可能丢了事件），这个会话又保存了一步，或它的任何任务（运行、压缩、后台任务
- * 结局的投递等）状态变了 */
+/** 会话页按哪些事件重新拉取：连上了（之前可能丢了事件），这个会话又保存了一步，或它的任何任务（运行、压缩、推送通知、
+ * 停止 thread 等）状态变了 */
 function refetchesSession(e: PageEvent, id: string): boolean {
   if (e.type === 'connected') return true
   if (e.type === 'changed' || e.session_id !== id) return false
@@ -887,7 +887,7 @@ export default function SessionView() {
   })
 
   // 重新拉取到的快照里没有进行中的运行（运行或压缩结束了）：以数据库为准，清空临时流。快照生成后才开始的运行，
-  // 已收到的事件被清掉时下一条事件接不上（mergeLive 的 gap），会再拉一次
+  // 已收到的事件被清掉时下一条事件接不上（mergeLive 的 gap），会再拉一次；清掉到下一条事件之间画面暂时缺这几条，是预期的
   // （渲染时按「快照换了」调整，React 推荐的做法，不用 effect）
   const [snapshot, setSnapshot] = useState(detail.data)
   if (detail.data !== snapshot) {
