@@ -2,7 +2,7 @@
 # 从 Rust 版退回 Python 版（切换后头一两天内用）：用法 deploy/rollback.sh
 #
 # 自己转到后台运行（见 lib.sh 的 detach），输出追加到 $MULIAO_HOME/deploy.log：等 20 秒 → 服务停到 hold 上 →
-# Rust 版的库移进 backups/muliao.rust.db.<时间> → 切换时留下的 data/muliao.python.db 改回 data/muliao.db →
+# Rust 版的库移进 backups/muliao.rust.<时间>.db → 切换时留下的 data/muliao.python.db 改回 data/muliao.db →
 # 入口改指 Python 版（uv tool 装的那个仍在）→ 健康检查。切换之后在 Rust 版里新写的会话、issue 等不带回去
 # （留在 backups 里的 Rust 版库中）。最后一行是 ROLLBACK OK 或 ROLLBACK FAILED。
 set -u

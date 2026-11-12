@@ -44,7 +44,7 @@ agent 的 shell 与 stdio MCP 只继承服务的 `PATH`（示例 plist 里的那
 ## 从 Python 版切换与回滚（#675，一次性）
 
 - `deploy/cutover.sh`：服务停到 hold 上 → 备份库到 `backups/muliao.db.pre-rust.<时间>` → `muliao-migrate` 从备份迁出新库（报告在 `backups/migrate-report.<时间>.md`）→ Python 版的库改名为 `data/muliao.python.db`、新库就位 → 入口改指 Rust 版 → 健康检查（接口有回应、30 秒内进程不换、日志无 ERROR）。任何一步失败自动换回 Python 版的库并放行给 Python 版。
-- `deploy/rollback.sh`：服务停到 hold 上 → Rust 版的库移进 `backups/muliao.rust.db.<时间>` → `muliao.python.db` 改回 `muliao.db` → 入口改指 uv tool 装的 Python 版 → 健康检查。切换后在 Rust 版里新写的数据不带回去。
+- `deploy/rollback.sh`：服务停到 hold 上 → Rust 版的库移进 `backups/muliao.rust.<时间>.db` → `muliao.python.db` 改回 `muliao.db` → 入口改指 uv tool 装的 Python 版 → 健康检查。切换后在 Rust 版里新写的数据不带回去。
 - 两个脚本都自己转到后台另起会话运行（从服务里调用也不会被重启打断），输出追加到 `~/.muliao/deploy.log`，最后一行是 `CUTOVER OK/FAILED`、`ROLLBACK OK/FAILED`。路径、服务名都能用环境变量改（`deploy/lib.sh` 开头），演练时指到临时目录。
 
 ## 开发

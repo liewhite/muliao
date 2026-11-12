@@ -40,7 +40,8 @@ prev=$(readlink "$APP/current" 2>/dev/null || true)
 ln -sfn "$dest" "$APP/current"
 say "installed $sha into $dest (previous: ${prev:-none}); restart the service to apply"
 
-# 只留最近 3 个版本目录（current 指着的总在其中：它是刚装的）
+# 只留最近 3 个版本目录（current 指着的总在其中：它是刚装的）。连装 3 次不重启的话，正在跑的那版目录会被删，
+# 界面要等重启后才回来；罕见，不处理
 ls -1d "$APP"/2*-* 2>/dev/null | sort -r | tail -n +4 | while read -r old; do
   rm -rf "$old"
   say "removed old version $old"

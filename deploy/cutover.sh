@@ -31,7 +31,7 @@ done
 need=$(($(du -k "$DATA/muliao.db" | cut -f1) * 3))
 free=$(df -k "$DATA" | awk 'NR==2 {print $4}')
 [ "$free" -gt "$need" ] || die "not enough disk: ${free}KB free, need ${need}KB"
-rm -f "$NEWDB" "$NEWDB.partial"
+rm -f "$NEWDB"
 say "switching to Rust $(cat "$APP/current/COMMIT") ($(readlink "$APP/current"))"
 
 sleep "${MULIAO_DELAY:-20}"
@@ -46,8 +46,8 @@ fi
 fail() {
   say "cutover failed: $*"
   # 停不住就不能换库（Rust 版可能还在写它）：保持现状，等人处理
-  on_hold || hold_service || { say "CUTOVER FAILED and could not stop the service: database left as is, entry $ENTRY -> $(readlink "$ENTRY")"; exit 1; }
-  rm -f "$NEWDB" "$NEWDB.partial"
+  hold_service || { say "CUTOVER FAILED and could not stop the service: database left as is, entry $ENTRY -> $(readlink "$ENTRY")"; exit 1; }
+  rm -f "$NEWDB"
   if restore_python "$TS"; then
     say "CUTOVER FAILED; back on the Python version"
   else

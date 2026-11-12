@@ -65,6 +65,8 @@ hold_service() {
 
 # 从 hold 放行到 Rust 版或 Python 版：改入口，hold.sh 一秒内发现并 exec 过去（同一个进程，launchd 不重启）。
 release_to() {
+  # 报到只代表「此刻在等的 hold.sh」：exec 过去后 pid 不变，不删的话 on_hold 会把放行后的程序当成还在 hold 上
+  rm -f "$HOLD.pid"
   case $1 in
     rust) point_entry "$APP/current/muliao" ;;
     python) point_entry "$PYTHON_MULIAO" ;;
@@ -74,7 +76,7 @@ release_to() {
 
 log_size() { if [ -f "$LOGFILE" ]; then wc -c < "$LOGFILE" | tr -d ' '; else echo 0; fi; }
 
-# 放行后的健康检查：90 秒内接口有回应（/api/auth/me 返回 200 或 401），之后 30 秒内进程没换（没在循环重启），
+# 放行后的健康检查：90 秒内接口有回应（/api/auth/me 不带 cookie 是 401；200 留给以后改成免登录也认），之后 30 秒内进程没换（没在循环重启），
 # 日志从 $1 字节起（放行前的长度）没有 ERROR。不健康返回 1 并打印原因。
 wait_healthy() {
   from=$1
@@ -102,13 +104,14 @@ wait_healthy() {
 restore_python() {
   ts=$1
   if [ -e "$PYDB" ]; then
+    # 主文件与 -wal/-shm 同名成对（SQLite 只认「主文件名-wal」）
     for s in "" -wal -shm; do
-      [ -e "$DATA/muliao.db$s" ] && mv "$DATA/muliao.db$s" "$BACKUPS/muliao.rust.db$s.$ts"
+      if [ -e "$DATA/muliao.db$s" ]; then mv "$DATA/muliao.db$s" "$BACKUPS/muliao.rust.$ts.db$s" || return 1; fi
     done
     for s in "" -wal -shm; do
-      [ -e "$PYDB$s" ] && mv "$PYDB$s" "$DATA/muliao.db$s"
+      if [ -e "$PYDB$s" ]; then mv "$PYDB$s" "$DATA/muliao.db$s" || return 1; fi
     done
-    say "database: Python version's restored as $DATA/muliao.db; Rust version's kept as $BACKUPS/muliao.rust.db.$ts"
+    say "database: Python version's restored as $DATA/muliao.db; Rust version's kept as $BACKUPS/muliao.rust.$ts.db"
   fi
   from=$(log_size)
   release_to python || return 1
@@ -120,7 +123,7 @@ restore_python() {
 detach() {
   if [ -z "${MULIAO_DETACHED:-}" ]; then
     mkdir -p "$BACKUPS"
-    MULIAO_DETACHED=1 nohup /usr/bin/perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV or die "exec: $!"' sh "$@" \
+    MULIAO_DETACHED=1 nohup /usr/bin/perl -MPOSIX -e 'POSIX::setsid() or die "setsid: $!"; exec @ARGV or die "exec: $!"' sh "$@" \
       >> "$MULIAO_HOME/deploy.log" 2>&1 < /dev/null &
     echo "running in the background (pid $!); follow: tail -f $MULIAO_HOME/deploy.log"
     exit 0
