@@ -10,8 +10,12 @@ muliao-assets = { workspace = true }
 muliao-files = { workspace = true }
 muliao-runtime = { workspace = true }
 muliao-sessions = { workspace = true }
+futures = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
+tempfile = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
