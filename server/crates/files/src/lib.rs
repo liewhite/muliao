@@ -9,7 +9,7 @@
 //!
 //! 用最终正确性换简化：内容与元数据不在一个事务里。先把内容写进临时文件、改名到最终位置，再插入元数据行。
 //! - 失败可见：任何一步失败都向上报错，调用方看到的是上传失败；没有返回 id 就没有任何引用。
-//! - 可收敛：进程中途被杀留下的临时文件由启动时的 [`FileStore::recover`] 清掉；已改名、没有元数据行的内容不会被任何
+//! - 可收敛：进程中途被杀留下的临时文件由启动时的 [`FileStore::open`] 清掉；已改名、没有元数据行的内容不会被任何
 //!   引用访问到（只能经元数据按 id 找到），同样内容再次上传时直接复用。
 //! - 代价：孤儿内容只占空间。
 
@@ -173,8 +173,11 @@ pub struct FileStore {
 }
 
 impl FileStore {
-    pub fn new(db: Arc<Database>, root: PathBuf, max_bytes: u64) -> Self {
-        Self { db, root, max_bytes }
+    /// 打开文件存储：启动时（还没有上传在进行）调用，先清掉上次进程中途被杀留下的临时文件。
+    pub fn open(db: Arc<Database>, root: PathBuf, max_bytes: u64) -> io::Result<Self> {
+        let store = Self { db, root, max_bytes };
+        store.recover()?;
+        Ok(store)
     }
 
     pub fn max_bytes(&self) -> u64 {
@@ -186,11 +189,15 @@ impl FileStore {
     }
 
     pub fn blob_path(&self, meta: &FileMeta) -> PathBuf {
-        self.root.join(&meta.sha256[..2]).join(&meta.sha256)
+        self.blob_of(&meta.sha256)
     }
 
-    /// 启动时（还没有上传在进行）清掉上次进程中途被杀留下的临时文件。
-    pub fn recover(&self) -> io::Result<()> {
+    /// 内容按 sha256 存放的位置
+    fn blob_of(&self, sha256: &str) -> PathBuf {
+        self.root.join(&sha256[..2]).join(sha256)
+    }
+
+    fn recover(&self) -> io::Result<()> {
         let entries = match std::fs::read_dir(self.tmp_dir()) {
             Ok(e) => e,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
@@ -240,12 +247,11 @@ impl FileStore {
         file.sync_all().await?;
         drop(file);
         let sha256 = format!("{:x}", digest.finalize());
-        let blob = self.root.join(&sha256[..2]).join(&sha256);
+        let blob = self.blob_of(&sha256);
         let from = tmp.0.clone();
         tokio::task::spawn_blocking(move || commit_blob(&from, &blob))
             .await
             .unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic()))?;
-        drop(tmp);
         let meta = FileMeta { id: new_id(), name, media_type, size, sha256, created_at: Utc::now() };
         let row = meta.clone();
         self.db

@@ -158,7 +158,7 @@ impl WebProvider for DeepSeekWeb {
         Box::pin(async move {
             let failure = match self.post::<FetchResponse>("fetch", serde_json::json!({"url": url})).await {
                 Ok(page) => {
-                    tracing::info!(provider = "deepseek", host = %host_of(url), chars = page.content.len(), "web fetch");
+                    tracing::info!(provider = "deepseek", host = %host_of(url), bytes = page.content.len(), "web fetch");
                     return Ok(Page { title: page.title, content: page.content });
                 }
                 Err(f) => f,

@@ -1,4 +1,5 @@
 use super::*;
+use tokio::io::AsyncWriteExt;
 
 async fn store(max_bytes: u64) -> (tempfile::TempDir, FileStore) {
     let dir = tempfile::tempdir().unwrap();
@@ -6,7 +7,7 @@ async fn store(max_bytes: u64) -> (tempfile::TempDir, FileStore) {
     muliao_platform::db::migrate(&db_path, &[MIGRATION]).unwrap();
     let db = Arc::new(Database::open(&db_path, Arc::new(|| {})).unwrap());
     let root = dir.path().join("files");
-    (dir, FileStore::new(db, root, max_bytes))
+    (dir, FileStore::open(db, root, max_bytes).unwrap())
 }
 
 fn tmp_count(s: &FileStore) -> usize {
@@ -70,13 +71,30 @@ async fn bad_names_and_types_are_rejected_before_reading() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn recover_removes_leftover_temp_files() {
+async fn open_removes_leftover_temp_files() {
     let (_dir, s) = store(1024).await;
-    s.recover().unwrap();
     std::fs::create_dir_all(s.tmp_dir()).unwrap();
     std::fs::write(s.tmp_dir().join("half"), b"x").unwrap();
-    s.recover().unwrap();
+    let s = FileStore::open(s.db.clone(), s.root.clone(), 1024).unwrap();
     assert_eq!(tmp_count(&s), 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cancelled_upload_leaves_no_temp_file() {
+    let (_dir, s) = store(1024).await;
+    let s = Arc::new(s);
+    // 先给几个字节，然后一直不结束（客户端上传到一半）
+    let (mut writer, reader) = tokio::io::duplex(64);
+    writer.write_all(b"half").await.unwrap();
+    let st = s.clone();
+    let upload = tokio::spawn(async move { st.put("a", "text/plain", reader).await });
+    while tmp_count(&s) == 0 {
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    upload.abort();
+    assert!(upload.await.unwrap_err().is_cancelled());
+    assert_eq!(tmp_count(&s), 0);
+    drop(writer);
 }
 
 #[test]

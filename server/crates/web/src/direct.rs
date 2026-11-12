@@ -138,7 +138,7 @@ pub async fn fetch(client: &reqwest::Client, url: &str, service_reason: &str) ->
              missing; {e}"
         ))
     })?;
-    tracing::info!(provider = "direct", %host, chars = page.content.len(), "web fetch");
+    tracing::info!(provider = "direct", %host, bytes = page.content.len(), "web fetch");
     let note = format!(
         "(Fetched directly from {} with a plain GET because the fetch service did not return it; content-type {}.)",
         resp.url, resp.content_type

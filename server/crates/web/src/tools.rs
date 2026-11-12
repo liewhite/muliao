@@ -9,10 +9,12 @@ use serde::Deserialize;
 
 use crate::{WebError, WebProvider};
 
+/// 交还模型的按「请重试」交回（同 Python 把 InvalidInput 当 ModelRetry：有连续次数上限，超了提示换做法）。
+/// 各领域错误到工具错误的统一规则由运行端口（#679）定，这里与它保持一致。
 impl From<WebError> for ToolError {
     fn from(e: WebError) -> Self {
         match e {
-            WebError::Rejected(reason) => ToolError::Failed(reason),
+            WebError::Rejected(reason) => ToolError::Retry(reason),
             WebError::Transient(reason) => ToolError::Unavailable(reason.into()),
             WebError::Failed(reason) => ToolError::Abort(reason.into()),
         }
@@ -145,6 +147,6 @@ mod tests {
         assert!(matches!(call(&search, r#"{"query":"down"}"#).await, Err(ToolError::Unavailable(_))));
 
         assert_eq!(call(&fetch, r#"{"url":"x"}"#).await.unwrap(), "# T\n\n012…[truncated: 7 more chars]");
-        assert!(matches!(call(&fetch, r#"{"url":"missing"}"#).await, Err(ToolError::Failed(r)) if r == "gone"));
+        assert!(matches!(call(&fetch, r#"{"url":"missing"}"#).await, Err(ToolError::Retry(r)) if r == "gone"));
     }
 }
