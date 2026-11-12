@@ -151,7 +151,13 @@ impl World {
         self.root.join(name)
     }
 
-    pub async fn call_in(&self, scope: &RunScope, name: &str, args: serde_json::Value, approval: Option<&Approval>) -> (Out, Vec<Content>) {
+    pub async fn call_in(
+        &self,
+        scope: &RunScope,
+        name: &str,
+        args: serde_json::Value,
+        approval: Option<&Approval>,
+    ) -> (Out, Vec<Content>) {
         let tool = self.tools.iter().find(|t| t.name() == name).unwrap_or_else(|| panic!("no tool {name}"));
         let args = args.to_string();
         let call = ToolCall { id: format!("call-{name}"), name: name.into(), args: args.clone(), meta: None };

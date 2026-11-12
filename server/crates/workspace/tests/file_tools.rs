@@ -116,7 +116,10 @@ async fn edit_file_changes_several_files_in_one_call_all_or_nothing() {
     assert!(out[2].contains("edit 2 of 2") && out[2].contains("b.py") && out[2].contains("nothing was written"));
     assert!(out[3].contains("     1\tA = 1") && out[3].contains("     1\tB = 1"));
     let report = &out[4];
-    assert!(report.contains("a.py (2 replacements; now 1 lines)") && report.contains("sub/b.py (1 replacement; now 1 lines)"));
+    assert!(
+        report.contains("a.py (2 replacements; now 1 lines)")
+            && report.contains("sub/b.py (1 replacement; now 1 lines)")
+    );
     // 回显的次序同 Python：按第一次改到它的次序
     assert!(report.find("a.py (2").unwrap() < report.find("sub/b.py").unwrap());
     assert!(!report.contains("sub/../a.py"));
@@ -214,14 +217,20 @@ async fn read_file_reads_several_parts_and_reports_bad_parts_inline() {
         .await;
     assert!(out[2].contains("(0 lines, 0 chars)"));
     let o = &out[3];
-    assert!(o.contains("a.txt lines 2-3 of 10 <==\n     2\tline2\n     3\tline3\n[7 more lines; continue with offset=4]"));
+    assert!(
+        o.contains("a.txt lines 2-3 of 10 <==\n     2\tline2\n     3\tline3\n[7 more lines; continue with offset=4]")
+    );
     assert!(o.contains("missing.txt: file not found"));
     assert!(o.contains("a.txt lines 9-10 of 10 <==\n     9\tline9\n    10\tline10"));
     assert!(o.contains("b.txt lines 1-1 of 1 <==\n     1\tonly"));
     assert!(o.contains("==> a.txt: offset 50 is past the end"));
     assert!(o.contains("empty.txt (empty file) <=="));
     let at = |s: &str| o.find(s).unwrap();
-    assert!(at("lines 2-3") < at("missing.txt") && at("missing.txt") < at("lines 9-10") && at("lines 9-10") < at("b.txt lines"));
+    assert!(
+        at("lines 2-3") < at("missing.txt")
+            && at("missing.txt") < at("lines 9-10")
+            && at("lines 9-10") < at("b.txt lines")
+    );
     assert!(out[4].contains("not both"));
     assert!(out[5].contains("path is required"));
 }
@@ -274,7 +283,11 @@ const N_SKIPPED: usize = 30;
 async fn read_file_stops_at_a_line_boundary_at_the_output_limit_and_says_where_to_continue() {
     let w = world(1000).await;
     let content: String = (1..=300).map(|i| format!("line{i:03}\n")).collect();
-    let mut many = vec![json!({"path": "a.txt", "limit": 3}), json!({"path": "a.txt", "offset": 11, "limit": 3}), json!({"path": "wide.txt"})];
+    let mut many = vec![
+        json!({"path": "a.txt", "limit": 3}),
+        json!({"path": "a.txt", "offset": 11, "limit": 3}),
+        json!({"path": "wide.txt"}),
+    ];
     many.extend((1..=N_SKIPPED).map(|i| json!({"path": format!("d{i:02}.py"), "offset": i})));
     let out = w
         .run(vec![
@@ -299,7 +312,9 @@ async fn read_file_stops_at_a_line_boundary_at_the_output_limit_and_says_where_t
     assert!(ranged.ends_with(&format!("continue with offset={}, limit={}]", stop + 1, 210 - stop)));
     let multi = &out[3];
     assert!(multi.chars().count() <= 1000 && !multi.contains("truncated"));
-    assert!(multi.contains("a.txt lines 1-5 of 300 <==") && multi.contains("\n[295 more lines; continue with offset=6]"));
+    assert!(
+        multi.contains("a.txt lines 1-5 of 300 <==") && multi.contains("\n[295 more lines; continue with offset=6]")
+    );
     let second = multi.split("\n\n").nth(1).unwrap();
     let stop: usize =
         second.rsplit_once("limit reached at line ").unwrap().1.split(' ').next().unwrap().parse().unwrap();
@@ -339,7 +354,9 @@ async fn read_file_returns_images_as_content() {
     std::fs::write(w.ws().join("huge.png"), vec![b'x'; (1 << 20) + 1]).unwrap();
     let (out, content) = w.call_in(&w.scope(), "read_file", json!({"path": "shot.png"}), None).await;
     assert!(out.ok().ends_with("shot.png (image/png, 9 bytes)"));
-    assert!(matches!(&content[1], Content::File(f) if f.media_type == "image/png" && f.source == FileSource::Data(b"\x89PNG fake".to_vec())));
+    assert!(
+        matches!(&content[1], Content::File(f) if f.media_type == "image/png" && f.source == FileSource::Data(b"\x89PNG fake".to_vec()))
+    );
     let out = w
         .run(vec![
             ("read_file", json!({"path": "shot.png", "offset": 3})),
@@ -363,7 +380,10 @@ async fn share_file_attaches_the_file_to_the_result() {
     assert_eq!(out.ok(), "shared file report.pdf with the user; it is shown with your reply");
     let meta = scope.take_result_metadata("call-share_file").unwrap();
     let attached = &meta[muliao_runtime::conventions::TOOL_ATTACHMENTS][0];
-    assert_eq!((attached["name"].as_str(), attached["media_type"].as_str()), (Some("report.pdf"), Some("application/pdf")));
+    assert_eq!(
+        (attached["name"].as_str(), attached["media_type"].as_str()),
+        (Some("report.pdf"), Some("application/pdf"))
+    );
     assert!(w.call("share_file", json!({"path": "nope.txt"})).await.retry().starts_with("file not found: "));
 }
 
