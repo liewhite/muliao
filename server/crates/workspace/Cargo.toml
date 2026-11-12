@@ -10,14 +10,25 @@ muliao-assets = { workspace = true }
 muliao-files = { workspace = true }
 muliao-runtime = { workspace = true }
 muliao-sessions = { workspace = true }
+agenter = { workspace = true }
+chrono = { workspace = true }
+html-escape = "0.2"
+regex = "1"
+rusqlite = { workspace = true }
+sha2 = "0.10"
+thiserror = { workspace = true }
 futures = { workspace = true }
+libc = { workspace = true }
+mime_guess = "2"
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+rusqlite = { workspace = true }
 tempfile = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
 
 [lints]
 workspace = true

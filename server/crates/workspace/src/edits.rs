@@ -7,7 +7,10 @@ use std::hash::Hash;
 
 use muliao_platform::errors::DomainError;
 
-use crate::text::{Splice, clip, ends_line, line_starts, locate_once, miss, numbered, occurrences, split_lines, split_lines_keep, splice};
+use crate::text::{
+    Splice, clip, ends_line, line_starts, locate_once, miss, numbered, occurrences, splice, split_lines,
+    split_lines_keep,
+};
 
 /// 一处修改。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,7 +36,12 @@ impl Change {
                 } else {
                     let at = occurrences(current, old);
                     if at.is_empty() {
-                        return Err(DomainError::invalid(miss(current, old, 0, &format!("old text must occur in {what}"))));
+                        return Err(DomainError::invalid(miss(
+                            current,
+                            old,
+                            0,
+                            &format!("old text must occur in {what}"),
+                        )));
                     }
                     at
                 };
@@ -55,7 +63,9 @@ impl Change {
                     )));
                 }
                 if anchor.trim().contains('\n') {
-                    return Err(DomainError::invalid("anchor must be the text of the single line start_line, not several lines"));
+                    return Err(DomainError::invalid(
+                        "anchor must be the text of the single line start_line, not several lines",
+                    ));
                 }
                 let line = original[start - 1].trim_end_matches(['\r', '\n']);
                 let anchor = anchor.trim();
@@ -172,12 +182,17 @@ impl Origin {
                 block.new.push_str(&before[block.at..p.start]);
                 block.new.push_str(&p.new);
             } else {
-                blocks.push(Block { first, stop: first, new: format!("{}{}", &before[starts[first]..p.start], p.new), at: p.end });
+                blocks.push(Block {
+                    first,
+                    stop: first,
+                    new: format!("{}{}", &before[starts[first]..p.start], p.new),
+                    at: p.end,
+                });
             }
             let block = blocks.last_mut().expect("just pushed");
             block.at = p.end;
             let touched = if p.end > p.start {
-                starts.partition_point(|&s| s <= p.end - 1)
+                starts.partition_point(|&s| s < p.end)
             } else if p.start == starts[first] && (p.new.is_empty() || ends_line(&p.new)) {
                 // 纯插入：插在行首且自成整行的不碰这一行
                 first
@@ -252,7 +267,9 @@ impl Origin {
 
 fn overlap(start: usize, end: usize, by: usize) -> DomainError {
     let lines = if start == end { format!("line {start}") } else { format!("lines {start}-{end}") };
-    DomainError::invalid(format!("{lines} overlap edit {by}, which already changed that part; merge the two into one edit"))
+    DomainError::invalid(format!(
+        "{lines} overlap edit {by}, which already changed that part; merge the two into one edit"
+    ))
 }
 
 /// 多处修改里第 i 处（共 n 处）失败的说明；after 补充这一处是在什么文本上找的。
@@ -262,15 +279,18 @@ pub fn failed_edit(i: usize, n: usize, error: &DomainError, after: &str) -> Stri
 
 pub const NO_EDITS: &str = "no edits given";
 
+/// [`apply_each`] 的结果：改到的各份的新文本与替换数。
+pub type Applied<K> = (BTreeMap<K, String>, BTreeMap<K, usize>);
+
 /// 依次做多处修改，每项作用在它那份文本上（键是文本的名字，如文件路径；what 是报错里怎么称呼它）。同一份文本里按原文
 /// 定位的在前面改过的结果上找；按行号定位的，行号一律指调用前的原文，按 [`Origin`] 换算。返回各份的新文本与替换数（只
 /// 含被改到的键）。任何一项失败都整体失败，报错指出是第几项；调用方只在成功后写盘，所以不会因为某处对不上而留下改了
-/// 一半的文件（写盘本身的 IO 失败不归这里管）。
+/// 一半的文件（写盘本身的 IO 失败不归这里管）。一项是 Err（模型给的定位参数本身不对）时按那一项定位失败报。
 pub fn apply_each<K: Eq + Hash + Ord + Clone>(
     texts: &HashMap<K, String>,
-    edits: &[(K, Change)],
+    edits: &[(K, Result<Change, DomainError>)],
     what: impl Fn(&K) -> String,
-) -> Result<(BTreeMap<K, String>, BTreeMap<K, usize>), DomainError> {
+) -> Result<Applied<K>, DomainError> {
     if edits.is_empty() {
         return Err(DomainError::invalid(NO_EDITS));
     }
@@ -281,7 +301,11 @@ pub fn apply_each<K: Eq + Hash + Ord + Clone>(
         let i = i + 1;
         let origin = origins.entry(key.clone()).or_insert_with(|| Origin::new(texts[key].clone()));
         let text = current.get(key).cloned().unwrap_or_else(|| origin.text.clone());
-        let (places, count) = match change.locate(&text, &what(key), origin) {
+        let located = match change {
+            Ok(change) => change.locate(&text, &what(key), origin),
+            Err(e) => Err(e.clone()),
+        };
+        let (places, count) = match located {
             Ok(found) => found,
             Err(e) if edits.len() == 1 => return Err(e),
             Err(e) => {
@@ -470,7 +494,7 @@ mod tests {
 
     fn apply(text: &str, edits: Vec<Change>) -> Result<String, String> {
         let texts = HashMap::from([("f".to_owned(), text.to_owned())]);
-        let edits: Vec<(String, Change)> = edits.into_iter().map(|e| ("f".to_owned(), e)).collect();
+        let edits: Vec<_> = edits.into_iter().map(|e| ("f".to_owned(), Ok(e))).collect();
         apply_each(&texts, &edits, |k| k.clone()).map(|(c, _)| c["f"].clone()).map_err(|e| e.message)
     }
 
@@ -501,7 +525,9 @@ mod tests {
     #[test]
     fn anchors_must_be_the_whole_line() {
         let err = apply("first line\nsecond\n", vec![lines(1, 1, "first", "x")]).unwrap_err();
-        assert!(err.starts_with("anchor matches only the beginning of line 1 of f; lines 1-2 are now:\n     1\tfirst line"));
+        assert!(
+            err.starts_with("anchor matches only the beginning of line 1 of f; lines 1-2 are now:\n     1\tfirst line")
+        );
         assert_eq!(apply("a\nb", vec![lines(2, 2, " b ", "B")]).unwrap(), "a\nB");
         assert_eq!(apply("a\nb\n", vec![lines(1, 1, "a", "")]).unwrap(), "b\n");
     }
@@ -511,7 +537,7 @@ mod tests {
         let texts = HashMap::from([("f".to_owned(), "x x x".to_owned())]);
         let (out, counts) = apply_each(
             &texts,
-            &[("f".to_owned(), Change::Replace { old: "x".into(), new: "y".into(), every: true })],
+            &[("f".to_owned(), Ok(Change::Replace { old: "x".into(), new: "y".into(), every: true }))],
             |k| k.clone(),
         )
         .unwrap();

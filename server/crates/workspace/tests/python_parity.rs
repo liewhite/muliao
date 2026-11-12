@@ -27,7 +27,7 @@ fn multi_edits_match_python() {
     let cases: Vec<EditCase> = serde_json::from_str(include_str!("fixtures/edits.json")).unwrap();
     assert!(cases.len() >= 1000);
     for (n, case) in cases.into_iter().enumerate() {
-        let edits: Vec<(String, Change)> = case
+        let edits: Vec<(String, Result<Change, _>)> = case
             .edits
             .into_iter()
             .map(|(k, e)| {
@@ -35,7 +35,7 @@ fn multi_edits_match_python() {
                     EditSpec::Lines(start, end, anchor, new) => Change::Lines { start, end, anchor, new },
                     EditSpec::Replace(old, new, every) => Change::Replace { old, new, every },
                 };
-                (k, change)
+                (k, Ok(change))
             })
             .collect();
         match apply_each(&case.texts, &edits, |k| k.clone()) {

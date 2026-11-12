@@ -118,7 +118,11 @@ fn decode(buf: &mut Vec<u8>, last: bool) -> String {
 /// 切口再避开跨在它上面的完整 secret（[`safe_cut`]），两侧分开脱敏也不会漏。secret 可以含换行，所以不能按行切。读到结尾时
 /// 写出全部剩余；读到一半被取消（进程退出后后代还占着管道）时，只丢下留着的那一小段。增量解码，多字节字符不会被块边界
 /// 切坏。
-pub async fn record_output(stream: &mut Output, log_file: &Path, secrets: &BTreeMap<String, String>) -> std::io::Result<()> {
+pub async fn record_output(
+    stream: &mut Output,
+    log_file: &Path,
+    secrets: &BTreeMap<String, String>,
+) -> std::io::Result<()> {
     let mut out = tokio::fs::OpenOptions::new().create(true).append(true).open(log_file).await?;
     let mut raw = Vec::new();
     let mut pending = String::new();
