@@ -16,9 +16,34 @@ use crate::sandbox::Mode;
 pub const DEFAULT_CONFIG_PATH: &str = "~/.muliao/config.toml";
 
 /// 密钥类的值：Debug 不打印内容，只能经 [`Secret::expose`] 取用。
-#[derive(Clone, Deserialize, PartialEq, Eq)]
-#[serde(transparent)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Secret(String);
+
+impl<'de> Deserialize<'de> for Secret {
+    /// 类型不对时只说「要字符串」，不带上写错的值（serde 默认把它印进报错，那可能就是密钥）
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct Visitor;
+        impl serde::de::Visitor<'_> for Visitor {
+            type Value = Secret;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a string")
+            }
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Secret, E> {
+                Ok(Secret(v.to_owned()))
+            }
+            fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<Secret, E> {
+                Err(E::custom("a secret must be a string (quote it)"))
+            }
+            fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<Secret, E> {
+                Err(E::custom("a secret must be a string (quote it)"))
+            }
+            fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<Secret, E> {
+                Err(E::custom("a secret must be a string (quote it)"))
+            }
+        }
+        d.deserialize_str(Visitor)
+    }
+}
 
 impl Secret {
     pub fn expose(&self) -> &str {
@@ -315,7 +340,8 @@ impl Settings {
     /// 读配置文件（`~/` 开头的按家目录展开）。
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
         let path = expand_home(&path.to_string_lossy());
-        let file = crate::fs::real(&path).map_err(|source| ConfigError::Read { path: path.clone(), source })?;
+        let file =
+            crate::fs::real(&path).map_err(|source| ConfigError::Read { path: path.clone(), source })?.into_path_buf();
         let text = std::fs::read_to_string(&file).map_err(|source| ConfigError::Read { path: file.clone(), source })?;
         Self::parse(&text, file)
     }
@@ -502,6 +528,9 @@ precheck_timeout_seconds = 60
         assert!(parse(&google).is_err());
         let cache = MINIMAL.replace("type = \"anthropic\"", "type = \"openai-responses\"\nprompt_cache = false");
         assert!(parse(&cache).unwrap_err().to_string().contains("prompt_cache"));
+        let numeric = MINIMAL.replace("\"sk-xyz\"", "987654321");
+        let err = parse(&numeric).unwrap_err().to_string();
+        assert!(err.contains("must be a string") && !err.contains("987654321"), "{err}");
         let short = MINIMAL.replace("\"12345678\"", "\"1234\"");
         assert!(parse(&short).unwrap_err().to_string().contains("password"));
     }

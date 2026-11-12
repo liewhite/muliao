@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 
-use crate::fs::{real, real_nofollow};
+use crate::fs::{RealPath, is_within, real, real_nofollow};
 
 /// 越界的写：enforce 拒绝；report 放行但由适配器记进系统日志（上线前试跑，统计漏掉的路径）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
@@ -54,30 +54,30 @@ pub fn expand(path: &str, home: &Path) -> PathBuf {
 ///
 /// 认不出（系统拒绝打开路径上的某一级，如 iCloud 目录间歇报 EPERM）时记 warning、退回字面的绝对路径：一条规则的路径
 /// 出问题只影响这一条，不让整组规则、每个 agent 的每次运行跟着失败（#624）。
-pub fn real_forms(path: &Path) -> Vec<PathBuf> {
+pub fn real_forms(path: &Path) -> Vec<RealPath> {
     match (real_nofollow(path), real(path)) {
         (Ok(link), Ok(target)) if link == target => vec![link],
         (Ok(link), Ok(target)) => vec![link, target],
         (Err(e), _) | (_, Err(e)) => {
             let literal = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
             tracing::warn!(path = %literal.display(), error = %e, "cannot resolve path on disk, using it as written");
-            vec![literal]
+            vec![RealPath::assumed(literal)]
         }
     }
 }
 
-/// path（绝对路径）按它的真实路径落在 paths（真实路径）的某一个里：就是它，或在它下面。认不出 path 的真实路径时
-/// 按字面路径比。
-pub fn covers(paths: &[PathBuf], path: &Path) -> bool {
-    let target = real(path).unwrap_or_else(|_| path.to_path_buf());
-    paths.iter().any(|p| target.starts_with(p))
+/// path（绝对路径）按它的真实路径落在 paths 的某一个里：就是它，或在它下面。认不出 path 的真实路径时报错，由调用方
+/// 按「不行」处理（不退回字面路径：换个大小写就能绕过）。
+pub fn covers(paths: &[RealPath], path: &Path) -> std::io::Result<bool> {
+    let target = real(path)?;
+    Ok(paths.iter().any(|p| is_within(p, &target)))
 }
 
 /// 一组可写路径：按顺序的 (可写, 路径)，路径都是真实路径（[`real_forms`]）。一个路径能不能写看最后一条覆盖它的规则
 /// （规则的路径是它本身或它的上级目录），没有覆盖它的就不能写。后面的规则覆盖前面的：先放开一类目录，再收回其中一部分。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WritablePaths {
-    rules: Vec<(bool, PathBuf)>,
+    rules: Vec<(bool, RealPath)>,
     /// 这组路径属于谁（agent 的 id）：只用于系统日志里认出是谁的命令
     owner: String,
 }
@@ -90,7 +90,7 @@ impl WritablePaths {
         Self { rules, owner: owner.into() }
     }
 
-    pub fn rules(&self) -> &[(bool, PathBuf)] {
+    pub fn rules(&self) -> &[(bool, RealPath)] {
         &self.rules
     }
 
@@ -98,12 +98,12 @@ impl WritablePaths {
         &self.owner
     }
 
-    /// path（绝对路径）能不能写：按它最终写到的真实路径判断。
+    /// path（绝对路径）能不能写：按它最终写到的真实路径判断；认不出真实路径的不能写。
     pub fn permits(&self, path: &Path) -> bool {
-        let target = real(path).unwrap_or_else(|_| path.to_path_buf());
+        let Ok(target) = real(path) else { return false };
         let mut verdict = false;
         for (writable, rule) in &self.rules {
-            if target.starts_with(rule) {
+            if is_within(rule, &target) {
                 verdict = *writable;
             }
         }
@@ -120,7 +120,7 @@ pub trait Sandbox: Send + Sync {
 
     /// 把命令包进沙箱：返回实际要执行的 argv，它与它起的所有子进程只能写 writable 允许的路径，读不了 unreadable 里的
     /// 文件内容（真实路径，文件或目录；存不存在、大小这些元数据照样看得到）。
-    fn wrap(&self, argv: &[String], writable: &WritablePaths, unreadable: &[PathBuf]) -> Vec<String>;
+    fn wrap(&self, argv: &[String], writable: &WritablePaths, unreadable: &[RealPath]) -> Vec<String>;
 }
 
 /// 当前系统的适配器（home：服务运行用户的家目录，家目录下的类别按它算）；没有时报错（启动时报出，不退回到不隔离）。
@@ -146,7 +146,7 @@ pub struct Confinement {
     pub home: PathBuf,
     pub explain: Explain,
     /// 读不了的文件或目录（真实路径，[`real_forms`]）
-    pub unreadable: Vec<PathBuf>,
+    pub unreadable: Vec<RealPath>,
 }
 
 impl Confinement {
@@ -154,9 +154,9 @@ impl Confinement {
         self.sandbox.wrap(argv, &self.writable, &self.unreadable)
     }
 
-    /// path（绝对路径）的内容能不能读：按它真正读到的真实路径判断。
+    /// path（绝对路径）的内容能不能读：按它真正读到的真实路径判断；认不出真实路径的不能读。
     pub fn readable(&self, path: &Path) -> bool {
-        !covers(&self.unreadable, path)
+        matches!(covers(&self.unreadable, path), Ok(false))
     }
 
     pub fn enforcing(&self) -> bool {
@@ -242,7 +242,7 @@ impl Seatbelt {
         Path::new(SANDBOX_EXEC).is_file()
     }
 
-    pub fn profile(&self, writable: &WritablePaths, unreadable: &[PathBuf]) -> String {
+    pub fn profile(&self, writable: &WritablePaths, unreadable: &[RealPath]) -> String {
         let message = format!("(with message \"{LOG_MESSAGE} agent={}\")", writable.owner());
         let enforce = self.mode == Mode::Enforce;
         let refuse = if enforce {
@@ -310,7 +310,7 @@ impl Sandbox for Seatbelt {
         }
     }
 
-    fn wrap(&self, argv: &[String], writable: &WritablePaths, unreadable: &[PathBuf]) -> Vec<String> {
+    fn wrap(&self, argv: &[String], writable: &WritablePaths, unreadable: &[RealPath]) -> Vec<String> {
         let mut out = vec![SANDBOX_EXEC.to_owned(), "-p".to_owned(), self.profile(writable, unreadable)];
         out.extend(argv.iter().cloned());
         out
@@ -325,7 +325,7 @@ mod tests {
     fn last_covering_rule_wins() {
         let dir = tempfile::tempdir().unwrap();
         let base = real(dir.path()).unwrap();
-        let w = WritablePaths::of([(true, base.clone()), (false, base.join("private"))], "a1");
+        let w = WritablePaths::of([(true, base.to_path_buf()), (false, base.join("private"))], "a1");
         assert!(w.permits(&base.join("x")));
         assert!(!w.permits(&base.join("private/x")));
         assert!(!w.permits(Path::new("/etc/hosts")));
@@ -338,14 +338,14 @@ mod tests {
         std::fs::create_dir(base.join("t")).unwrap();
         std::os::unix::fs::symlink(base.join("t"), base.join("l")).unwrap();
         let w = WritablePaths::of([(true, base.join("l"))], "a1");
-        assert_eq!(w.rules(), &[(true, base.join("l")), (true, base.join("t"))]);
+        assert_eq!(w.rules(), &[(true, real_nofollow(base.join("l")).unwrap()), (true, real(base.join("t")).unwrap())]);
     }
 
     #[test]
     fn profile_quotes_paths() {
         let sb = Seatbelt::new(Mode::Enforce, "/Users/x".into());
-        let w = WritablePaths { rules: vec![(true, PathBuf::from("/a \"b\""))], owner: "id1".into() };
-        let p = sb.profile(&w, &[PathBuf::from("/secret")]);
+        let w = WritablePaths { rules: vec![(true, RealPath::assumed("/a \"b\"".into()))], owner: "id1".into() };
+        let p = sb.profile(&w, &[RealPath::assumed("/secret".into())]);
         assert!(p.contains(r#"(allow file-write* (subpath "/a \"b\""))"#), "{p}");
         assert!(
             p.contains(r#"(deny file-read-data (with message "muliao write sandbox agent=id1") (subpath "/secret"))"#),

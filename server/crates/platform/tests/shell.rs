@@ -21,7 +21,7 @@ struct Env {
 
 fn env() -> Env {
     let dir = tempfile::tempdir().unwrap();
-    let base = real(dir.path()).unwrap();
+    let base = real(dir.path()).unwrap().into_path_buf();
     let work = base.join("work");
     let outside = base.join("outside");
     std::fs::create_dir_all(&work).unwrap();
@@ -43,7 +43,7 @@ fn confinement(mode: Mode, e: &Env) -> Confinement {
         writable: WritablePaths::of(rules, "test-agent"),
         home,
         explain: Arc::new(|p: &Path| format!("{} is not writable", p.display())),
-        unreadable: vec![e.private.clone()],
+        unreadable: vec![real(&e.private).unwrap()],
     }
 }
 

@@ -33,10 +33,6 @@ impl RotatingFile {
     }
 
     fn open_with(path: &Path, max_bytes: u64, backups: u32, stdio: bool) -> io::Result<Self> {
-        if max_bytes == 0 || backups == 0 {
-            // 0 在别的实现里常是「永不轮转」，漏传时别悄悄退化
-            return Err(io::Error::other("a log file needs positive max_bytes and backups"));
-        }
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }

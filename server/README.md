@@ -16,8 +16,9 @@ Cargo workspace，一个领域一个 crate（`crates/<领域>`，包名 `muliao-
 | 6 | `history` |
 | 适配 | `http`（接口与 SSE）、`muliao`（组合根，二进制 `muliao`）、`migrate`（旧库迁移，二进制 `muliao-migrate`） |
 
-规则（docs/architecture.md 2.3，由 Cargo 的依赖图保证）：
-- 只依赖更早一层的 crate；同层、反向需要的调用由组合根注入函数。Cargo 不允许循环依赖。
+规则（docs/architecture.md 2.3）：
+- 只依赖更早一层的 crate；同层、反向需要的调用由组合根注入函数。由 `crates/muliao/tests/layers.rs` 检查（层表在那里，新领域先在那里定层）。
+- 路径的身份只经 `platform::fs::real` 算，「在不在某目录下」、写沙箱规则只收它给的 `RealPath`。
 - 每个领域独占自己的表，迁移是自己 crate 里的一串 SQL（`platform::db::Migration`，按领域记版本），领域之间只用 id 引用，没有跨领域外键。
 - 写事务经 `platform::db::Database::write`：同步闭包，在单写者线程上串行执行，里面不能 await。
 - agent 的命令只经 `platform::shell` 起；以哪个 agent 的身份（secret、可写路径）由工作区领域拼好交进来。

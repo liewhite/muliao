@@ -192,7 +192,11 @@ pub async fn run_bash(cmd: &Command<'_>, timeout: Duration, stdin: Option<Vec<u8
                 // 已回收：进程组 id 可能被复用，之后不再杀它
                 guard.0 = None;
                 if !read_done {
-                    read_done = tokio::time::timeout(DRAIN, &mut reads).await.map(|r| r.is_ok()).unwrap_or(false);
+                    // 读出错照常报出；只有到时没读完才算「后代占着管道」
+                    if let Ok(r) = tokio::time::timeout(DRAIN, &mut reads).await {
+                        r?;
+                        read_done = true;
+                    }
                 }
                 let code = status.code().unwrap_or_else(|| -status.signal().unwrap_or(0));
                 (Some(code), read_done)

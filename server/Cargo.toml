@@ -16,7 +16,9 @@ axum = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
 croner = "4"
-fernet = "0.2"
+# 纯 Rust 实现：不动态链接 Homebrew 的 OpenSSL（brew upgrade 换代后服务会起不来）
+fernet = { version = "0.2", default-features = false, features = ["rustcrypto"] }
+caseless = "0.2"
 libc = "0.2"
 notify = "8"
 rusqlite = { version = "0.42", features = ["bundled", "chrono"] }

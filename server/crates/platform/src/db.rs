@@ -10,7 +10,6 @@
 //! - **迁移**：每个领域一串 SQL（[`Migration`]），各自记版本，启动时在一个事务里全部升到最新（[`migrate`]）。
 
 use std::any::Any;
-use std::collections::HashSet;
 use std::ops::{Deref, DerefMut};
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::path::{Path, PathBuf};
@@ -66,8 +65,8 @@ fn configure(conn: &Connection) -> rusqlite::Result<()> {
 }
 
 impl Database {
-    /// 打开数据库（应已经 [`migrate`] 过），起写线程。要在 tokio 运行时里调用：写线程进入这个运行时，[`Tx::on_commit`] 里
-    /// 可以 `tokio::spawn`。
+    /// 打开数据库（应已经 [`migrate`] 过），起写线程。必须在 tokio 运行时里调用（否则 panic）：写线程进入这个运行时，
+    /// [`Tx::on_commit`] 里可以 `tokio::spawn`。
     pub fn open(path: &Path, after_write: AfterWrite) -> rusqlite::Result<Self> {
         let mut conn = Connection::open(path)?;
         let mode: String = conn.pragma_update_and_check(None, "journal_mode", "WAL", |r| r.get(0))?;
@@ -76,11 +75,11 @@ impl Database {
         }
         configure(&conn)?;
         let (sender, jobs) = mpsc::channel::<Job>();
-        let runtime = tokio::runtime::Handle::try_current().ok();
+        let runtime = tokio::runtime::Handle::current();
         std::thread::Builder::new()
             .name("muliao-db-writer".into())
             .spawn(move || {
-                let _entered = runtime.as_ref().map(|r| r.enter());
+                let _entered = runtime.enter();
                 // 所有 Database 句柄都 drop 后 recv 失败，线程结束；排在前面的事务照常做完
                 while let Ok(job) = jobs.recv() {
                     job(&mut conn);
@@ -90,7 +89,11 @@ impl Database {
         Ok(Self { path: path.to_path_buf(), writer: sender, readers: Arc::default(), after_write })
     }
 
-    /// 在写线程上跑一个写事务：f 返回 Ok 提交，Err 回滚；f panic 时回滚并在调用方重新 panic。
+    /// 在写线程上跑一个写事务：f 返回 Ok 提交，Err 回滚；f panic 时回滚并在调用方重新 panic。提交后的 after_write 或
+    /// on_commit 动作 panic 时数据已经提交，后面登记的动作不再执行，panic 照样交回调用方。
+    ///
+    /// 调用方被取消时立即返回，事务在写线程上照常做完（或回滚），之后的写排在它后面。要依据现状做决定的（查了再改），
+    /// 查和改都放在同一个闭包里，不要先用 [`Database::read`] 读再来写：两次之间别的事务可能改了它。
     pub async fn write<T, E, F>(&self, f: F) -> Result<T, E>
     where
         F: FnOnce(&mut Tx<'_>) -> Result<T, E> + Send + 'static,
@@ -173,8 +176,6 @@ pub struct Migration {
 pub enum MigrateError {
     #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
-    #[error("domain {0:?} is listed twice")]
-    Duplicate(&'static str),
     #[error(
         "domain {domain:?} is at version {found} in the database but the code only knows {known}: the database is newer than this build"
     )]
@@ -191,12 +192,6 @@ pub enum MigrateError {
 /// 迁移连接关掉外键（重建表时「建新表-拷数据-删旧表」，开着外键删旧表会级联删掉子表数据；PRAGMA foreign_keys 在事务里
 /// 无效，所以在开事务前关），提交前做一次 foreign_key_check。
 pub fn migrate(path: &Path, domains: &[Migration]) -> Result<(), MigrateError> {
-    let mut seen = HashSet::new();
-    for m in domains {
-        if !seen.insert(m.domain) {
-            return Err(MigrateError::Duplicate(m.domain));
-        }
-    }
     let mut conn = Connection::open(path)?;
     conn.pragma_update(None, "foreign_keys", false)?;
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -270,7 +265,6 @@ mod tests {
         assert_eq!(tables, 0, "a failed migration leaves nothing behind");
         const OLD: Migration = Migration { domain: "notes", steps: &["CREATE TABLE notes (id INTEGER PRIMARY KEY)"] };
         assert!(matches!(migrate(&path, &[OLD]), Err(MigrateError::Newer { .. })));
-        assert!(matches!(migrate(&path, &[NOTES, NOTES]), Err(MigrateError::Duplicate("notes"))));
     }
 
     #[tokio::test(flavor = "multi_thread")]

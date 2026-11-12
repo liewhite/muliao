@@ -16,23 +16,56 @@ use crate::errors::DomainError;
 /// 解析符号链接时最多跟几层，超过按循环链接处理：原样保留，之后的 stat 自然失败（同 Python 的 realpath）
 const MAX_LINKS: usize = 40;
 
+/// 一个路径的身份（[`real`] / [`real_nofollow`] 算出的）。只能由这两个函数构造，所以收它的接口（「在不在某目录下」
+/// [`is_within`]、写沙箱的规则）拿到的一定是算过身份的路径，换个大小写或经符号链接绕不过去。
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RealPath(PathBuf);
+
+impl RealPath {
+    /// 认不出身份时按字面写法当作身份（只给 #624 那种「一条规则认不出只影响这一条」的场合用）。
+    pub(crate) fn assumed(path: PathBuf) -> Self {
+        Self(path)
+    }
+
+    pub fn as_path(&self) -> &Path {
+        &self.0
+    }
+
+    pub fn into_path_buf(self) -> PathBuf {
+        self.0
+    }
+}
+
+impl std::ops::Deref for RealPath {
+    type Target = Path;
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl AsRef<Path> for RealPath {
+    fn as_ref(&self) -> &Path {
+        &self.0
+    }
+}
+
 /// 路径的身份：绝对路径，解析符号链接，每一段换成盘上的真实写法（大小写、正规化形式）。两个路径指同一个文件当且仅当
-/// `real` 相等；「在某目录下」按 `real` 比。不存在的部分保持原样拼在最近的存在的上级后面。
+/// `real` 相等；「在某目录下」按 `real` 比（[`is_within`]）。不存在的部分保持原样拼在最近的存在的上级后面。
 ///
 /// 只在系统拒绝打开路径上的某一级、又认不出它在盘上的写法时报错，不退回给的写法。
-pub fn real(path: impl AsRef<Path>) -> io::Result<PathBuf> {
+pub fn real(path: impl AsRef<Path>) -> io::Result<RealPath> {
     let absolute = std::path::absolute(path.as_ref())?;
-    on_disk(realpath(&absolute))
+    on_disk(realpath(&absolute)).map(RealPath)
 }
 
 /// 同 [`real`]，但不解析最后一段：链接本身的身份。
-pub fn real_nofollow(path: impl AsRef<Path>) -> io::Result<PathBuf> {
+pub fn real_nofollow(path: impl AsRef<Path>) -> io::Result<RealPath> {
     let absolute = normalize(&std::path::absolute(path.as_ref())?);
     let resolved = match (absolute.parent(), absolute.file_name()) {
         (Some(parent), Some(name)) => realpath(parent).join(name),
         _ => realpath(&absolute),
     };
-    on_disk(resolved)
+    on_disk(resolved).map(RealPath)
 }
 
 /// 词法上去掉 `.` 与 `..`（同 Python 的 os.path.abspath）。
@@ -164,8 +197,9 @@ mod macos {
         Ok(PathBuf::from(OsStr::from_bytes(&buf[..len])))
     }
 
+    /// 不分大小写与正规化形式的比较键（同 Python 的 NFD + casefold）
     fn fold(name: &OsStr) -> String {
-        name.to_string_lossy().nfd().collect::<String>().to_lowercase()
+        caseless::default_case_fold_str(&name.to_string_lossy().nfd().collect::<String>())
     }
 
     /// directory 里叫 name 的那一项在盘上的写法；不存在为 None。目录列不出（只有 x 没有 r 权限）时打开这一项本身取内核
@@ -201,14 +235,20 @@ mod macos {
     }
 }
 
-/// path（或它最终指向的）在 root 里（就是 root 或在它下面），按 [`real`] 比。两边都应是 real 过的路径。
-pub fn is_within(root: &Path, path: &Path) -> bool {
-    path.starts_with(root)
+/// path 在 root 里：就是 root，或在它下面（按路径段比，两边都是算过身份的）。
+pub fn is_within(root: &RealPath, path: &RealPath) -> bool {
+    path.0.starts_with(&root.0)
+}
+
+impl PartialEq<PathBuf> for RealPath {
+    fn eq(&self, other: &PathBuf) -> bool {
+        &self.0 == other
+    }
 }
 
 /// root 下的相对 posix 路径 rel 的身份，必须仍在 root 内（按 real 比，经符号链接走出去也不行）；不查是否存在。
 /// 界面只读浏览目录、找 skill 脚本用：只防误走出去，不是安全隔离。
-pub fn resolve_within(root: &Path, rel: &str) -> Result<PathBuf, DomainError> {
+pub fn resolve_within(root: &Path, rel: &str) -> Result<RealPath, DomainError> {
     if rel.contains('\0') {
         return Err(DomainError::invalid(format!("path contains a NUL character: {rel:?}")));
     }
@@ -224,13 +264,17 @@ pub fn resolve_within(root: &Path, rel: &str) -> Result<PathBuf, DomainError> {
     Ok(target)
 }
 
-/// 读 UTF-8 文本，换行符原样保留。不是 UTF-8 时报 InvalidData，说明在哪个字节。
+/// 读 UTF-8 文本，换行符原样保留。不是 UTF-8 时报 InvalidData，说明在哪个字节（文件工具把它当调用方的错交还模型）。
 pub fn read_text(path: &Path) -> io::Result<String> {
     let data = fs::read(path)?;
     String::from_utf8(data).map_err(|e| {
         io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("{} is not UTF-8 text (invalid byte at offset {})", path.display(), e.utf8_error().valid_up_to()),
+            format!(
+                "{} is not UTF-8 text (invalid byte at offset {}); it can only be changed with a command",
+                path.display(),
+                e.utf8_error().valid_up_to()
+            ),
         )
     })
 }
