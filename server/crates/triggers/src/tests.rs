@@ -499,6 +499,9 @@ async fn corrupt_stored_state_disables_only_that_trigger() {
     let bad = w.get(bad.id).await;
     assert!(!bad.enabled);
     assert!(bad.disabled_reason.unwrap().contains("invalid stored state"));
+    // 列表照常：坏的那一行的状态是报错
+    let listed: Value = serde_json::from_str(&w.call("trigger_list", json!({})).await.unwrap()).unwrap();
+    assert!(listed[0]["status"]["error"].as_str().unwrap().contains("invalid stored state"), "{listed}");
     assert_eq!(w.sessions(good.id).await.len(), 1);
 }
 

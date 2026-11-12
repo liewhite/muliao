@@ -10,6 +10,9 @@ pub enum Error {
     /// 这个触发器存下的配置或状态与代码的约定对不上（只经 configure 写入，现在读不懂）：只停用这一个，原因给用户看
     #[error("{0}")]
     Corrupt(String),
+    /// 代码自己的不变式被破坏（如刚确认过能运行的 agent 又拒信）：契约外的失败，让人看见
+    #[error("{0}")]
+    Broken(String),
     #[error("database error: {0}")]
     Db(#[from] rusqlite::Error),
     #[error(transparent)]

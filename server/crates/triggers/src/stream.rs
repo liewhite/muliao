@@ -25,7 +25,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use muliao_notifications::{Notifications, Notify};
-use muliao_platform::shell::{DRAIN, Output, Spawned, kill_group, redact};
+use muliao_platform::shell::{DRAIN, KillOnDrop, Output, Spawned, kill_group, redact};
 use muliao_workspace::commands::{AgentCommands, Options};
 use muliao_workspace::output::{record_output, tail};
 use serde::{Deserialize, Serialize};
@@ -53,6 +53,8 @@ const BUSY_POLL: Duration = Duration::from_secs(2);
 const ERROR_TAIL_CHARS: usize = 2000;
 const LOG_MAX_BYTES: u64 = 1024 * 1024;
 const LOG_DIR: &str = "trigger-logs";
+/// 对账时列不出触发器（数据库出错）隔多久再试
+const RECONCILE_RETRY: Duration = Duration::from_secs(10);
 const CHUNK: usize = 65536;
 
 fn default_debounce() -> f64 {
@@ -297,17 +299,6 @@ struct Record {
     fault: Option<String>,
 }
 
-/// 被取消（停用、删除、改配置、关停）或意外失败时不留下还在跑的命令：drop 时杀掉整个进程组。
-struct GroupGuard(Option<i32>);
-
-impl Drop for GroupGuard {
-    fn drop(&mut self) {
-        if let Some(pgid) = self.0 {
-            kill_group(pgid);
-        }
-    }
-}
-
 /// 节奏（测试改短）。
 #[derive(Clone, Copy)]
 pub struct Timing {
@@ -352,21 +343,24 @@ impl StreamRunner {
             let mut changed = self.service.watch();
             loop {
                 changed.borrow_and_update();
-                self.reconcile().await;
-                if changed.changed().await.is_err() {
-                    return;
+                // 列不出来（数据库出错）时不干等下一次改动：过一会儿自己重试
+                let reconciled = self.reconcile().await;
+                tokio::select! {
+                    r = changed.changed() => if r.is_err() { return },
+                    _ = tokio::time::sleep(RECONCILE_RETRY), if !reconciled => {}
                 }
             }
         })
     }
 
-    async fn reconcile(self: &Arc<Self>) {
+    /// 对账一次；列不出触发器时返回 false。
+    async fn reconcile(self: &Arc<Self>) -> bool {
         let listing = Listing { kind: Some(KIND.into()), enabled_only: true, ..Listing::default() };
         let wanted: HashMap<i64, Spec> = match self.service.list(listing).await {
             Ok(ts) => ts.iter().map(|t| (t.id, Spec::of(t))).collect(),
             Err(e) => {
-                tracing::error!(error = %e, "listing stream triggers failed; reconciling on the next change");
-                return;
+                tracing::error!(error = %e, "listing stream triggers failed; retrying");
+                return false;
             }
         };
         let mut running = self.running.lock().expect("running lock");
@@ -388,6 +382,7 @@ impl StreamRunner {
                 running.insert(id, (spec, handle));
             }
         }
+        true
     }
 
     /// 关停：杀掉全部托管的命令（等它们的任务收尾）。
@@ -457,8 +452,8 @@ impl StreamRunner {
             Ok(s) => s,
             Err(e) => return (format!("stream supervision failed: cannot start the command: {e}"), false),
         };
-        // spawn 之后的任何一步（包括在这里被取消）都要杀掉进程组
-        let mut guard = GroupGuard(Some(pgid));
+        // spawn 之后的任何一步（包括被取消：停用、删除、改配置、关停）都要杀掉进程组
+        let mut guard = KillOnDrop(Some(pgid));
         tracing::info!(trigger = %spec.name, pid = pgid, "stream started");
         self.record(spec, Record { running_since: Some(Some(Utc::now())), ..Record::default() }).await;
         let mut stderr = stderr.expect("stderr is not merged");
@@ -594,23 +589,23 @@ impl StreamRunner {
         loop {
             let (trigger_id, queued, already) = (spec.trigger_id, pending.len(), notified.clone());
             let notifications = self.notifications.clone();
+            // 先只读；只有要通知时才开写事务（忙的时候每轮都查，不占写线程）
             let blocking = self
                 .service
                 .db()
-                .write(move |tx| {
-                    let Some(t) = load_in(tx, trigger_id)? else { return Ok::<_, Error>(None) };
-                    let Some((session_id, busy)) = busy_previous_in(tx, &t)? else { return Ok(None) };
-                    let notify = busy == Busy::Waiting && already.as_deref() != Some(session_id.as_str());
-                    if notify {
-                        notifications.notify_in(tx, &waiting_notice(&t, queued, &session_id))?;
-                    }
-                    Ok(Some((session_id, notify)))
+                .read(move |c| {
+                    let Some(t) = load_in(c, trigger_id)? else { return Ok::<_, Error>(None) };
+                    Ok(busy_previous_in(c, &t)?.map(|(session_id, busy)| (t, session_id, busy)))
                 })
                 .await?;
-            match blocking {
-                None => return Ok(()),
-                Some((session_id, true)) => *notified = Some(session_id),
-                Some(_) => {}
+            let Some((t, session_id, busy)) = blocking else { return Ok(()) };
+            if busy == Busy::Waiting && already.as_deref() != Some(session_id.as_str()) {
+                let sid = session_id.clone();
+                self.service
+                    .db()
+                    .write(move |tx| notifications.notify_in(tx, &waiting_notice(&t, queued, &sid)))
+                    .await?;
+                *notified = Some(session_id);
             }
             tokio::time::sleep(self.timing.busy_poll).await;
         }

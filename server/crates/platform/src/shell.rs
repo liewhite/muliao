@@ -122,8 +122,8 @@ pub struct ShellResult {
     pub left_running: bool,
 }
 
-/// 被取消（future 被 drop）时杀掉还在跑的命令
-struct KillOnDrop(Option<i32>);
+/// 被取消（future 被 drop）时杀掉还在跑的命令的进程组。进程已被回收、不该再杀时把它置为 None。
+pub struct KillOnDrop(pub Option<i32>);
 
 impl Drop for KillOnDrop {
     fn drop(&mut self) {

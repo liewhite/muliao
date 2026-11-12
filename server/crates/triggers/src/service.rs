@@ -124,6 +124,12 @@ enum Outcome {
     CheckFailed(String),
 }
 
+/// 触发的第一个事务的结果：已经有结果了，或要先在事务外跑前置检查。
+enum First {
+    Done(Outcome),
+    Check { agent_id: String, precheck: Precheck },
+}
+
 /// 谁在触发：决定前置检查失败怎么处理。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum By {
@@ -133,12 +139,14 @@ enum By {
     Activation,
 }
 
-/// 触发器的读模型（HTTP 层与工具共用）：行、它的方式给出的运行状态、上一次触发开出的会话（已删除时 None）。
+/// 触发器的读模型（HTTP 层与工具共用）：行、它的方式给出的运行状态（存下的状态坏了时是 `{"error": 原因}`，一行坏数据
+/// 不连累整个列表）、上一次触发开出的、还在的会话。
 #[derive(Debug, Clone)]
 pub struct TriggerView {
     pub trigger: Trigger,
     pub status: Value,
-    pub last_session_id: Option<String>,
+    /// 上一次触发开出的会话，已删除时 None（`trigger.last_session_id` 是记下的原值）
+    pub live_session_id: Option<String>,
 }
 
 /// 新建一个触发器。
@@ -267,8 +275,11 @@ impl TriggerService {
                             Some(id) => states.next().flatten().map(|_| id.clone()),
                             None => None,
                         };
-                        let status = kinds.get(&t.kind)?.status(&t)?;
-                        Ok(TriggerView { trigger: t, status, last_session_id: alive })
+                        let status = match kinds.get(&t.kind)?.status(&t) {
+                            Err(Error::Corrupt(e)) => serde_json::json!({ "error": e }),
+                            other => other?,
+                        };
+                        Ok(TriggerView { trigger: t, status, live_session_id: alive })
                     })
                     .collect()
             })
@@ -497,24 +508,22 @@ impl TriggerService {
             .db
             .write(move |tx| {
                 let Some(mut t) = load_in(tx, trigger_id)? else {
-                    return Ok::<_, Error>(Err(Outcome::Skipped(
-                        Skip::Deleted,
-                        format!("trigger {trigger_id} not found"),
-                    )));
+                    let detail = format!("trigger {trigger_id} not found");
+                    return Ok::<_, Error>(First::Done(Outcome::Skipped(Skip::Deleted, detail)));
                 };
                 // 停用、归档的 agent 不跑前置检查、不触发；检查结束后投信前再查一次（检查期间可能被归档）
                 if let Some((why, detail)) = skip_in(tx, &t)? {
-                    return Ok(Err(Outcome::Skipped(why, detail)));
+                    return Ok(First::Done(Outcome::Skipped(why, detail)));
                 }
                 match t.precheck.clone() {
-                    None => Ok(Err(Outcome::Fired(this.deliver_in(tx, &mut t, event.as_deref())?))),
-                    Some(p) => Ok(Ok((t.agent_id.clone(), p))),
+                    None => Ok(First::Done(Outcome::Fired(this.deliver_in(tx, &mut t, event.as_deref())?))),
+                    Some(precheck) => Ok(First::Check { agent_id: t.agent_id.clone(), precheck }),
                 }
             })
             .await?;
         let (agent_id, precheck) = match first {
-            Err(outcome) => return Ok(outcome),
-            Ok(check) => check,
+            First::Done(outcome) => return Ok(outcome),
+            First::Check { agent_id, precheck } => (agent_id, precheck),
         };
         let checked = self.0.precheck.run(&agent_id, &precheck, payload.as_deref()).await?;
         let record = by == By::Activation;
@@ -590,7 +599,7 @@ impl TriggerService {
             Ok(accepted) => accepted.session_id,
             // 新会话只看 agent 能不能运行，同一事务里刚由 skip_in 确认过
             Err(refused) => {
-                return Err(Error::Corrupt(format!(
+                return Err(Error::Broken(format!(
                     "trigger {:?}: its own agent refused after the check: {}",
                     t.name, refused.detail
                 )));

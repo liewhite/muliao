@@ -54,7 +54,7 @@ fn info(view: TriggerView, names: &AgentNames) -> TriggerInfo {
         precheck: t.precheck,
         disabled_reason: t.disabled_reason,
         faults: t.faults,
-        last_session_id: view.last_session_id,
+        last_session_id: view.live_session_id,
         finished_at: t.finished_at,
     }
 }

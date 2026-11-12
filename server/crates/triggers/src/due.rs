@@ -20,6 +20,8 @@ use crate::store::{Listing, load_in, save_in};
 
 /// 没有更早到期的也至少这么久醒一次
 const MAX_SLEEP: Duration = Duration::from_secs(60);
+/// 两轮至少隔这么久：消耗写不进去（磁盘满）时它仍到期，不能零间隔空转刷日志
+const MIN_SLEEP: Duration = Duration::from_secs(1);
 
 pub struct DueRunner {
     service: TriggerService,
@@ -167,6 +169,6 @@ impl DueRunner {
             .into_iter()
             .map(|(_, at)| (at - now).to_std().unwrap_or(Duration::ZERO))
             .min()
-            .map_or(MAX_SLEEP, |d| d.min(MAX_SLEEP))
+            .map_or(MAX_SLEEP, |d| d.clamp(MIN_SLEEP, MAX_SLEEP))
     }
 }
