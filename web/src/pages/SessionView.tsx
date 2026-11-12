@@ -471,6 +471,13 @@ function MailNote({ mail, ctx }: { mail: Mail; ctx: SessionContext }) {
   )
 }
 
+/** 运行中的提示：出过暂时性的错时说在重试；下次尝试的时间已过（正在重试）就不写时间 */
+function retryText(retrying: Retrying | null): string {
+  if (retrying === null) return '运行中…'
+  if (Date.parse(retrying.next_at) <= Date.now()) return '出错了，正在重试…'
+  return `出错了，自动重试中（下次 ${formatTime(retrying.next_at)}）`
+}
+
 /** 最近一次运行还没正常结束：在跑（出过暂时性的错时显示它与下次尝试的时间），或最终失败（可重试）。手动压缩不算在内（接口不给） */
 function RunStatus({ run, retrying, onRetry }: { run: RunRecord; retrying: Retrying | null; onRetry: () => void }) {
   if (run.outcome === 'failed') {
@@ -490,7 +497,7 @@ function RunStatus({ run, retrying, onRetry }: { run: RunRecord; retrying: Retry
   return (
     <div className="flex flex-col items-end gap-1 self-end text-xs text-muted">
       <div className="flex items-center gap-2">
-        <Spinner size="sm" /> {retrying ? `出错了，自动重试中（下次 ${formatTime(retrying.next_at)}）` : '运行中…'}
+        <Spinner size="sm" /> {retryText(retrying)}
       </div>
       {retrying && <div className="max-w-full break-all text-danger">上次错误：{retrying.error}</div>}
     </div>
