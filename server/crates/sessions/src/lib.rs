@@ -21,6 +21,7 @@ pub mod live;
 pub mod mailbox;
 pub mod origins;
 pub mod pending;
+pub mod recall;
 pub mod run;
 pub mod runs;
 pub mod service;

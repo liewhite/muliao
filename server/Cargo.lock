@@ -1779,12 +1779,24 @@ dependencies = [
 name = "muliao-history"
 version = "0.1.0"
 dependencies = [
+ "agenter",
+ "chrono",
+ "chrono-tz",
+ "futures",
  "muliao-assets",
+ "muliao-files",
  "muliao-issues",
  "muliao-platform",
  "muliao-runtime",
  "muliao-sessions",
- "muliao-triggers",
+ "regex",
+ "rusqlite",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
 ]
 
 [[package]]

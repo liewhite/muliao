@@ -7,10 +7,25 @@ publish.workspace = true
 [dependencies]
 muliao-platform = { workspace = true }
 muliao-assets = { workspace = true }
-muliao-runtime = { workspace = true }
 muliao-sessions = { workspace = true }
 muliao-issues = { workspace = true }
-muliao-triggers = { workspace = true }
+agenter = { workspace = true }
+chrono = { workspace = true }
+chrono-tz = { workspace = true }
+# session_read 的 grep（只有这里用）
+regex = "1"
+rusqlite = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+muliao-files = { workspace = true }
+muliao-runtime = { workspace = true }
+futures = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true }
 
 [lints]
 workspace = true
