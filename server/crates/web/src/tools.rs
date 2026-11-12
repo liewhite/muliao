@@ -1,16 +1,17 @@
-//! web 工具组：`web_search`、`web_fetch`，经 [`WebProvider`] 完成。对运行方的依赖（`C`）没有要求。
+//! web 工具组：`web_search`、`web_fetch`，经 [`WebProvider`] 完成（[`tools`] 带着声明交给运行端口）。
 
 use std::sync::Arc;
 
 use agenter::{Tool, ToolCtx, ToolError, ToolOutput};
 use muliao_platform::text::truncate;
+use muliao_platform::tool_views::{Link, ToolRender, ViewBlock, fields};
+use muliao_platform::tooling::{BuiltinTool, ToolTraits, builtin};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::{WebError, WebProvider};
+use crate::{SearchHit, WebError, WebProvider};
 
-/// 交还模型的按「请重试」交回（同 Python 把 InvalidInput 当 ModelRetry：有连续次数上限，超了提示换做法）。
-/// 各领域错误到工具错误的统一规则由运行端口（#679）定，这里与它保持一致。
+/// 按 platform::tooling 的统一规则：交还模型的按「请重试」、暂时不可用的按暂时性失败、其余让这次运行失败。
 impl From<WebError> for ToolError {
     fn from(e: WebError) -> Self {
         match e {
@@ -19,6 +20,27 @@ impl From<WebError> for ToolError {
             WebError::Failed(reason) => ToolError::Abort(reason.into()),
         }
     }
+}
+
+/// web 工具组（配置了 `[web]` 才有）。max_chars：网页正文最多给模型多少字符（配置 runtime.tool_output_max_chars）。
+pub fn tools(web: Arc<dyn WebProvider>, max_chars: usize) -> Vec<BuiltinTool> {
+    let search = ToolRender::new()
+        .call(|a: &SearchArgs| Some(vec![fields([("query", a.query.as_str().into())])]))
+        .result_json(|hits: &Vec<SearchHit>| {
+            let links = hits
+                .iter()
+                .map(|h| Link { title: h.title.clone(), url: h.url.clone(), summary: Some(h.summary.clone()) })
+                .collect();
+            Some(vec![ViewBlock::Links { links }])
+        });
+    // 网页内容不按 Markdown 渲染（里面的图片会让浏览器去加载外部地址），结果显示原文
+    let fetch = ToolRender::new().call(|a: &FetchArgs| {
+        Some(vec![ViewBlock::Links { links: vec![Link { title: a.url.clone(), url: a.url.clone(), summary: None }] }])
+    });
+    vec![
+        builtin(WebSearch { web: web.clone() }, ToolTraits::read().render(search)),
+        builtin(WebFetch { web, max_chars }, ToolTraits::read().render(fetch)),
+    ]
 }
 
 fn default_limit() -> u32 {
@@ -147,6 +169,15 @@ mod tests {
         assert!(matches!(call(&search, r#"{"query":"down"}"#).await, Err(ToolError::Unavailable(_))));
 
         assert_eq!(call(&fetch, r#"{"url":"x"}"#).await.unwrap(), "# T\n\n012…[truncated: 7 more chars]");
+
+        // 带着声明交给运行端口：都是读工具，搜索结果画成链接
+        let declared = tools(Arc::new(Fake), 8);
+        assert!(declared.iter().all(|t| t.traits.access == muliao_platform::tooling::ToolAccess::Read));
+        let render = declared[0].traits.render.as_ref().unwrap();
+        let text = call(&search, r#"{"query":"q"}"#).await.unwrap();
+        let view = render.result_view("web_search", &text);
+        let Some([ViewBlock::Links { links }]) = view.as_deref() else { panic!("{view:?}") };
+        assert_eq!(links[0].title, "q:10");
         assert!(matches!(call(&fetch, r#"{"url":"missing"}"#).await, Err(ToolError::Retry(r)) if r == "gone"));
     }
 }

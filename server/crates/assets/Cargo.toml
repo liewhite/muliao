@@ -6,10 +6,12 @@ publish.workspace = true
 
 [dependencies]
 muliao-platform = { workspace = true }
+agenter = { workspace = true }
 caseless = { workspace = true }
 chrono = { workspace = true }
 notify = { workspace = true }
 rusqlite = { workspace = true }
+schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

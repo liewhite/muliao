@@ -12,9 +12,10 @@ use std::sync::Arc;
 
 use futures::future::BoxFuture;
 use muliao_platform::config::{WebConfig, WebProviderType};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// 交给模型的是它的 JSON；界面展示时从那段 JSON 还原（Deserialize）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SearchHit {
     pub title: String,
     pub url: String,

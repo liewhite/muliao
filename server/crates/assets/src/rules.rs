@@ -33,12 +33,8 @@ impl Action {
     }
 }
 
-/// 内置工具读还是写（工具自己声明）
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ToolAccess {
-    Read,
-    Write,
-}
+/// 内置工具读还是写（工具自己声明，定义在平台层的工具契约里）
+pub use muliao_platform::tooling::ToolAccess;
 
 /// 一个内置工具在分发里的样子：名字、读 / 写、是否管理类（base 不含，只经 admin 角色或显式规则给出）。
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -5,6 +5,8 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+# 工具的共同契约（tooling）要用它的工具接口
+agenter = { workspace = true }
 caseless = { workspace = true }
 chrono = { workspace = true }
 chrono-tz = { workspace = true }
@@ -21,6 +23,8 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 unicode-normalization = { workspace = true }
 uuid = { workspace = true }
+# 只有这个 crate 用的：工具展示的 diff
+similar = "2"
 
 [lints]
 workspace = true

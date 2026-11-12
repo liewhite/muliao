@@ -9,7 +9,23 @@ muliao-platform = { workspace = true }
 muliao-assets = { workspace = true }
 muliao-files = { workspace = true }
 muliao-usage = { workspace = true }
-muliao-web = { workspace = true }
+agenter = { workspace = true }
+chrono = { workspace = true }
+chrono-tz = { workspace = true }
+futures = { workspace = true }
+reqwest = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+# 只有这个 crate 用的：发给模型前整理图片（解码、切段、缩放、重新编码）
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "tiff"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+wiremock = { workspace = true }
 
 [lints]
 workspace = true

@@ -25,6 +25,7 @@ notify = "8"
 # 出站 HTTP：rustls（不链接 OpenSSL），与 agenter 同一套
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls", "charset"] }
 rusqlite = { version = "0.42", features = ["bundled", "chrono", "fallible_uint"] }
+schemars = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = "3"
@@ -53,6 +54,14 @@ muliao-issues = { path = "crates/issues" }
 muliao-triggers = { path = "crates/triggers" }
 muliao-history = { path = "crates/history" }
 muliao-http = { path = "crates/http" }
+
+# 解码、缩放图片在未优化的构建里慢几十倍（长截图的测试要十几秒）
+[profile.dev.package.image]
+opt-level = 3
+[profile.dev.package.fdeflate]
+opt-level = 3
+[profile.dev.package.png]
+opt-level = 3
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
