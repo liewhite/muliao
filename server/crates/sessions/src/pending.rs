@@ -52,6 +52,26 @@ pub fn kind_of(call: &ToolCall, approvals: &HashSet<String>) -> Option<Waiting> 
     }
 }
 
+/// 一步停在挂起的调用上时（agenter 的 `Step::Paused`）各调用是哪一种，同 [`kind_of`]：挂起的只能是 ask_user、ask_agent，
+/// 请求批准的不能是它们（按工具名认的与按记录认的会认不清）。不符合是工具与这里的约定不一致。
+pub fn paused_calls(deferred: Vec<ToolCall>, approvals: Vec<ToolCall>) -> Result<Vec<PendingCall>> {
+    let none = HashSet::new();
+    let mut out = Vec::new();
+    for call in deferred {
+        match kind_of(&call, &none) {
+            Some(kind @ (Waiting::AskUser | Waiting::AskAgent)) => out.push(PendingCall { call, kind }),
+            _ => return Err(broken(format!("run deferred an unexpected tool call: {}", call.name))),
+        }
+    }
+    for call in approvals {
+        if kind_of(&call, &none).is_some() {
+            return Err(broken(format!("a deferred tool asked for approval: {}", call.name)));
+        }
+        out.push(PendingCall { call, kind: Waiting::Approval });
+    }
+    Ok(out)
+}
+
 /// 挂起调用的永久事实（其余由历史推导）：已经交出去的 ask_agent 调用（带 call_id 的占用），与停下来等批准的调用。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HandedOut {

@@ -38,7 +38,7 @@ use crate::compaction::{Compactor, Verdict};
 use crate::content::{Content, append_content, content_of, request_of};
 use crate::conventions::{
     MadeUp, answer_text, attach_run_context, interrupted_response, is_stopped, made_up_result, results_request,
-    set_finished_at,
+    set_finished_at, unanswered_calls,
 };
 use crate::directory::{self, Session};
 use crate::error::{Error, Result, broken};
@@ -47,7 +47,7 @@ use crate::history::{self, SessionContext, Stored};
 use crate::live::{DeltaType, Live};
 use crate::mailbox::{Mail, consume_in, consumed_by_in, give_in, queued_in};
 use crate::origins::OriginNotes;
-use crate::pending::{Paused, Position, deferred_results};
+use crate::pending::{Paused, PendingCall, Position, deferred_results, paused_calls};
 use crate::runs::{self, Outcome, RunKind};
 use crate::settlement::{delegated_in, settle_finished_in};
 use crate::transcript::{call_item, result_item};
@@ -141,22 +141,18 @@ pub(crate) struct RunEnd {
 }
 
 /// 停在这些挂起的调用上：提问的问题、等批准的调用要告诉用户。
-fn paused_end(calls: &[ToolCall], gated: &[ToolCall]) -> RunEnd {
+fn paused_end(calls: &[PendingCall]) -> RunEnd {
     let mut texts = Vec::new();
-    let questions: Vec<_> = calls.iter().flat_map(|c| questions_of(&c.args)).collect();
+    let questions: Vec<_> =
+        calls.iter().filter(|c| c.kind == Waiting::AskUser).flat_map(|c| questions_of(&c.call.args)).collect();
     if !questions.is_empty() {
         texts.push(questions_waiting_text(&questions));
     }
+    let gated: Vec<String> = calls.iter().filter(|c| c.kind == Waiting::Approval).map(|c| brief(&c.call)).collect();
     if !gated.is_empty() {
-        texts.push(approvals_waiting_text(&gated.iter().map(brief).collect::<Vec<_>>()));
+        texts.push(approvals_waiting_text(&gated));
     }
-    let mut waiting: BTreeSet<Waiting> = BTreeSet::new();
-    for c in calls {
-        waiting.insert(if c.name == crate::pending::ASK_USER { Waiting::AskUser } else { Waiting::AskAgent });
-    }
-    if !gated.is_empty() {
-        waiting.insert(Waiting::Approval);
-    }
+    let waiting: BTreeSet<Waiting> = calls.iter().map(|c| c.kind).collect();
     RunEnd { answer: texts.join("\n"), stopped: false, waiting_on: waiting.into_iter().collect() }
 }
 
@@ -214,7 +210,6 @@ pub(crate) async fn execute(
         context: begun.context.clone(),
         run_context_row: None,
         compaction_exhausted: false,
-        saved_any: false,
     };
     // 上下文超过阈值时先压缩：放在确认有要交给模型的之后、交出信件与批准之前
     if driver.compaction_due() {
@@ -322,11 +317,7 @@ async fn opening(core: &Core, begun: &Begun) -> Result<Option<Opening>> {
 /// 之前的尝试已经跑完、只差收尾：从保存的历史与它停在哪得出它怎么结束的。
 fn settled_end(begun: &Begun) -> Result<RunEnd> {
     if let Some(p) = begun.at.paused() {
-        let calls: Vec<ToolCall> =
-            p.pending.iter().filter(|c| c.kind != Waiting::Approval).map(|c| c.call.clone()).collect();
-        let gated: Vec<ToolCall> =
-            p.pending.iter().filter(|c| c.kind == Waiting::Approval).map(|c| c.call.clone()).collect();
-        return Ok(paused_end(&calls, &gated));
+        return Ok(paused_end(&p.pending));
     }
     match begun.context.messages.last() {
         Some(Message::Assistant(r)) => Ok(RunEnd { answer: answer_text(r), stopped: false, waiting_on: Vec::new() }),
@@ -399,7 +390,6 @@ struct Driver<'a> {
     run_context_row: Option<i64>,
     /// 压缩不下去了：这次运行不再因为上下文大小停下
     compaction_exhausted: bool,
-    saved_any: bool,
 }
 
 /// 驱动的一步之后怎么走。
@@ -460,26 +450,29 @@ impl Driver<'_> {
                 // 新开：开头的内容自己成一条请求
                 let (content, mail) = first.take().expect("just set");
                 self.save_request(request_of(content), mail, notices).await?;
-                if let Some(r) = self.after_request(run, notices).await? {
+                if let Some(r) = self.after_request(notices).await? {
                     *run = r;
                 }
             }
         }
         loop {
+            // 下一步看最后一条回复里还有没有没出结果的调用，不看末尾消息的类型：停在挂起的调用上时，已做完的结果存在
+            // 回复之后，末尾是一条请求，可还有调用在等结局
+            let open = !unanswered_calls(&self.history)?.is_empty();
             let next = match self.history.last() {
                 None => return Err(broken("cannot run from an empty history").into()),
+                _ if open => self.tools(run, resolved.take(), first.take(), notices).await?,
                 Some(Message::User(_)) => self.request(run).await?,
-                Some(Message::Assistant(r)) if r.tool_calls().next().is_none() => {
+                Some(Message::Assistant(r)) => {
                     Next::End(RunEnd { answer: answer_text(r), stopped: false, waiting_on: Vec::new() })
                 }
-                Some(Message::Assistant(_)) => self.tools(run, resolved.take(), first.take(), notices).await?,
             };
             match next {
                 Next::End(end) => return Ok(end),
                 Next::Continue => {}
             }
             if matches!(self.history.last(), Some(Message::User(_)))
-                && let Some(r) = self.after_request(run, notices).await?
+                && let Some(r) = self.after_request(notices).await?
             {
                 *run = r;
             }
@@ -488,6 +481,9 @@ impl Driver<'_> {
 
     /// 停在挂起的调用上、能继续：开头取走的信件交给这次运行，被批准的调用记为已交给运行执行（之前交过的不再执行，给「被
     /// 中断」）；被问的 agent 挂给用户的文件挂到这次调用的结果上。
+    ///
+    /// 「交给过运行」单独一个事务提交（Python 与取走信件同一事务）：之后到这一步保存之间失败的，重试时这个批准给「被中断」、
+    /// 不执行——偏保守，不会重复执行，窗口只有交出回答到工具开始执行之间。
     async fn hand_over(&self, run: &Run, p: &Paused) -> Result<HashMap<String, Resolution>> {
         let (session_id, answers) = (self.session_id().to_owned(), p.answers.clone());
         let replaced = self.core.db.write(move |tx| crate::approvals::take_in(tx, &session_id, &answers)).await?;
@@ -570,7 +566,14 @@ impl Driver<'_> {
                         _ => None,
                     })
                     .collect();
-                let mut request = results_request(fresh(results)).unwrap_or_else(|| Request {
+                let results = fresh(results);
+                {
+                    // 整理好的结果换掉事件里的原样：保存之前被停止时停止事务存的就是它们
+                    let mut p = self.partial.lock().expect("partial lock");
+                    p.finished = results.clone();
+                    p.finished_at.clear();
+                }
+                let mut request = results_request(results).unwrap_or_else(|| Request {
                     parts: Vec::new(),
                     timestamp: Utc::now(),
                     metadata: None,
@@ -588,23 +591,31 @@ impl Driver<'_> {
             Step::Paused { results, deferred, approvals } => {
                 // 停在挂起的调用上：已做完的结果与这次新请求批准的调用同一个事务记下（分开提交时，进程在两者之间退出会留下
                 // 一个没有结果、又不算在等批准的调用）
-                if deferred.iter().any(|c| c.name != crate::pending::ASK_USER && c.name != crate::pending::ASK_AGENT) {
-                    return Err(broken(format!(
-                        "run deferred unexpected tool calls: {:?}",
-                        deferred.iter().map(|c| &c.name).collect::<Vec<_>>()
-                    ))
-                    .into());
-                }
-                let new: Vec<Message> = results_request(fresh(results)).map(Message::User).into_iter().collect();
                 let requested: Vec<(String, String)> =
                     approvals.iter().map(|(c, pin)| (c.id.clone(), pin.clone())).collect();
+                let pending = paused_calls(deferred, approvals.into_iter().map(|(c, _)| c).collect())?;
+                let mut request = results_request(fresh(results));
+                // 继续之后又停在挂起的调用上：开头取走的信也在这一步记为已处理，内容随结果存下（下次随它们交给模型）
+                let mail = match first {
+                    Some((content, mail)) => {
+                        let r = request.get_or_insert_with(|| Request {
+                            parts: Vec::new(),
+                            timestamp: Utc::now(),
+                            metadata: None,
+                        });
+                        append_content(r, content);
+                        mail
+                    }
+                    None => Vec::new(),
+                };
+                let new: Vec<Message> =
+                    request.filter(|r| !r.parts.is_empty()).map(Message::User).into_iter().collect();
                 let session_id = self.session_id().to_owned();
-                self.save_with(new, Vec::new(), Clear::Finished, move |tx| {
+                self.save_with(new, mail, Clear::Finished, move |tx| {
                     crate::approvals::record_in(tx, &session_id, &requested)
                 })
                 .await?;
-                let gated: Vec<ToolCall> = approvals.into_iter().map(|(c, _)| c).collect();
-                Ok(Next::End(paused_end(&deferred, &gated)))
+                Ok(Next::End(paused_end(&pending)))
             }
             other => Err(broken(format!("a tools step returned {other:?}")).into()),
         }
@@ -644,11 +655,7 @@ impl Driver<'_> {
     }
 
     /// 刚保存了一条请求：上下文超过阈值时压缩，从库里重新加载上下文续跑（新的摘要在指令里，所以重新组装这次运行）。
-    async fn after_request(
-        &mut self,
-        _run: &Arc<Run>,
-        notices: &mut Vec<String>,
-    ) -> std::result::Result<Option<Arc<Run>>, Failure> {
+    async fn after_request(&mut self, notices: &mut Vec<String>) -> std::result::Result<Option<Arc<Run>>, Failure> {
         if !self.compaction_due() {
             return Ok(None);
         }
@@ -728,7 +735,6 @@ impl Driver<'_> {
             .await?;
         self.history.extend(messages.iter().cloned());
         self.context.messages.extend(messages);
-        self.saved_any = true;
         Ok(ids)
     }
 

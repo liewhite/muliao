@@ -101,7 +101,7 @@ pub fn among_in(c: &Connection, session_ids: &[String]) -> Result<BTreeMap<Strin
 
 /// id 以它开头的会话，至多 limit 个（热历史的工具接受 id 前缀）。
 pub fn with_prefix_in(c: &Connection, prefix: &str, limit: usize) -> Result<Vec<Session>> {
-    let pattern = format!("{}%", prefix.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_"));
+    let pattern = like_pattern(prefix).trim_start_matches('%').to_owned();
     query(c, "id LIKE ?1 ESCAPE '\\' ORDER BY id LIMIT ?2", params![pattern, limit as i64])
 }
 

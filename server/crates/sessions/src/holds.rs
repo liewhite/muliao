@@ -139,35 +139,37 @@ pub fn active_delegations_in(c: &Connection, thread_call_ids: Option<&[i64]>) ->
     }
 }
 
-fn set_status(c: &Connection, hold_id: i64, status: HoldStatus) -> Result<()> {
-    c.execute(
-        "UPDATE session_holds SET status = ?1, ended_at = ?2 WHERE id = ?3",
+/// 把还 active 的占用改成 status（按库里的现状，不按调用方手里的副本）。返回改之前的状态。
+fn end_active(c: &Connection, hold_id: i64, status: HoldStatus) -> Result<HoldStatus> {
+    let n = c.execute(
+        "UPDATE session_holds SET status = ?1, ended_at = ?2 WHERE id = ?3 AND status = 'active'",
         params![status.as_str(), Utc::now(), hold_id],
     )?;
-    Ok(())
+    if n == 1 {
+        return Ok(HoldStatus::Active);
+    }
+    let now: String = c.query_row("SELECT status FROM session_holds WHERE id = ?1", [hold_id], |r| r.get(0))?;
+    HoldStatus::parse(&now)
 }
 
-/// 记为已释放，返回释放前的状态。已经被清掉的不变：调用方不再投信。
+/// 记为已释放，返回释放前的状态。已经被清掉或释放的不变：调用方按返回值决定。
 pub fn release_in(c: &Connection, hold: &Hold) -> Result<HoldStatus> {
-    if hold.status == HoldStatus::Active {
-        set_status(c, hold.id, HoldStatus::Released)?;
-    }
-    Ok(hold.status)
+    end_active(c, hold.id, HoldStatus::Released)
 }
 
 /// 会话自己放弃一项还在进行的工作（改期、取消到点唤醒、后台任务没起来）：记为 cleared，之后的结局不再投。
 pub fn abandon_in(c: &Connection, hold: &Hold) -> Result<()> {
-    if hold.status != HoldStatus::Active {
-        return Err(broken(format!("hold {} of session {} is not active", hold.id, hold.session_id)));
+    match end_active(c, hold.id, HoldStatus::Cleared)? {
+        HoldStatus::Active => Ok(()),
+        _ => Err(broken(format!("hold {} of session {} is not active", hold.id, hold.session_id))),
     }
-    set_status(c, hold.id, HoldStatus::Cleared)
 }
 
 /// 会话被停止：全部 active 占用记为 cleared，返回它们。
 pub fn clear_in(c: &Connection, session_id: &str) -> Result<Vec<Hold>> {
     let holds = query(c, "session_id = ?1 AND status = 'active' ORDER BY id", [session_id])?;
     for h in &holds {
-        set_status(c, h.id, HoldStatus::Cleared)?;
+        end_active(c, h.id, HoldStatus::Cleared)?;
     }
     Ok(holds)
 }

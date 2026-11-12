@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use crate::activity::WorkState;
 use crate::actor::{Actors, Waker};
 use crate::answers::AskArgs;
-use crate::delegation::{dispatch_in, send_in, threads_in, validate_thread};
+use crate::delegation::{Mode, send_in, threads_in, validate_thread};
 use crate::error::{Error, Result, invalid, not_found};
 use crate::halt::Halted;
 use crate::pending::{ASK_AGENT, ASK_USER};
@@ -92,10 +92,6 @@ impl Tool<RunScope> for AskUser {
 
 // ---- 委派 ----
 
-fn agent_id_named(c: &rusqlite::Connection, name: &str) -> Result<String> {
-    Ok(named_in(c, name)?.id)
-}
-
 #[derive(Deserialize, JsonSchema)]
 pub struct DelegateArgs {
     /// Target agent name from `list_agents`, or your own name.
@@ -155,12 +151,9 @@ impl Tool<RunScope> for DelegateTask {
             .db
             .write(move |tx| {
                 let target = named_in(tx, &agent)?;
-                if report_back {
-                    // 续跑重新执行这次调用时按调用 id 去重
-                    dispatch_in(tx, &waker, &parent, &target.id, &name, &task, &call, false, awaited, Some(check))?;
-                } else {
-                    send_in(tx, &waker, &parent, &target.id, &name, &task, &call)?;
-                }
+                let mode = if report_back { Mode::ReportBack { check_seconds: check } } else { Mode::Plain };
+                // 续跑重新执行这次调用时按调用 id 去重
+                send_in(tx, &waker, &parent, &target.id, &name, &task, &call, mode, awaited)?;
                 Ok::<_, Error>(target.name)
             })
             .await?;
@@ -214,9 +207,9 @@ impl Tool<RunScope> for AskAgent {
         let (agent, message) = (a.agent, a.message);
         self.db
             .write(move |tx| {
-                let target = agent_id_named(tx, &agent)?;
+                let target = named_in(tx, &agent)?.id;
                 // 续跑时重新执行这次调用：已经投过就只再挂起（按调用 id 幂等）
-                dispatch_in(tx, &waker, &parent, &target, &thread, &message, &call, true, awaited, None)
+                send_in(tx, &waker, &parent, &target, &thread, &message, &call, Mode::Ask, awaited)
             })
             .await?;
         // 发问方的运行停在这次调用上；对方的结局作为这次调用的结果交回
@@ -261,7 +254,7 @@ impl Tool<RunScope> for StopThread {
             .read(move |c| {
                 let mut named = crate::directory::threads_named_in(c, &parent, &wanted)?;
                 if let Some(agent) = &a.agent {
-                    let id = agent_id_named(c, agent)?;
+                    let id = named_in(c, agent)?.id;
                     named.retain(|s| s.agent_id == id);
                 }
                 let names = agent_names_in(c)?;
@@ -391,9 +384,14 @@ fn due(
         (Some(at), None) => {
             let text = at.trim();
             let bad = || format!("`at` must be an ISO 8601 time such as \"2026-10-22T10:30\", not {at:?}");
-            let due = match DateTime::parse_from_rfc3339(text) {
-                Ok(d) => d.with_timezone(&Utc),
-                Err(_) => {
+            // 带时区的按它的时区；不带的按本地时间
+            let offset = DateTime::parse_from_rfc3339(text)
+                .ok()
+                .or_else(|| DateTime::parse_from_str(text, "%Y-%m-%dT%H:%M%:z").ok())
+                .or_else(|| DateTime::parse_from_str(text, "%Y-%m-%dT%H:%M%z").ok());
+            let due = match offset {
+                Some(d) => d.with_timezone(&Utc),
+                None => {
                     let naive = [
                         "%Y-%m-%dT%H:%M:%S%.f",
                         "%Y-%m-%dT%H:%M:%S",
@@ -403,7 +401,6 @@ fn due(
                     ]
                     .iter()
                     .find_map(|f| NaiveDateTime::parse_from_str(text, f).ok())
-                    .or_else(|| chrono::DateTime::parse_from_str(text, "%Y-%m-%dT%H:%M%:z").ok().map(|d| d.naive_utc()))
                     .ok_or_else(bad)?;
                     tz.from_local_datetime(&naive).earliest().ok_or_else(bad)?.with_timezone(&Utc)
                 }
@@ -482,6 +479,11 @@ mod tests {
         assert_eq!(
             due(Some("2026-11-12T10:30:00+00:00"), None, tz, now).unwrap(),
             Utc.with_ymd_and_hms(2026, 11, 12, 10, 30, 0).unwrap()
+        );
+        // 带时区不带秒：只按它自己的时区算一次
+        assert_eq!(
+            due(Some("2026-11-12T10:30+08:00"), None, tz, now).unwrap(),
+            Utc.with_ymd_and_hms(2026, 11, 12, 2, 30, 0).unwrap()
         );
     }
 }

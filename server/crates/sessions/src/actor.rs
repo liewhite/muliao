@@ -18,16 +18,17 @@ use futures::FutureExt;
 use muliao_platform::db::Tx;
 use tokio::sync::{mpsc, oneshot};
 
+use crate::activity::{WorkState, work_state_in};
 use crate::delegation::check_threads;
 use crate::error::{Error, Result, broken, conflict, not_found};
 use crate::events::RunFailed;
 use crate::halt::{Halted, StopThread, halt};
-use crate::mailbox::{Mail, queued_in};
+use crate::mailbox::Mail;
 use crate::pending::Position;
 use crate::run::{Core, Partial, SharedPartial, execute, unsaved_of};
 use crate::runs::{self, Outcome, RunKind, RunRecord};
 use crate::settlement::settle_failure_in;
-use crate::work::{CheckBeats, position_in};
+use crate::work::CheckBeats;
 use crate::{directory, wakeups};
 
 /// 叫醒会话 actor 的句柄：只说「这个会话可能有事了」，要不要跑由 actor 自己按 [`should_run`] 判断。可以先于 actor 系统
@@ -130,6 +131,10 @@ impl Actors {
 
     /// 服务启动时：有没结束的运行（停在半路）或有排着的信的会话各叫醒一次，按唤醒规则接着跑。
     pub async fn resume(&self) -> Result<usize> {
+        let abandoned = self.inner.core.db.write(|tx| runs::abandon_compactions_in(tx)).await?;
+        if abandoned > 0 {
+            tracing::warn!(compactions = abandoned, "manual compactions interrupted by a restart were dropped");
+        }
         let ids = self
             .inner
             .core
@@ -220,8 +225,20 @@ async fn actor(inner: Arc<Inner>, id: String, mut rx: mpsc::UnboundedReceiver<Co
         match has_work(&inner.core, &id).await {
             Ok(true) => {
                 if !run_with_retries(&inner, &id, &mut rx, &mut compactions).await {
-                    // 失败得连运行记录都没留下（开头的事务就出错）：不原地重来，等下一次叫醒
+                    // 失败得连运行记录都没留下（开头的事务就出错）：不原地重来，等下一次叫醒；有排着的命令先处理
+                    let mut actors = inner.actors.lock().expect("actors lock");
+                    if rx.is_empty() {
+                        actors.remove(&id);
+                        return;
+                    }
+                    drop(actors);
+                    while let Ok(cmd) = rx.try_recv() {
+                        idle_command(&inner, &id, cmd, &mut compactions).await;
+                    }
                     inner.actors.lock().expect("actors lock").remove(&id);
+                    for reply in compactions.drain(..) {
+                        let _ = reply.send(Err(broken("the session could not run; try again later")));
+                    }
                     return;
                 }
             }
@@ -265,7 +282,7 @@ async fn idle_command(
     }
 }
 
-/// 有没结束的运行，或按唤醒规则该开始一次。
+/// 有没结束的运行，或按唤醒规则该开始一次：就是工作状态的 running（同一条规则，删除是否拒绝也看它）。
 async fn has_work(core: &Core, id: &str) -> Result<bool> {
     let id = id.to_owned();
     core.db
@@ -273,12 +290,15 @@ async fn has_work(core: &Core, id: &str) -> Result<bool> {
             if directory::get_in(c, &id)?.is_none() {
                 return Ok(false);
             }
-            if runs::unfinished_in(c, &id)?.is_some() {
-                return Ok(true);
-            }
-            Ok(should_run(&queued_in(c, &id)?, runs::latest_in(c, &id)?.as_ref(), &position_in(c, &id)?))
+            Ok(work_state_in(c, &id)? == WorkState::Running)
         })
         .await
+}
+
+/// 会话最后一条消息（判断一次尝试有没有往前推进）。
+async fn last_message(core: &Core, id: &str) -> Option<i64> {
+    let id = id.to_owned();
+    core.db.read(move |c| crate::history::last_message_id_in(c, &id)).await.ok().flatten()
 }
 
 /// 运行一次（失败时按规则重试），其间收到停止就丢掉它、执行停止事务。返回 false：最终失败却没有运行记录可记（开头
@@ -290,9 +310,11 @@ async fn run_with_retries(
     compactions: &mut Vec<oneshot::Sender<Result<usize>>>,
 ) -> bool {
     let core = &inner.core;
-    let started = Instant::now();
+    // 重试窗口从第一次失败算起；一次尝试往前推进了（存下了新消息）就重新算
+    let mut first_failure: Option<Instant> = None;
     let mut delay = FIRST_DELAY;
     loop {
+        let before = last_message(core, id).await;
         let partial: SharedPartial = Arc::new(Mutex::new(Partial::default()));
         let outcome = {
             let run = AssertUnwindSafe(execute(core, id, &partial)).catch_unwind();
@@ -313,6 +335,12 @@ async fn run_with_retries(
         let failure = match outcome {
             Err(reply) => {
                 core.live.end(id);
+                // 等排在前面的写事务做完（写线程先进先出）：被丢掉的运行如果正等着保存一步，那一步先提交并取走对应的已产生
+                // 部分，这里才取剩下的，不会存两遍
+                if let Err(e) = core.db.write(|_| Ok::<_, rusqlite::Error>(())).await {
+                    let _ = reply.send(Err(e.into()));
+                    return true;
+                }
                 let halted = match unsaved_of(&partial).await {
                     Ok(unsaved) => halt(core, id, unsaved, Actors::stop_thread(Arc::downgrade(inner))).await,
                     Err(e) => Err(e),
@@ -332,7 +360,12 @@ async fn run_with_retries(
                 crate::run::Failure { transient: false, message: format!("panicked: {message}") }
             }
         };
-        if failure.transient && started.elapsed() < RETRY_WINDOW {
+        if last_message(core, id).await != before {
+            first_failure = None;
+            delay = FIRST_DELAY;
+        }
+        let since = *first_failure.get_or_insert_with(Instant::now);
+        if failure.transient && since.elapsed() < RETRY_WINDOW {
             tracing::warn!(session_id = id, error = %failure.message, retry_in = ?delay, "run failed transiently; retrying");
             // 退避期间也能停止（停在两次尝试之间：没有已产生、没保存的部分）
             let sleep = tokio::time::sleep(delay);

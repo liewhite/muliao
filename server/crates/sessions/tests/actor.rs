@@ -71,19 +71,25 @@ impl Respond for Script {
 }
 
 fn ok(block: Value, stop: &str) -> ResponseTemplate {
+    ok_blocks(&[block], stop)
+}
+
+fn ok_blocks(blocks: &[Value], stop: &str) -> ResponseTemplate {
     let mut events = vec![
         json!({"type": "message_start", "message": {"model": "m", "id": "msg", "type": "message", "role": "assistant", "content": [], "stop_reason": null, "usage": {"input_tokens": 10, "output_tokens": 1}}}),
     ];
-    if block["type"] == "tool_use" {
-        events.push(json!({"type": "content_block_start", "index": 0, "content_block": {"type": "tool_use", "id": block["id"], "name": block["name"], "input": {}}}));
-        events.push(json!({"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": block["input"].to_string()}}));
-    } else {
-        events.push(json!({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}));
-        events.push(
-            json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": block["text"]}}),
-        );
+    for (i, block) in blocks.iter().enumerate() {
+        if block["type"] == "tool_use" {
+            events.push(json!({"type": "content_block_start", "index": i, "content_block": {"type": "tool_use", "id": block["id"], "name": block["name"], "input": {}}}));
+            events.push(json!({"type": "content_block_delta", "index": i, "delta": {"type": "input_json_delta", "partial_json": block["input"].to_string()}}));
+        } else {
+            events.push(
+                json!({"type": "content_block_start", "index": i, "content_block": {"type": "text", "text": ""}}),
+            );
+            events.push(json!({"type": "content_block_delta", "index": i, "delta": {"type": "text_delta", "text": block["text"]}}));
+        }
+        events.push(json!({"type": "content_block_stop", "index": i}));
     }
-    events.push(json!({"type": "content_block_stop", "index": 0}));
     events.push(json!({"type": "message_delta", "delta": {"stop_reason": stop}, "usage": {"input_tokens": 10, "output_tokens": 2}}));
     events.push(json!({"type": "message_stop"}));
     let body: String =
@@ -517,4 +523,42 @@ impl Tool<RunScope> for Flaky {
         *self.0.lock().unwrap() += 1;
         Err(ToolError::Unavailable("down for a moment".into()))
     }
+}
+
+#[tokio::test]
+async fn a_question_asked_next_to_another_tool_call_resumes_with_both_results() {
+    let w = world().await;
+    let questions =
+        json!({"questions": [{"question": "哪个？", "header": "选", "options": [{"label": "a"}, {"label": "b"}]}]});
+    w.script.push(ok_blocks(
+        &[
+            json!({"type": "tool_use", "id": "e1", "name": "echo", "input": {"text": "先做"}}),
+            json!({"type": "tool_use", "id": "q1", "name": "ask_user", "input": questions}),
+        ],
+        "tool_use",
+    ));
+    let s = w.new_chat("一边做一边问").await;
+    assert_eq!(w.settled(&s).await, WorkState::Waiting);
+    // 已做完的 echo 结果先存下，提问还挂着
+    let h = w.history(&s).await;
+    assert_eq!(h.len(), 3);
+    assert!(texts(&h[2])[0].contains("echo: 先做"));
+    w.script.text("知道了");
+    let answer = UserMessage {
+        content: "顺便说一句".into(),
+        session: UserTarget::Existing(s.clone()),
+        attachments: vec![],
+        answers: BTreeMap::from([("q1".to_owned(), vec![QuestionAnswer { selected: vec!["b".into()], other: None }])]),
+        approvals: BTreeMap::new(),
+    };
+    w.service.receive(answer).await.unwrap();
+    assert_eq!(w.settled(&s).await, WorkState::Idle);
+    let h = w.history(&s).await;
+    assert_eq!(texts(h.last().unwrap())[0], "知道了");
+    // 第二次请求模型时两个结果都在、只出现一次，新消息也在
+    let echo_results = h.iter().flat_map(texts).filter(|t| t.contains("echo: 先做")).count();
+    assert_eq!(echo_results, 1, "the earlier result is not saved twice");
+    let all: Vec<String> = h.iter().flat_map(texts).collect();
+    assert!(all.iter().any(|t| t.contains("result q1")), "{all:?}");
+    assert!(all.iter().any(|t| t == "顺便说一句"), "{all:?}");
 }

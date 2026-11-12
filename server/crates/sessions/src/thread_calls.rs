@@ -49,7 +49,7 @@ fn query(c: &Connection, filter: &str, params: impl rusqlite::Params) -> Result<
     Ok(stmt.query_map(params, record)?.collect::<rusqlite::Result<_>>()?)
 }
 
-/// 记下这次调用开出或续写了这个 thread，返回这一行。同一次调用只记一次：续跑重新执行时已经记过，记成别的样子是 bug。
+/// 记下这次调用开出或续写了这个 thread，返回这一行。同一次调用只记一次（调用方先查过 [`call_in`]，表上还有唯一索引）。
 pub fn record_call_in(
     c: &Connection,
     parent_id: &str,
@@ -57,14 +57,6 @@ pub fn record_call_in(
     thread_id: &str,
     check_seconds: Option<f64>,
 ) -> Result<CallRecord> {
-    if let Some(existing) = call_in(c, parent_id, call_id)? {
-        if existing.thread_id != thread_id || existing.check_seconds != check_seconds {
-            return Err(broken(format!(
-                "call {call_id} of session {parent_id} was recorded for another thread or interval"
-            )));
-        }
-        return Ok(existing);
-    }
     c.execute(
         "INSERT INTO thread_calls (parent_session_id, call_id, thread_session_id, check_seconds) VALUES (?1, ?2, ?3, ?4)",
         params![parent_id, call_id, thread_id, check_seconds],

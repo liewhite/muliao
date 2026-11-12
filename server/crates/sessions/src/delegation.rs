@@ -58,8 +58,21 @@ pub(crate) fn open_in(c: &Connection, parent_id: &str, agent_id: &str, thread: &
     )
 }
 
-/// 不交回结局的委派（delegate_task）：往 thread 的信箱投一封用户在等的信（没有就新建 thread），记下是这次调用开出或续写
-/// 了它。续跑重做同一次调用时只返回已经投到的 thread。
+/// 一次往 thread 投信的调用是哪一种。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum Mode {
+    /// delegate_task：不交回结局，thread 的回答推给用户（用户在等 thread）
+    Plain,
+    /// delegate_task(report_back)：结局作为事件交回发起方，按间隔投运行中检查
+    ReportBack { check_seconds: f64 },
+    /// ask_agent：发起方停在这次调用上，结局作为它的结果交回，没有检查也没有超时
+    Ask,
+}
+
+/// 往 thread 投信（见模块说明）：打开或找到 thread，记下是这次调用开出或续写了它；要交回结局的再在发起方登记引用它的
+/// 占用（这就是一项委派），信件引用它。awaited：用户是否在等发起方的回答（交回的结局随之推送）。续跑重做同一次调用时
+/// 只返回已经投到的 thread（调用行、占用与信件在同一个事务里写下：有行就是投过了）。
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn send_in(
     tx: &mut Tx<'_>,
     waker: &Waker,
@@ -68,48 +81,31 @@ pub(crate) fn send_in(
     thread: &str,
     prompt: &str,
     call_id: &str,
-) -> Result<Session> {
-    if let Some(done) = sent_before(tx, parent_id, call_id)? {
-        return Ok(done);
-    }
-    let child = open_in(tx, parent_id, agent_id, thread)?;
-    record_call_in(tx, parent_id, call_id, &child.id, None)?;
-    receive_in(tx, waker, Inbound::delegated(parent_id, &child.id, prompt, true, None))
-}
-
-/// 这次调用已经投过（调用行、占用与信件在同一个事务里写下：有行就是投过了）。
-fn sent_before(c: &Connection, parent_id: &str, call_id: &str) -> Result<Option<Session>> {
-    let Some(existing) = call_in(c, parent_id, call_id)? else { return Ok(None) };
-    let child = directory::get_in(c, &existing.thread_id)?.ok_or_else(|| {
-        broken(format!("delegation {} points to a missing thread {}", existing.id, existing.thread_id))
-    })?;
-    Ok(Some(child))
-}
-
-/// 发出一项要交回结局的委派（见模块说明）。suspends：这次调用挂起、等结局作为它的结果（ask_agent），占用带上 call_id。
-/// awaited：用户是否在等发起方的回答。check_seconds：report_back 的运行中检查间隔（ask_agent 为 None）。
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn dispatch_in(
-    tx: &mut Tx<'_>,
-    waker: &Waker,
-    parent_id: &str,
-    agent_id: &str,
-    thread: &str,
-    prompt: &str,
-    call_id: &str,
-    suspends: bool,
+    mode: Mode,
     awaited: bool,
-    check_seconds: Option<f64>,
 ) -> Result<Session> {
-    if let Some(done) = sent_before(tx, parent_id, call_id)? {
-        return Ok(done);
+    if let Some(existing) = call_in(tx, parent_id, call_id)? {
+        return directory::get_in(tx, &existing.thread_id)?.ok_or_else(|| {
+            broken(format!("delegation {} points to a missing thread {}", existing.id, existing.thread_id))
+        });
     }
     let child = open_in(tx, parent_id, agent_id, thread)?;
-    let delegation = record_call_in(tx, parent_id, call_id, &child.id, check_seconds)?;
-    hold_delegation_in(tx, parent_id, delegation.id, suspends.then_some(call_id), awaited)?;
-    // 没有人等 thread 的回答：结局交回发起方，由它处理
-    receive_in(tx, waker, Inbound::delegated(parent_id, &child.id, prompt, false, Some(delegation.id)))?;
-    tracing::info!(session_id = parent_id, thread_session_id = %child.id, delegation = delegation.id, call_id, "delegation dispatched");
+    let check_seconds = match mode {
+        Mode::ReportBack { check_seconds } => Some(check_seconds),
+        Mode::Plain | Mode::Ask => None,
+    };
+    let call = record_call_in(tx, parent_id, call_id, &child.id, check_seconds)?;
+    let inbound = match mode {
+        Mode::Plain => Inbound::delegated(parent_id, &child.id, prompt, true, None),
+        Mode::ReportBack { .. } | Mode::Ask => {
+            hold_delegation_in(tx, parent_id, call.id, (mode == Mode::Ask).then_some(call_id), awaited)?;
+            tracing::info!(session_id = parent_id, thread_session_id = %child.id, delegation = call.id, call_id,
+                "delegation dispatched");
+            // 没有人等 thread 的回答：结局交回发起方，由它处理
+            Inbound::delegated(parent_id, &child.id, prompt, false, Some(call.id))
+        }
+    };
+    receive_in(tx, waker, inbound)?;
     Ok(child)
 }
 
@@ -278,9 +274,4 @@ pub fn check_text(
         (WorkState::Running | WorkState::Idle, _, _) => "has your task queued and has not started on it yet".to_owned(),
     };
     format!("{who} {doing}. {keep}")
-}
-
-/// 一个 agent 的显示名（含正在删除的）。
-pub fn agent_name_in(c: &Connection, agent_id: &str) -> Result<String> {
-    Ok(agent_in(c, agent_id)?.name)
 }

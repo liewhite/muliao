@@ -110,8 +110,10 @@ fn query(c: &Connection, filter: &str, params: impl rusqlite::Params) -> Result<
 
 /// 开始一次运行，返回它的编号。同一会话同时只有一个没结束的（actor 串行），已有就是 bug。
 pub fn start_in(c: &Connection, session_id: &str, kind: RunKind) -> Result<i64> {
-    if let Some(r) = unfinished_in(c, session_id)? {
-        panic!("session {session_id} starts a {} while run {} is unfinished", kind.as_str(), r.id);
+    if kind == RunKind::Run
+        && let Some(r) = unfinished_in(c, session_id)?
+    {
+        panic!("session {session_id} starts a run while run {} is unfinished", r.id);
     }
     c.execute(
         "INSERT INTO runs (session_id, kind, started_at) VALUES (?1, ?2, ?3)",
@@ -140,21 +142,31 @@ pub fn reopen_in(c: &Connection, run_id: i64) -> Result<()> {
 
 /// 会话没结束的那次运行（至多一个）。
 pub fn unfinished_in(c: &Connection, session_id: &str) -> Result<Option<RunRecord>> {
-    Ok(query(c, "session_id = ?1 AND ended_at IS NULL", [session_id])?.into_iter().next())
+    Ok(query(c, "session_id = ?1 AND kind = 'run' AND ended_at IS NULL", [session_id])?.into_iter().next())
 }
 
 /// 停止：没结束的运行记为停止（actor 已经放下它，或它停在两次重试之间）。
 pub fn stop_unfinished_in(c: &Connection, session_id: &str) -> Result<Vec<i64>> {
-    let ids: Vec<i64> = query(c, "session_id = ?1 AND ended_at IS NULL", [session_id])?.iter().map(|r| r.id).collect();
+    let ids: Vec<i64> =
+        query(c, "session_id = ?1 AND kind = 'run' AND ended_at IS NULL", [session_id])?.iter().map(|r| r.id).collect();
     for id in &ids {
         end_in(c, *id, Outcome::Stopped, None)?;
     }
     Ok(ids)
 }
 
+/// 服务启动时：停在半路的手动压缩（只在内存里排，不接着做）记为失败。「没结束的运行」的查询都只认普通运行。
+pub fn abandon_compactions_in(c: &Connection) -> Result<usize> {
+    Ok(c.execute(
+        "UPDATE runs SET ended_at = ?1, outcome = 'failed', error = 'interrupted by a service restart' \
+         WHERE kind = 'compaction' AND ended_at IS NULL",
+        [Utc::now()],
+    )?)
+}
+
 /// 有没结束的运行的会话（重启后接着跑）。
 pub fn sessions_unfinished_in(c: &Connection) -> Result<Vec<String>> {
-    let mut stmt = c.prepare("SELECT DISTINCT session_id FROM runs WHERE ended_at IS NULL")?;
+    let mut stmt = c.prepare("SELECT DISTINCT session_id FROM runs WHERE kind = 'run' AND ended_at IS NULL")?;
     Ok(stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)
 }
 
@@ -164,7 +176,7 @@ pub fn unfinished_among(c: &Connection, session_ids: &[String]) -> Result<Vec<St
         return Ok(Vec::new());
     }
     let sql = format!(
-        "SELECT DISTINCT session_id FROM runs WHERE ended_at IS NULL AND session_id IN ({})",
+        "SELECT DISTINCT session_id FROM runs WHERE kind = 'run' AND ended_at IS NULL AND session_id IN ({})",
         placeholders(session_ids.len())
     );
     let mut stmt = c.prepare(&sql)?;
