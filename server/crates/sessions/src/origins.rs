@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Result, broken};
 
 /// 来源的种类：用户在界面发起、触发器、agent 之间委派、issue 看板。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Origin {
     User,
@@ -67,7 +67,7 @@ impl Sender {
 }
 
 /// 会话的来源与发起方（界面按 `kind` 区分）。委派的发起方是父会话（存在 `parent_session_id`，不在这里另存一份）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SessionOrigin {
     User,

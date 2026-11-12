@@ -36,7 +36,7 @@ use crate::rules::{ask_to_settle, cannot_review, cannot_start, cannot_stop_into,
 const RUN_FAILED_BODY_MAX: usize = 500;
 
 /// 谁在这个 issue 上做事、它在等谁（从会话领域与依赖图派生，不存）。
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, utoipa::ToSchema)]
 pub struct IssueWork {
     /// 每个 agent 在这个 issue 上的会话：agent id -> 会话 id
     pub sessions: BTreeMap<String, String>,
@@ -57,7 +57,7 @@ pub struct IssueWork {
 }
 
 /// 看板上的一个 issue：它本身加上谁在做（HTTP 返回的形状）。
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, utoipa::ToSchema)]
 pub struct BoardIssue {
     #[serde(flatten)]
     pub issue: Issue,
@@ -65,7 +65,7 @@ pub struct BoardIssue {
     pub work: IssueWork,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, utoipa::ToSchema)]
 pub struct IssueDetail {
     pub issue: BoardIssue,
     pub activities: Vec<Activity>,

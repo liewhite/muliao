@@ -11,7 +11,7 @@ use crate::error::{Result, invalid};
 
 // ---- 提问（ask_user）----
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct QuestionOption {
     /// Short choice text shown on the button.
@@ -23,7 +23,7 @@ pub struct QuestionOption {
     pub description: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Question {
     /// The full question.
@@ -89,7 +89,7 @@ pub fn questions_of(args: &str) -> Vec<Question> {
 }
 
 /// 用户对一个问题的回答：选中的选项，和/或「其他」里填的文字。
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct QuestionAnswer {
     #[serde(default)]
@@ -98,7 +98,7 @@ pub struct QuestionAnswer {
     pub other: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AnsweredQuestion {
     pub question: String,
     pub selected: Vec<String>,
@@ -106,7 +106,7 @@ pub struct AnsweredQuestion {
 }
 
 /// 一次提问交给模型的结果（也是界面展示已回答提问的来源）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AskResult {
     pub answered: bool,
     pub answers: Vec<AnsweredQuestion>,
@@ -166,7 +166,7 @@ pub const STILL_WORKING: &str = "A new message arrived before the agent you aske
 
 /// 被问的 agent 交回的结局：给发问方模型的文字，它挂给用户的文件（交回时挂到发问方这次调用的结果上，文件就出现在用户
 /// 正在看的会话里）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AgentAnswer {
     pub text: String,
     #[serde(default)]
@@ -184,7 +184,7 @@ pub const APPROVAL_INTERRUPTED: &str = "The user approved this call, but the run
      calling it again (that asks the user to approve again).";
 
 /// 用户在界面上对等批准的调用的选择。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Choice {
     Approve,
@@ -195,7 +195,7 @@ pub enum Choice {
 
 /// 用户对一次等批准的调用的决定。pin：用户批准的是哪一份（请求批准时工具定下、记在 approval_requests 的指纹），批准时
 /// 交回工具比对（迁移来的旧信件可能没有，工具当作对不上）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Decision {
     pub approved: bool,
     #[serde(default)]
@@ -249,7 +249,7 @@ pub fn answer_lines(asked: &[&AskResult]) -> Vec<String> {
 }
 
 /// 回答信件里一次调用的结果。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(tag = "tool", content = "result", rename_all = "snake_case")]
 pub enum CallResult {
     AskUser(AskResult),

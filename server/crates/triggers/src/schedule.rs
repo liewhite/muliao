@@ -24,14 +24,14 @@ use crate::store::Trigger;
 
 pub const KIND: &str = "schedule";
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ScheduleConfig {
     pub cron: String,
 }
 
 /// 连续跳过（界面与模型看的部分）。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SkippedFires {
     /// 连续跳过了几次
     pub count: u32,
@@ -58,7 +58,7 @@ struct ScheduleState {
 }
 
 /// 界面与模型看到的状态。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct ScheduleStatus {
     pub next_run_at: String,
     /// 正在连续跳过（上一次触发的会话还没做完）时给出，下次真正触发时清除

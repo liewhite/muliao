@@ -98,6 +98,7 @@ pub fn file_in(root: &Path, path: &str) -> Result<WorkspaceFile, DomainError> {
 }
 
 /// agent 工作目录的浏览。
+#[derive(Clone)]
 pub struct WorkspaceFiles {
     workspaces_dir: PathBuf,
 }

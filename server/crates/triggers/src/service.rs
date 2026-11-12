@@ -67,7 +67,7 @@ pub fn event_prompt(instructions: &str, payload: Option<&str>) -> String {
 }
 
 /// 上一次触发开出的会话还没做完时它在干什么（不会是 idle）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Busy {
     Running,

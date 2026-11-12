@@ -12,7 +12,7 @@ publish = false
 [workspace.dependencies]
 agenter = { git = "ssh://git@github.com/liewhite/agenter.git", branch = "main" }
 anyhow = "1"
-axum = "0.8"
+axum = { version = "0.8", features = ["macros"] }
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
 croner = "4"
@@ -37,6 +37,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 unicode-normalization = "0.1"
 uuid = { version = "1", features = ["v4"] }
+# 接口描述（OpenAPI）：界面直接看到的类型 derive ToSchema，web/openapi.json 由它生成
+utoipa = { version = "6", features = ["chrono", "preserve_order", "preserve_path_order", "axum_extras"] }
 wiremock = "0.6"
 
 # 领域 crate 互相引用的路径（只能引用更早一层的，见 docs/architecture.md 2.3）

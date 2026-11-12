@@ -19,13 +19,13 @@ use crate::store::Trigger;
 
 pub const KIND: &str = "once";
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct OnceConfig {
     pub at: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct OnceStatus {
     pub run_at: String,
 }

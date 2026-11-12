@@ -29,7 +29,7 @@ use crate::store::{Trigger, set_baseline_in};
 /// 报错里带上的 stderr 结尾
 const STDERR_TAIL_CHARS: usize = 2000;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum FireWhen {
     /// stdout 非空就触发
@@ -40,7 +40,7 @@ pub enum FireWhen {
 }
 
 /// 一个前置检查（存在触发器上，也是工具与接口的参数）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Precheck {
     /// bash command run before each firing.

@@ -13,7 +13,7 @@ use crate::error::{Result, broken};
 use crate::model::{Actor, Assignee, By, Priority};
 
 /// 属性从什么改成什么（存为 `{"from": ..., "to": ...}`）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Change<T> {
     #[serde(rename = "from")]
@@ -28,7 +28,7 @@ impl<T> Change<T> {
 }
 
 /// 一个上游完成（done / cancelled）：它的状态变化，状态的取值同 [`Happening::Status`]。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DependencyChange {
     /// 完成的那个上游
@@ -39,7 +39,7 @@ pub struct DependencyChange {
 }
 
 /// 不是属性变化、只有一个值的记法（存为 `{"from": null, "to": 值}`）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Arrival {
     #[serde(rename = "from")]
@@ -48,7 +48,7 @@ pub struct Arrival {
 }
 
 /// 时间线上发生的一件事。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Happening {
     Created,
@@ -70,6 +70,7 @@ pub enum Happening {
     },
     /// agent id、`user`，或 null（未指派）
     Assignee {
+        #[schema(value_type = Change<Option<String>>)]
         change: Change<Option<Assignee>>,
     },
     /// agent id，或 null（负责的 agent 已删除）
@@ -142,7 +143,7 @@ impl Happening {
 }
 
 /// 时间线上记下的一条：谁、什么时候、在哪个会话里，发生了什么。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct Activity {
     pub id: i64,
     pub issue_id: i64,

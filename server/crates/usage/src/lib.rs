@@ -34,7 +34,7 @@ impl RunKind {
 
 /// 用量的各项计数（一笔的，或一组的和）。`input_tokens` 是输入总数，**已经包含**缓存读写两项，展示为「总数与其中两部分」，
 /// 不要相加。
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
 pub struct UsageTotals {
     pub requests: u64,
     pub input_tokens: u64,
@@ -75,7 +75,8 @@ pub struct UsageEntry {
 }
 
 /// 汇总时的分组维度，可以任意组合。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum UsageGroup {
     Agent,
     Model,
@@ -83,12 +84,13 @@ pub enum UsageGroup {
 }
 
 /// 一个分组的汇总。没有选中的维度为 None（例如只按模型分组时 agent_id 与 day 都是 None）。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
 pub struct UsageBucket {
     pub agent_id: Option<String>,
     pub model: Option<String>,
     /// 配置时区里的日历日
     pub day: Option<NaiveDate>,
+    #[serde(flatten)]
     pub totals: UsageTotals,
 }
 

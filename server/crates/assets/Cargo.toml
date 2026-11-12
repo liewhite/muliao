@@ -5,6 +5,7 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+utoipa = { workspace = true }
 muliao-platform = { workspace = true }
 agenter = { workspace = true }
 caseless = { workspace = true }

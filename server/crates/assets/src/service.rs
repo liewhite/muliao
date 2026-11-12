@@ -70,6 +70,11 @@ impl AgentService {
         Self { db: source.db().clone(), source, workspaces_dir, default_model }
     }
 
+    /// 新建时没给模型用的默认值（服务端配置的 llm.default_model）
+    pub fn default_model(&self) -> &str {
+        &self.default_model
+    }
+
     pub fn workspace(&self, agent_id: &str) -> PathBuf {
         workspace_of(&self.workspaces_dir, agent_id)
     }

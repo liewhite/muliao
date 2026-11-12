@@ -68,6 +68,7 @@ fn mtime(path: &Path) -> std::io::Result<DateTime<Utc>> {
     Ok(DateTime::<Utc>::from(std::fs::metadata(path)?.modified()?))
 }
 
+#[derive(Clone)]
 pub struct Sites {
     workspaces_dir: PathBuf,
 }

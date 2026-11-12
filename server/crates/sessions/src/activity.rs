@@ -26,7 +26,7 @@ use crate::runs::{latest_among, unfinished_among};
 use crate::thread_calls::delegations_among;
 use crate::work::job_id_of_holder;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkState {
     /// 有没结束的运行，或有要处理的信
@@ -139,7 +139,7 @@ pub fn blocks_agent_in(c: &Connection, agent_id: &str) -> Result<bool> {
 }
 
 /// 会话在等的一项东西（会话页列出）。
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, utoipa::ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Wait {
     /// 后台任务（run_shell background）

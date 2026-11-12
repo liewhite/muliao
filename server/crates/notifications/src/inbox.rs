@@ -18,6 +18,7 @@ use muliao_sessions::answers::Waiting;
 use muliao_sessions::events::{BoxError, RunEnded, RunFailed, SessionDeleted, Subscribers};
 use rusqlite::{Connection, OptionalExtension, Row, params, params_from_iter};
 use serde::Serialize;
+use utoipa::ToSchema;
 
 use crate::push::Push;
 
@@ -35,8 +36,15 @@ pub struct Notify {
     pub issue_id: Option<i64>,
 }
 
+/// 有新通知了（SSE 事件名 `notification`）：前端刷新通知页与未读数；正看着这个会话时把它标为已读。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct NotificationEvent {
+    pub notification_id: i64,
+    pub session_id: Option<String>,
+}
+
 /// 一条通知（读模型）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub struct Notification {
     pub id: i64,
     pub title: String,
@@ -156,9 +164,10 @@ impl Notifications {
         let (bus, push, session_id) = (self.bus.clone(), self.push.clone(), n.session_id.clone());
         tx.on_commit(move || {
             // 前端据此刷新通知页与未读数；正看着这个会话时把它标为已读
+            let event = NotificationEvent { notification_id: id, session_id };
             bus.publish(ServerEvent {
                 kind: "notification",
-                data: serde_json::json!({"notification_id": id, "session_id": session_id}),
+                data: serde_json::to_value(event).expect("notification events serialize"),
             });
             push.deliver(id);
         });

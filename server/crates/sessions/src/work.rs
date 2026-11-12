@@ -135,7 +135,7 @@ pub fn thread_source(child_id: &str) -> String {
 }
 
 /// 事件来源解析成的种类（界面用，不自己解析字符串）。
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EventSource {
     Thread { raw: String, session_id: String },

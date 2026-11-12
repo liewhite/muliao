@@ -5,6 +5,7 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+utoipa = { workspace = true }
 # 工具的共同契约（tooling）要用它的工具接口
 agenter = { workspace = true }
 caseless = { workspace = true }

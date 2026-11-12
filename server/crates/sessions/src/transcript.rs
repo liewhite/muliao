@@ -25,7 +25,7 @@ use crate::work::{EventSource, parse_source};
 /// 各工具的展示规则（`Toolbox::renders`）；只要文字的投影给空的。
 pub type Renders = HashMap<String, Arc<ToolRender>>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ItemType {
     User,
@@ -39,7 +39,7 @@ pub enum ItemType {
 }
 
 /// ask_user 调用的状态，由后端按唯一规则给出（[`annotate_asks`]），前端只渲染。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AskStatus {
     /// 运行还没停下（还不能回答）
@@ -53,7 +53,7 @@ pub enum AskStatus {
     NotAnswered,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct AskView {
     pub status: AskStatus,
     pub questions: Vec<Question>,
@@ -64,7 +64,7 @@ pub struct AskView {
 }
 
 /// 停下来等用户批准的工具调用的状态。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ApprovalState {
     /// 现在能批准（显示批准/拒绝按钮）
@@ -73,7 +73,7 @@ pub enum ApprovalState {
     Submitted,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, utoipa::ToSchema)]
 pub struct Item {
     #[serde(rename = "type")]
     pub kind: ItemType,
@@ -99,6 +99,7 @@ pub struct Item {
     pub approval: Option<ApprovalState>,
     /// 工具调用的参数、结果按工具自己的展示规则画成的展示块；None 显示原文（工具没定规则、参数或结果不合它的类型、
     /// 被退回的错误、事后补的结果、带图片的结果）。其他条目为 None
+    #[schema(value_type = Option<Vec<muliao_platform::tool_views::ViewBlock>>)]
     pub view: Option<View>,
     /// 工具调用开始执行的时间（tool_call），工具结束的时间（tool_result、tool_error），或事件交给模型的时间（event，
     /// 所在请求的 timestamp）；其他条目，以及拿不到真实时间的（事后补的结果、没记结束时间的结果、调用方没给保存时间的

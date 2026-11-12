@@ -10,7 +10,8 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 use crate::error::{Result, broken};
 use crate::mailbox::placeholders;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum RunKind {
     Run,
     /// 用户在会话页手动压缩
@@ -34,7 +35,8 @@ impl RunKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum Outcome {
     Done,
     Stopped,
@@ -60,7 +62,7 @@ impl Outcome {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, utoipa::ToSchema)]
 pub struct RunRecord {
     pub id: i64,
     pub session_id: String,

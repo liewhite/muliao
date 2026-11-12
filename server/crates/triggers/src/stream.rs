@@ -61,7 +61,7 @@ fn default_debounce() -> f64 {
     5.0
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StreamConfig {
     pub command: String,
@@ -82,7 +82,7 @@ struct StreamState {
     failures: u32,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct StreamStatus {
     /// 当前进程的启动时间；没有在运行（停用、刚启用或改配置后还没起来、退出后在等重启）时为 null
     pub running_since: Option<DateTime<Utc>>,

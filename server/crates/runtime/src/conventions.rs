@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 /// 工具结果上挂给用户的文件（`ToolResult.metadata` 的键）：文件一定会显示给用户，不依赖模型在回答里转写引用。
 pub const TOOL_ATTACHMENTS: &str = "muliao_attachments";
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Attachment {
     /// 文件存储的地址（files::file_url）：界面直接用它显示与下载
     pub url: String,

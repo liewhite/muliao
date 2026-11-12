@@ -37,7 +37,7 @@ pub struct NewEntry {
 }
 
 /// 库里的一件事。
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, utoipa::ToSchema)]
 pub struct Record {
     pub id: i64,
     pub agent_id: String,

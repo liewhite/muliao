@@ -12,12 +12,13 @@ use muliao_platform::bus::{Bus, ServerEvent};
 use muliao_platform::text::truncate;
 use muliao_platform::tool_views::truncated;
 use serde::Serialize;
+use utoipa::ToSchema;
 
 use crate::transcript::Item;
 
 const PREVIEW_CHARS: usize = 2000;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DeltaType {
     Assistant,
@@ -25,7 +26,7 @@ pub enum DeltaType {
 }
 
 /// 一条运行事件。
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum RunEvent {
     /// 一条完整的会话条目（工具调用、工具结果），与历史同一个投影；文字可能截断过
@@ -35,7 +36,7 @@ pub enum RunEvent {
 }
 
 /// 推给前端的一条（SSE 事件名 `run`）。
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
 pub struct RunEventEnvelope {
     pub session_id: String,
     pub agent: String,
@@ -45,12 +46,18 @@ pub struct RunEventEnvelope {
     pub event: RunEvent,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
 pub struct LiveSegment {
     pub segment_id: String,
     /// 这一段开始时会话最后一条已保存消息的 id：这之后保存的消息由这一段的事件展示，历史里先不显示
     pub after_message_id: Option<i64>,
     pub events: Vec<RunEventEnvelope>,
+}
+
+/// 运行中又保存了一步（SSE 事件名 `saved`）：历史有了新内容，实时事件换成新的一段。
+#[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
+pub struct SavedEvent {
+    pub session_id: String,
 }
 
 #[derive(Clone)]
@@ -80,7 +87,9 @@ impl Live {
     /// 一次请求已经保存（事务已提交）：之后的事件属于新的一段。
     pub(crate) fn step(&self, session_id: &str, after_message_id: i64) {
         self.segments.lock().expect("live lock").insert(session_id.to_owned(), new_segment(Some(after_message_id)));
-        self.bus.publish(ServerEvent { kind: "saved", data: serde_json::json!({"session_id": session_id}) });
+        let saved = SavedEvent { session_id: session_id.to_owned() };
+        self.bus
+            .publish(ServerEvent { kind: "saved", data: serde_json::to_value(saved).expect("saved events serialize") });
     }
 
     pub(crate) fn end(&self, session_id: &str) {

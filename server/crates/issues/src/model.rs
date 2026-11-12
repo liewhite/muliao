@@ -12,7 +12,21 @@ use crate::error::{Result, broken, not_found};
 
 // 状态。不设 todo（给 agent 的一建就投，与 in_progress 无别）、不设 waiting：在等上游由依赖派生，在等后台任务、委派、
 // 唤醒由 issue 会话的工作状态看出（#258、#261）。工具参数的 schema 用到它：类型与变体上只写 `//` 注释，免得说明进 schema
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Default,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    utoipa::ToSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
     #[default]
@@ -57,7 +71,7 @@ impl fmt::Display for Status {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Priority {
     #[default]
@@ -130,6 +144,14 @@ impl From<Assignee> for String {
 }
 
 /// 指派给 agent 时是它的 id；未指派或指派给用户为 None。
+// 在接口描述里就是一个字符串（`user` 或 agent id）
+impl utoipa::PartialSchema for Assignee {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        <String as utoipa::PartialSchema>::schema()
+    }
+}
+impl utoipa::ToSchema for Assignee {}
+
 pub fn agent_of(assignee: Option<&Assignee>) -> Option<&str> {
     assignee.and_then(Assignee::agent)
 }
@@ -181,6 +203,14 @@ impl From<Actor> for String {
 }
 
 /// 一次修改是谁、在哪个会话里做的：agent 用工具时所在的会话；用户在界面上的操作、系统的清理没有会话。
+// 在接口描述里就是一个字符串（`user`、`system` 或 agent id）
+impl utoipa::PartialSchema for Actor {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        <String as utoipa::PartialSchema>::schema()
+    }
+}
+impl utoipa::ToSchema for Actor {}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct By {
     pub actor: Actor,
@@ -202,7 +232,7 @@ impl By {
 }
 
 /// 人与 agent 协作的一件事（读模型，也是 HTTP 返回的形状）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct Issue {
     pub id: i64,
     pub title: String,

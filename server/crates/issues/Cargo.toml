@@ -5,6 +5,7 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+utoipa = { workspace = true }
 muliao-platform = { workspace = true }
 muliao-assets = { workspace = true }
 muliao-sessions = { workspace = true }

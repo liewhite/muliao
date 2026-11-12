@@ -26,7 +26,7 @@ use crate::store::Trigger;
 const SUMMARY_MAX: usize = 500;
 
 /// 哪个脚本出的错。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum FaultSource {
     Precheck,
@@ -44,7 +44,7 @@ impl FaultSource {
 }
 
 /// 一条出错：来源、原因。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TriggerFault {
     pub source: FaultSource,

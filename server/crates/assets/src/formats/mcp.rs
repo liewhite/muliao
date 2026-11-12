@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use super::{Draft, Loaded, modified, read};
 use crate::kinds::Content;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum McpTransport {
     Stdio,

@@ -14,7 +14,7 @@ use serde::de::DeserializeOwned;
 use crate::text::truncate;
 
 /// 一个展示块。输出时字段一律都在（没有就是 null），前端类型与实际输出一致。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ViewBlock {
     /// 终端：`$ command` 提示行、输出、状态行（如退出码、超时、后台任务）。界面把相邻的终端块（调用的命令与结果的输出）
@@ -52,13 +52,13 @@ pub enum ViewBlock {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct FieldRow {
     pub label: String,
     pub value: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct Link {
     pub title: String,
     pub url: String,
