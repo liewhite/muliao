@@ -213,9 +213,11 @@ pub fn listed_page_in(
     offset: usize,
 ) -> Result<Vec<Session>> {
     let (filter, mut values) = listing.filter();
-    let pinned = if first.is_empty() { "0".to_owned() } else { format!("id IN ({})", placeholders(first.len())) };
+    // 常数不能做排序项（SQLite 把整数当成第几列），没有置顶的就只按更新时间
+    let pinned =
+        if first.is_empty() { String::new() } else { format!("(id IN ({})) DESC, ", placeholders(first.len())) };
     values.extend(first.iter().cloned());
-    let sql = format!("{filter} ORDER BY ({pinned}) DESC, updated_at DESC LIMIT {limit} OFFSET {offset}");
+    let sql = format!("{filter} ORDER BY {pinned}updated_at DESC LIMIT {limit} OFFSET {offset}");
     query(c, &sql, rusqlite::params_from_iter(&values))
 }
 
