@@ -495,10 +495,19 @@ async fn issues_triggers_notifications_usage_and_history() {
 
     // 触发器：按方式校验配置
     let kinds = w.get("/api/trigger-kinds").await;
-    assert_eq!(
-        kinds.as_array().unwrap().iter().map(|k| k["name"].as_str().unwrap()).collect::<Vec<_>>(),
-        ["schedule", "once", "stream"]
-    );
+    let names: Vec<&str> = kinds.as_array().unwrap().iter().map(|k| k["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["schedule", "once", "stream"]);
+    // 接口描述按 kind 写出的形状与登记的方式一一对应（加一种方式忘了补描述时这里挂）
+    let doc = serde_json::to_value(muliao_http::openapi()).unwrap();
+    for schema in ["KindOutDoc", "KindInDoc"] {
+        let described: Vec<&str> = doc["components"]["schemas"][schema]["oneOf"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["properties"]["kind"]["enum"][0].as_str().unwrap())
+            .collect();
+        assert_eq!(described, names, "{schema}");
+    }
     let t = w
         .call(Method::POST, "/api/triggers", Some(json!({"name": "daily", "agent_id": id, "kind": "schedule", "prompt": "日报", "config": {"cron": "0 9 * * *"}})), 201)
         .await;
