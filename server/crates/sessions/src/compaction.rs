@@ -76,6 +76,7 @@ pub fn select_steps<'a, 'r>(
     keep_steps: usize,
     max_chars: usize,
 ) -> Result<(&'a [Vec<&'r Stored>], bool)> {
+    // keep_steps 为 0 时全部可压缩（Python 的 steps[:-0] 是空列表，随后出错；配置下限是 1，碰不到）
     let compactable = &steps[..steps.len().saturating_sub(keep_steps)];
     let mut chosen = 0;
     let mut total = 0;
