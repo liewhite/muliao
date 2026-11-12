@@ -436,6 +436,7 @@ fn copy_messages(tx: &Transaction, report: &mut Report) -> anyhow::Result<TableR
     let old_rows = count(tx, "SELECT count(*) FROM old.messages")?;
     let gone = count(tx, "SELECT count(*) FROM old.messages WHERE session_id NOT IN (SELECT id FROM main.sessions)")?;
     let mut notes = Notes::new();
+    let mut failures: std::collections::BTreeMap<String, Vec<i64>> = Default::default();
     let mut new_rows = 0;
     let mut stopped_runs = std::collections::BTreeSet::new();
     {
@@ -457,7 +458,7 @@ fn copy_messages(tx: &Transaction, report: &mut Report) -> anyhow::Result<TableR
             let message = match messages::convert(&payload, created_at, &mut notes) {
                 Ok(m) => m,
                 Err(e) => {
-                    report.message_failures.entry(e).or_default().push(id);
+                    failures.entry(e).or_default().push(id);
                     continue;
                 }
             };
@@ -479,9 +480,8 @@ fn copy_messages(tx: &Transaction, report: &mut Report) -> anyhow::Result<TableR
     }
     report.message_notes = notes;
     // 历史中间少一条可能让工具调用与结果对不上，那个会话就再也跑不了：有转不了的就整个不迁，先把转换补上
-    if !report.message_failures.is_empty() {
-        let lines: Vec<String> = report
-            .message_failures
+    if !failures.is_empty() {
+        let lines: Vec<String> = failures
             .iter()
             .map(|(why, ids)| format!("{why}: {} (e.g. ids {:?})", ids.len(), &ids[..ids.len().min(5)]))
             .collect();
@@ -522,9 +522,23 @@ pub fn migrate(old: &Path, new: &Path, report: &mut Report) -> anyhow::Result<()
             std::fs::remove_file(&leftover).with_context(|| format!("removing {}", leftover.display()))?;
         }
     }
-    muliao_platform::db::migrate(&partial, &muliao_server::MIGRATIONS).context("creating the new schema")?;
+    let result = write(old, &partial, report);
+    if result.is_err() {
+        // 不留只有表结构或写了一半的文件（事务已回滚）
+        let _ = std::fs::remove_file(&partial);
+        return result;
+    }
+    std::fs::rename(&partial, new).with_context(|| format!("renaming {} to {}", partial.display(), new.display()))?;
+    report.old_db = old.display().to_string();
+    report.new_db = new.display().to_string();
+    Ok(())
+}
+
+/// 建好新表、把旧库搬进 partial（一个事务）。
+fn write(old: &Path, partial: &Path, report: &mut Report) -> anyhow::Result<()> {
+    muliao_platform::db::migrate(partial, &muliao_server::MIGRATIONS).context("creating the new schema")?;
     let mut conn = Connection::open_with_flags(
-        &partial,
+        partial,
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_URI | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
     register_utc(&conn)?;
@@ -560,9 +574,6 @@ pub fn migrate(old: &Path, new: &Path, report: &mut Report) -> anyhow::Result<()
     }
     conn.execute("DETACH DATABASE old", [])?;
     conn.close().map_err(|(_, e)| e)?;
-    std::fs::rename(&partial, new).with_context(|| format!("renaming {} to {}", partial.display(), new.display()))?;
-    report.old_db = old.display().to_string();
-    report.new_db = new.display().to_string();
     Ok(())
 }
 

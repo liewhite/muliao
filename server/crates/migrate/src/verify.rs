@@ -112,6 +112,27 @@ fn ids(db: &Path, sql: &str) -> anyhow::Result<Vec<String>> {
         .collect())
 }
 
+/// 收掉进行中的东西之前，按迁过来的原样读一遍每个会话停在哪、在做什么（排着的信、占用、等着的调用都要能解析）。
+fn check_session_states(db: &Path, report: &mut Report) -> anyhow::Result<()> {
+    let conn = Connection::open(db)?;
+    let sessions = ids(db, "SELECT id FROM sessions")?;
+    if let Err(e) = muliao_sessions::activity::statuses_in(&conn, &sessions) {
+        report.problems.push(format!("会话状态读不出：{e}"));
+    }
+    let mut failed = 0;
+    for id in &sessions {
+        if let Err(e) = muliao_sessions::work::position_in(&conn, id) {
+            failed += 1;
+            report.problems.push(format!("会话 {id} 停在哪读不出：{e}"));
+        }
+    }
+    report.checks.push(format!(
+        "迁过来的原样状态（停在哪、排着的信、占用、等着的调用）：{} 个会话，失败 {failed} 个",
+        sessions.len()
+    ));
+    Ok(())
+}
+
 /// 附件目录：真目录里的分片子目录（内容按 sha256 前两位分）逐个链接过来，别的（tmp）不链。
 fn link_file_shards(real: &Path, copy: &Path) -> anyhow::Result<()> {
     std::fs::create_dir_all(copy)?;
@@ -219,6 +240,7 @@ pub async fn verify(new_db: &Path, config: &Path, report: &mut Report) -> anyhow
 
     let mut settings = Settings::load(config).with_context(|| format!("loading {}", config.display()))?;
     link_file_shards(&settings.files_dir(), &data.join("files"))?;
+    check_session_states(&db, report)?;
     for done in isolate(&db)? {
         report.checks.push(format!("检查用的副本：{done}"));
     }

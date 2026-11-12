@@ -1,6 +1,5 @@
 //! 迁移报告：每张表迁了多少、丢了什么、为什么；消息转换的说明；迁完之后的检查结果。写成 Markdown。
 
-use std::collections::BTreeMap;
 use std::fmt::Write;
 
 use crate::messages::Notes;
@@ -27,8 +26,6 @@ pub struct Report {
     /// 旧库里整张不迁的表与原因
     pub dropped_tables: Vec<(String, i64, String)>,
     pub message_notes: Notes,
-    /// 转不了的消息：原因 → 消息 id（有就不迁，见 copy::copy_messages）
-    pub message_failures: BTreeMap<String, Vec<i64>>,
     /// 迁完后的检查（verify）：做了什么 → 结果；问题单列
     pub checks: Vec<String>,
     pub problems: Vec<String>,
