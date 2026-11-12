@@ -30,7 +30,7 @@ use crate::attachments::{for_model, store_tool_images};
 use crate::instructions::{InstructionParts, build_instructions, run_context};
 use crate::mcp::{BoxError, McpConnector, skip};
 use crate::models::{ModelRegistry, thinking_of};
-use crate::toolbox::Toolbox;
+use crate::toolbox::{Redaction, Toolbox};
 
 /// 组合根交给运行端口的依赖。
 pub struct RuntimeDeps {
@@ -199,6 +199,7 @@ impl Runtime {
             agent,
             scope: RunScope::new(agent_id.to_owned(), workspace, spec.session_id.to_owned(), spec.audience),
             notices,
+            redaction: self.d.toolbox.redaction(),
             files: self.d.files.clone(),
             meter: Meter::new(self.d.usage.clone(), agent_id, Some(spec.session_id), config.file.model(), RunKind::Run),
         })
@@ -245,6 +246,7 @@ pub struct Run {
     agent: Agent<RunScope>,
     scope: RunScope,
     notices: Vec<String>,
+    redaction: Redaction,
     files: Arc<FileStore>,
     meter: Meter,
 }
@@ -268,8 +270,8 @@ impl Run {
     /// - 末尾是用户一方的消息：附件展开后请求模型，回复后记一笔用量；
     /// - 末尾是带工具调用的回复：执行工具；交回的结果里能内联的图片存进文件存储换成引用，工具挂上的附加数据并进结果。
     ///
-    /// on_event 是给界面的实时预览：其中 `ToolFinished` 的结果还是工具交回的原样（图片是内容、没有附加数据），保存的以返回
-    /// 值为准。
+    /// on_event 是给界面的实时预览，工具调用的参数已经脱敏（[`Redaction::preview`]）；其中 `ToolFinished` 的结果还是工具
+    /// 交回的原样（图片是内容、没有附加数据），保存的以返回值为准（返回的回复没有脱敏，保存前由会话领域脱敏）。
     pub async fn step(
         &self,
         history: &[Message],
@@ -283,7 +285,8 @@ impl Run {
         } else {
             history
         };
-        let step = self.agent.step(&self.scope, sent, resolved, on_event).await?;
+        let mut preview = self.redaction.preview(on_event);
+        let step = self.agent.step(&self.scope, sent, resolved, &mut preview).await?;
         Ok(match step {
             Step::Responded(r) => {
                 self.meter.bill(r.usage).await;
@@ -324,6 +327,19 @@ impl Run {
 impl Drop for Run {
     fn drop(&mut self) {
         let spent = *self.meter.spent.lock().expect("meter lock");
+        let unbilled = *self.meter.pending.lock().expect("meter lock");
+        if unbilled != UsageTotals::default() {
+            tracing::error!(
+                agent = %self.scope.agent_id,
+                session_id = %self.scope.session_id,
+                requests = unbilled.requests,
+                input_tokens = unbilled.input_tokens,
+                output_tokens = unbilled.output_tokens,
+                cache_read_tokens = unbilled.cache_read_tokens,
+                cache_write_tokens = unbilled.cache_write_tokens,
+                "the run ended with model usage that could not be recorded"
+            );
+        }
         tracing::info!(
             agent = %self.scope.agent_id,
             session_id = %self.scope.session_id,
@@ -338,7 +354,8 @@ impl Drop for Run {
 }
 
 /// 一次运行的计量：每次模型回复后记一笔（会话的累计随步骤更新，服务被硬杀只丢在途那次请求的）。用量是账目，不是运行的
-/// 一部分：记不上只记 error 日志、不改变运行的结果，没记上的并进下一笔，不丢不重。交出去之后调用方被取消的，这笔照样会
+/// 一部分：记不上只记 error 日志、不改变运行的结果，没记上的并进这次运行的下一笔；运行结束时还有没记上的，只在
+/// error 日志里留下数目（便于人工补记）。交出去之后调用方被取消的，这笔照样会
 /// 入账（UsageLog::record 的约定），按已入账算。
 struct Meter {
     usage: Arc<UsageLog>,

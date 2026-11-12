@@ -11,6 +11,7 @@ caseless = { workspace = true }
 chrono = { workspace = true }
 chrono-tz = { workspace = true }
 fernet = { workspace = true }
+futures = { workspace = true }
 libc = { workspace = true }
 rusqlite = { workspace = true }
 serde = { workspace = true }

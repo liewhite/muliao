@@ -89,7 +89,8 @@ pub struct ToolTraits {
     pub secret_args: &'static [&'static str],
     /// 界面上的展示形式；None 显示参数与结果的原文
     pub render: Option<Arc<ToolRender>>,
-    /// 同一步里的多个调用中，这类工具一个一个执行（彼此不并发），如读写同一批文件的文件工具；其余工具照常并发
+    /// 同一条回复里的调用中它是屏障：前面的调用（含 run_shell）做完才执行它，它做完才执行后面的（agenter 的
+    /// `DynTool::sequential`）。文件工具用它（#224：模型常在一条回复里先用 run_shell 生成文件、再 read_file 它）
     pub sequential: bool,
 }
 
@@ -140,9 +141,32 @@ impl BuiltinTool {
     }
 }
 
-/// 把一个工具和它的声明交给运行端口的工具箱。
+/// 把一个工具和它的声明交给运行端口的工具箱。声明里管执行的部分（sequential）在这里交给 agenter。
 pub fn builtin<T: Tool<RunScope>>(tool: T, traits: ToolTraits) -> BuiltinTool {
-    BuiltinTool { tool: agenter::tool(tool), traits }
+    let tool = agenter::tool(tool);
+    let tool = if traits.sequential { Arc::new(Barrier(tool)) } else { tool };
+    BuiltinTool { tool, traits }
+}
+
+/// 声明为屏障的工具（ToolTraits::sequential）。
+struct Barrier(Arc<dyn DynTool<RunScope>>);
+
+impl DynTool<RunScope> for Barrier {
+    fn def(&self) -> &agenter::ToolDef {
+        self.0.def()
+    }
+
+    fn sequential(&self) -> bool {
+        true
+    }
+
+    fn call<'a>(
+        &'a self,
+        ctx: agenter::ToolCtx<'a, RunScope>,
+        args: &'a str,
+    ) -> futures::future::BoxFuture<'a, Result<agenter::ToolOutput, ToolError>> {
+        self.0.call(ctx, args)
+    }
 }
 
 /// 领域错误交还模型修正（见模块说明的统一规则）。

@@ -2,11 +2,10 @@
 //! 资源目录的 `ToolTable::bind`）、界面的展示规则（[`Toolbox::renders`]）、消息落库前的脱敏（[`Toolbox::redaction`]），
 //! 以及一次运行按 agent 的规则开放的那部分（[`Toolbox::allowed`]）。MCP 工具不在这里（[`crate::mcp`]，每次运行连接）。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use agenter::{DynTool, Message, ResponsePart, ToolCall, ToolCtx, ToolDef, ToolError, ToolOutput};
-use futures::future::BoxFuture;
+use agenter::{DynTool, Event, Message, ResponsePart, RunEvent, ToolCall};
 use muliao_assets::rules::{Rules, ToolSpec};
 use muliao_platform::tool_views::ToolRender;
 use muliao_platform::tooling::{BuiltinTool, RunScope};
@@ -17,11 +16,20 @@ pub struct Toolbox {
 }
 
 impl Toolbox {
-    /// 全部内置工具，按注册顺序。重名是组合根的 bug，当场 panic。
+    /// 全部内置工具，按注册顺序。重名、声明要脱敏的参数不在工具的参数里（字段改了名而声明没跟着改，脱敏就会静默失效），
+    /// 都是代码的 bug，启动时当场 panic。
     pub fn new(tools: Vec<BuiltinTool>) -> Self {
         let mut seen = std::collections::HashSet::new();
         for t in &tools {
             assert!(seen.insert(t.name().to_owned()), "built-in tool {:?} is registered more than once", t.name());
+            let params = &t.tool.def().parameters["properties"];
+            for arg in t.traits.secret_args {
+                assert!(
+                    params.get(arg).is_some(),
+                    "tool {:?} declares secret argument {arg:?} it does not have",
+                    t.name()
+                );
+            }
         }
         Self { tools }
     }
@@ -51,49 +59,19 @@ impl Toolbox {
         }
     }
 
-    /// 一次运行开放的内置工具：rules（agent 现在的最终规则）放行的那些，按注册顺序。声明了 sequential 的工具共用这次
-    /// 运行的一把锁：同一步里它们一个一个执行。
+    /// 一次运行开放的内置工具：rules（agent 现在的最终规则）放行的那些，按注册顺序。
     pub fn allowed(&self, rules: &Rules) -> Vec<Arc<dyn DynTool<RunScope>>> {
         let names: Vec<&str> = self.tools.iter().map(BuiltinTool::name).collect();
         let allowed = rules.tools(names);
-        let lock = Arc::new(tokio::sync::Mutex::new(()));
-        self.tools
-            .iter()
-            .filter(|t| allowed.contains(&t.name()))
-            .map(|t| {
-                if t.traits.sequential {
-                    Arc::new(Sequential { inner: t.tool.clone(), lock: lock.clone() }) as Arc<dyn DynTool<RunScope>>
-                } else {
-                    t.tool.clone()
-                }
-            })
-            .collect()
-    }
-}
-
-/// 拿到这次运行的锁才执行。
-struct Sequential {
-    inner: Arc<dyn DynTool<RunScope>>,
-    lock: Arc<tokio::sync::Mutex<()>>,
-}
-
-impl DynTool<RunScope> for Sequential {
-    fn def(&self) -> &ToolDef {
-        self.inner.def()
-    }
-
-    fn call<'a>(&'a self, ctx: ToolCtx<'a, RunScope>, args: &'a str) -> BoxFuture<'a, Result<ToolOutput, ToolError>> {
-        Box::pin(async move {
-            let _turn = self.lock.lock().await;
-            self.inner.call(ctx, args).await
-        })
+        self.tools.iter().filter(|t| allowed.contains(&t.name())).map(|t| t.tool.clone()).collect()
     }
 }
 
 pub const REDACTED: &str = "[redacted]";
 
-/// 工具调用参数里的 secret 脱敏：在消息落库、推送到界面之前执行（会话领域）。只能防止明文进入保存的对话记录；同一次运行
-/// 中模型已经看到过明文。参数解析失败时交还模型的「请重试」不带参数的值（agenter 保证），不用处理。
+/// 工具调用参数里的 secret 脱敏。两处用：会话领域保存消息前（[`Redaction::messages`]）；运行中的实时预览在运行端口
+/// 交出事件前就已脱敏（[`Redaction::preview`]，[`crate::Run::step`] 套上），消费方不用记得做。只能防止明文进入保存的
+/// 对话记录与界面；同一次运行中模型已经看到过明文。参数解析失败时交还模型的「请重试」不带参数的值（agenter 保证），不用处理。
 #[derive(Debug, Clone, Default)]
 pub struct Redaction {
     secret_args: HashMap<String, &'static [&'static str]>,
@@ -131,21 +109,50 @@ impl Redaction {
             }
         }
     }
+
+    fn covers(&self, tool: &str) -> bool {
+        self.secret_args.contains_key(tool)
+    }
+
+    /// 一步的实时事件先脱敏再交给 sink：声明了脱敏参数的工具，它的调用段开始、整段替换时交出脱敏后的调用，参数的增量
+    /// 不交出（跟着事件攒半截回复的一方攒出的也是脱敏的）；工具开始执行时同样交出脱敏后的调用。一步用一个（段号只在一次
+    /// 模型请求里有意义）。
+    pub fn preview<'f>(
+        &'f self,
+        sink: &'f mut (dyn FnMut(RunEvent<'_>) + Send),
+    ) -> impl FnMut(RunEvent<'_>) + Send + 'f {
+        let mut secret_parts: HashSet<usize> = HashSet::new();
+        move |event| match event {
+            RunEvent::Model(Event::PartStart { index, part: ResponsePart::ToolCall(c) }) if self.covers(&c.name) => {
+                secret_parts.insert(*index);
+                sink(RunEvent::Model(&Event::PartStart { index: *index, part: ResponsePart::ToolCall(self.call(c)) }));
+            }
+            RunEvent::Model(Event::Replace { index, part: ResponsePart::ToolCall(c) }) if self.covers(&c.name) => {
+                sink(RunEvent::Model(&Event::Replace { index: *index, part: ResponsePart::ToolCall(self.call(c)) }));
+            }
+            RunEvent::Model(Event::Delta { index, .. }) if secret_parts.contains(index) => {}
+            RunEvent::ToolStarted(c) if self.covers(&c.name) => sink(RunEvent::ToolStarted(&self.call(c))),
+            other => sink(other),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use agenter::Tool;
-    use muliao_platform::tooling::{Audience, ToolTraits, builtin};
+    use agenter::{DeltaKind, Tool, ToolCtx, ToolError, ToolOutput};
+    use muliao_platform::tooling::{ToolTraits, builtin};
     use schemars::JsonSchema;
     use serde::Deserialize;
 
     use super::*;
 
     #[derive(Deserialize, JsonSchema)]
-    struct Args {}
+    struct Args {
+        #[allow(dead_code)]
+        value: Option<String>,
+    }
 
-    struct Named(&'static str, Arc<std::sync::Mutex<Vec<String>>>);
+    struct Named(&'static str);
 
     impl Tool<RunScope> for Named {
         type Args = Args;
@@ -156,23 +163,19 @@ mod tests {
             "t"
         }
         async fn call(&self, _ctx: ToolCtx<'_, RunScope>, _a: Args) -> Result<ToolOutput, ToolError> {
-            self.1.lock().unwrap().push(format!("{} start", self.0));
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            self.1.lock().unwrap().push(format!("{} end", self.0));
             Ok(agenter::tool::text("ok"))
         }
     }
 
-    fn log() -> Arc<std::sync::Mutex<Vec<String>>> {
-        Arc::default()
+    fn call(name: &str, args: &str) -> ToolCall {
+        ToolCall { id: "1".into(), name: name.into(), args: args.into(), meta: None }
     }
 
     #[test]
     fn specs_renders_and_redaction_come_from_the_declarations() {
-        let l = log();
         let tb = Toolbox::new(vec![
-            builtin(Named("read_x", l.clone()), ToolTraits::read().render(ToolRender::new())),
-            builtin(Named("make_y", l.clone()), ToolTraits::write().admin().secret_args(&["value"])),
+            builtin(Named("read_x"), ToolTraits::read().render(ToolRender::new())),
+            builtin(Named("make_y"), ToolTraits::write().admin().secret_args(&["value"])),
         ]);
         let specs = tb.specs();
         assert_eq!(
@@ -182,8 +185,6 @@ mod tests {
         assert!(specs[1].admin);
         assert_eq!(tb.renders().keys().collect::<Vec<_>>(), ["read_x"]);
         let r = tb.redaction();
-        let call =
-            |name: &str, args: &str| ToolCall { id: "1".into(), name: name.into(), args: args.into(), meta: None };
         assert_eq!(
             r.call(&call("make_y", r#"{"key":"K","value":"s3cret"}"#)).args,
             r#"{"key":"K","value":"[redacted]"}"#
@@ -195,31 +196,50 @@ mod tests {
     #[test]
     #[should_panic(expected = "registered more than once")]
     fn duplicate_names_are_a_bug() {
-        let l = log();
-        Toolbox::new(vec![
-            builtin(Named("a", l.clone()), ToolTraits::read()),
-            builtin(Named("a", l), ToolTraits::read()),
-        ]);
+        Toolbox::new(vec![builtin(Named("a"), ToolTraits::read()), builtin(Named("a"), ToolTraits::read())]);
     }
 
-    #[tokio::test]
-    async fn allowed_follows_rules_and_sequential_tools_take_turns() {
-        let l = log();
+    #[test]
+    #[should_panic(expected = "declares secret argument \"token\" it does not have")]
+    fn secret_args_must_be_real_arguments() {
+        Toolbox::new(vec![builtin(Named("a"), ToolTraits::write().secret_args(&["token"]))]);
+    }
+
+    #[test]
+    fn allowed_follows_rules_and_keeps_the_barrier_declaration() {
         let tb = Toolbox::new(vec![
-            builtin(Named("f1", l.clone()), ToolTraits::read().sequential()),
-            builtin(Named("f2", l.clone()), ToolTraits::write().sequential()),
-            builtin(Named("other", l.clone()), ToolTraits::read()),
+            builtin(Named("f1"), ToolTraits::read().sequential()),
+            builtin(Named("f2"), ToolTraits::write()),
+            builtin(Named("other"), ToolTraits::read()),
         ]);
         let rules = Rules::new(vec!["use:tool:f*".into()], vec!["use:tool:other".into()]);
         let tools = tb.allowed(&rules);
         assert_eq!(tools.iter().map(|t| t.def().name.as_str()).collect::<Vec<_>>(), ["f1", "f2"]);
-        let scope = RunScope::new("a".into(), "/w".into(), "s".into(), Audience::None);
-        let c1 = ToolCall { id: "1".into(), name: "f1".into(), args: "{}".into(), meta: None };
-        let c2 = ToolCall { id: "2".into(), name: "f2".into(), args: "{}".into(), meta: None };
-        let ctx = |c| ToolCtx { deps: &scope, call: c, retries: 0, approval: None };
-        let (a, b) = tokio::join!(tools[0].call(ctx(&c1), "{}"), tools[1].call(ctx(&c2), "{}"));
-        a.unwrap();
-        b.unwrap();
-        assert_eq!(*l.lock().unwrap(), ["f1 start", "f1 end", "f2 start", "f2 end"]);
+        assert!(tools[0].sequential() && !tools[1].sequential(), "agenter runs f1 as a barrier");
+    }
+
+    #[test]
+    fn preview_events_are_redacted() {
+        let tb = Toolbox::new(vec![builtin(Named("vault_set"), ToolTraits::write().secret_args(&["value"]))]);
+        let r = tb.redaction();
+        let mut seen: Vec<String> = Vec::new();
+        let mut sink = |e: RunEvent<'_>| seen.push(format!("{e:?}"));
+        {
+            let mut preview = r.preview(&mut sink);
+            let part = |args: &str| ResponsePart::ToolCall(call("vault_set", args));
+            preview(RunEvent::Model(&Event::PartStart { index: 0, part: part("") }));
+            preview(RunEvent::Model(&Event::Delta {
+                index: 0,
+                kind: DeltaKind::ToolArgs,
+                text: "{\"value\":\"hunter2".into(),
+            }));
+            preview(RunEvent::Model(&Event::Replace { index: 0, part: part(r#"{"value":"hunter2"}"#) }));
+            preview(RunEvent::Model(&Event::Delta { index: 1, kind: DeltaKind::Text, text: "ok".into() }));
+            preview(RunEvent::ToolStarted(&call("vault_set", r#"{"value":"hunter2"}"#)));
+        }
+        let all = seen.join("\n");
+        assert!(!all.contains("hunter2"), "{all}");
+        assert_eq!(seen.len(), 4, "the argument delta is dropped, the text delta passes: {all}");
+        assert!(all.contains("[redacted]") && all.contains("ok"));
     }
 }
