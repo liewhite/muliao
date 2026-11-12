@@ -1,0 +1,3 @@
+[net]
+# 走系统 git（用 ~/.ssh 的 key 拉 agenter）
+git-fetch-with-cli = true
