@@ -71,11 +71,12 @@ class SessionWork:
         await hold_in(s, session_id, holder, awaited=awaited)
 
     async def abandoned_in(self, s: AsyncSession, session_id: str, holder: str) -> None:
-        """这项工作没开始就放弃了，在发送方删掉它的事务里：清掉占用，不交回结局。占用已被停止清掉、或会话已删除时
-        不变。"""
+        """这项工作没开始就放弃了，在发送方删掉它的事务里：清掉占用，不交回结局。只在发起它的那次运行里调用：停止
+        排在运行退出之后、删除拒绝忙会话，所以占用一定还 active，不是就当场报错。"""
         hold = await hold_of_in(s, session_id, holder)
-        if hold is not None and hold.status == HoldStatus.ACTIVE:
-            abandon(hold)
+        if hold is None:
+            raise RuntimeError(f"session {session_id} was deleted while its run was starting {holder}")
+        abandon(hold)
 
     async def ended_in(self, s: AsyncSession, session_id: str, holder: str, text: str) -> None:
         """这项工作结束了，在发送方记下结局的事务里：往会话的信箱投一封事件信件（来源是占用者），同时释放占用。占用

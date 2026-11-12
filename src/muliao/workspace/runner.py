@@ -219,7 +219,8 @@ class JobRunner:
         )
 
     async def _discard(self, job: Job) -> None:
-        """进程没起来的任务：一个事务里删掉任务行、放弃会话上的占用。启动中的行没有别人会动（对账跳过它）。"""
+        """进程没起来的任务：一个事务里删掉任务行、放弃会话上的占用。没有别人会先动它们：对账跳过启动中的行，
+        会话的停止排在这次运行退出之后（清理在屏蔽作用域里做完），删除拒绝忙会话。"""
         async with self._db.transaction() as s:
             await s.execute(delete(Job).where(Job.id == job.id))
             await self._sessions.abandoned_in(s, job.session_id, job_holder(job.id))
