@@ -144,6 +144,8 @@ impl BuiltinTool {
 /// 把一个工具和它的声明交给运行端口的工具箱。声明里管执行的部分（sequential）在这里交给 agenter。
 pub fn builtin<T: Tool<RunScope>>(tool: T, traits: ToolTraits) -> BuiltinTool {
     let tool = agenter::tool(tool);
+    // 屏障只在声明里写，不在 Tool 上另写一份
+    assert!(!tool.sequential(), "tool {:?}: declare sequential in its ToolTraits, not on the Tool", tool.def().name);
     let tool = if traits.sequential { Arc::new(Barrier(tool)) } else { tool };
     BuiltinTool { tool, traits }
 }
