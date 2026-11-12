@@ -178,8 +178,12 @@ impl Actors {
             let Some(inner) = inner.upgrade() else { return };
             tokio::spawn(async move {
                 match (Actors { inner }).stop(&thread_id).await {
-                    Ok(halted) => tracing::info!(session_id = %thread_id, ?halted, "thread of a stopped session stopped"),
-                    Err(e) => tracing::error!(session_id = %thread_id, error = %e, "stopping a thread of a stopped session failed"),
+                    Ok(halted) => {
+                        tracing::info!(session_id = %thread_id, ?halted, "thread of a stopped session stopped")
+                    }
+                    Err(e) => {
+                        tracing::error!(session_id = %thread_id, error = %e, "stopping a thread of a stopped session failed")
+                    }
                 }
             });
         })
@@ -242,7 +246,12 @@ async fn actor(inner: Arc<Inner>, id: String, mut rx: mpsc::UnboundedReceiver<Co
 }
 
 /// 没在跑时收到的命令。
-async fn idle_command(inner: &Arc<Inner>, id: &str, cmd: Command, compactions: &mut Vec<oneshot::Sender<Result<usize>>>) {
+async fn idle_command(
+    inner: &Arc<Inner>,
+    id: &str,
+    cmd: Command,
+    compactions: &mut Vec<oneshot::Sender<Result<usize>>>,
+) {
     match cmd {
         Command::Wake => {}
         Command::Stop(reply) => {
@@ -354,13 +363,15 @@ async fn run_with_retries(
 /// 收尾：委派不结清，发起方的运行中检查会如实说，由它停掉 thread。返回有没有运行记录可记。
 async fn fail(core: &Core, id: &str, error: &str) -> bool {
     tracing::error!(session_id = id, error, "run failed");
-    let (session_id, message, waker, events) = (id.to_owned(), error.to_owned(), core.waker.clone(), core.events.clone());
+    let (session_id, message, waker, events) =
+        (id.to_owned(), error.to_owned(), core.waker.clone(), core.events.clone());
     let full = core
         .db
         .write(move |tx| {
             let Some(run) = runs::unfinished_in(tx, &session_id)? else { return Ok(false) };
             runs::end_in(tx, run.id, Outcome::Failed, Some(&message))?;
-            let session = directory::get_in(tx, &session_id)?.ok_or_else(|| not_found(format!("session {session_id} not found")))?;
+            let session = directory::get_in(tx, &session_id)?
+                .ok_or_else(|| not_found(format!("session {session_id} not found")))?;
             settle_failure_in(tx, &waker, &session, run.id, &message)?;
             let agent_name = muliao_assets::agents::agent_in(tx, &session.agent_id)?.name;
             events.run_failed(
@@ -388,12 +399,13 @@ async fn fail(core: &Core, id: &str, error: &str) -> bool {
         let alone = core
             .db
             .write(move |tx| match runs::unfinished_in(tx, &session_id)? {
-                Some(run) => runs::end_in(tx, run.id, Outcome::Failed, Some(&message)),
-                None => Ok(()),
+                Some(run) => runs::end_in(tx, run.id, Outcome::Failed, Some(&message)).map(|()| true),
+                None => Ok(false),
             })
             .await;
-        if let Err(e) = alone {
-            tracing::error!(session_id = id, error = %e, "recording a failed run failed");
+        match alone {
+            Ok(recorded) => return recorded,
+            Err(e) => tracing::error!(session_id = id, error = %e, "recording a failed run failed"),
         }
     }
     false
@@ -422,7 +434,8 @@ async fn compact(core: &Core, id: &str) -> Result<usize> {
     let (run_id, agent_id) = core
         .db
         .write(move |tx| {
-            let session = directory::get_in(tx, &session_id)?.ok_or_else(|| not_found(format!("session {session_id:?} not found")))?;
+            let session = directory::get_in(tx, &session_id)?
+                .ok_or_else(|| not_found(format!("session {session_id:?} not found")))?;
             // 正在删除的 agent 的会话不再新排工作（与来信同一条规则）
             muliao_assets::agents::active_agent_in(tx, &session.agent_id)?;
             Ok::<_, Error>((runs::start_in(tx, &session_id, RunKind::Compaction)?, session.agent_id))

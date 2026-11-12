@@ -71,7 +71,10 @@ impl Subscribers {
     pub fn on_run_ended(&mut self, f: impl Fn(&mut Tx<'_>, &RunEnded) -> Result<(), BoxError> + Send + Sync + 'static) {
         self.run_ended.push(Arc::new(f));
     }
-    pub fn on_run_failed(&mut self, f: impl Fn(&mut Tx<'_>, &RunFailed) -> Result<(), BoxError> + Send + Sync + 'static) {
+    pub fn on_run_failed(
+        &mut self,
+        f: impl Fn(&mut Tx<'_>, &RunFailed) -> Result<(), BoxError> + Send + Sync + 'static,
+    ) {
         self.run_failed.push(Arc::new(f));
     }
     pub fn on_session_stopped(

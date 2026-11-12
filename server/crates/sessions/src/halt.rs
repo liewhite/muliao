@@ -42,7 +42,12 @@ pub enum Halted {
 pub(crate) type StopThread = Arc<dyn Fn(String) + Send + Sync>;
 
 /// 停止事务。unsaved：运行中被停止时这次运行已产生、还没保存的部分（运行编号与消息），存在最前面。
-pub(crate) async fn halt(core: &Core, session_id: &str, unsaved: (Option<i64>, Vec<Message>), stop_thread: StopThread) -> Result<Halted> {
+pub(crate) async fn halt(
+    core: &Core,
+    session_id: &str,
+    unsaved: (Option<i64>, Vec<Message>),
+    stop_thread: StopThread,
+) -> Result<Halted> {
     let (run_id, mut messages) = unsaved;
     core.redaction.messages(&mut messages);
     let (session_id, waker, events) = (session_id.to_owned(), core.waker.clone(), core.events.clone());
@@ -53,7 +58,8 @@ pub(crate) async fn halt(core: &Core, session_id: &str, unsaved: (Option<i64>, V
                 return Ok(Halted::Gone);
             };
             if !messages.is_empty() {
-                let run_id = run_id.ok_or_else(|| broken(format!("session {session_id} has unsaved messages but no run")))?;
+                let run_id =
+                    run_id.ok_or_else(|| broken(format!("session {session_id} has unsaved messages but no run")))?;
                 history::append_in(tx, &session_id, run_id, &messages)?;
             }
             close_history_in(tx, &session_id, run_id)?;
@@ -61,7 +67,8 @@ pub(crate) async fn halt(core: &Core, session_id: &str, unsaved: (Option<i64>, V
             let cleared = clear_in(tx, &session_id)?;
             let answer = history::latest_answer(tx, &session_id)?;
             let (settled, discarded) = settle_stopped_in(tx, &waker, &session, &answer)?;
-            let delegations = delegations_among(tx, &cleared.iter().filter_map(|h| h.thread_call_id).collect::<Vec<_>>())?;
+            let delegations =
+                delegations_among(tx, &cleared.iter().filter_map(|h| h.thread_call_id).collect::<Vec<_>>())?;
             let threads: Vec<String> =
                 delegations.values().map(|d| d.thread_id.clone()).collect::<BTreeSet<_>>().into_iter().collect();
             for thread in threads.clone() {

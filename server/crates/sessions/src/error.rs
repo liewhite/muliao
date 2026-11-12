@@ -19,6 +19,11 @@ pub enum Error {
     /// 会话事件的订阅者（别的领域）出错：发布方的事务整个回滚
     #[error("a session event subscriber failed: {0}")]
     Subscriber(crate::events::BoxError),
+    /// 压缩时请模型总结失败
+    #[error("summarizing for compaction failed: {0}")]
+    Summarize(#[from] muliao_runtime::SummarizeError),
+    #[error("{0}")]
+    Io(#[from] std::io::Error),
 }
 
 impl From<FilesError> for Error {
@@ -45,6 +50,11 @@ impl Error {
             Error::Domain(e) => Some(e),
             _ => None,
         }
+    }
+
+    /// 暂时性的失败（模型接口出错）：稍后原样重试可能就成。
+    pub fn is_transient(&self) -> bool {
+        matches!(self, Error::Summarize(muliao_runtime::SummarizeError::Run(e)) if e.is_transient())
     }
 }
 

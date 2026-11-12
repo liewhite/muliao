@@ -11,11 +11,13 @@
 //! | [`MADE_UP`]：事后补的结果（停止、中断时没出结果的调用） | 工具结果的 metadata（`stopped` / `interrupted`） | 停止、续跑 | 模型看结果文字；会话条目（没有结束时间） |
 //! | [`RUN_EVENTS`] / [`RUN_CHECK_INS`]：这条请求里哪些段是事件、其中哪些是运行中检查 | 请求的 metadata（`parts` 的下标） | 交出信件时 | 会话条目 |
 //! | [`RUN_CONTEXT`]：这次运行的运行上下文（当前时间等） | 单独一段文字，请求的 metadata 记下标 | 每步保存 | 模型；会话条目不展示 |
+//! | [`FINISHED_AT`]：工具调用结束的时刻 | 工具结果的 metadata（RFC3339） | 每步保存 | 会话条目（结果的时间） |
 //! | 「调用是否已有结果」 | 工具结果；没结果的只可能在最后一条回复里 | — | [`unanswered_calls`] |
 
 use std::collections::HashSet;
 
 use agenter::{Message, Request, RequestPart, Response, ResponsePart, ToolCall, ToolResult};
+use chrono::{DateTime, SecondsFormat, Utc};
 use serde_json::{Map, Value};
 
 use crate::error::{Result, broken};
@@ -26,6 +28,7 @@ pub const MADE_UP: &str = "muliao_made_up";
 pub const RUN_EVENTS: &str = "muliao_events";
 pub const RUN_CHECK_INS: &str = "muliao_check_ins";
 pub const RUN_CONTEXT: &str = "muliao_run_context";
+pub const FINISHED_AT: &str = "muliao_finished_at";
 
 /// 停止时还没出结果的工具调用的结果：副作用可能已经发生，告诉模型它没有完成。
 pub const STOPPED_TOOL_RESULT: &str = "Stopped by the user before this tool call finished; it may have partly run.";
@@ -139,6 +142,21 @@ pub fn made_up(result: &ToolResult) -> Option<MadeUp> {
         Some("interrupted") => Some(MadeUp::Interrupted),
         _ => None,
     }
+}
+
+/// 工具调用结束的时刻（保存结果时记下）；没记的（事后补的结果、记下这条约定之前的结果）为 None。值不是 RFC3339 时间是
+/// 写入方的 bug，当场 panic。
+pub fn finished_at(result: &ToolResult) -> Option<DateTime<Utc>> {
+    let value = meta_of(&result.metadata)?.get(FINISHED_AT)?;
+    let parsed = value.as_str().and_then(|s| DateTime::parse_from_rfc3339(s).ok());
+    let at = parsed.unwrap_or_else(|| panic!("bad {FINISHED_AT} {value} on a result of {}", result.tool_name));
+    Some(at.with_timezone(&Utc))
+}
+
+/// 记下工具调用结束的时刻。
+pub fn set_finished_at(result: &mut ToolResult, at: DateTime<Utc>) {
+    meta_mut(&mut result.metadata)
+        .insert(FINISHED_AT.into(), Value::from(at.to_rfc3339_opts(SecondsFormat::Micros, true)));
 }
 
 /// 这些结果合成一条请求；没有则 None。
@@ -409,5 +427,15 @@ mod tests {
         let Message::User(r) = &m else { unreachable!() };
         let RequestPart::ToolResult(t) = &r.parts[0] else { unreachable!() };
         assert_eq!(made_up(t), Some(MadeUp::Interrupted));
+    }
+
+    #[test]
+    fn finished_at_round_trips() {
+        let mut r =
+            ToolResult { call_id: "a".into(), tool_name: "t".into(), content: vec![], is_error: false, metadata: None };
+        assert_eq!(finished_at(&r), None);
+        let at = DateTime::parse_from_rfc3339("2026-11-12T10:00:00.123456Z").unwrap().with_timezone(&Utc);
+        set_finished_at(&mut r, at);
+        assert_eq!(finished_at(&r), Some(at));
     }
 }

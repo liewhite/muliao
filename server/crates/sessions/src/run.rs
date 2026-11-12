@@ -33,7 +33,7 @@ use muliao_runtime::{Run, RunSpec, Runtime};
 use rusqlite::Connection;
 
 use crate::actor::Waker;
-use crate::answers::{CallResult, Waiting, approvals_waiting_text, questions_waiting_text, questions_of};
+use crate::answers::{CallResult, Waiting, approvals_waiting_text, questions_of, questions_waiting_text};
 use crate::compaction::{Compactor, Verdict};
 use crate::content::{Content, append_content, content_of, request_of};
 use crate::conventions::{
@@ -162,7 +162,11 @@ fn paused_end(calls: &[ToolCall], gated: &[ToolCall]) -> RunEnd {
 
 /// 通知里等批准的调用：工具名与参数（长的截短，全文在会话里）。
 fn brief(call: &ToolCall) -> String {
-    let args = if call.args.chars().count() <= 300 { call.args.clone() } else { format!("{}…", call.args.chars().take(300).collect::<String>()) };
+    let args = if call.args.chars().count() <= 300 {
+        call.args.clone()
+    } else {
+        format!("{}…", call.args.chars().take(300).collect::<String>())
+    };
     format!("{} {args}", call.name)
 }
 
@@ -183,7 +187,11 @@ struct Begun {
 }
 
 /// 一次运行（或从上次的尝试接着跑）：返回时运行已经收尾（结局已记下）。Err 是失败，由 actor 决定重试还是最终失败。
-pub(crate) async fn execute(core: &Core, session_id: &str, partial: &SharedPartial) -> std::result::Result<(), Failure> {
+pub(crate) async fn execute(
+    core: &Core,
+    session_id: &str,
+    partial: &SharedPartial,
+) -> std::result::Result<(), Failure> {
     let begun = begin(core, session_id).await?;
     partial.lock().expect("partial lock").run_id = Some(begun.run_id);
     let opening = opening(core, &begun).await?;
@@ -222,8 +230,9 @@ async fn begin(core: &Core, session_id: &str) -> Result<Begun> {
     let session_id = session_id.to_owned();
     core.db
         .write(move |tx| {
-            let session = directory::get_in(tx, &session_id)?
-                .unwrap_or_else(|| panic!("session {session_id} vanished while it had work: busy sessions are not deleted"));
+            let session = directory::get_in(tx, &session_id)?.unwrap_or_else(|| {
+                panic!("session {session_id} vanished while it had work: busy sessions are not deleted")
+            });
             let run_id = match runs::unfinished_in(tx, &session_id)? {
                 Some(r) => r.id,
                 None => runs::start_in(tx, &session_id, RunKind::Run)?,
@@ -300,7 +309,11 @@ async fn opening(core: &Core, begun: &Begun) -> Result<Option<Opening>> {
         }
         Position::Fresh => {
             let content = content_of(&core.files, &workspace, &begun.queued).await?;
-            (!content.is_empty()).then(|| Opening { mail: begun.queued.iter().map(|m| m.id).collect(), paused: None, content })
+            (!content.is_empty()).then(|| Opening {
+                mail: begun.queued.iter().map(|m| m.id).collect(),
+                paused: None,
+                content,
+            })
         }
         _ => None,
     })
@@ -309,8 +322,10 @@ async fn opening(core: &Core, begun: &Begun) -> Result<Option<Opening>> {
 /// 之前的尝试已经跑完、只差收尾：从保存的历史与它停在哪得出它怎么结束的。
 fn settled_end(begun: &Begun) -> Result<RunEnd> {
     if let Some(p) = begun.at.paused() {
-        let calls: Vec<ToolCall> = p.pending.iter().filter(|c| c.kind != Waiting::Approval).map(|c| c.call.clone()).collect();
-        let gated: Vec<ToolCall> = p.pending.iter().filter(|c| c.kind == Waiting::Approval).map(|c| c.call.clone()).collect();
+        let calls: Vec<ToolCall> =
+            p.pending.iter().filter(|c| c.kind != Waiting::Approval).map(|c| c.call.clone()).collect();
+        let gated: Vec<ToolCall> =
+            p.pending.iter().filter(|c| c.kind == Waiting::Approval).map(|c| c.call.clone()).collect();
         return Ok(paused_end(&calls, &gated));
     }
     match begun.context.messages.last() {
@@ -340,7 +355,8 @@ fn finish_in(
     runs::end_in(tx, run_id, Outcome::Done, None)?;
     let saved = history::saved_by_in(tx, session_id, run_id)?;
     let Some(end) = end.filter(|_| !saved.is_empty()) else { return Ok(()) };
-    let session = directory::get_in(tx, session_id)?.ok_or_else(|| broken(format!("session {session_id} vanished during its run")))?;
+    let session = directory::get_in(tx, session_id)?
+        .ok_or_else(|| broken(format!("session {session_id} vanished during its run")))?;
     directory::touch_in(tx, session_id)?;
     let mut handled = consumed_by_in(tx, session_id, run_id)?;
     handled.extend(adopted.iter().cloned());
@@ -505,7 +521,8 @@ impl Driver<'_> {
         first: Option<(Content, Vec<i64>)>,
         notices: &mut Vec<String>,
     ) -> std::result::Result<Next, Failure> {
-        let cut = self.history.iter().rposition(|m| matches!(m, Message::Assistant(_))).expect("ends with a response") + 1;
+        let cut =
+            self.history.iter().rposition(|m| matches!(m, Message::Assistant(_))).expect("ends with a response") + 1;
         // 挂起之前已经做完、存在回复之后的结果：连同回答交回 agenter（它们不再执行），新出的结果只存新的那些
         let saved: Vec<ToolResult> = self.history[cut..]
             .iter()
@@ -537,7 +554,8 @@ impl Driver<'_> {
                 .into_iter()
                 .filter(|t| !already.contains(&t.call_id))
                 .map(|mut t| {
-                    set_finished_at(&mut t, finished_at.get(&t.call_id).copied().unwrap_or_else(Utc::now));
+                    let at = finished_at.get(&t.call_id).copied().unwrap_or_else(Utc::now);
+                    set_finished_at(&mut t, at);
                     t
                 })
                 .collect()
@@ -571,10 +589,15 @@ impl Driver<'_> {
                 // 停在挂起的调用上：已做完的结果与这次新请求批准的调用同一个事务记下（分开提交时，进程在两者之间退出会留下
                 // 一个没有结果、又不算在等批准的调用）
                 if deferred.iter().any(|c| c.name != crate::pending::ASK_USER && c.name != crate::pending::ASK_AGENT) {
-                    return Err(broken(format!("run deferred unexpected tool calls: {:?}", deferred.iter().map(|c| &c.name).collect::<Vec<_>>())).into());
+                    return Err(broken(format!(
+                        "run deferred unexpected tool calls: {:?}",
+                        deferred.iter().map(|c| &c.name).collect::<Vec<_>>()
+                    ))
+                    .into());
                 }
                 let new: Vec<Message> = results_request(fresh(results)).map(Message::User).into_iter().collect();
-                let requested: Vec<(String, String)> = approvals.iter().map(|(c, pin)| (c.id.clone(), pin.clone())).collect();
+                let requested: Vec<(String, String)> =
+                    approvals.iter().map(|(c, pin)| (c.id.clone(), pin.clone())).collect();
                 let session_id = self.session_id().to_owned();
                 self.save_with(new, Vec::new(), Clear::Finished, move |tx| {
                     crate::approvals::record_in(tx, &session_id, &requested)
@@ -588,7 +611,12 @@ impl Driver<'_> {
     }
 
     /// 一条新请求（这次运行新增的）：并进新到的信与运行上下文，与它带上的信件同一个事务保存。
-    async fn save_request(&mut self, mut request: Request, mut mail: Vec<i64>, notices: &mut Vec<String>) -> Result<()> {
+    async fn save_request(
+        &mut self,
+        mut request: Request,
+        mut mail: Vec<i64>,
+        notices: &mut Vec<String>,
+    ) -> Result<()> {
         let session_id = self.session_id().to_owned();
         let queued = self.core.db.read(move |c| queued_in(c, &session_id)).await?;
         let arrived: Vec<Mail> = queued.into_iter().filter(|m| !mail.contains(&m.id)).collect();
@@ -599,7 +627,8 @@ impl Driver<'_> {
             mail.extend(arrived.iter().map(|m| m.id));
         }
         let attaching = self.run_context_row.is_none();
-        let context = with_notices(if attaching { &self.core.runtime.run_context(self.audience) } else { "" }, notices);
+        let run_context = if attaching { self.core.runtime.run_context(self.audience) } else { String::new() };
+        let context = with_notices(&run_context, notices);
         if !context.is_empty() {
             // 只挂在本次运行新增的第一条请求上（重发的那条已经在库里，不改它）；运行上下文已经挂出去了时，notices 单独挂
             attach_run_context(&mut request, &context);
@@ -615,7 +644,11 @@ impl Driver<'_> {
     }
 
     /// 刚保存了一条请求：上下文超过阈值时压缩，从库里重新加载上下文续跑（新的摘要在指令里，所以重新组装这次运行）。
-    async fn after_request(&mut self, _run: &Arc<Run>, notices: &mut Vec<String>) -> std::result::Result<Option<Arc<Run>>, Failure> {
+    async fn after_request(
+        &mut self,
+        _run: &Arc<Run>,
+        notices: &mut Vec<String>,
+    ) -> std::result::Result<Option<Arc<Run>>, Failure> {
         if !self.compaction_due() {
             return Ok(None);
         }
@@ -752,7 +785,13 @@ enum Clear {
 pub(crate) async fn unsaved_of(partial: &SharedPartial) -> Result<(Option<i64>, Vec<Message>)> {
     let (run_id, streaming, finished, finished_at, run) = {
         let mut p = partial.lock().expect("partial lock");
-        (p.run_id, p.streaming.take(), std::mem::take(&mut p.finished), std::mem::take(&mut p.finished_at), p.run.clone())
+        (
+            p.run_id,
+            p.streaming.take(),
+            std::mem::take(&mut p.finished),
+            std::mem::take(&mut p.finished_at),
+            p.run.clone(),
+        )
     };
     let mut messages = Vec::new();
     if let Some(b) = streaming {

@@ -71,7 +71,10 @@ impl Live {
     pub(crate) fn begin(&self, session_id: &str, after_message_id: Option<i64>) {
         let mut all = self.segments.lock().expect("live lock");
         // 同一会话同时只有一次运行；已有记录说明上一次漏了 end
-        assert!(all.insert(session_id.to_owned(), new_segment(after_message_id)).is_none(), "session {session_id} already has a live run");
+        assert!(
+            all.insert(session_id.to_owned(), new_segment(after_message_id)).is_none(),
+            "session {session_id} already has a live run"
+        );
     }
 
     /// 一次请求已经保存（事务已提交）：之后的事件属于新的一段。
@@ -111,7 +114,8 @@ impl Live {
             segment.events.push(envelope.clone());
             envelope
         };
-        self.bus.publish(ServerEvent { kind: "run", data: serde_json::to_value(envelope).expect("run events serialize") });
+        self.bus
+            .publish(ServerEvent { kind: "run", data: serde_json::to_value(envelope).expect("run events serialize") });
     }
 
     pub fn snapshot(&self, session_id: &str) -> Option<LiveSegment> {

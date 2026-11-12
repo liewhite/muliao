@@ -301,3 +301,133 @@ pub fn open_asks_of(at: &Position, queued: &[Mail]) -> OpenAsks {
     }
     asks
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use agenter::{Request, RequestPart, Response, ResponsePart};
+    use chrono::Utc;
+
+    use super::*;
+    use crate::answers::{AgentAnswer, AskResult};
+    use crate::mailbox::MailState;
+
+    fn call(id: &str, name: &str, args: &str) -> ToolCall {
+        ToolCall { id: id.into(), name: name.into(), args: args.into(), meta: None }
+    }
+
+    const ASK: &str = r#"{"questions":[{"question":"q","header":"h","options":[{"label":"a"},{"label":"b"}]}]}"#;
+
+    fn response(calls: Vec<ToolCall>) -> Message {
+        Message::Assistant(Response {
+            parts: calls.into_iter().map(ResponsePart::ToolCall).collect(),
+            protocol: "anthropic".into(),
+            model: "m".into(),
+            response_id: None,
+            finish_reason: None,
+            usage: Default::default(),
+            timestamp: Utc::now(),
+            metadata: None,
+        })
+    }
+
+    fn user() -> Message {
+        Message::User(Request {
+            parts: vec![RequestPart::Text { text: "hi".into() }],
+            timestamp: Utc::now(),
+            metadata: None,
+        })
+    }
+
+    fn mail(id: i64, kind: MailKind, answers: BTreeMap<String, CallResult>) -> Mail {
+        Mail {
+            id,
+            session_id: "s".into(),
+            kind,
+            source: None,
+            origin: None,
+            content: String::new(),
+            check_in: false,
+            attachments: vec![],
+            answers,
+            awaited: false,
+            delegation_id: None,
+            state: MailState::Queued,
+            taken_by: None,
+            created_at: Utc::now(),
+        }
+    }
+
+    fn answered(id: &str) -> BTreeMap<String, CallResult> {
+        BTreeMap::from([(
+            id.to_owned(),
+            CallResult::AskUser(AskResult { answered: true, answers: vec![], note: None }),
+        )])
+    }
+
+    #[test]
+    fn idle_fresh_and_resend() {
+        let none = HandedOut::default();
+        assert_eq!(position(&[response(vec![])], &none, &[]).unwrap(), Position::Idle);
+        let q = [mail(1, MailKind::Message, BTreeMap::new())];
+        assert_eq!(position(&[response(vec![])], &none, &q).unwrap(), Position::Fresh);
+        assert_eq!(position(&[user()], &none, &[]).unwrap(), Position::Resend { replays: vec![] });
+        let mut stopped = user();
+        crate::conventions::mark_stopped(&mut stopped);
+        assert_eq!(position(&[stopped], &none, &[]).unwrap(), Position::Idle);
+    }
+
+    #[test]
+    fn asks_wait_until_answered_or_a_new_message() {
+        let none = HandedOut::default();
+        let h = [response(vec![call("q1", ASK_USER, ASK)])];
+        let at = position(&h, &none, &[mail(1, MailKind::Event, BTreeMap::new())]).unwrap();
+        assert!(at.waiting_for_answers(), "events wait with the question");
+        let at = position(&h, &none, &[mail(1, MailKind::Answer, answered("q1"))]).unwrap();
+        assert!(at.paused().unwrap().ready);
+        let at = position(&h, &none, &[mail(1, MailKind::Message, BTreeMap::new())]).unwrap();
+        assert!(at.paused().unwrap().ready, "a new message skips the question");
+        // 参数不合法的提问不是提问：被打断的普通调用
+        let bad = [response(vec![call("q1", ASK_USER, "{}")])];
+        assert!(matches!(position(&bad, &none, &[]).unwrap(), Position::Interrupted { .. }));
+    }
+
+    #[test]
+    fn ask_agent_replays_until_handed_out_and_other_calls_are_interrupted() {
+        let h = [response(vec![call("a1", ASK_AGENT, "{}")])];
+        let none = HandedOut::default();
+        assert_eq!(position(&h, &none, &[]).unwrap(), Position::Resend { replays: vec![call("a1", ASK_AGENT, "{}")] });
+        let handed = HandedOut { delegated: ["a1".to_owned()].into(), approvals: Default::default() };
+        let at = position(&h, &handed, &[]).unwrap();
+        assert!(at.waiting_for_answers());
+        let answer = BTreeMap::from([(
+            "a1".to_owned(),
+            CallResult::AskAgent(AgentAnswer { text: "x".into(), attachments: vec![] }),
+        )]);
+        assert!(position(&h, &handed, &[mail(1, MailKind::Answer, answer)]).unwrap().paused().unwrap().ready);
+        // 一个不能重放就整步补「被中断」
+        let mixed = [response(vec![call("a1", ASK_AGENT, "{}"), call("c1", "run_shell", "{}")])];
+        let Position::Interrupted { calls, after } = position(&mixed, &none, &[]).unwrap() else { panic!() };
+        assert_eq!(calls.len(), 2);
+        assert_eq!(*after, Position::Resend { replays: vec![] });
+        // 等批准的按记录认
+        let gated = [response(vec![call("c1", "skill_run", "{}")])];
+        let approvals = HandedOut { delegated: Default::default(), approvals: ["c1".to_owned()].into() };
+        let at = position(&gated, &approvals, &[]).unwrap();
+        assert_eq!(open_asks_of(&at, &[]).approvable, vec![("c1".to_owned(), "skill_run".to_owned())]);
+        let closing = closing_on_stop(&at);
+        assert_eq!(closing.stopped.len(), 1, "stopping does not keep calls waiting for approval");
+    }
+
+    #[test]
+    fn stop_keeps_unanswered_questions_and_writes_submitted_answers() {
+        let none = HandedOut::default();
+        let h = [response(vec![call("q1", ASK_USER, ASK), call("q2", ASK_USER, ASK)])];
+        let at = position(&h, &none, &[mail(7, MailKind::Answer, answered("q1"))]).unwrap();
+        let closing = closing_on_stop(&at);
+        assert!(closing.stopped.is_empty());
+        assert_eq!(closing.answered.iter().map(|r| r.call_id.as_str()).collect::<Vec<_>>(), ["q1"]);
+        assert_eq!(closing.used, [7]);
+    }
+}

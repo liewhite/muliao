@@ -86,7 +86,8 @@ pub(crate) async fn deliver_due(db: &Database, waker: &Waker, tz: Tz) -> Result<
     let waker = waker.clone();
     db.write(move |tx: &mut Tx<'_>| {
         let now = Utc::now();
-        let due: Vec<(String, String, DateTime<Utc>, String, DateTime<Utc>)> = {
+        type Due = (String, String, DateTime<Utc>, String, DateTime<Utc>);
+        let due: Vec<Due> = {
             let mut stmt = tx.prepare(
                 "SELECT w.holder, w.session_id, w.due_at, w.note, w.created_at FROM wakeups w \
                  JOIN session_holds h ON h.holder = w.holder AND h.status = 'active' \
