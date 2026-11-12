@@ -19,9 +19,12 @@ croner = "4"
 # 纯 Rust 实现：不动态链接 Homebrew 的 OpenSSL（brew upgrade 换代后服务会起不来）
 fernet = { version = "0.2", default-features = false, features = ["rustcrypto"] }
 caseless = "0.2"
+futures = "0.3"
 libc = "0.2"
 notify = "8"
-rusqlite = { version = "0.42", features = ["bundled", "chrono"] }
+# 出站 HTTP：rustls（不链接 OpenSSL），与 agenter 同一套
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls", "charset"] }
+rusqlite = { version = "0.42", features = ["bundled", "chrono", "fallible_uint"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = "3"
@@ -33,6 +36,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 unicode-normalization = "0.1"
 uuid = { version = "1", features = ["v4"] }
+wiremock = "0.6"
 
 # 领域 crate 互相引用的路径（只能引用更早一层的，见 docs/architecture.md 2.3）
 muliao-platform = { path = "crates/platform" }

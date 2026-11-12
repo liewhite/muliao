@@ -6,6 +6,22 @@ publish.workspace = true
 
 [dependencies]
 muliao-platform = { workspace = true }
+agenter = { workspace = true }
+dom_smoothie = "0.19"
+encoding_rs = "0.8"
+futures = { workspace = true }
+reqwest = { workspace = true }
+schemars = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+encoding_rs = "0.8"
+toml = { workspace = true }
+wiremock = { workspace = true }
 
 [lints]
 workspace = true
