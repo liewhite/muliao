@@ -3,5 +3,7 @@
 # 再 exec 过去。这样不用重新加载 launchd 的 plist（从服务里起的进程 launchctl bootstrap 会失败，#706），服务也不会在
 # 换库期间被 KeepAlive 拉起旧程序。用法见 deploy/lib.sh 的 hold_service / release_to。
 me=$(readlink "$0")
+# 报到：hold_service 等到这个 pid 就是服务的 pid 才去改入口（改早了，launchd 起 hold.sh 的半路会读到别的文件）
+echo $$ > "$me.pid"
 while [ "$(readlink "$0")" = "$me" ]; do sleep 1; done
 exec "$0" "$@"

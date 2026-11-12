@@ -39,20 +39,28 @@ point_entry() {
   say "service entry $ENTRY -> $1"
 }
 
+# 服务此刻跑的就是报到过的 hold.sh
+on_hold() {
+  p=$(svc_pid)
+  [ -n "$p" ] && [ "$(cat "$HOLD.pid" 2>/dev/null)" = "$p" ]
+}
+
 # 让服务停在 hold.sh 上：入口指向它，重启服务（SIGTERM，在跑的程序按自己的关停流程退出，最长 ExitTimeOut），
 # 等原来的进程真的退出。之后库可以随便换，launchd 拉起的只是在等的 hold.sh。停不下来返回 1。
 hold_service() {
   cp "$(dirname "$0")/hold.sh" "$HOLD.new" && chmod +x "$HOLD.new" && mv -f "$HOLD.new" "$HOLD" || return 1
   old=$(svc_pid)
+  rm -f "$HOLD.pid"
   point_entry "$HOLD" || return 1
   launchctl kickstart -k "$SVC" || return 1
+  # 等旧进程退出、hold.sh 起来报到（launchd 两次启动之间最多隔 ThrottleInterval）
   i=0
-  while [ -n "$old" ] && kill -0 "$old" 2>/dev/null; do
+  while [ -n "$old" ] && kill -0 "$old" 2>/dev/null || ! on_hold; do
     i=$((i + 1))
-    [ $i -ge 120 ] && { say "old process $old still alive after 120s"; return 1; }
+    [ $i -ge 150 ] && { say "not on hold after 150s (old process ${old:-none}, pid now $(svc_pid))"; return 1; }
     sleep 1
   done
-  say "service on hold (old process ${old:-none} gone after ${i}s, now pid $(svc_pid))"
+  say "service on hold (old process ${old:-none} gone, hold.sh is pid $(svc_pid), ${i}s)"
 }
 
 # 从 hold 放行到 Rust 版或 Python 版：改入口，hold.sh 一秒内发现并 exec 过去（同一个进程，launchd 不重启）。
