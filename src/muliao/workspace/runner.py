@@ -27,7 +27,7 @@ from typing import Any
 
 import anyio
 from anyio.abc import TaskGroup
-from sqlalchemy import Select, select
+from sqlalchemy import Select, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.errors import Conflict, NotFound
@@ -39,7 +39,6 @@ from muliao.platform.tasks import Clock
 from muliao.sessions.api import (
     CheckBeats,
     SessionWork,
-    hold_registered_in,
     job_holder,
     job_id_of_holder,
     session_in,
@@ -52,10 +51,6 @@ from muliao.workspace.tables import Job, JobStatus
 log = logging.getLogger(__name__)
 
 JOBS_DIR = "jobs"
-
-
-def _start_failure(error: BaseException) -> str:
-    return f"it could not be started ({type(error).__name__}: {error})"
 
 
 def _duration(start: datetime, end: datetime) -> str:
@@ -164,6 +159,9 @@ class JobRunner:
                 s.add(job)
                 await s.flush()
                 job.log_path = f"{JOBS_DIR}/{job.id}.log"
+                # 同一事务里在会话上登记占用（会话据此知道工作还没做完；用户是否在等结局记在占用上）：任务行与占用
+                # 一起出现，没有「有行无占用」的中间状态
+                await self._sessions.hold_in(s, session_id, job_holder(job.id), awaited=awaited)
                 # 正在启动：对账不把它当成没人监督的（无论启动成败，结束时撤销）。在插入的事务里登记，行一出现就有标记
                 self._starting.add(job.id)
         except BaseException:
@@ -172,23 +170,22 @@ class JobRunner:
                 self._starting.discard(job.id)
             raise
         try:
-            await self._launch(job, agent_shell, group, awaited)
+            await self._launch(job, agent_shell, group)
         finally:
             self._starting.discard(job.id)
         log.info("background job started", extra={"job_id": job.id, "session_id": session_id, "pid": job.pid})
         return job
 
-    async def _launch(self, job: Job, agent_shell: AgentShell, group: TaskGroup, awaited: bool) -> None:
+    async def _launch(self, job: Job, agent_shell: AgentShell, group: TaskGroup) -> None:
         """起进程与监督者并记下 pid。任何一步失败或被取消（这次运行被停止）都不能留下没人能结束的进程：清理在
         屏蔽作用域里做完；清理超时则记 error，这一行留在 running，下一次检查的对账把它记为被中断并告诉 agent。"""
         log_file = self._log_file(job)
         try:
-            # 先在会话上登记占用（会话据此知道工作还没做完；用户是否在等结局记在占用上），再起进程
-            await self._sessions.hold(job.session_id, job_holder(job.id), awaited=awaited)
             await asyncio.to_thread(log_file.parent.mkdir, parents=True, exist_ok=True)
             proc = await agent_shell.spawn(job.command, merge_stderr=True)
-        except BaseException as e:
-            await self._cleanup(job.id, "spawn", self._close_unstarted(job.id, _start_failure(e)))
+        except BaseException:
+            # 进程没起来：失败已作为这次工具调用的结果告诉 agent，任务行与占用一起撤掉，不再另投事件
+            await self._cleanup(job.id, "spawn", self._discard(job))
             raise
         handle = _Running(proc, agent_shell)
         try:
@@ -214,13 +211,19 @@ class JobRunner:
         handle.scope.cancel()
         if handle.started:
             await handle.finished.wait()
-        await self._close_unstarted(job_id, "its process id could not be recorded (see server log)")
-
-    async def _close_unstarted(self, job_id: int, reason: str) -> None:
         await self._close_each(
             lambda: select(Job).where(Job.id == job_id, Job.status == JobStatus.RUNNING),
-            lambda s, job, last: self._close_unsupervised_in(s, job, reason, last, may_be_alive=False),
+            lambda s, job, last: self._interrupt_in(
+                s, job, "its process id could not be recorded (see server log)", last, may_be_alive=False
+            ),
         )
+
+    async def _discard(self, job: Job) -> None:
+        """进程没起来的任务：一个事务里删掉任务行、放弃会话上的占用。启动中的行没有别人会动（对账跳过它）。"""
+        async with self._db.transaction() as s:
+            await s.execute(delete(Job).where(Job.id == job.id))
+            await self._sessions.abandoned_in(s, job.session_id, job_holder(job.id))
+        log.info("background job that could not start discarded", extra={"job_id": job.id})
 
     async def _close_each(
         self,
@@ -248,20 +251,6 @@ class JobRunner:
     def _log_file(self, job: Job) -> Path:
         # 与起进程时的 AgentShell.cwd 同源（agents.workspace）；不起命令的读路径（job_status、对账）不经 prepare
         return self._workspace_of(job.agent_id) / job.log_path
-
-    async def _close_unsupervised_in(
-        self, s: AsyncSession, job: Job, reason: str, last: str, *, may_be_alive: bool
-    ) -> None:
-        """没有监督者的任务行（启动失败、监督意外结束）的唯一收敛规则：会话还在、上面没登记过占用，说明任务没开始过，
-        删掉这一行；否则记为被中断，交回会话并释放占用（会话已删除时交回得到「会话已不在」，行照样保留终态）。占用行
-        随会话删除，所以「没登记过」只在会话还在时成立；会话与占用的存在都只会单向变化，在本事务里读没有竞态。"""
-        if await session_in(s, job.session_id) is not None and not await hold_registered_in(
-            s, job.session_id, job_holder(job.id)
-        ):
-            await s.delete(job)
-            log.info("background job that never started discarded", extra={"job_id": job.id})
-            return
-        await self._interrupt_in(s, job, reason, last, may_be_alive=may_be_alive)
 
     async def _cleanup(self, job_id: int, stage: str, cleanup: Coroutine[Any, Any, None]) -> None:
         """启动失败后的清理：屏蔽取消、设时限；做不完就记下来，交给对账。"""
@@ -428,7 +417,7 @@ class JobRunner:
             lambda: select(Job).where(
                 Job.status == JobStatus.RUNNING, Job.id.not_in([*self._running, *self._starting])
             ),
-            lambda s, job, last: self._close_unsupervised_in(
+            lambda s, job, last: self._interrupt_in(
                 s, job, "its supervision ended unexpectedly (see server log)", last, may_be_alive=True
             ),
         )
@@ -436,7 +425,7 @@ class JobRunner:
             log.warning(
                 "unsupervised background jobs marked interrupted", extra={"job_ids": [j.id for j in orphans]}
             )
-        # 只检查有人监督的：登记监督之前占用已经登记（_launch），启动中的任务还没有占用，不检查
+        # 只检查有人监督的：启动中的任务进程还没起来，不检查
         supervised = list(self._running)
         self._beats.keep(supervised)
         async with self._db.transaction() as s:
@@ -469,7 +458,7 @@ class JobRunner:
         进程自成进程组，不随服务退出，可能还活着：如实告诉 agent，不盲杀（pid 可能已被复用）。"""
         stale = await self._close_each(
             lambda: select(Job).where(Job.status == JobStatus.RUNNING),
-            lambda s, job, last: self._close_unsupervised_in(
+            lambda s, job, last: self._interrupt_in(
                 s, job, "the service stopped unexpectedly", last, may_be_alive=True
             ),
         )

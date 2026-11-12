@@ -94,7 +94,7 @@ class SessionPorts(Parts):
             delegations=delegations,
             thread_checks=ThreadChecks(db, queue),
             wakeups=WakeUps(db, queue, tz),
-            work=SessionWork(db, queue),
+            work=SessionWork(queue),
             inbox=SenderInbox(queue),
             recall=recall,
             _tools=(

@@ -55,11 +55,6 @@ async def get_in(s: AsyncSession, session_id: str, holder: str) -> SessionHold |
     )
 
 
-async def registered_in(s: AsyncSession, session_id: str, holder: str) -> bool:
-    """这项工作在会话上登记过占用（行永久保留，随会话删除）。"""
-    return await get_in(s, session_id, holder) is not None
-
-
 async def active_delegations_in(
     s: AsyncSession, thread_call_ids: Collection[int] | None = None
 ) -> list[SessionHold]:

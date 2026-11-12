@@ -340,13 +340,14 @@ async def _job_rows(container) -> list[Job]:
         return list((await s.scalars(select(Job))).all())
 
 
-async def test_a_job_that_fails_before_holding_its_session_leaves_no_row(container, make_agent, monkeypatch):
+async def test_a_job_whose_hold_cannot_be_registered_leaves_no_row(container, make_agent, monkeypatch):
+    """任务行与占用同一个事务：登记占用失败，行也不留。"""
     session, agent = await _session_for_jobs(container, make_agent)
 
     async def broken_hold(*_args, **_kwargs):
         raise RuntimeError("database unavailable")
 
-    monkeypatch.setattr(container.jobs._sessions, "hold", broken_hold)  # noqa: SLF001
+    monkeypatch.setattr(container.jobs._sessions, "hold_in", broken_hold)  # noqa: SLF001
     with pytest.raises(RuntimeError, match="database unavailable"):
         await container.jobs.start(
             session_id=session.id,
@@ -370,7 +371,10 @@ async def _held_job_outcome(container, session_id: str) -> tuple[Job, str]:
     return row, event.content
 
 
-async def test_a_job_whose_process_cannot_start_is_reported_interrupted(container, make_agent, monkeypatch):
+async def test_a_job_whose_process_cannot_start_is_discarded_with_its_hold(
+    container, make_agent, monkeypatch
+):
+    """进程没起来：失败只作为工具结果报给 agent，任务行删掉、占用放弃，不投事件。"""
     session, agent = await _session_for_jobs(container, make_agent)
 
     async def broken_spawn(*_args, **_kwargs):
@@ -388,12 +392,13 @@ async def test_a_job_whose_process_cannot_start_is_reported_interrupted(containe
             check_seconds=30,
         )
 
-    row, content = await _held_job_outcome(container, session.id)
-    assert (
-        row.status == JobStatus.INTERRUPTED
-        and "could not be started" in content
-        and "bash missing" in content
-    )
+    await side_tasks(container)
+    assert await _job_rows(container) == []
+    assert [
+        m for m in await queued_events(container, session.id) if (m.source or "").startswith("job:")
+    ] == []
+    async with container.db.transaction() as s:
+        assert not await has_active_in(s, session.id)
 
 
 async def test_a_job_whose_pid_cannot_be_recorded_kills_its_process_and_is_reported_interrupted(
@@ -438,11 +443,11 @@ async def test_a_start_whose_cleanup_times_out_is_reconciled_as_interrupted(
     async def broken_spawn(*_args, **_kwargs):
         raise OSError("bash missing")
 
-    async def stuck_close(_self, _job_id, _reason):
+    async def stuck_discard(_self, _job):
         await asyncio.sleep(60)
 
     monkeypatch.setattr("muliao.workspace.commands.spawn_bash", broken_spawn)
-    monkeypatch.setattr("muliao.workspace.runner.JobRunner._close_unstarted", stuck_close)
+    monkeypatch.setattr("muliao.workspace.runner.JobRunner._discard", stuck_discard)
     monkeypatch.setattr("muliao.workspace.runner._CLEANUP_SECONDS", 0.1)
     with pytest.raises(OSError):
         await container.jobs.start(
@@ -543,7 +548,7 @@ async def test_a_check_while_a_job_is_starting_skips_it(container, make_agent, m
     launch = container.jobs._launch
 
     async def slow_launch(*args, **kwargs):
-        # 行已插入、占用还没登记（hold_in 在 _launch 的第一个事务里）；停在事务之外
+        # 行与占用已插入、进程还没起；停在事务之外
         holding.set()
         await release.wait()
         await launch(*args, **kwargs)
@@ -562,7 +567,7 @@ async def test_a_check_while_a_job_is_starting_skips_it(container, make_agent, m
             )
         )
         await holding.wait()
-        # 行已经是 running、占用还没登记：既不当成没人监督的，也不发检查
+        # 行已经是 running、还没有监督者：既不当成没人监督的，也不发检查
         assert await container.jobs.check() == 0
         release.set()
     [row] = await _job_rows(container)
@@ -570,7 +575,7 @@ async def test_a_check_while_a_job_is_starting_skips_it(container, make_agent, m
 
 
 async def test_a_job_whose_session_was_deleted_is_kept_as_interrupted_after_a_crash(container, make_agent):
-    """占用行随会话删除：会话已不在时不能把运行过的任务当成「没开始过」删掉，记为被中断，交回得到「会话已不在」。"""
+    """会话已删除（占用随它删除）：崩溃后照样记为被中断，交回得到「会话已不在」，不出错。"""
     from tests.test_flow import drain
 
     session, agent = await _session_for_jobs(container, make_agent)

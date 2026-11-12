@@ -1,7 +1,7 @@
 """在会话之外进行的工作与会话的接口（docs/architecture.md 第 7 节「占用与结清」）：登记占用、运行中检查、交回结局。
 
-- SessionWork：别的领域（后台任务）登记占用（hold，在会话领域自己的事务里），工作结束与运行中检查（ended_in、
-  checked_in，在发送方记下结局或确认工作仍在进行的事务里）。
+- SessionWork：别的领域（后台任务）登记占用与没开始就放弃（hold_in、abandoned_in，在发送方记下或删掉这项工作的事务里），
+  工作结束与运行中检查（ended_in、checked_in，在发送方记下结局或确认工作仍在进行的事务里）。
 - 运行中检查的间隔规则（check_interval 定间隔、CheckBeats 记上次检查的时刻）：后台任务与委派共用，节拍在
   platform.checks.WorkWatcher。
 - post_check_in：运行中检查投信，与 deliver_in 共用占用的检查。
@@ -19,9 +19,8 @@ from enum import StrEnum
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.errors import InvalidInput
-from muliao.platform.db import Database
 from muliao.platform.tasks import TaskQueue
-from muliao.sessions.holds import get_in, hold_in, release
+from muliao.sessions.holds import abandon, get_in, hold_in, release
 from muliao.sessions.mailbox import has_queued_from, position_in, post_in
 from muliao.sessions.pending import CallResult, paused
 from muliao.sessions.tables import HoldStatus, MailKind, Session, SessionHold
@@ -64,14 +63,19 @@ class CheckBeats[K]:
 class SessionWork:
     """别的领域在会话之外做一项工作时对会话的命令。"""
 
-    def __init__(self, db: Database, queue: TaskQueue):
-        self._db = db
+    def __init__(self, queue: TaskQueue):
         self._queue = queue
 
-    async def hold(self, session_id: str, holder: str, *, awaited: bool) -> None:
-        """登记一项进行中的工作（重放幂等）：会话据此知道工作还没做完。awaited：用户是否在等它的结局。"""
-        async with self._db.transaction() as s:
-            await hold_in(s, session_id, holder, awaited=awaited)
+    async def hold_in(self, s: AsyncSession, session_id: str, holder: str, *, awaited: bool) -> None:
+        """登记一项进行中的工作，在发送方记下这项工作的事务里：会话据此知道工作还没做完。awaited：用户是否在等它的结局。"""
+        await hold_in(s, session_id, holder, awaited=awaited)
+
+    async def abandoned_in(self, s: AsyncSession, session_id: str, holder: str) -> None:
+        """这项工作没开始就放弃了，在发送方删掉它的事务里：清掉占用，不交回结局。占用已被停止清掉、或会话已删除时
+        不变。"""
+        hold = await hold_of_in(s, session_id, holder)
+        if hold is not None and hold.status == HoldStatus.ACTIVE:
+            abandon(hold)
 
     async def ended_in(self, s: AsyncSession, session_id: str, holder: str, text: str) -> None:
         """这项工作结束了，在发送方记下结局的事务里：往会话的信箱投一封事件信件（来源是占用者），同时释放占用。占用
