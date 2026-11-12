@@ -32,7 +32,7 @@ from muliao.sessions.answers import AgentAnswer, AgentAnswered
 from muliao.sessions.directory import among_in
 from muliao.sessions.holds import hold_delegation_in
 from muliao.sessions.inbound import FromParent, Inbound, receive
-from muliao.sessions.runs import latest_runs_among
+from muliao.sessions.runs import failure_of, latest_runs_among
 from muliao.sessions.sources import thread_source
 from muliao.sessions.tables import Session
 from muliao.sessions.thread_calls import Owed, call_in, owed_in, record_call_in
@@ -256,8 +256,8 @@ def check_text(
         case WorkState.IDLE if run is not None and run.failed:
             # 最终失败的收尾钩子自己出错时，结清与唤醒随收尾一起回滚：委派不会自己结束，如实说，让发起方能自己停
             return (
-                f"{who} failed on its last run and will not continue on its own; its failure was not handed back to "
-                f"you. Call stop_thread(thread={name!r}, agent={agent.name!r}) to settle it."
+                f"{who} failed on its last run ({failure_of(run)}) and will not continue on its own; its failure was not "
+                f"handed back to you. Call stop_thread(thread={name!r}, agent={agent.name!r}) to settle it."
             )
         case WorkState.RUNNING | WorkState.IDLE:
             doing = "has your task queued and has not started on it yet"

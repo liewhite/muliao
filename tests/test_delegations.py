@@ -2,6 +2,7 @@
 的结果（发问方已经不等时作为事件）；运行中检查；随发起方停止。"""
 
 import asyncio
+from dataclasses import replace
 
 import pytest
 from pydantic_ai.exceptions import ModelHTTPError
@@ -370,9 +371,9 @@ def test_check_text_follows_the_threads_work_state_and_offers_stop_thread():
     assert "waiting for work it started" in check_text(child, agent, WorkState.WAITING, done, now, 30)
     assert "queued and has not started" in check_text(child, agent, WorkState.IDLE, done, now, 30)
     # 最终失败的收尾钩子自己出错时结清随它回滚：thread 空闲、最近一次运行失败，如实说不会自己继续，建议停掉
-    failed = run(5, TaskStatus.FAILED, 1)
+    failed = replace(run(5, TaskStatus.FAILED, 1), error="boom")
     text = check_text(child, agent, WorkState.IDLE, failed, now, 30)
-    assert "will not continue on its own" in text and "stop_thread(thread='review'" in text
+    assert "(boom) and will not continue on its own" in text and "stop_thread(thread='review'" in text
     # 被停止时如实说明，附上停止前说的话
     assert "was stopped" in _event_text("review", agent.name, Ending.STOPPED, "")
 
