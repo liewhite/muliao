@@ -507,7 +507,6 @@ name = "muliao-issues"
 version = "0.1.0"
 dependencies = [
  "muliao-assets",
- "muliao-notifications",
  "muliao-platform",
  "muliao-runtime",
  "muliao-sessions",
