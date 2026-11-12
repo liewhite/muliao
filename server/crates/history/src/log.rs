@@ -97,13 +97,11 @@ impl History {
 
     /// 这个本地日历日的起止时刻 [start, end)：活动概览按它取当天的会话活动。
     pub fn day_bounds(&self, day: NaiveDate) -> (DateTime<Utc>, DateTime<Utc>) {
+        // 一天从本地零点开始；零点在夏令时切换里被跳过的时区，从之后第一个存在的整点开始
         let start = |d: NaiveDate| {
-            let midnight = d.and_hms_opt(0, 0, 0).expect("midnight exists");
-            // 午夜在夏令时切换里不存在时取之后最早的那个时刻
-            self.tz
-                .from_local_datetime(&midnight)
-                .earliest()
-                .unwrap_or_else(|| self.tz.from_utc_datetime(&midnight))
+            (0..24)
+                .find_map(|h| self.tz.from_local_datetime(&d.and_hms_opt(h, 0, 0)?).earliest())
+                .expect("a local day has an hour that exists")
                 .with_timezone(&Utc)
         };
         (start(day), start(day.succ_opt().expect("a day after")))

@@ -236,6 +236,18 @@ impl Waiting {
     }
 }
 
+/// 用户对提问的回答，每题一行（`- 问题: 选项; 其他`）：调用结束后才到的回答交给模型、热历史列出用户的回答，都用这一份。
+pub fn answer_lines(asked: &[&AskResult]) -> Vec<String> {
+    asked
+        .iter()
+        .flat_map(|r| &r.answers)
+        .map(|a| {
+            let given: Vec<&str> = a.selected.iter().map(String::as_str).chain(a.other.as_deref()).collect();
+            format!("- {}: {}", a.question, given.join("; "))
+        })
+        .collect()
+}
+
 /// 回答信件里一次调用的结果。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "tool", content = "result", rename_all = "snake_case")]
@@ -288,12 +300,7 @@ impl CallResult {
             .collect();
         if !asked.is_empty() {
             lines.push("The user answered questions that had already been closed:".to_owned());
-            for r in asked {
-                for a in &r.answers {
-                    let given: Vec<&str> = a.selected.iter().map(String::as_str).chain(a.other.as_deref()).collect();
-                    lines.push(format!("- {}: {}", a.question, given.join("; ")));
-                }
-            }
+            lines.extend(answer_lines(&asked));
         }
         for r in results {
             match r {

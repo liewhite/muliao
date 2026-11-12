@@ -12,9 +12,9 @@ use chrono::{DateTime, Utc};
 use rusqlite::Connection;
 
 use crate::activity::{WorkState, work_states_in};
-use crate::answers::CallResult;
+use crate::answers::{AskResult, CallResult, answer_lines};
 use crate::directory::{Session, among_in, with_prefix_in};
-use crate::error::{Result, invalid, not_found};
+use crate::error::{Result, broken, invalid, not_found};
 use crate::history::{Span, spans_between_in, transcript_in};
 use crate::mailbox::{Mail, MailKind, MailState, first_arrivals_between_in, sent_by_in};
 use crate::origins::Origin;
@@ -89,33 +89,34 @@ pub fn between_in(
                 .min()
                 .expect("an active session has mail or messages in the range");
             let runs = runs.remove(&session.id).unwrap_or_default();
+            // 按运行开始的时刻归到哪天（Python 版按排队的时刻；Rust 版没有任务队列，只有跨午夜才开始的运行会归到不同的天）
             let failures = runs
                 .iter()
                 .filter(|r| r.failed())
-                .map(|r| RunFailure {
-                    run_id: r.id,
-                    at: r.started_at,
-                    error: r.failure().unwrap_or_default().to_owned(),
+                .map(|r| {
+                    let error = r.failure().ok_or_else(|| broken(format!("run {} failed without an error", r.id)))?;
+                    Ok(RunFailure { run_id: r.id, at: r.started_at, error: error.to_owned() })
                 })
-                .collect();
-            DaySession { state: states[&session.id], span, first_at, runs: runs.len(), failures, session }
+                .collect::<Result<_>>()?;
+            Ok(DaySession { state: states[&session.id], span, first_at, runs: runs.len(), failures, session })
         })
-        .collect();
+        .collect::<Result<_>>()?;
     found.sort_by(|a, b| (a.first_at, &a.session.id).cmp(&(b.first_at, &b.session.id)));
     Ok(Activity { sessions: found, words: words.iter().map(words_of).collect() })
 }
 
 fn words_of(mail: &Mail) -> UserWords {
     let text = if mail.kind == MailKind::Answer {
+        let asked: Vec<&AskResult> = mail
+            .answers
+            .values()
+            .filter_map(|r| match r {
+                CallResult::AskUser(a) => Some(a),
+                _ => None,
+            })
+            .collect();
         let mut lines = vec!["(answers to ask_user)".to_owned()];
-        for result in mail.answers.values() {
-            if let CallResult::AskUser(r) = result {
-                for a in &r.answers {
-                    let given: Vec<&str> = a.selected.iter().map(String::as_str).chain(a.other.as_deref()).collect();
-                    lines.push(format!("- {}: {}", a.question, given.join("; ")));
-                }
-            }
-        }
+        lines.extend(answer_lines(&asked));
         lines.join("\n")
     } else {
         mail.content.clone()

@@ -336,7 +336,7 @@ fn overview_lines(d: &Day, who: &str, day: NaiveDate, tz: Tz) -> Vec<String> {
             place(&s.session),
             chars(&s.session.title, 40)
         ));
-        out.extend(w.text.lines().map(|l| format!("  {l}")));
+        out.push(indented(&w.text));
     }
     if words.is_empty() {
         out.push("(none)".into());
@@ -348,7 +348,7 @@ fn overview_lines(d: &Day, who: &str, day: NaiveDate, tz: Tz) -> Vec<String> {
     for a in &d.actions {
         out.push(format!("- #{} {:?} (now {}):", a.issue_id, chars(&a.title, 80), a.status.as_str()));
         for line in &a.lines {
-            out.extend(line.lines().map(|l| format!("  {l}")));
+            out.push(indented(line));
         }
     }
     if d.actions.is_empty() {
@@ -454,7 +454,8 @@ impl Tool<RunScope> for ActivityOverview {
             None => "every agent".to_owned(),
             Some(ids) => d.names.name(&ids[0]),
         };
-        let lines = overview_lines(&d, &who, day, tz);
+        // 一项里可能有多行（用户的话、标题）：续读按真正的行算
+        let lines: Vec<String> = overview_lines(&d, &who, day, tz).join("\n").split('\n').map(str::to_owned).collect();
         Ok(agenter::tool::text(limited_lines(&lines, a.offset, self.max_chars)?))
     }
 }
@@ -478,7 +479,7 @@ fn label_words() -> Vec<String> {
 /// 一条的标签；思考不展示（None）。
 fn label(entry: &Entry) -> Result<Option<String>> {
     let item = &entry.item;
-    let tool = || item.tool_name.clone().unwrap_or_default();
+    let tool = || item.tool_name.clone().ok_or_else(|| Error::Broken("a tool item has no tool name".into()));
     Ok(Some(match item.kind {
         ItemType::User => {
             let sender =
@@ -493,9 +494,9 @@ fn label(entry: &Entry) -> Result<Option<String>> {
             format!("{EVENT} {raw}{}", if item.check_in { " (check-in)" } else { "" })
         }
         ItemType::Assistant => ASSISTANT.to_owned(),
-        ItemType::ToolCall => format!("{CALL} {}", tool()),
-        ItemType::ToolResult => format!("{RESULT} {}", tool()),
-        ItemType::ToolError => format!("{ERROR} {}", tool()),
+        ItemType::ToolCall => format!("{CALL} {}", tool()?),
+        ItemType::ToolResult => format!("{RESULT} {}", tool()?),
+        ItemType::ToolError => format!("{ERROR} {}", tool()?),
         ItemType::Thinking => return Ok(None),
         ItemType::Stopped => "-- run stopped by the user --".to_owned(),
     }))
@@ -507,10 +508,9 @@ fn labelled(label: &str, wanted: &[String]) -> bool {
 }
 
 /// since 参数：ISO 8601 的日期或时刻，不带时区的按本地时间。
-fn local_since(since: &str, tz: Tz) -> Result<DateTime<Utc>> {
-    let midnight =
-        NaiveDate::parse_from_str(since.trim(), "%Y-%m-%d").ok().and_then(|d| parse_local(&format!("{d}T00:00"), tz));
-    midnight.or_else(|| parse_local(since, tz)).ok_or_else(|| {
+fn local_since(since: &str, history: &History) -> Result<DateTime<Utc>> {
+    let day_start = NaiveDate::parse_from_str(since.trim(), "%Y-%m-%d").ok().map(|d| history.day_bounds(d).0);
+    day_start.or_else(|| parse_local(since, history.tz())).ok_or_else(|| {
         invalid(format!("`since` must be an ISO 8601 date or time such as \"2026-11-04T09:30\", not {since:?}"))
     })
 }
@@ -591,7 +591,7 @@ impl SessionRead {
             }
         }
         let tz = self.history.tz();
-        let since = a.since.as_deref().map(|s| local_since(s, tz)).transpose()?;
+        let since = a.since.as_deref().map(|s| local_since(s, &self.history)).transpose()?;
         let session = a.session.clone();
         let (timeline, names) = self
             .history
