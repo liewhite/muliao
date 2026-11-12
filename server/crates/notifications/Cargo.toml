@@ -6,9 +6,28 @@ publish.workspace = true
 
 [dependencies]
 muliao-platform = { workspace = true }
-muliao-assets = { workspace = true }
-muliao-runtime = { workspace = true }
 muliao-sessions = { workspace = true }
+agenter = { workspace = true }
+chrono = { workspace = true }
+reqwest = { workspace = true }
+rusqlite = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+# Web Push 的加密与签名（webpush.rs 说明为什么不用 web-push crate），只有这里用
+aes-gcm = "0.10"
+base64 = "0.22"
+hkdf = "0.12"
+p256 = { version = "0.13", features = ["ecdh", "ecdsa", "pem", "pkcs8"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+sha2 = "0.10"
+
+[dev-dependencies]
+tempfile = { workspace = true }
+wiremock = { workspace = true }
 
 [lints]
 workspace = true
