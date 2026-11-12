@@ -81,7 +81,8 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(&addr).await.with_context(|| format!("binding {addr}"))?;
     let app = muliao_server::assemble(settings, web_dir).await?;
     app.start().await?;
-    tracing::info!(%addr, "muliao is serving");
+    // pid：部署自检（deploy/selfcheck.sh）凭它认出本进程的启动行
+    tracing::info!(%addr, pid = std::process::id(), "muliao is serving");
 
     // 关停：先关事件总线，界面的 SSE 长连接随之正常结束（浏览器自动重连），其余请求最多再等 GRACEFUL_SHUTDOWN
     let stopping = Arc::new(Notify::new());
