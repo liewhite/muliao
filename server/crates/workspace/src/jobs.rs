@@ -16,7 +16,6 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -31,6 +30,11 @@ use tokio::sync::watch;
 use crate::commands::{AgentCommands, AgentShell, Options};
 use crate::error::{Error, Result, conflict, not_found};
 use crate::output::{record_output, tail};
+
+/// 日志的最后几行；读不了（agent 把它换成了目录、改了权限）时换成一句说明，不让结局与检查因此写不下去。
+fn log_tail(path: &std::path::Path) -> String {
+    tail(path).unwrap_or_else(|e| format!("(could not read the log: {e})"))
+}
 
 pub const JOBS_DIR: &str = "jobs";
 /// 运行中检查的节拍（同会话领域的委派检查）
@@ -57,14 +61,22 @@ impl JobStatus {
         }
     }
 
-    fn parse(raw: &str) -> Result<Self> {
-        Ok(match raw {
+    fn parse(raw: &str) -> Option<Self> {
+        Some(match raw {
             "running" => JobStatus::Running,
             "exited" => JobStatus::Exited,
             "killed" => JobStatus::Killed,
             "interrupted" => JobStatus::Interrupted,
-            other => return Err(Error::Broken(format!("unknown job status {other:?}"))),
+            _ => return None,
         })
+    }
+}
+
+impl rusqlite::types::FromSql for JobStatus {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        let raw = value.as_str()?;
+        JobStatus::parse(raw)
+            .ok_or_else(|| rusqlite::types::FromSqlError::Other(format!("unknown job status {raw:?}").into()))
     }
 }
 
@@ -87,34 +99,25 @@ struct Job {
 const COLUMNS: &str =
     "id, session_id, agent_id, command, status, exit_code, log_path, pid, check_seconds, started_at, finished_at";
 
-fn job_of(r: &Row<'_>) -> rusqlite::Result<(Job, String)> {
-    Ok((
-        Job {
-            id: r.get(0)?,
-            session_id: r.get(1)?,
-            agent_id: r.get(2)?,
-            command: r.get(3)?,
-            status: JobStatus::Running,
-            exit_code: r.get(5)?,
-            log_path: r.get(6)?,
-            pid: r.get(7)?,
-            check_seconds: r.get(8)?,
-            started_at: r.get(9)?,
-            finished_at: r.get(10)?,
-        },
-        r.get(4)?,
-    ))
+fn job_of(r: &Row<'_>) -> rusqlite::Result<Job> {
+    Ok(Job {
+        id: r.get(0)?,
+        session_id: r.get(1)?,
+        agent_id: r.get(2)?,
+        command: r.get(3)?,
+        status: r.get(4)?,
+        exit_code: r.get(5)?,
+        log_path: r.get(6)?,
+        pid: r.get(7)?,
+        check_seconds: r.get(8)?,
+        started_at: r.get(9)?,
+        finished_at: r.get(10)?,
+    })
 }
 
 fn jobs_where(c: &Connection, filter: &str, args: impl rusqlite::Params) -> Result<Vec<Job>> {
     let mut stmt = c.prepare(&format!("SELECT {COLUMNS} FROM jobs WHERE {filter} ORDER BY id"))?;
-    let rows = stmt.query_map(args, job_of)?.collect::<rusqlite::Result<Vec<_>>>()?;
-    rows.into_iter()
-        .map(|(mut job, status)| {
-            job.status = JobStatus::parse(&status)?;
-            Ok(job)
-        })
-        .collect()
+    Ok(stmt.query_map(args, job_of)?.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
 fn job_in(c: &Connection, job_id: i64) -> Result<Option<Job>> {
@@ -154,25 +157,43 @@ enum Ending {
     Interrupted(String),
 }
 
+/// 进程现在怎样：照看者与 job_kill、会话停止、关停都在同一把锁里看和改，结局与 job_kill 的回答对得上。
+enum Process {
+    Running,
+    /// 有人说明了结局并杀了进程组，还没回收
+    Ending(Ending),
+    /// 已被回收：进程组 id 可能已被复用，不再杀它
+    Reaped,
+}
+
 /// 一个有人照看的任务（进程在跑，或已退出、结局还没写完）。
 struct Handle {
     pgid: i32,
-    /// 进程已被回收：进程组 id 可能已被复用，不再杀它
-    reaped: AtomicBool,
-    ending: Mutex<Option<Ending>>,
+    process: Mutex<Process>,
     /// 照看者结束了（结局写完或写不进去）
     done: watch::Receiver<bool>,
 }
 
 impl Handle {
-    /// 说明结局并杀掉进程组；进程已退出（结局正在记）时什么也不做，返回 false。先说明的算（job_kill 之后再关停仍记为被结束）。
+    /// 说明结局并杀掉进程组；进程已回收（结局正在记）时什么也不做，返回 false。先说明的算（job_kill 之后再关停仍记为被
+    /// 结束）。
     fn end(&self, ending: Ending) -> bool {
-        if self.reaped.load(Ordering::SeqCst) {
-            return false;
+        let mut process = self.process.lock().expect("process lock");
+        match &*process {
+            Process::Reaped => return false,
+            Process::Running => *process = Process::Ending(ending),
+            Process::Ending(_) => {}
         }
-        self.ending.lock().expect("ending lock").get_or_insert(ending);
         kill_group(self.pgid);
         true
+    }
+
+    /// 照看者回收了进程：此后不再杀它；返回别人说明的结局。
+    fn reaped(&self) -> Option<Ending> {
+        match std::mem::replace(&mut *self.process.lock().expect("process lock"), Process::Reaped) {
+            Process::Ending(e) => Some(e),
+            _ => None,
+        }
     }
 }
 
@@ -337,7 +358,7 @@ impl JobRunner {
             }
         };
         let (done_tx, done) = watch::channel(false);
-        let handle = Arc::new(Handle { pgid, reaped: AtomicBool::new(false), ending: Mutex::default(), done });
+        let handle = Arc::new(Handle { pgid, process: Mutex::new(Process::Running), done });
         self.running.lock().expect("running lock").insert(started.id, handle.clone());
         let log_file = workspace.join(&started.log_path);
         let (this, id) = (self.clone(), started.id);
@@ -360,7 +381,7 @@ impl JobRunner {
         log_file: PathBuf,
     ) {
         let Spawned { mut child, mut stdout, .. } = spawned;
-        let (exit_code, drained, recorded) = {
+        let (exit_code, drained, recorded, ending) = {
             let mut recording = std::pin::pin!(record_output(&mut stdout, &log_file, &shell.secrets));
             let mut read: Option<std::io::Result<()>> = None;
             let status = loop {
@@ -375,7 +396,7 @@ impl JobRunner {
                     s = child.wait() => break s,
                 }
             };
-            handle.reaped.store(true, Ordering::SeqCst);
+            let ending = handle.reaped();
             if read.is_none() {
                 // 以进程退出为准：退出后最多再给 DRAIN 读完（脱离进程组的后代可能一直占着管道）
                 read = tokio::time::timeout(DRAIN, &mut recording).await.ok();
@@ -384,9 +405,8 @@ impl JobRunner {
                 use std::os::unix::process::ExitStatusExt;
                 s.code().unwrap_or_else(|| -s.signal().unwrap_or(0))
             });
-            (code, read.is_some(), read.unwrap_or(Ok(())))
+            (code, read.is_some(), read.unwrap_or(Ok(())), ending)
         };
-        let ending = handle.ending.lock().expect("ending lock").clone();
         let (status, exit_code, note) = match (recorded, ending) {
             (Err(e), _) => {
                 tracing::error!(job_id, error = %e, "background job output could not be recorded");
@@ -416,7 +436,7 @@ impl JobRunner {
     ) -> Result<()> {
         // 事务里不做文件 IO：进程已经结束，先读好输出的最后几行
         let path = log_file.to_path_buf();
-        let last = tokio::task::spawn_blocking(move || tail(&path)).await.expect("reading the log panicked")?;
+        let last = tokio::task::spawn_blocking(move || log_tail(&path)).await.expect("reading the log panicked");
         let refused = shell.refusal(exit_code, &last);
         let work = self.work.clone();
         self.db
@@ -481,7 +501,7 @@ impl JobRunner {
         let agent = agent_id.to_owned();
         let job = self.db.read(move |c| own_in(c, job_id, &agent)).await?;
         let path = self.log_file(&job);
-        let tail = tokio::task::spawn_blocking(move || tail(&path)).await.expect("reading the log panicked")?;
+        let tail = tokio::task::spawn_blocking(move || log_tail(&path)).await.expect("reading the log panicked");
         Ok(JobInfo {
             id: job.id,
             command: job.command.clone(),
@@ -493,13 +513,11 @@ impl JobRunner {
         })
     }
 
-    async fn tails(&self, jobs: &[Job]) -> Result<BTreeMap<i64, String>> {
+    async fn tails(&self, jobs: &[Job]) -> BTreeMap<i64, String> {
         let files: Vec<(i64, PathBuf)> = jobs.iter().map(|j| (j.id, self.log_file(j))).collect();
-        tokio::task::spawn_blocking(move || {
-            files.into_iter().map(|(id, path)| Ok((id, tail(&path)?))).collect::<Result<BTreeMap<_, _>>>()
-        })
-        .await
-        .expect("reading logs panicked")
+        tokio::task::spawn_blocking(move || files.into_iter().map(|(id, path)| (id, log_tail(&path))).collect())
+            .await
+            .expect("reading logs panicked")
     }
 
     /// 给到了自己检查间隔的运行中任务各投一封检查信件（会话领域投；它上一封还在信箱里排着时不投，不堆积）。返回发出的
@@ -510,64 +528,70 @@ impl JobRunner {
         if supervised.is_empty() {
             return Ok(0);
         }
-        let candidates = self.db.read(|c| jobs_where(c, "status = 'running'", [])).await?;
+        let filter = format!(
+            "status = 'running' AND id IN ({})",
+            supervised.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(", ")
+        );
+        let candidates = self.db.read(move |c| jobs_where(c, &filter, [])).await?;
         let now = Utc::now();
         let due: Vec<Job> = {
             let beats = self.beats.lock().expect("beats lock");
-            candidates
-                .into_iter()
-                .filter(|j| supervised.contains(&j.id) && beats.due(&j.id, j.started_at, j.check_seconds, now))
-                .collect()
+            candidates.into_iter().filter(|j| beats.due(&j.id, j.started_at, j.check_seconds, now)).collect()
         };
         if due.is_empty() {
             return Ok(0);
         }
-        let tails = self.tails(&due).await?;
+        let tails = self.tails(&due).await;
         let work = self.work.clone();
         let ids: Vec<i64> = due.iter().map(|j| j.id).collect();
         // 在确认任务仍在运行的同一个事务里投检查信件：与记下结局（同一事务交回结局）互斥，检查要么先于结束，要么任务已经
         // 结束、不再发
-        let sent = self
+        // 节拍按「到了就算检查过」前移（上一封还排着没投的也算），返回的是真投出的封数
+        let (checked, sent) = self
             .db
             .write(move |tx| {
-                let mut sent = Vec::new();
+                let (mut checked, mut sent) = (Vec::new(), 0);
                 for id in ids {
                     let Some(job) = job_in(tx, id)?.filter(|j| j.status == JobStatus::Running) else { continue };
                     let text = check_text(&job, Utc::now(), &tails[&id]);
-                    work.checked_in(tx, &job.session_id, &job_holder(id), &text)?;
-                    sent.push(id);
+                    if work.checked_in(tx, &job.session_id, &job_holder(id), &text)? {
+                        sent += 1;
+                    }
+                    checked.push(id);
                 }
-                Ok::<_, Error>(sent)
+                Ok::<_, Error>((checked, sent))
             })
             .await?;
         let mut beats = self.beats.lock().expect("beats lock");
-        for id in &sent {
-            beats.checked(*id, now);
+        for id in checked {
+            beats.checked(id, now);
         }
-        Ok(sent.len())
+        Ok(sent)
     }
 
-    /// 常驻：每个节拍做一次运行中检查。组合根起一次。
-    pub fn spawn_checks(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
+    /// 组合根在服务启动时、对外服务（起任何后台任务）之前调用一次：先收掉上次服务没能收尾的任务（[`JobRunner::recover`]），
+    /// 再起常驻的运行中检查（每个节拍一次）。两件事只在这里一起做，「先 recover」不靠调用方记。
+    pub async fn run(self: &Arc<Self>) -> Result<tokio::task::JoinHandle<()>> {
+        self.recover().await?;
         let this = self.clone();
-        tokio::spawn(async move {
+        Ok(tokio::spawn(async move {
             loop {
                 tokio::time::sleep(TICK).await;
                 if let Err(e) = this.check().await {
                     tracing::error!(error = %e, "checking background jobs failed");
                 }
             }
-        })
+        }))
     }
 
     /// 服务启动时、还没有任务在跑时调用一次：这时记为运行中的是上次服务没能收尾的（被强杀、崩溃，或照看者没写下结局）。
     /// 进程自成进程组，不随服务退出，可能还活着：如实告诉 agent，不盲杀（pid 可能已被复用）。
-    pub async fn recover(&self) -> Result<usize> {
+    async fn recover(&self) -> Result<usize> {
         let stale = self.db.read(|c| jobs_where(c, "status = 'running'", [])).await?;
         if stale.is_empty() {
             return Ok(0);
         }
-        let tails = self.tails(&stale).await?;
+        let tails = self.tails(&stale).await;
         let work = self.work.clone();
         let ids: Vec<i64> = stale.iter().map(|j| j.id).collect();
         let closed = self

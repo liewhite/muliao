@@ -794,7 +794,7 @@ impl Tool<RunScope> for EditFile {
         if !in_tree.is_empty() {
             let unchanged = |target: &Path| -> muliao_assets::error::Result<()> {
                 // 写入口在锁里、紧挨着写之前调用：读 before 之后别处改了就整次不写
-                if !target.is_file() || modified(target) != stamps[target] {
+                if !target.is_file() || stamps.get(target).is_none_or(|at| modified(target) != *at) {
                     return Err(DomainError::invalid(format!(
                         "{} changed while this edit was being checked (someone else wrote it); nothing was written: \
                          redo the edit on the current content",

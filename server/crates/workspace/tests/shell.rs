@@ -283,7 +283,7 @@ async fn jobs_left_running_by_a_previous_process_are_reported_interrupted() {
         w.workspace.commands.clone(),
         muliao_sessions::work::SessionWork::new(muliao_sessions::actor::Waker::channel().0),
     );
-    assert_eq!(fresh.recover().await.unwrap(), 1);
+    fresh.run().await.unwrap().abort();
     let info = fresh.info(id, &w.me).await.unwrap();
     assert_eq!(info.status, "interrupted");
     let mail = w.queued().await;
@@ -324,4 +324,19 @@ async fn a_background_skill_run_redacts_its_log() {
         .await;
     let info = wait_done(&w, job_id(started.ok())).await;
     assert_eq!(std::fs::read_to_string(w.ws().join(&info.log_path)).unwrap(), "args: \nkey is [secret:DEPLOY_KEY]\n");
+}
+
+#[tokio::test]
+async fn an_unreadable_log_does_not_keep_the_job_from_ending() {
+    let w = world(20_000).await;
+    let started = w.call("run_shell", json!({"command": "sleep 0.5; echo x", "background": true})).await;
+    let id = job_id(started.ok());
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let log = w.ws().join(format!("jobs/{id}.log"));
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&log, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let info = wait_done(&w, id).await;
+    std::fs::set_permissions(&log, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(info.status, "exited");
+    assert!(w.queued().await[0].content.contains("Last lines of output:\n(could not read the log: "));
 }

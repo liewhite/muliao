@@ -117,7 +117,8 @@ pub enum Access {
 }
 
 /// 模型给的 path 换成绝对路径：`~` 展开，相对路径以 workspace 为基准，`.` 段与多余的 `/` 去掉（同 pathlib，报错与回显里
-/// 的写法与 Python 版一样）；`..` 原样保留。
+/// 的写法与 Python 版一样）；`..` 原样保留。`~user/…`（别的用户的家目录）不展开、按相对路径算：agent 都以服务的用户
+/// 运行，用不到它。
 pub fn absolute(workspace: &Path, home: &Path, path: &str) -> PathBuf {
     let p = if path == "~" {
         home.to_path_buf()

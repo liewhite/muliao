@@ -4,7 +4,7 @@
 //! 浏览（[`browse`]）与 agent 页面（[`sites`]）。
 //!
 //! 组合根按这个顺序接上：[`Workspace::build`] → [`Workspace::tools`] 进工具箱 → [`Workspace::subscribe`] 登记会话事件 →
-//! [`ScriptGrants::deletion_hook`] 交给 agent 的删除流程 → 对外服务之前 `jobs.recover()`，再 `jobs.spawn_checks()` →
+//! [`ScriptGrants::deletion_hook`] 交给 agent 的删除流程 → 对外服务之前 `jobs.run()`（先收掉上次没收尾的任务，再起运行中检查）→
 //! 关停时 `jobs.shutdown()`。MCP 的沙箱用 [`commands::confine`]。
 
 pub mod browse;
