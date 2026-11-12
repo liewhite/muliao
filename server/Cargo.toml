@@ -1,0 +1,55 @@
+[workspace]
+resolver = "3"
+# 一个领域一个 crate（docs/architecture.md 2.3）。成员按目录收：新领域只加目录，不改这里
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# 各 crate 共用的第三方依赖在这里定版本，crate 里写 `x = { workspace = true }`；只有一个 crate 用的可以写在它自己的 Cargo.toml
+[workspace.dependencies]
+agenter = { git = "ssh://git@github.com/liewhite/agenter.git", branch = "main" }
+anyhow = "1"
+axum = "0.8"
+chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
+croner = "4"
+fernet = "0.2"
+libc = "0.2"
+notify = "8"
+rusqlite = { version = "0.42", features = ["bundled", "chrono"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process", "io-util", "fs", "signal", "net"] }
+toml = "1"
+toml_edit = "0.25"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+unicode-normalization = "0.1"
+uuid = { version = "1", features = ["v4"] }
+
+# 领域 crate 互相引用的路径（只能引用更早一层的，见 docs/architecture.md 2.3）
+muliao-platform = { path = "crates/platform" }
+muliao-assets = { path = "crates/assets" }
+muliao-files = { path = "crates/files" }
+muliao-usage = { path = "crates/usage" }
+muliao-web = { path = "crates/web" }
+muliao-speech = { path = "crates/speech" }
+muliao-runtime = { path = "crates/runtime" }
+muliao-sessions = { path = "crates/sessions" }
+muliao-workspace = { path = "crates/workspace" }
+muliao-notifications = { path = "crates/notifications" }
+muliao-issues = { path = "crates/issues" }
+muliao-triggers = { path = "crates/triggers" }
+muliao-history = { path = "crates/history" }
+muliao-http = { path = "crates/http" }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"

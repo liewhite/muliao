@@ -1,0 +1,16 @@
+[package]
+name = "muliao-history"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+muliao-platform = { workspace = true }
+muliao-assets = { workspace = true }
+muliao-runtime = { workspace = true }
+muliao-sessions = { workspace = true }
+muliao-issues = { workspace = true }
+muliao-triggers = { workspace = true }
+
+[lints]
+workspace = true

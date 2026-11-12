@@ -1,0 +1,11 @@
+[package]
+name = "muliao-speech"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+muliao-platform = { workspace = true }
+
+[lints]
+workspace = true

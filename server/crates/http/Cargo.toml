@@ -1,0 +1,23 @@
+[package]
+name = "muliao-http"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+muliao-platform = { workspace = true }
+muliao-assets = { workspace = true }
+muliao-files = { workspace = true }
+muliao-usage = { workspace = true }
+muliao-web = { workspace = true }
+muliao-speech = { workspace = true }
+muliao-runtime = { workspace = true }
+muliao-sessions = { workspace = true }
+muliao-workspace = { workspace = true }
+muliao-notifications = { workspace = true }
+muliao-issues = { workspace = true }
+muliao-triggers = { workspace = true }
+muliao-history = { workspace = true }
+
+[lints]
+workspace = true

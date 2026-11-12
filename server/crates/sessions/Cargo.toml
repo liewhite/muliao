@@ -1,0 +1,15 @@
+[package]
+name = "muliao-sessions"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+muliao-platform = { workspace = true }
+muliao-assets = { workspace = true }
+muliao-files = { workspace = true }
+muliao-usage = { workspace = true }
+muliao-runtime = { workspace = true }
+
+[lints]
+workspace = true
