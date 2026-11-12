@@ -45,7 +45,8 @@ fi
 # 从这里起，失败就回到 Python 版
 fail() {
   say "cutover failed: $*"
-  [ "$(readlink "$ENTRY")" = "$HOLD" ] || hold_service
+  # 停不住就不能换库（Rust 版可能还在写它）：保持现状，等人处理
+  on_hold || hold_service || { say "CUTOVER FAILED and could not stop the service: database left as is, entry $ENTRY -> $(readlink "$ENTRY")"; exit 1; }
   rm -f "$NEWDB" "$NEWDB.partial"
   if restore_python "$TS"; then
     say "CUTOVER FAILED; back on the Python version"

@@ -52,7 +52,7 @@ hold_service() {
   old=$(svc_pid)
   rm -f "$HOLD.pid"
   point_entry "$HOLD" || return 1
-  launchctl kickstart -k "$SVC" || return 1
+  launchctl kickstart -k "$SVC" || { say "launchctl kickstart -k $SVC failed"; return 1; }
   # 等旧进程退出、hold.sh 起来报到（launchd 两次启动之间最多隔 ThrottleInterval）
   i=0
   while [ -n "$old" ] && kill -0 "$old" 2>/dev/null || ! on_hold; do
