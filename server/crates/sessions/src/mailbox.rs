@@ -101,6 +101,14 @@ pub struct Mail {
     pub created_at: DateTime<Utc>,
 }
 
+impl Mail {
+    /// 事件信件的来源（界面展示用）；事件却没记来源是数据坏了。
+    pub fn event_source(&self) -> Result<crate::work::EventSource> {
+        let raw = self.source.as_deref().ok_or_else(|| broken(format!("event mail {} has no source", self.id)))?;
+        Ok(crate::work::parse_source(raw))
+    }
+}
+
 /// 一封要投的信（[`post_in`] 的输入）。
 #[derive(Debug, Clone)]
 pub struct NewMail {

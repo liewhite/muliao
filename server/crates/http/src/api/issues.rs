@@ -5,7 +5,7 @@ use axum::http::StatusCode;
 use muliao_issues::activity::Activity;
 use muliao_issues::graph::Upstream;
 use muliao_issues::{Assignee, BoardIssue, By, Filter, IssueDetail, NewIssue, Patch, Priority, Status};
-use serde::{Deserialize, Deserializer};
+use serde::Deserialize;
 use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
@@ -91,11 +91,6 @@ async fn get_issue(State(s): State<AppState>, Path(issue_id): Path<i64>) -> ApiR
     Ok(axum::Json(s.services.board.detail(issue_id).await?))
 }
 
-/// 区分「没给」（外层 None）与「给了 null」（Some(None)）
-fn present<'de, D: Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Option<Option<T>>, D::Error> {
-    Option::<T>::deserialize(d).map(Some)
-}
-
 /// 只修改给出的字段。assignee 给出 null 表示取消指派，不出现表示不变。
 #[derive(Deserialize, ToSchema)]
 pub struct IssuePatch {
@@ -110,7 +105,7 @@ pub struct IssuePatch {
     #[serde(default)]
     pub priority: Option<Priority>,
     /// agent id、`user`；null 取消指派，不出现不变
-    #[serde(default, deserialize_with = "present")]
+    #[serde(default, deserialize_with = "crate::extract::present")]
     #[schema(value_type = Option<String>)]
     pub assignee: Option<Option<String>>,
     /// 依赖的上游 issue id，整体替换（[] 去掉全部）；不出现表示不变

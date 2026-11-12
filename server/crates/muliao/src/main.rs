@@ -76,10 +76,11 @@ async fn main() -> anyhow::Result<()> {
     if !web_dir.join("index.html").is_file() {
         tracing::warn!(web_dir = %web_dir.display(), "web UI not built, serving API only");
     }
+    // 先占端口：同一个库上已有服务在跑时当场退出，不先续跑会话（同一个工具调用会被执行两次）
     let addr = format!("{}:{}", settings.server.host, settings.server.port);
+    let listener = tokio::net::TcpListener::bind(&addr).await.with_context(|| format!("binding {addr}"))?;
     let app = muliao_server::assemble(settings, web_dir).await?;
     app.start().await?;
-    let listener = tokio::net::TcpListener::bind(&addr).await.with_context(|| format!("binding {addr}"))?;
     tracing::info!(%addr, "muliao is serving");
 
     // 关停：先关事件总线，界面的 SSE 长连接随之正常结束（浏览器自动重连），其余请求最多再等 GRACEFUL_SHUTDOWN

@@ -4,6 +4,7 @@
 use axum::extract::rejection::{JsonRejection, PathRejection};
 use axum::extract::{FromRequest, FromRequestParts, Request};
 use axum::http::request::Parts;
+use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
 use crate::error::ApiError;
@@ -47,4 +48,11 @@ impl<S: Send + Sync, T: DeserializeOwned + Send> FromRequestParts<S> for Path<T>
             Err(e) => Err(ApiError::new(e.status(), e.body_text())),
         }
     }
+}
+
+/// 请求体里「没给」（None）与「给了 null」（Some(None)）要分开的字段：`#[serde(default, deserialize_with = "present")]`
+pub fn present<'de, D: serde::Deserializer<'de>, T: serde::Deserialize<'de>>(
+    d: D,
+) -> Result<Option<Option<T>>, D::Error> {
+    Option::<T>::deserialize(d).map(Some)
 }

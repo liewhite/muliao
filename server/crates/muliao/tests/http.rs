@@ -571,6 +571,10 @@ fn every_route_is_described() {
     }
     let schemas = json["components"]["schemas"].as_object().unwrap();
     // 响应里的字段都是必有的（可为 null）
+    // 请求与响应共用的类型不改（新建触发器时有默认值的可以不填）
+    let required: Vec<&str> =
+        schemas["Precheck"]["required"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+    assert_eq!(required, ["command"]);
     let required: Vec<&str> =
         schemas["SessionOut"]["required"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
     assert!(required.contains(&"parent_session_id"));

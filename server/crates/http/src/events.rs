@@ -1,7 +1,7 @@
 //! 推给前端的服务端事件（SSE `/api/events`）：只用于展示加速，库是唯一事实源，收到 changed 或重连时前端从接口重新拉取。
 //!
 //! 每条 data 是 `{"type": <事件名>, ...}`：总线上的事件只是「名字 + JSON」，这里补上 type。事件的形状由发布它的领域的
-//! 具名类型定义，[`ServerEvent`] 把它们登记进 OpenAPI（前端类型由此生成）；认不出名字的事件是缺陷，记 error 不发出。
+//! 具名类型定义，[`ServerEvent`] 把它们登记进 OpenAPI（前端类型由此生成），原样转发，前端忽略不认识的。
 
 use std::convert::Infallible;
 use std::time::Duration;
@@ -46,9 +46,6 @@ pub enum ServerEvent {
     Heartbeat(HeartbeatEvent),
 }
 
-/// 总线上会出现的事件名（与 [`ServerEvent`] 的变体一一对应，心跳由这里自己发）
-const KINDS: [&str; 4] = ["run", "saved", "notification", "changed"];
-
 /// 一条 SSE：data 是事件的字段加上 type。不是对象的是缺陷，记 error 不发出。
 fn tagged(kind: &str, payload: Value) -> Option<Event> {
     let Value::Object(mut fields) = payload else {
@@ -60,10 +57,6 @@ fn tagged(kind: &str, payload: Value) -> Option<Event> {
 }
 
 fn from_bus(BusEvent { kind, data }: BusEvent) -> Option<Event> {
-    if !KINDS.contains(&kind) {
-        tracing::error!(kind, "unknown server event kind, dropped");
-        return None;
-    }
     tagged(kind, data)
 }
 

@@ -1,7 +1,7 @@
 //! 触发器的管理：列出、新建、修改、删除、立即运行。
 //!
 //! 触发器的配置与状态在领域里是各触发方式自己解释的 JSON（加一种方式只加代码），这里原样交进交出；接口描述里按 kind 写出
-//! 各方式的具体形状（[`TriggerOutDoc`]、[`TriggerCreateDoc`]），加一种方式时在这两处各加一个变体。
+//! 各方式的具体形状（[`KindOutDoc`]、[`KindInDoc`]），加一种方式时在这两处各加一个变体（有测试对照登记的方式）。
 
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -13,7 +13,7 @@ use muliao_triggers::schedule::{ScheduleConfig, ScheduleStatus};
 use muliao_triggers::store::Listing;
 use muliao_triggers::stream::{StreamConfig, StreamStatus};
 use muliao_triggers::{NewSpec, PrecheckChange, TriggerView, Update};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::router::OpenApiRouter;
@@ -47,54 +47,9 @@ async fn trigger_kinds(State(s): State<AppState>) -> axum::Json<Vec<TriggerKindO
     )
 }
 
-/// 一个触发器（实际发出的形状；接口描述见 [`TriggerOutDoc`]）。
-#[derive(Serialize)]
+/// 一个触发器：各方式共有的字段，加上按 kind 区分的 config 与 status。
+#[derive(Serialize, ToSchema)]
 pub struct TriggerOut {
-    id: i64,
-    name: String,
-    agent_id: String,
-    kind: String,
-    prompt: String,
-    config: Value,
-    status: Value,
-    enabled: bool,
-    precheck: Option<Precheck>,
-    last_checked_at: Option<DateTime<Utc>>,
-    last_fired_at: Option<DateTime<Utc>>,
-    last_session_id: Option<String>,
-    disabled_reason: Option<String>,
-    faults: Vec<TriggerFault>,
-    finished_at: Option<DateTime<Utc>>,
-}
-
-impl TriggerOut {
-    fn of(v: TriggerView) -> Self {
-        let t = v.trigger;
-        TriggerOut {
-            id: t.id,
-            name: t.name,
-            agent_id: t.agent_id,
-            kind: t.kind,
-            prompt: t.prompt,
-            config: t.config,
-            status: v.status,
-            enabled: t.enabled,
-            precheck: t.precheck,
-            last_checked_at: t.last_checked_at,
-            last_fired_at: t.last_fired_at,
-            last_session_id: v.live_session_id,
-            disabled_reason: t.disabled_reason,
-            faults: t.faults,
-            finished_at: t.finished_at,
-        }
-    }
-}
-
-/// 一个触发器：各方式共有的字段，加上按 kind 区分的 config 与 status（这种方式自己给出的运行状态，不含凭证；存下的状态坏了时
-/// 是 `{"error": 原因}`）。
-#[derive(ToSchema)]
-#[allow(dead_code)]
-pub struct TriggerOutDoc {
     id: i64,
     name: String,
     agent_id: String,
@@ -113,9 +68,19 @@ pub struct TriggerOutDoc {
     /// 结束的时间：不为空表示它不会再触发了（一次性触发器跑完），只能查看与删除
     finished_at: Option<DateTime<Utc>>,
     #[serde(flatten)]
-    kind: KindOutDoc,
+    #[schema(value_type = KindOutDoc)]
+    kind: KindOut,
 }
 
+/// 领域里的 kind、config 与 status（各方式自己解释的 JSON）；接口描述里的形状是 [`KindOutDoc`]。
+#[derive(Serialize)]
+struct KindOut {
+    kind: String,
+    config: Value,
+    status: Value,
+}
+
+/// config 与 status（这种方式自己给出的运行状态，不含凭证；存下的状态坏了时是 `{"error": 原因}`）按 kind 区分。
 #[derive(ToSchema)]
 #[allow(dead_code)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -123,6 +88,27 @@ enum KindOutDoc {
     Schedule { config: ScheduleConfig, status: ScheduleStatus },
     Once { config: OnceConfig, status: OnceStatus },
     Stream { config: StreamConfig, status: StreamStatus },
+}
+
+impl TriggerOut {
+    fn of(v: TriggerView) -> Self {
+        let t = v.trigger;
+        TriggerOut {
+            id: t.id,
+            name: t.name,
+            agent_id: t.agent_id,
+            prompt: t.prompt,
+            enabled: t.enabled,
+            precheck: t.precheck,
+            last_checked_at: t.last_checked_at,
+            last_fired_at: t.last_fired_at,
+            last_session_id: v.live_session_id,
+            disabled_reason: t.disabled_reason,
+            faults: t.faults,
+            finished_at: t.finished_at,
+            kind: KindOut { kind: t.kind, config: t.config, status: v.status },
+        }
+    }
 }
 
 #[derive(Deserialize, IntoParams)]
@@ -134,7 +120,7 @@ pub struct TriggerQuery {
 }
 
 #[utoipa::path(get, path = "/api/triggers", tag = "triggers", params(TriggerQuery),
-    responses((status = 200, body = Vec<TriggerOutDoc>)))]
+    responses((status = 200, body = Vec<TriggerOut>)))]
 async fn list_triggers(
     State(s): State<AppState>,
     Query(q): Query<TriggerQuery>,
@@ -144,29 +130,24 @@ async fn list_triggers(
     Ok(axum::Json(t.views(found).await?.into_iter().map(TriggerOut::of).collect()))
 }
 
-/// 新建触发器的请求（实际收的形状；接口描述见 [`TriggerCreateDoc`]）：config 原样交给触发方式校验、补默认值。
-#[derive(Deserialize)]
+/// 新建触发器：kind 与 config 按方式区分（有默认值的配置项可以不填），config 原样交给触发方式校验、补默认值。
+#[derive(Deserialize, ToSchema)]
 pub struct TriggerCreate {
-    name: String,
-    agent_id: String,
-    kind: String,
-    prompt: String,
-    config: Value,
-    #[serde(default)]
-    precheck: Option<Precheck>,
-}
-
-/// 新建触发器：kind 与 config 按方式区分（有默认值的配置项可以不填）。
-#[derive(ToSchema)]
-#[allow(dead_code)]
-pub struct TriggerCreateDoc {
     name: String,
     agent_id: String,
     prompt: String,
     /// 触发前的前置检查；不给则每次都交给 agent
+    #[serde(default)]
     precheck: Option<Precheck>,
     #[serde(flatten)]
-    kind: KindInDoc,
+    #[schema(value_type = KindInDoc)]
+    kind: KindIn,
+}
+
+#[derive(Deserialize)]
+struct KindIn {
+    kind: String,
+    config: Value,
 }
 
 #[derive(ToSchema)]
@@ -178,8 +159,8 @@ enum KindInDoc {
     Stream { config: StreamConfig },
 }
 
-#[utoipa::path(post, path = "/api/triggers", tag = "triggers", request_body = TriggerCreateDoc,
-    responses((status = 201, body = TriggerOutDoc), (status = 404, body = ErrorOut), (status = 409, body = ErrorOut),
+#[utoipa::path(post, path = "/api/triggers", tag = "triggers", request_body = TriggerCreate,
+    responses((status = 201, body = TriggerOut), (status = 404, body = ErrorOut), (status = 409, body = ErrorOut),
         (status = 422, body = ErrorOut)))]
 async fn create_trigger(
     State(s): State<AppState>,
@@ -189,21 +170,13 @@ async fn create_trigger(
     let spec = NewSpec {
         name: body.name,
         agent_id: body.agent_id,
-        kind: body.kind,
+        kind: body.kind.kind,
         prompt: body.prompt,
-        config: body.config,
+        config: body.kind.config,
         precheck: body.precheck,
     };
     let created = t.create(spec).await?;
     Ok((StatusCode::CREATED, axum::Json(TriggerOut::of(t.view(created).await?))))
-}
-
-/// 区分「没给」（Keep）与「给了 null」（Remove）
-fn precheck_change<'de, D: Deserializer<'de>>(d: D) -> Result<PrecheckChange, D::Error> {
-    Ok(match Option::<Precheck>::deserialize(d)? {
-        Some(p) => PrecheckChange::Set(p),
-        None => PrecheckChange::Remove,
-    })
 }
 
 /// 只修改给出的字段。precheck 给出 null 表示去掉前置检查，不出现表示不变。
@@ -217,13 +190,13 @@ pub struct TriggerPatch {
     pub config: Option<Value>,
     #[serde(default)]
     pub enabled: Option<bool>,
-    #[serde(default, deserialize_with = "precheck_change")]
+    #[serde(default, deserialize_with = "crate::extract::present")]
     #[schema(value_type = Option<Precheck>)]
-    pub precheck: PrecheckChange,
+    pub precheck: Option<Option<Precheck>>,
 }
 
 #[utoipa::path(patch, path = "/api/triggers/{trigger_id}", tag = "triggers", request_body = TriggerPatch,
-    responses((status = 200, body = TriggerOutDoc), (status = 404, body = ErrorOut), (status = 409, body = ErrorOut),
+    responses((status = 200, body = TriggerOut), (status = 404, body = ErrorOut), (status = 409, body = ErrorOut),
         (status = 422, body = ErrorOut)))]
 async fn update_trigger(
     State(s): State<AppState>,
@@ -231,7 +204,12 @@ async fn update_trigger(
     Json(body): Json<TriggerPatch>,
 ) -> ApiResult<axum::Json<TriggerOut>> {
     let t = &s.services.triggers;
-    let update = Update { prompt: body.prompt, config: body.config, enabled: body.enabled, precheck: body.precheck };
+    let precheck = match body.precheck {
+        None => PrecheckChange::Keep,
+        Some(None) => PrecheckChange::Remove,
+        Some(Some(p)) => PrecheckChange::Set(p),
+    };
+    let update = Update { prompt: body.prompt, config: body.config, enabled: body.enabled, precheck };
     let updated = t.update(trigger_id, update).await?;
     Ok(axum::Json(TriggerOut::of(t.view(updated).await?)))
 }

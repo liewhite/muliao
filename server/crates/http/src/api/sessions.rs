@@ -14,7 +14,7 @@ use muliao_sessions::mailbox::{Mail, MailKind, MailState};
 use muliao_sessions::origins::{Origin, Sender, SessionOrigin};
 use muliao_sessions::runs::RunRecord;
 use muliao_sessions::transcript::Item;
-use muliao_sessions::work::{EventSource, parse_source};
+use muliao_sessions::work::EventSource;
 use muliao_usage::UsageTotals;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
@@ -201,13 +201,7 @@ async fn mail_outs(s: &AppState, mail: Vec<Mail>) -> ApiResult<Vec<MailOut>> {
         .map(|m| {
             let kind = match m.kind {
                 MailKind::Message => MailKindOut::Message,
-                MailKind::Event => MailKindOut::Event {
-                    source: parse_source(m.source.as_deref().ok_or_else(|| {
-                        tracing::error!(mail_id = m.id, "event mail has no source");
-                        ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "stored session data is inconsistent")
-                    })?),
-                    check_in: m.check_in,
-                },
+                MailKind::Event => MailKindOut::Event { source: m.event_source()?, check_in: m.check_in },
                 MailKind::Answer => MailKindOut::Answer { answers: m.answers },
             };
             Ok(MailOut {

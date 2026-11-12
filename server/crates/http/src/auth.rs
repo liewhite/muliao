@@ -8,7 +8,6 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use axum::Json;
 use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::middleware::Next;
@@ -20,6 +19,7 @@ use subtle::ConstantTimeEq;
 use utoipa::ToSchema;
 
 use crate::error::{ApiError, ApiResult, ErrorOut};
+use crate::extract::Json;
 use crate::state::AppState;
 
 pub const COOKIE_NAME: &str = "muliao_session";
