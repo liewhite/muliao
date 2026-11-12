@@ -5,11 +5,12 @@
 use std::sync::{Arc, OnceLock};
 
 use agenter::{Tool, ToolCtx, ToolError, ToolOutput};
-use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
+use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
 use muliao_assets::agents::{agent_names_in, named_in};
 use muliao_platform::db::Database;
 use muliao_platform::text::truncate;
+use muliao_platform::time::parse_local;
 use muliao_platform::tooling::{Audience, BuiltinTool, RunScope, ToolTraits, builtin};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -382,31 +383,8 @@ fn due(
                 .ok_or_else(|| format!("after_seconds {s} is too far in the future"))
         }
         (Some(at), None) => {
-            // `Z` 表示 UTC：换成 +00:00，带不带秒都按带时区的解析
-            let normalized = at.trim().strip_suffix('Z').map(|t| format!("{t}+00:00"));
-            let text = normalized.as_deref().unwrap_or(at.trim());
-            let bad = || format!("`at` must be an ISO 8601 time such as \"2026-10-22T10:30\", not {at:?}");
-            // 带时区的按它的时区；不带的按本地时间
-            let offset = DateTime::parse_from_rfc3339(text)
-                .ok()
-                .or_else(|| DateTime::parse_from_str(text, "%Y-%m-%dT%H:%M%:z").ok())
-                .or_else(|| DateTime::parse_from_str(text, "%Y-%m-%dT%H:%M%z").ok());
-            let due = match offset {
-                Some(d) => d.with_timezone(&Utc),
-                None => {
-                    let naive = [
-                        "%Y-%m-%dT%H:%M:%S%.f",
-                        "%Y-%m-%dT%H:%M:%S",
-                        "%Y-%m-%dT%H:%M",
-                        "%Y-%m-%d %H:%M:%S",
-                        "%Y-%m-%d %H:%M",
-                    ]
-                    .iter()
-                    .find_map(|f| NaiveDateTime::parse_from_str(text, f).ok())
-                    .ok_or_else(bad)?;
-                    tz.from_local_datetime(&naive).earliest().ok_or_else(bad)?.with_timezone(&Utc)
-                }
-            };
+            let due = parse_local(at, tz)
+                .ok_or_else(|| format!("`at` must be an ISO 8601 time such as \"2026-10-22T10:30\", not {at:?}"))?;
             if due <= now {
                 return Err(format!("`at` {at:?} is in the past (now is {})", local_time(now, tz)));
             }
@@ -462,6 +440,7 @@ impl Tool<RunScope> for WakeMe {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
 
     #[test]
     fn wake_times() {
