@@ -310,6 +310,12 @@ impl Run {
         })
     }
 
+    /// 一步没走完就被停下时，已经做完的工具结果（取自 `ToolFinished` 事件）变成存储形态（同 [`Run::step`] 交回的）。
+    pub async fn settled(&self, mut result: ToolResult) -> Result<ToolResult, FilesError> {
+        self.settle(&mut result).await?;
+        Ok(result)
+    }
+
     /// 工具结果变成存储形态：挂上的附加数据并进 metadata，图片存进文件存储。
     async fn settle(&self, result: &mut ToolResult) -> Result<(), FilesError> {
         if let Some(extra) = self.scope.take_result_metadata(&result.call_id) {

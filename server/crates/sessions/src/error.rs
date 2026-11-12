@@ -16,6 +16,9 @@ pub enum Error {
     Assets(muliao_assets::error::Error),
     #[error(transparent)]
     Files(FilesError),
+    /// 会话事件的订阅者（别的领域）出错：发布方的事务整个回滚
+    #[error("a session event subscriber failed: {0}")]
+    Subscriber(crate::events::BoxError),
 }
 
 impl From<FilesError> for Error {

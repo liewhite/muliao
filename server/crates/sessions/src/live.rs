@@ -1,0 +1,120 @@
+//! 运行中的实时展示：当前这一段的运行事件在内存里留一份，经展示总线推给前端 SSE。只用于展示加速，库是唯一事实源。
+//!
+//! 一段从一次模型请求保存之后开始，包括模型的回复与它调用的工具，到下一次请求保存（或运行结束）为止。每保存一次请求就换一段
+//! （[`Live::step`]），发 `saved` 让前端重新拉取历史；回复在工具执行前就已保存，但这一段的事件已经在展示它，会话接口不在
+//! 历史里重复显示（after_message_id）。事件带这一段的 segment_id 与递增的 seq，前端据此把快照与之后的 SSE 事件合并、发现缺口。
+//! 生命周期只由运行管（begin / step / end）。
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+use muliao_platform::bus::{Bus, ServerEvent};
+use muliao_platform::text::truncate;
+use muliao_platform::tool_views::truncated;
+use serde::Serialize;
+
+use crate::transcript::Item;
+
+const PREVIEW_CHARS: usize = 2000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeltaType {
+    Assistant,
+    Thinking,
+}
+
+/// 一条运行事件。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "event", rename_all = "snake_case")]
+pub enum RunEvent {
+    /// 一条完整的会话条目（工具调用、工具结果），与历史同一个投影；文字可能截断过
+    Item { item: Box<Item> },
+    /// 流式文字：接在同类的最后一条后面（或开始新的一条）
+    Delta { item_type: DeltaType, text: String },
+}
+
+/// 推给前端的一条（SSE 事件名 `run`）。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RunEventEnvelope {
+    pub session_id: String,
+    pub agent: String,
+    pub segment_id: String,
+    pub seq: usize,
+    #[serde(flatten)]
+    pub event: RunEvent,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct LiveSegment {
+    pub segment_id: String,
+    /// 这一段开始时会话最后一条已保存消息的 id：这之后保存的消息由这一段的事件展示，历史里先不显示
+    pub after_message_id: Option<i64>,
+    pub events: Vec<RunEventEnvelope>,
+}
+
+#[derive(Clone)]
+pub struct Live {
+    bus: Arc<Bus>,
+    segments: Arc<Mutex<HashMap<String, LiveSegment>>>,
+}
+
+fn new_segment(after: Option<i64>) -> LiveSegment {
+    LiveSegment { segment_id: uuid::Uuid::new_v4().simple().to_string(), after_message_id: after, events: Vec::new() }
+}
+
+impl Live {
+    pub fn new(bus: Arc<Bus>) -> Self {
+        Self { bus, segments: Arc::default() }
+    }
+
+    pub(crate) fn begin(&self, session_id: &str, after_message_id: Option<i64>) {
+        let mut all = self.segments.lock().expect("live lock");
+        // 同一会话同时只有一次运行；已有记录说明上一次漏了 end
+        assert!(all.insert(session_id.to_owned(), new_segment(after_message_id)).is_none(), "session {session_id} already has a live run");
+    }
+
+    /// 一次请求已经保存（事务已提交）：之后的事件属于新的一段。
+    pub(crate) fn step(&self, session_id: &str, after_message_id: i64) {
+        self.segments.lock().expect("live lock").insert(session_id.to_owned(), new_segment(Some(after_message_id)));
+        self.bus.publish(ServerEvent { kind: "saved", data: serde_json::json!({"session_id": session_id}) });
+    }
+
+    pub(crate) fn end(&self, session_id: &str) {
+        self.segments.lock().expect("live lock").remove(session_id);
+    }
+
+    pub(crate) fn item(&self, session_id: &str, agent: &str, mut item: Item) {
+        item.text = truncate(&item.text, PREVIEW_CHARS);
+        item.view = item.view.map(|v| truncated(v, PREVIEW_CHARS));
+        self.publish(session_id, agent, RunEvent::Item { item: Box::new(item) });
+    }
+
+    pub(crate) fn delta(&self, session_id: &str, agent: &str, item_type: DeltaType, text: &str) {
+        if !text.is_empty() {
+            self.publish(session_id, agent, RunEvent::Delta { item_type, text: text.to_owned() });
+        }
+    }
+
+    fn publish(&self, session_id: &str, agent: &str, event: RunEvent) {
+        let envelope = {
+            let mut all = self.segments.lock().expect("live lock");
+            // 运行结束后才到的事件（不会有：事件都在运行里发出）不展示
+            let Some(segment) = all.get_mut(session_id) else { return };
+            let envelope = RunEventEnvelope {
+                session_id: session_id.to_owned(),
+                agent: agent.to_owned(),
+                segment_id: segment.segment_id.clone(),
+                seq: segment.events.len(),
+                event,
+            };
+            segment.events.push(envelope.clone());
+            envelope
+        };
+        self.bus.publish(ServerEvent { kind: "run", data: serde_json::to_value(envelope).expect("run events serialize") });
+    }
+
+    pub fn snapshot(&self, session_id: &str) -> Option<LiveSegment> {
+        self.segments.lock().expect("live lock").get(session_id).cloned()
+    }
+}
