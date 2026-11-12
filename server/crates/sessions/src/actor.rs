@@ -129,7 +129,8 @@ impl Actors {
         actors
     }
 
-    /// 服务启动时：有没结束的运行（停在半路）或有排着的信的会话各叫醒一次，按唤醒规则接着跑。
+    /// 服务启动时、对外服务之前调用一次：有没结束的运行（停在半路）或有排着的信的会话各叫醒一次，按唤醒规则接着跑；停在
+    /// 半路的手动压缩记为失败（之后才开始的压缩会被误记，所以必须先于对外服务）。
     pub async fn resume(&self) -> Result<usize> {
         let abandoned = self.inner.core.db.write(|tx| runs::abandon_compactions_in(tx)).await?;
         if abandoned > 0 {
@@ -225,21 +226,13 @@ async fn actor(inner: Arc<Inner>, id: String, mut rx: mpsc::UnboundedReceiver<Co
         match has_work(&inner.core, &id).await {
             Ok(true) => {
                 if !run_with_retries(&inner, &id, &mut rx, &mut compactions).await {
-                    // 失败得连运行记录都没留下（开头的事务就出错）：不原地重来，等下一次叫醒；有排着的命令先处理
+                    // 失败得连运行记录都没留下（开头的事务就出错）：不原地重来，等下一次叫醒；有排着的命令就回到主循环处理
+                    // （处理完会再试一次，命令总会处理完，不会空转）
                     let mut actors = inner.actors.lock().expect("actors lock");
                     if rx.is_empty() {
                         actors.remove(&id);
                         return;
                     }
-                    drop(actors);
-                    while let Ok(cmd) = rx.try_recv() {
-                        idle_command(&inner, &id, cmd, &mut compactions).await;
-                    }
-                    inner.actors.lock().expect("actors lock").remove(&id);
-                    for reply in compactions.drain(..) {
-                        let _ = reply.send(Err(broken("the session could not run; try again later")));
-                    }
-                    return;
                 }
             }
             Ok(false) => {

@@ -63,14 +63,15 @@ pub(crate) fn open_in(c: &Connection, parent_id: &str, agent_id: &str, thread: &
 pub(crate) enum Mode {
     /// delegate_task：不交回结局，thread 的回答推给用户（用户在等 thread）
     Plain,
-    /// delegate_task(report_back)：结局作为事件交回发起方，按间隔投运行中检查
-    ReportBack { check_seconds: f64 },
+    /// delegate_task(report_back)：结局作为事件交回发起方，按间隔投运行中检查。awaited：用户是否在等发起方的回答（交回的
+    /// 结局随之推送）
+    ReportBack { check_seconds: f64, awaited: bool },
     /// ask_agent：发起方停在这次调用上，结局作为它的结果交回，没有检查也没有超时
-    Ask,
+    Ask { awaited: bool },
 }
 
 /// 往 thread 投信（见模块说明）：打开或找到 thread，记下是这次调用开出或续写了它；要交回结局的再在发起方登记引用它的
-/// 占用（这就是一项委派），信件引用它。awaited：用户是否在等发起方的回答（交回的结局随之推送）。续跑重做同一次调用时
+/// 占用（这就是一项委派），信件引用它。续跑重做同一次调用时
 /// 只返回已经投到的 thread（调用行、占用与信件在同一个事务里写下：有行就是投过了）。
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn send_in(
@@ -82,7 +83,6 @@ pub(crate) fn send_in(
     prompt: &str,
     call_id: &str,
     mode: Mode,
-    awaited: bool,
 ) -> Result<Session> {
     if let Some(existing) = call_in(tx, parent_id, call_id)? {
         return directory::get_in(tx, &existing.thread_id)?.ok_or_else(|| {
@@ -91,14 +91,15 @@ pub(crate) fn send_in(
     }
     let child = open_in(tx, parent_id, agent_id, thread)?;
     let check_seconds = match mode {
-        Mode::ReportBack { check_seconds } => Some(check_seconds),
-        Mode::Plain | Mode::Ask => None,
+        Mode::ReportBack { check_seconds, .. } => Some(check_seconds),
+        Mode::Plain | Mode::Ask { .. } => None,
     };
     let call = record_call_in(tx, parent_id, call_id, &child.id, check_seconds)?;
     let inbound = match mode {
         Mode::Plain => Inbound::delegated(parent_id, &child.id, prompt, true, None),
-        Mode::ReportBack { .. } | Mode::Ask => {
-            hold_delegation_in(tx, parent_id, call.id, (mode == Mode::Ask).then_some(call_id), awaited)?;
+        Mode::ReportBack { awaited, .. } | Mode::Ask { awaited } => {
+            let suspends = matches!(mode, Mode::Ask { .. });
+            hold_delegation_in(tx, parent_id, call.id, suspends.then_some(call_id), awaited)?;
             tracing::info!(session_id = parent_id, thread_session_id = %child.id, delegation = call.id, call_id,
                 "delegation dispatched");
             // 没有人等 thread 的回答：结局交回发起方，由它处理

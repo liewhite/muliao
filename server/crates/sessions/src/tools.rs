@@ -151,9 +151,9 @@ impl Tool<RunScope> for DelegateTask {
             .db
             .write(move |tx| {
                 let target = named_in(tx, &agent)?;
-                let mode = if report_back { Mode::ReportBack { check_seconds: check } } else { Mode::Plain };
+                let mode = if report_back { Mode::ReportBack { check_seconds: check, awaited } } else { Mode::Plain };
                 // 续跑重新执行这次调用时按调用 id 去重
-                send_in(tx, &waker, &parent, &target.id, &name, &task, &call, mode, awaited)?;
+                send_in(tx, &waker, &parent, &target.id, &name, &task, &call, mode)?;
                 Ok::<_, Error>(target.name)
             })
             .await?;
@@ -209,7 +209,7 @@ impl Tool<RunScope> for AskAgent {
             .write(move |tx| {
                 let target = named_in(tx, &agent)?.id;
                 // 续跑时重新执行这次调用：已经投过就只再挂起（按调用 id 幂等）
-                send_in(tx, &waker, &parent, &target, &thread, &message, &call, Mode::Ask, awaited)
+                send_in(tx, &waker, &parent, &target, &thread, &message, &call, Mode::Ask { awaited })
             })
             .await?;
         // 发问方的运行停在这次调用上；对方的结局作为这次调用的结果交回
@@ -382,7 +382,9 @@ fn due(
                 .ok_or_else(|| format!("after_seconds {s} is too far in the future"))
         }
         (Some(at), None) => {
-            let text = at.trim();
+            // `Z` 表示 UTC：换成 +00:00，带不带秒都按带时区的解析
+            let normalized = at.trim().strip_suffix('Z').map(|t| format!("{t}+00:00"));
+            let text = normalized.as_deref().unwrap_or(at.trim());
             let bad = || format!("`at` must be an ISO 8601 time such as \"2026-10-22T10:30\", not {at:?}");
             // 带时区的按它的时区；不带的按本地时间
             let offset = DateTime::parse_from_rfc3339(text)
@@ -478,6 +480,10 @@ mod tests {
         assert!(due(Some("2026-11-12T07:00"), None, tz, now).is_err(), "in the past");
         assert_eq!(
             due(Some("2026-11-12T10:30:00+00:00"), None, tz, now).unwrap(),
+            Utc.with_ymd_and_hms(2026, 11, 12, 10, 30, 0).unwrap()
+        );
+        assert_eq!(
+            due(Some("2026-11-12T10:30Z"), None, tz, now).unwrap(),
             Utc.with_ymd_and_hms(2026, 11, 12, 10, 30, 0).unwrap()
         );
         // 带时区不带秒：只按它自己的时区算一次
