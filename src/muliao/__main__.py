@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 import uvicorn
-from uvicorn.main import STARTUP_FAILURE
+from uvicorn.main import STARTUP_FAILURE  # pyright: ignore[reportPrivateImportUsage]  # uvicorn 没导出，但它的 CLI 用这个退出码
 
 from muliao.api.app import create_app
 from muliao.config import DEFAULT_CONFIG_PATH, WEB_DIR, load_settings

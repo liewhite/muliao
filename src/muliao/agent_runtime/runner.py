@@ -163,6 +163,8 @@ class AgentRuntime:
             # 所以与各工具集取同一个容忍次数（#373）
             retries={"tools": TOOL_MAX_RETRIES},
         )
+        # 压缩用的无工具文本生成：输入只有一段文字，没有运行的 deps、附件与工具结果
+        self._summarizer = PaiAgent(output_type=str)
 
     def scope(self, agent: AgentInfo, *, session_id: str, audience: Audience) -> RunScope:
         return RunScope(
@@ -295,7 +297,7 @@ class AgentRuntime:
         }
         resolved, settings = self._model(config.file.model, config.file.thinking)
         async with self._billed(RunKind.COMPACTION, config.id, config.file.model, session_id, ctx) as meter:
-            result = await self._pai.run(
+            result = await self._summarizer.run(
                 prompt,
                 model=resolved,
                 model_settings=settings,
@@ -377,9 +379,12 @@ async def _step_through(
     按身份核对历史里那一位就是它（_sent），不符当场报错。下标只在这里用，不交出去。是不是重发只问 pydantic-ai（第一次请求
     节点的 is_resuming_without_prompt）。"""
     node = await run.next(first)
-    resend = PaiAgent.is_model_request_node(node) and node.is_resuming_without_prompt
     # 重发时 pydantic-ai 把末尾那条请求从历史里取出、放进第一次请求的节点，一起查
-    _unrepaired(given, [*run.ctx.state.message_history, *([node.request] if resend else [])])
+    resent = (
+        [node.request] if PaiAgent.is_model_request_node(node) and node.is_resuming_without_prompt else []
+    )
+    resend = bool(resent)
+    _unrepaired(given, [*run.ctx.state.message_history, *resent])
     handed = len(run.ctx.state.message_history)
 
     def take() -> list[ModelMessage]:

@@ -228,7 +228,7 @@ class JobRunner:
 
     async def _close_each(
         self,
-        stale: Callable[[], Select[tuple[Job]]],
+        stale: Callable[[], Select[Job]],
         close: Callable[[AsyncSession, Job, str], Awaitable[None]],
     ) -> list[Job]:
         """按 stale 选出的任务逐个收尾（close 拿到它输出的最后几行）。日志在事务外的线程里读（事务里不做文件 IO）：

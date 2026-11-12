@@ -140,7 +140,7 @@ class UsageLog:
                     *(getattr(ModelUsage, f) for f in COUNTS),
                 ).where(ModelUsage.created_at >= since, ModelUsage.created_at < until)
             )
-            rows = [_Row(*r[:3], UsageTotals(*r[3:])) for r in result.all()]
+            rows = [_Row(*r[:3], UsageTotals(**{f: r._mapping[f] for f in COUNTS})) for r in result.all()]
         return _summarize(rows, group_by, self._tz)
 
     async def session_totals(self, session_id: str) -> UsageTotals:

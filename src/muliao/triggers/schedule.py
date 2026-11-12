@@ -16,7 +16,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, ClassVar, Final
 from zoneinfo import ZoneInfo
 
 from croniter import CroniterBadDateError, croniter
@@ -29,10 +29,10 @@ from muliao.platform.db import utcnow
 from muliao.platform.tasks import Clock
 from muliao.sessions.api import SessionActivity, WorkState
 from muliao.triggers.due import stored_time
-from muliao.triggers.service import parse_config, previous_fire_state_in, set_state
+from muliao.triggers.service import TriggerKindName, parse_config, previous_fire_state_in, set_state
 from muliao.triggers.tables import Trigger
 
-KIND = "schedule"
+KIND: Final = "schedule"
 
 
 class ScheduleConfig(BaseModel):
@@ -62,7 +62,7 @@ class ScheduleStatus(BaseModel):
 
 
 class ScheduleKind:
-    name = KIND
+    name: ClassVar[TriggerKindName] = KIND
     description = (
         'Fires on a schedule. config: {"cron": "<5-field cron expression>"} in the server timezone, '
         'e.g. {"cron": "*/5 * * * *"}. Skips a firing while the conversation the previous firing started '

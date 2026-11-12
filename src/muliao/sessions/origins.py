@@ -10,11 +10,14 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Annotated, Literal, Protocol
+from typing import TYPE_CHECKING, Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 from muliao.errors import CorruptState
+
+if TYPE_CHECKING:  # 表行的模块导入了这里的 Origin
+    from muliao.sessions.tables import Session
 
 
 class Origin(StrEnum):
@@ -43,23 +46,22 @@ RULES: dict[Origin, OriginRule] = {
 
 
 # kind 有默认值（构造时不必写），接口描述里仍是必有的字段：前端按它区分种类
-_ORIGIN_CONFIG = ConfigDict(frozen=True, extra="forbid", json_schema_serialization_defaults_required=True)
+# frozen 写成类参数（子类也要写）：类型检查器只从类参数认出不可变、可哈希（会话按发送方定位时作字典键）
+class _OriginBase(BaseModel, frozen=True, extra="forbid", json_schema_serialization_defaults_required=True):
+    pass
 
 
-class UserOrigin(BaseModel):
-    model_config = _ORIGIN_CONFIG
+class UserOrigin(_OriginBase, frozen=True):
     kind: Literal[Origin.USER] = Origin.USER
 
 
-class DelegationOrigin(BaseModel):
+class DelegationOrigin(_OriginBase, frozen=True):
     """发起方是父会话（存在会话的 parent_session_id，不在来源里另存一份）。"""
 
-    model_config = _ORIGIN_CONFIG
     kind: Literal[Origin.DELEGATION] = Origin.DELEGATION
 
 
-class TriggerOrigin(BaseModel):
-    model_config = _ORIGIN_CONFIG
+class TriggerOrigin(_OriginBase, frozen=True):
     kind: Literal[Origin.TRIGGER] = Origin.TRIGGER
     trigger_id: int
 
@@ -68,8 +70,7 @@ class TriggerOrigin(BaseModel):
         return str(self.trigger_id)
 
 
-class IssueOrigin(BaseModel):
-    model_config = _ORIGIN_CONFIG
+class IssueOrigin(_OriginBase, frozen=True):
     kind: Literal[Origin.ISSUE] = Origin.ISSUE
     issue_id: int
 
@@ -86,18 +87,7 @@ type SessionOrigin = Annotated[
 ]
 
 
-class Stored(Protocol):
-    """存着来源的会话（表行或读模型）。"""
-
-    @property
-    def id(self) -> str: ...
-    @property
-    def origin(self) -> Origin: ...
-    @property
-    def origin_ref(self) -> str | None: ...
-
-
-def origin_of(session: Stored) -> SessionOrigin:
+def origin_of(session: "Session") -> SessionOrigin:
     """会话存下的来源编号的唯一解析：用户、委派没有编号，触发器、issue 的编号是它们的 id。不合格式是存下的数据坏了。"""
     return _parse(session.origin, session.origin_ref, f"session {session.id}")
 

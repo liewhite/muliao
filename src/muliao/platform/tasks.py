@@ -13,9 +13,9 @@ import logging
 from collections.abc import Awaitable, Callable, Collection, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
-from sqlalchemy import Select, delete, func, select
+from sqlalchemy import CursorResult, Select, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -236,7 +236,7 @@ class TaskQueue:
         """领取一个可以执行的 task，只在调用方能处理的这些种类里找。"""
         return await self._claim(_claimable().where(Task.kind.in_(list(kinds))).order_by(Task.id).limit(1))
 
-    async def _claim(self, query: Select[tuple[Task]]) -> Task | None:
+    async def _claim(self, query: Select[Task]) -> Task | None:
         now = self._clock()
         async with self._db.transaction() as s:  # 事务串行化保证同一 task 不会被领取两次
             task = await s.scalar(query.where(Task.not_before <= now))
@@ -333,12 +333,16 @@ class TaskQueue:
     async def prune_done(self, kinds: Collection[str], *, finished_before: datetime) -> int:
         """删掉这些种类里在 finished_before 之前就已完成（done）的 task，返回删除的条数（保留策略，platform.retention）。"""
         async with self._db.transaction() as s:
-            result = await s.execute(
-                delete(Task).where(
-                    Task.kind.in_(list(kinds)),
-                    Task.status == TaskStatus.DONE,
-                    Task.finished_at < finished_before,
-                )
+            # 不带 RETURNING 的 DML 返回的是 CursorResult（有 rowcount），execute 的标注只写到 Result
+            result = cast(
+                CursorResult[Any],
+                await s.execute(
+                    delete(Task).where(
+                        Task.kind.in_(list(kinds)),
+                        Task.status == TaskStatus.DONE,
+                        Task.finished_at < finished_before,
+                    )
+                ),
             )
             return result.rowcount
 

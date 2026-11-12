@@ -50,6 +50,8 @@ async def test_wrong_formats_are_refused_with_the_reason_and_the_skill_section(c
             ("write_file", {"path": str(mine / "mcp/srv.json"), "content": "{not json"}),
             ("write_file", {"path": str(mine / "notes.txt"), "content": "hi"}),
             ("edit_file", {"path": str(skill_md), "old_text": "description: helps", "new_text": "title: x"}),
+            # 放文件的资源子目录本身也不能写成文件（曾经漏判、校验返回空，类型检查发现）
+            ("write_file", {"path": str(mine / "mcp"), "content": "{}"}),
         ],
     )
     assert "frontmatter must contain a string 'description'" in outputs[0]
@@ -59,6 +61,7 @@ async def test_wrong_formats_are_refused_with_the_reason_and_the_skill_section(c
     assert "not valid JSON" in outputs[2] and "section 'MCP servers'" in outputs[2]
     assert "not a place for an asset file" in outputs[3]
     assert "nothing was written" in outputs[4]
+    assert "is a directory, not a file" in outputs[5] and "section 'MCP servers'" in outputs[5]
     assert not (mine / "skills/new-one").exists() and not (mine / "mcp").exists()
     assert not (mine / "notes.txt").exists()
     assert (mine / "memory.md").read_text() == "note\n"

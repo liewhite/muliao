@@ -156,7 +156,7 @@ async def spans_between_in(s: AsyncSession, start: datetime, end: datetime) -> d
     return {x: Span(n, first, last) for x, n, first, last in rows.all()}
 
 
-def sessions_mentioning(keyword: str) -> Select[tuple[str]]:
+def sessions_mentioning(keyword: str) -> Select[str]:
     """可搜索文字（searchable_text）里提到关键字的会话，作子查询供会话列表按关键字筛：原样子串匹配，`%` `_` 按字面，
     不区分 ASCII 大小写（SQLite LIKE）。"""
     return (

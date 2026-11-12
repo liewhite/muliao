@@ -34,7 +34,8 @@ SKILL = "assets-files"
 
 class _Rejected(Exception):
     def __init__(self, reason: str, section: Section):
-        self.reason, self.section = reason, section
+        self.reason = reason
+        self.section: Section = section
 
 
 class AssetRejected(InvalidInput):
@@ -128,7 +129,10 @@ def _check(
                 assert owner is not None
                 _agent(owner, text, check_agent)
             return text
-        case Shelf(kind=kind) | Entry(kind=kind, inner=()) if spec_of(kind).is_directory:
+        # 放资源的子目录本身总是目录（放文件的 mcp/、secrets/ 也是）；skill 这类目录资源的条目本身也是目录
+        case Shelf(kind=kind):
+            raise _Rejected(f"{'/'.join(rest)} is a directory, not a file", spec_of(kind).section)
+        case Entry(kind=kind, inner=()) if spec_of(kind).is_directory:
             raise _Rejected(f"{'/'.join(rest)} is a directory, not a file", spec_of(kind).section)
         case PrivateMemory():
             assert owner is not None

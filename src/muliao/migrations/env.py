@@ -1,7 +1,10 @@
 """Alembic 环境。运行时由 muliao.platform.db.migrate 传入已关闭外键的连接；开发时由仓库根目录 alembic.ini 驱动。"""
 
+from typing import Any, Literal
+
 from alembic import context
-from sqlalchemy import create_engine
+from alembic.autogenerate.api import AutogenContext
+from sqlalchemy import String, create_engine
 
 import muliao.schema  # noqa: F401  注册所有表
 from muliao.platform.db import Base, StrEnumType, UTCDateTime, include_name
@@ -9,9 +12,10 @@ from muliao.platform.db import Base, StrEnumType, UTCDateTime, include_name
 config = context.config
 
 
-def _render_item(type_: str, obj: object, autogen_context: object) -> str | bool:
+def _render_item(type_: str, obj: Any, autogen_context: AutogenContext) -> str | Literal[False]:
     """迁移里只写库里的实际类型，不依赖应用里的类型包装：枚举列是字符串，时间列是 DateTime。"""
     if type_ == "type" and isinstance(obj, StrEnumType):
+        assert isinstance(obj.impl, String)
         return f"sa.String(length={obj.impl.length})"
     if type_ == "type" and isinstance(obj, UTCDateTime):
         return "sa.DateTime()"
@@ -35,5 +39,7 @@ connection = config.attributes.get("connection")
 if connection is not None:
     _run(connection)
 else:
-    with create_engine(config.get_main_option("sqlalchemy.url")).connect() as conn:
+    url = config.get_main_option("sqlalchemy.url")
+    assert url is not None, "alembic.ini sets sqlalchemy.url"
+    with create_engine(url).connect() as conn:
         _run(conn)

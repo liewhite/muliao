@@ -92,7 +92,8 @@ class DueRunner:
     async def fire_due(self) -> int:
         """扫描一轮并等这轮的触发都做完；返回到期的个数。"""
         async with anyio.create_task_group() as group:
-            return await self._fire_due_in(group)
+            due = await self._fire_due_in(group)
+        return due  # pyright: ignore[reportPossiblyUnboundVariable]  # 任务组 __aexit__ 标注为 bool，被当成可能吞掉异常
 
     async def _fire_due_in(self, group: TaskGroup) -> int:
         """扫描一轮：到期的在这里逐个消耗（短事务，下一轮不会再看到它到期），触发放进 group 并发跑、不等它做完：

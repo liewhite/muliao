@@ -150,7 +150,9 @@ class Notifications:
             query = select(Notification.session_id).where(
                 Notification.session_id.in_(session_ids), Notification.unread.is_(True)
             )
-            return set((await s.scalars(query)).all())
+            return {
+                sid for sid in (await s.scalars(query)).all() if sid is not None
+            }  # 查询已限定 in_，不会有空
 
     async def unread_count(self) -> int:
         async with self._db.transaction() as s:

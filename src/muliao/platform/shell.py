@@ -198,7 +198,7 @@ async def run_bash(
                 proc, [partial(_collect, stream, buf) for stream, buf in streams], timeout
             )
             group.cancel_scope.cancel()
-        return ended
+        return ended  # pyright: ignore[reportPossiblyUnboundVariable]  # 任务组 __aexit__ 标注为 bool，被当成可能吞掉异常
 
     async def drain() -> None:
         # 把杀掉之前写进管道、还没读的部分读完；脱离进程组的后代可能仍持有管道，所以收尾也有时限

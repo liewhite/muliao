@@ -31,7 +31,7 @@ from muliao.sessions.approvals import waiting_text as approval_waiting_text
 from muliao.sessions.codec import load_messages
 from muliao.sessions.content import ContentBuilder
 from muliao.sessions.conventions import answer_text, is_stopped
-from muliao.sessions.events import RunFailed
+from muliao.sessions.events import RunFailed, Waiting
 from muliao.sessions.finish import RunEnd, RunFinisher
 from muliao.sessions.halt import Halted, SessionHalt
 from muliao.sessions.history import (
@@ -70,7 +70,7 @@ def paused_end(
     texts = [waiting_text(questions)] if questions else []
     if gated:
         texts.append(approval_waiting_text([_brief(c) for c in gated]))
-    waiting = {pending.DEFERRED_TOOLS[c.tool_name].name for c in calls}
+    waiting: set[Waiting] = {pending.DEFERRED_TOOLS[c.tool_name].name for c in calls}
     if gated:
         waiting.add(pending.AWAITING_APPROVAL.name)
     return RunEnd(

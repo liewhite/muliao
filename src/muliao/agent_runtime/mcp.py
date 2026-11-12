@@ -167,7 +167,9 @@ class McpConnector:
         self._vault = vault
         self._confine = confine
 
-    async def build_toolset(self, server: McpServer, user: str, cwd: Path | None) -> AbstractToolset:
+    async def build_toolset(
+        self, server: McpServer, user: str, cwd: Path | None
+    ) -> AbstractToolset[RunScope]:
         """按 user（用它的 agent 的 id，或 USER）能用的 secret 解析 vault 引用并构建 toolset；工具名以 `<server名>_` 为前缀
         避免冲突。cwd：stdio server 进程的工作目录——运行时是这次运行的工作目录，server 写出的文件（如浏览器的截图、页面
         快照）落在 agent 的文件工具与 shell 读得到的地方；新增时的探测没有运行，为 None（沿用服务进程的）。"""

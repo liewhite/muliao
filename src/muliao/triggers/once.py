@@ -13,7 +13,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, ClassVar, Final
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, field_validator
@@ -23,10 +23,10 @@ from muliao.errors import InvalidInput
 from muliao.platform.db import utcnow
 from muliao.platform.tasks import Clock
 from muliao.triggers.due import stored_time
-from muliao.triggers.service import finish_in, parse_config
+from muliao.triggers.service import TriggerKindName, finish_in, parse_config
 from muliao.triggers.tables import Trigger
 
-KIND = "once"
+KIND: Final = "once"
 
 
 class OnceConfig(BaseModel):
@@ -51,7 +51,7 @@ class OnceStatus(BaseModel):
 
 
 class OnceKind:
-    name = KIND
+    name: ClassVar[TriggerKindName] = KIND
     description = (
         'Fires once at a given time and then finishes: config {"at": "<ISO 8601 time>"}, e.g. '
         '{"at": "2026-10-22T10:30"}; without an offset it is read in the server timezone, and it must be in '
@@ -94,6 +94,6 @@ class OnceDue:
     def due_at(self, trigger: Trigger) -> datetime:
         return run_at(trigger)
 
-    async def consume_in(self, _s: AsyncSession, trigger: Trigger, now: datetime) -> str | None:
+    async def consume_in(self, s: AsyncSession, trigger: Trigger, now: datetime) -> str | None:
         finish_in(trigger, now)
         return None

@@ -342,14 +342,16 @@ async def _target_in(s: AsyncSession, inbound: Inbound) -> Checked:
     match checked := await check_in(s, inbound):
         case Checked():
             return checked
-        case Refused(reason=Refusal.ARCHIVED, detail=detail):
-            raise AgentArchived(detail)
-        case Refused(reason=Refusal.GONE, detail=detail):
-            raise NotFound(detail)
-        case Refused(reason=Refusal.NOT_YOURS, detail=detail):
-            raise Forbidden(detail)
-        case Refused(reason=other):
-            assert_never(other)
+        case Refused(reason=reason, detail=detail):
+            match reason:
+                case Refusal.ARCHIVED:
+                    raise AgentArchived(detail)
+                case Refusal.GONE:
+                    raise NotFound(detail)
+                case Refusal.NOT_YOURS:
+                    raise Forbidden(detail)
+                case other:
+                    assert_never(other)
 
 
 @dataclass(frozen=True)

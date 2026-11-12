@@ -13,6 +13,8 @@ from sqlalchemy import create_engine as sa_create_engine
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, ORMExecuteState, Session
 from sqlalchemy.pool import NullPool
+from sqlalchemy.sql.dml import UpdateBase
+from sqlalchemy.sql.expression import TableClause
 from sqlalchemy.types import TypeDecorator
 
 
@@ -168,7 +170,10 @@ def _track_writes(s: AsyncSession) -> set[str]:
     @event.listens_for(s.sync_session, "do_orm_execute")
     def _statements(state: ORMExecuteState) -> None:
         if state.is_insert or state.is_update or state.is_delete:
-            written.add(state.statement.table.name)
+            # 写语句都是对单表的 Insert / Update / Delete（ORM 不对 Join 写）
+            statement = state.statement
+            assert isinstance(statement, UpdateBase) and isinstance(statement.table, TableClause)
+            written.add(statement.table.name)
 
     return written
 

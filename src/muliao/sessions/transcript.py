@@ -196,7 +196,7 @@ def annotate_threads(items: list[Item], call_threads: Mapping[str, str]) -> list
     thread 显示在这次调用处。只看调用 id，不看调用有没有结果、结果是谁补的。"""
     return [
         item.model_copy(update={"threads": [call_threads[item.tool_call_id]]})
-        if item.type == "tool_call" and item.tool_call_id in call_threads
+        if item.type == "tool_call" and item.tool_call_id is not None and item.tool_call_id in call_threads
         else item
         for item in items
     ]
@@ -254,6 +254,8 @@ def _prompt_items(part: UserPromptPart, events: Sequence[int], check_ins: Sequen
             if own:
                 items.append(_user_item(own))
                 own = []
+            if not isinstance(c, str):
+                raise RuntimeError(f"event segment {i} of a user prompt is not text")
             source, text = parse_event(c)
             items.append(_item("event", text, source=source, at=part.timestamp, check_in=i in check_ins))
         else:

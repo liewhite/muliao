@@ -35,7 +35,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar, Final
 
 import anyio
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -49,6 +49,7 @@ from muliao.platform.tasks import Clock
 from muliao.sessions.api import SessionActivity, WorkState
 from muliao.triggers.faults import Faults, FaultSource, TriggerFault, recovered
 from muliao.triggers.service import (
+    TriggerKindName,
     TriggerService,
     parse_config,
     previous_fire_state_in,
@@ -59,7 +60,7 @@ from muliao.workspace.api import AgentCommands
 
 log = logging.getLogger(__name__)
 
-KIND = "stream"
+KIND: Final = "stream"
 
 # 稳定运行这么久算恢复：清除错误，退避与连续失败计数从头算
 _STABLE_SECONDS = 60.0
@@ -96,7 +97,7 @@ def stderr_log(name: str) -> str:
 
 
 class StreamKind:
-    name = KIND
+    name: ClassVar[TriggerKindName] = KIND
     description = (
         "Runs a long-lived command hosted by the platform; every line it prints to stdout is an event. config: "
         '{"command": "<bash command>", "secrets": ["VAULT_KEY", ...], "debounce_seconds": 5}. The command runs in '
@@ -330,9 +331,9 @@ class StreamRunner:
         logged = await anyio.to_thread.run_sync(tail, log_file)
         # 日志是追加的，末尾几行里可能有前几次启动（甚至改配置前那条命令）的报错：补说明只看这次的分隔行之后的整行
         # （分隔行已不在末尾几行里时，整段都是这次的）
-        refused = agent_shell.refusal(code, logged.rpartition(started)[2])
+        refused = agent_shell.refusal(code, logged.rpartition(started)[2])  # pyright: ignore[reportPossiblyUnboundVariable]  # 同上：任务组
         stderr_tail = logged[-_ERROR_TAIL_CHARS:].strip()
-        return f"stream command exited with {code}: {stderr_tail}" + (
+        return f"stream command exited with {code}: {stderr_tail}" + (  # pyright: ignore[reportPossiblyUnboundVariable]
             "" if refused is None else f"\n{refused}"
         )
 
@@ -450,7 +451,7 @@ class StreamRunner:
                 )
 
     @staticmethod
-    async def _safely(spec: _Spec, write: Awaitable[None]) -> None:
+    async def _safely(spec: _Spec, write: Awaitable[object]) -> None:
         """状态写不进去（数据库暂时不可用）不影响进程的监督：记日志，下次再写。"""
         try:
             await write

@@ -219,7 +219,7 @@ def issues_toolset(board: IssueService, agents: AgentService) -> FunctionToolset
         status: IssueStatus = NewIssue.status,
         priority: IssuePriority = NewIssue.priority,
         assignee: str | None = NewIssue.assignee,
-        depends_on: tuple[int, ...] = NewIssue.depends_on,
+        depends_on: tuple[int, ...] = (),
         issues: tuple[NewIssueItem, ...] = (),
     ) -> str:
         """Create an issue. Each agent works on an issue in one conversation dedicated to it; while the issue is
@@ -250,7 +250,9 @@ def issues_toolset(board: IssueService, agents: AgentService) -> FunctionToolset
             issues: Several issues to create at once, each with the fields above plus an optional `key`; in
                 their `depends_on`, a string is the key of another item of this batch, a number an existing issue.
         """
-        rest = dict(
+        given = NewIssueItem(
+            title=title or "",
+            owner=owner or "",
             description=description,
             status=status,
             priority=priority,
@@ -259,14 +261,14 @@ def issues_toolset(board: IssueService, agents: AgentService) -> FunctionToolset
         )
         if issues:
             # 缺省值与领域同源（NewIssue）：title / owner 之外的字段都等于缺省值，就是没给（显式传缺省值与不传等价）
-            others = NewIssueItem(title="", owner="", **rest) != NewIssueItem(title="", owner="")
+            others = given.model_copy(update={"title": "", "owner": ""}) != NewIssueItem(title="", owner="")
             if title is not None or owner is not None or others:
                 raise InvalidInput("pass either one issue (title/owner/...) or issues, not both")
             new = [await new_issue(item, len(issues), n) for n, item in enumerate(issues)]
         else:
             if title is None or owner is None:
                 raise InvalidInput("title and owner are required (or pass issues)")
-            new = [await new_issue(NewIssueItem(title=title, owner=owner, **rest), 1, 0)]
+            new = [await new_issue(given, 1, 0)]
         created = await board.create_many(ctx.deps.agent_id, new, session_id=ctx.deps.session_id)
         if not issues:
             return f"created issue #{created[0].id}"

@@ -9,9 +9,16 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, NoReturn
 
-from pydantic_ai import AgentRunResult, DeferredToolRequests, DeferredToolResults, RunContext, ToolDenied
+from pydantic_ai import (
+    AgentRunResult,
+    DeferredToolRequests,
+    DeferredToolResults,
+    RunContext,
+    ToolDenied,
+)
 from pydantic_ai.exceptions import ApprovalRequired, CallDeferred
 from pydantic_ai.messages import ModelMessage, ToolCallPart
+from pydantic_ai.tools import DeferredToolApprovalResult
 
 
 @dataclass(frozen=True)
@@ -89,7 +96,7 @@ def outcome_of(result: AgentRunResult[str | DeferredToolRequests]) -> Finished |
 def deferred_tool_results(deferred: Mapping[str, object]) -> DeferredToolResults:
     """交回的 `{调用 id: 结果}` 换成模型库的形态：Approval 是对等批准的调用的决定（批准→工具再执行，不批准→note
     作为结果），其余是调用的结果本身（等批准的调用也可以直接给结果，工具不执行）。"""
-    approvals: dict[str, bool | ToolDenied] = {}
+    approvals: dict[str, bool | DeferredToolApprovalResult] = {}
     calls: dict[str, object] = {}
     metadata: dict[str, dict[str, Any]] = {}
     for call_id, result in deferred.items():

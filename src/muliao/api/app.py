@@ -50,7 +50,7 @@ from muliao.errors import (
     Unauthorized,
     UpstreamFailed,
 )
-from muliao.platform.bus import SubscriptionEnded
+from muliao.platform.bus import Event, SubscriptionEnded
 from muliao.platform.fs import resolve_within
 
 log = logging.getLogger(__name__)
@@ -167,20 +167,19 @@ def _private_routes() -> APIRouter:
     # `: ping` 注释行只防代理断开，EventSource 不把注释交给页面，所以心跳仍然需要
     @router.get("/events", response_class=EventSourceResponse)
     async def events(request: Request, c: C) -> AsyncIterator[ServerEvent]:
-        heartbeat = _heartbeat(request.app.state.ui_version)
+        heartbeat = ServerEvent(_heartbeat(request.app.state.ui_version))
         async with c.bus.subscribe() as sub:
             # 连上就先发一次心跳：前端立刻知道间隔
             yield heartbeat
             while True:
+                event: Event | None = None
                 try:
-                    with anyio.move_on_after(_HEARTBEAT_SECONDS) as waited:
+                    with anyio.move_on_after(_HEARTBEAT_SECONDS):
                         event = await sub.next()
                 except SubscriptionEnded:
                     return
-                if waited.cancelled_caught:
-                    yield heartbeat
-                    continue
-                yield event
+                # 总线上的事件只是带 type 的模型（总线不认识种类），在这里认成 SSE 的条目类型，不认识的当场报错
+                yield heartbeat if event is None else ServerEvent.model_validate(event)
 
     return router
 

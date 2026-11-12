@@ -330,7 +330,7 @@ def _section(doc: TOMLDocument, name: str) -> Table:
     return table
 
 
-def _rules_table(fields: dict[str, object]) -> Table:
+def _rules_table(fields: Mapping[str, object]) -> Table:
     table = tomlkit.table()
     for key, value in fields.items():
         if isinstance(value, list):

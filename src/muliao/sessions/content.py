@@ -65,13 +65,15 @@ def append_content(request: ModelRequest, content: Content) -> None:
 
     运行上下文（RUN_CONTEXT）虽然也是一段用户消息，但不是对话内容，跳过它：这样两者谁先挂上都不影响结果。"""
     context_at = run_context_index(request)
-    for i, part in enumerate(request.parts):
+    parts = list(request.parts)
+    for i, part in enumerate(parts):
         if isinstance(part, UserPromptPart) and i != context_at:
             existing = [part.content] if isinstance(part.content, str) else list(part.content)
-            request.parts[i] = replace(part, content=[*existing, *content.items])
+            parts[i] = replace(part, content=[*existing, *content.items])
+            request.parts = parts
             mark_events(request, len(existing), content)
             return
-    request.parts.append(UserPromptPart(content.items))
+    request.parts = [*parts, UserPromptPart(content.items)]
     mark_events(request, 0, content)
 
 

@@ -13,8 +13,9 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any, cast
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import CursorResult, delete, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -157,6 +158,9 @@ class ScriptGrants:
     async def revoke(self, grant_id: int) -> None:
         """撤销一条始终允许：之后同一调用重新要批准。"""
         async with self._db.transaction() as s:
-            result = await s.execute(delete(ScriptGrant).where(ScriptGrant.id == grant_id))
+            # 不带 RETURNING 的 DML 返回 CursorResult（有 rowcount），execute 的标注只写到 Result
+            result = cast(
+                CursorResult[Any], await s.execute(delete(ScriptGrant).where(ScriptGrant.id == grant_id))
+            )
             if result.rowcount == 0:
                 raise NotFound(f"script grant {grant_id} not found")

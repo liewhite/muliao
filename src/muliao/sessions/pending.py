@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from muliao.sessions.answers import AgentAnswered
 from muliao.sessions.approvals import ApprovalAnswered, requested_among, requested_in
 from muliao.sessions.conventions import is_stopped, unanswered_calls
+from muliao.sessions.events import Waiting
 from muliao.sessions.holds import called_among, called_in
 from muliao.sessions.questions import Question, UserAnswered, questions_of
 from muliao.sessions.tables import Mail, MailKind
@@ -64,7 +65,7 @@ class DeferredKind:
             raise ValueError(f"{self.name}: only tools that need a hold can have calls that are not pending")
 
     @property
-    def name(self) -> str:
+    def name(self) -> Waiting:
         (name,) = get_args(self.answer.model_fields["tool"].annotation)
         return name
 
@@ -327,7 +328,8 @@ def late_text(results: Sequence[CallResult]) -> str:
     """回答到达时那次调用已经结束（模型已经带着「没回答」或「之后送达」继续了）：作为一段用户消息交给模型，回答不丢。"""
     lines: list[str] = []
     for kind in KINDS:
-        lines += kind.answer.late_lines([r for r in results if isinstance(r, kind.answer)])
+        # 筛出的就是这一种的回答；类型检查器不把 isinstance 的结果和同一个 kind.answer 对应起来
+        lines += kind.answer.late_lines([r for r in results if isinstance(r, kind.answer)])  # pyright: ignore[reportArgumentType]
     return "\n".join(lines)
 
 

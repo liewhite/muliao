@@ -53,6 +53,7 @@ class VapidKeys:
             )
             key_path.chmod(0o600)
         self.vapid = Vapid02.from_file(str(key_path))
+        assert self.vapid.public_key is not None  # 从私钥文件载入时一并得到公钥
         raw = self.vapid.public_key.public_bytes(Encoding.X962, PublicFormat.UncompressedPoint)
         # 浏览器 PushManager.subscribe 的 applicationServerKey
         self.public_key_b64 = b64urlencode(raw)

@@ -88,6 +88,7 @@ _OUT: dict[type[BaseModel], type[BaseModel]] = {
     what: create_model(f"{what.__name__}Activity", __base__=(what, _ActivityBase), __doc__=what.__doc__)
     for what in HAPPENINGS
 }
+# 运行时由 _OUT 生成的联合（OpenAPI 用），类型检查器看不懂，用到它的标注处忽略 reportInvalidTypeForm
 ActivityOut = Annotated[Union[tuple(_OUT.values())], Field(discriminator="kind")]  # noqa: UP007
 
 
@@ -99,7 +100,7 @@ def _activity_out(a: Activity) -> BaseModel:
 
 class IssueDetailOut(BaseModel):
     issue: IssueOut
-    activities: list[ActivityOut]
+    activities: list[ActivityOut]  # pyright: ignore[reportInvalidTypeForm]
 
 
 class IssueCreate(BaseModel):
@@ -195,7 +196,7 @@ async def update_issue(c: C, issue_id: int, body: IssuePatch) -> IssueOut:
 
 
 @router.post("/issues/{issue_id}/comments", status_code=201)
-async def comment_issue(c: C, issue_id: int, body: CommentIn) -> ActivityOut:
+async def comment_issue(c: C, issue_id: int, body: CommentIn) -> ActivityOut:  # pyright: ignore[reportInvalidTypeForm]
     return _activity_out(await c.issues.comment(USER, issue_id, body.body))
 
 

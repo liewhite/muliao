@@ -107,7 +107,9 @@ class AttachmentsForModel(AbstractCapability[RunScope]):
                     extra={"file_id": meta.id, "media_type": meta.media_type, "error": str(e)},
                 )
                 return [f"[image {meta.name!r} could not be decoded as an image, so it is not shown]"]
-            tiles = [BinaryContent(t.data, media_type=t.media_type) for t in fitted.tiles]
+            tiles: list[str | BinaryContent] = [
+                BinaryContent(t.data, media_type=t.media_type) for t in fitted.tiles
+            ]
             return tiles if fitted.note is None else [fitted.note, *tiles]
 
         return await asyncio.to_thread(load)

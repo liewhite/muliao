@@ -15,6 +15,7 @@ from muliao.issues.tables import ActivityKind, IssueActivity, IssuePriority
 
 class _Value(BaseModel):
     # 库里多出没定义的内容也算形状不符。接口描述按输出的样子给：有默认值的（kind、Arrival 的 from）输出里总在，列为必有
+    # from 是关键字：字段叫 before，进出都用别名 from（只给 validation/serialization_alias，构造时类型检查认字段名）
     model_config = ConfigDict(
         frozen=True,
         extra="forbid",
@@ -28,14 +29,14 @@ class _Value(BaseModel):
 class Change[T](_Value):
     """属性从什么改成什么（存为 {"from": ..., "to": ...}）。"""
 
-    before: T = Field(alias="from")
+    before: T = Field(validation_alias="from", serialization_alias="from")
     to: T
 
 
 class Arrival(_Value):
     """不是属性变化、只有一个值的记法（存为 {"from": null, "to": 值}）。"""
 
-    before: None = Field(default=None, alias="from")
+    before: None = Field(default=None, validation_alias="from", serialization_alias="from")
     to: str
 
 

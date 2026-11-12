@@ -72,32 +72,36 @@ class IssueDelivery:
                 log.info(
                     "issue activity delivered", extra={"issue_id": issue.id, "agent": to, "actor": actor}
                 )
-            case Refused(reason=Refusal.ARCHIVED) if actor == USER:
-                # 已有 issue 的指派人或 owner 后来被归档：动态照常记进时间线（不让用户在这类 issue 上的评论、改动报错），
-                # 不投递；用户自己的改动、评论没人接要当场告诉他（只有他能取消归档或改指派）。别人的动态（agent、触发器
-                # 的事件）只记日志：不然周期触发器投进这类 issue 会每个周期推一条，in_progress 的由看板的「停滞」标出
-                await self._notify(
-                    s,
-                    Notify(
-                        agent_id=to,
-                        title=f"#{issue.id} 的动态没交给 {names[to]}：它已归档",
-                        body="取消归档后它用 issue_show 能看到这些动态；也可以把 issue 改指派给别的 agent。",
-                        session_id=None,
-                        issue_id=issue.id,
-                    ),
-                )
-                log.info("issue activity not delivered: %s", result.detail, extra={"issue_id": issue.id})
-            case Refused(reason=Refusal.ARCHIVED):
-                log.info("issue activity not delivered: %s", result.detail, extra={"issue_id": issue.id})
-            case Refused(reason=Refusal.GONE):
-                # agent 正在删除：删除流程会清理它在 issue 上的指派与 owner（on_agent_deleting），不投
-                log.info("issue activity not delivered: %s", result.detail, extra={"issue_id": issue.id})
-            case Refused(reason=Refusal.NOT_YOURS):
-                raise RuntimeError(
-                    f"issue #{issue.id}: mail to the agent's own issue session was refused as not ours: {result.detail}"
-                )
-            case Refused(reason=other):
-                assert_never(other)
+            case Refused(reason=reason):
+                match reason:
+                    case Refusal.ARCHIVED if actor == USER:
+                        # 已有 issue 的指派人或 owner 后来被归档：动态照常记进时间线（不让用户在这类 issue 上的评论、改动报错），
+                        # 不投递；用户自己的改动、评论没人接要当场告诉他（只有他能取消归档或改指派）。别人的动态（agent、触发器
+                        # 的事件）只记日志：不然周期触发器投进这类 issue 会每个周期推一条，in_progress 的由看板的「停滞」标出
+                        await self._notify(
+                            s,
+                            Notify(
+                                agent_id=to,
+                                title=f"#{issue.id} 的动态没交给 {names[to]}：它已归档",
+                                body="取消归档后它用 issue_show 能看到这些动态；也可以把 issue 改指派给别的 agent。",
+                                session_id=None,
+                                issue_id=issue.id,
+                            ),
+                        )
+                        log.info(
+                            "issue activity not delivered: %s", result.detail, extra={"issue_id": issue.id}
+                        )
+                    case Refusal.ARCHIVED | Refusal.GONE:
+                        # GONE：agent 正在删除，删除流程会清理它在 issue 上的指派与 owner（on_agent_deleting），不投
+                        log.info(
+                            "issue activity not delivered: %s", result.detail, extra={"issue_id": issue.id}
+                        )
+                    case Refusal.NOT_YOURS:
+                        raise RuntimeError(
+                            f"issue #{issue.id}: mail to the agent's own issue session was refused as not ours: {result.detail}"
+                        )
+                    case other:
+                        assert_never(other)
 
 
 async def _from_its_session_in(

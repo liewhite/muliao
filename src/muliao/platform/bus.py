@@ -82,7 +82,10 @@ class EventBus:
             try:
                 sub.queue.put_nowait(event)
             except asyncio.QueueFull:
-                log.warning("event subscriber overflowed, disconnecting it", extra={"event_type": event.type})
+                log.warning(
+                    "event subscriber overflowed, disconnecting it",
+                    extra={"event_type": type(event).__name__},
+                )
                 self._subscribers.discard(sub)
                 sub.end("event subscriber fell behind and was disconnected")
 

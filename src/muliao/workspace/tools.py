@@ -170,6 +170,7 @@ def workspace_toolset(
                         "Call it again to ask the user to approve the current version."
                     )
                 if always_allow_requested(ctx):
+                    assert ctx.tool_call_id is not None  # 工具调用里总有调用 id
                     await grants.grant(call, ctx.deps.session_id, ctx.tool_call_id)
             else:
                 granted = await grants.find(call)

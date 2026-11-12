@@ -24,7 +24,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum, StrEnum
-from typing import Any, Literal, Protocol, assert_never
+from typing import Any, ClassVar, Literal, Protocol, assert_never
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ValidationError
@@ -146,14 +146,16 @@ def _settled(outcome: Outcome) -> Fired | None:
     match outcome:
         case Fired() | None:
             return outcome
-        case Skipped(why=Skip.DISABLED, detail=detail):
-            raise Conflict(detail)
-        case Skipped(why=Skip.ARCHIVED, detail=detail):
-            raise AgentArchived(detail)
-        case Skipped(why=Skip.DELETED, detail=detail):
-            raise TriggerNotFound(detail)
-        case Skipped(why=other):
-            assert_never(other)
+        case Skipped(why=why, detail=detail):
+            match why:
+                case Skip.DISABLED:
+                    raise Conflict(detail)
+                case Skip.ARCHIVED:
+                    raise AgentArchived(detail)
+                case Skip.DELETED:
+                    raise TriggerNotFound(detail)
+                case other:
+                    assert_never(other)
         case CheckFailed(error=error):
             raise error
         case other:
@@ -167,7 +169,7 @@ TriggerKindName = Literal["schedule", "once", "stream"]
 class TriggerKind(Protocol):
     """一种触发方式的纯逻辑部分。"""
 
-    name: str
+    name: ClassVar[TriggerKindName]
     # 给模型与界面看的说明：什么时候触发、config 的格式
     description: str
 
@@ -558,13 +560,15 @@ class TriggerService:
         match await self._fire(trigger_id, payload, _By.ACTIVATION):
             case Fired() | None | CheckFailed():
                 pass
-            case Skipped(why=Skip.ARCHIVED, detail=detail):
+            case Skipped(why=why, detail=detail):
                 log.info("activated fire skipped: %s", detail, extra={"trigger_id": trigger_id})
-                await self._once_skipped(trigger_id)
-            case Skipped(why=Skip.DISABLED | Skip.DELETED, detail=detail):
-                log.info("activated fire skipped: %s", detail, extra={"trigger_id": trigger_id})
-            case Skipped(why=other):
-                assert_never(other)
+                match why:
+                    case Skip.ARCHIVED:
+                        await self._once_skipped(trigger_id)
+                    case Skip.DISABLED | Skip.DELETED:
+                        pass
+                    case other:
+                        assert_never(other)
             case other:
                 assert_never(other)
 
