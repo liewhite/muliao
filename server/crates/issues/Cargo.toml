@@ -7,8 +7,26 @@ publish.workspace = true
 [dependencies]
 muliao-platform = { workspace = true }
 muliao-assets = { workspace = true }
-muliao-runtime = { workspace = true }
 muliao-sessions = { workspace = true }
+agenter = { workspace = true }
+chrono = { workspace = true }
+chrono-tz = { workspace = true }
+rusqlite = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+muliao-files = { workspace = true }
+muliao-runtime = { workspace = true }
+muliao-usage = { workspace = true }
+futures = { workspace = true }
+reqwest = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true }
+wiremock = { workspace = true }
 
 [lints]
 workspace = true

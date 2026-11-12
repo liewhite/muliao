@@ -1727,10 +1727,26 @@ dependencies = [
 name = "muliao-issues"
 version = "0.1.0"
 dependencies = [
+ "agenter",
+ "chrono",
+ "chrono-tz",
+ "futures",
  "muliao-assets",
+ "muliao-files",
  "muliao-platform",
  "muliao-runtime",
  "muliao-sessions",
+ "muliao-usage",
+ "reqwest",
+ "rusqlite",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "wiremock",
 ]
 
 [[package]]
