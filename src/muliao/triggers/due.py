@@ -51,7 +51,9 @@ def stored_time(trigger: Trigger, value: object, what: str) -> datetime:
     """读出触发器存下的到期时间（ISO 8601、带时区，配置时总是这样写入）。缺失、解析不了或不带时区都是存下的数据坏了：
     抛 CorruptState，信息里带上是哪个触发器。"""
     try:
-        at = datetime.fromisoformat(value)  # type: ignore[arg-type]
+        if not isinstance(value, str):
+            raise TypeError(f"not a string: {type(value).__name__}")
+        at = datetime.fromisoformat(value)
     except (TypeError, ValueError) as e:
         raise CorruptState(f"trigger {trigger.id} ({trigger.name}) has no valid {what}: {value!r}") from e
     if at.tzinfo is None:
@@ -93,7 +95,7 @@ class DueRunner:
         """扫描一轮并等这轮的触发都做完；返回到期的个数。"""
         async with anyio.create_task_group() as group:
             due = await self._fire_due_in(group)
-        return due  # pyright: ignore[reportPossiblyUnboundVariable]  # 任务组 __aexit__ 标注为 bool，被当成可能吞掉异常
+        return due
 
     async def _fire_due_in(self, group: TaskGroup) -> int:
         """扫描一轮：到期的在这里逐个消耗（短事务，下一轮不会再看到它到期），触发放进 group 并发跑、不等它做完：

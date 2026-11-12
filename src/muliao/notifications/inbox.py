@@ -11,6 +11,7 @@ Notifications 写下通知（notify、别的领域在自己事务里调的 notif
 
 import logging
 from collections.abc import Sequence
+from typing import cast
 
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -150,9 +151,8 @@ class Notifications:
             query = select(Notification.session_id).where(
                 Notification.session_id.in_(session_ids), Notification.unread.is_(True)
             )
-            return {
-                sid for sid in (await s.scalars(query)).all() if sid is not None
-            }  # 查询已限定 in_，不会有空
+            # in_ 已排除空的 session_id
+            return cast(set[str], set((await s.scalars(query)).all()))
 
     async def unread_count(self) -> int:
         async with self._db.transaction() as s:

@@ -20,9 +20,9 @@ from __future__ import annotations
 import logging
 from collections.abc import Collection, Mapping, Sequence
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import CursorResult, and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.errors import NotFound
@@ -262,14 +262,18 @@ async def consume_in(s: AsyncSession, ids: Sequence[int], run_id: int) -> None:
     """交给模型的那一步保存时记下处理掉的信件。同一会话只有一个消费者，取走的信件不可能被别人处理掉。"""
     if not ids:
         return
-    result = await s.execute(
-        update(Mail)
-        .where(Mail.id.in_(list(ids)), Mail.state == MailState.QUEUED)
-        .values(state=MailState.CONSUMED, taken_by=run_id)
+    # 不带 RETURNING 的 DML 返回 CursorResult（有 rowcount），execute 的标注只写到 Result
+    result = cast(
+        CursorResult[Any],
+        await s.execute(
+            update(Mail)
+            .where(Mail.id.in_(list(ids)), Mail.state == MailState.QUEUED)
+            .values(state=MailState.CONSUMED, taken_by=run_id)
+        ),
     )
-    if result.rowcount != len(ids):  # type: ignore[attr-defined]
+    if result.rowcount != len(ids):
         raise RuntimeError(
-            f"run {run_id} handed mail {list(ids)} to the model but only {result.rowcount} were still queued"  # type: ignore[attr-defined]
+            f"run {run_id} handed mail {list(ids)} to the model but only {result.rowcount} were still queued"
         )
 
 

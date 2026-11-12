@@ -58,6 +58,8 @@ testpaths = ["tests"]
 include = ["src"]
 pythonVersion = "3.12"
 typeCheckingMode = "basic"
+# 过期的抑制注释也报错，免得它压住以后真出现的问题
+reportUnnecessaryTypeIgnoreComment = "error"
 venvPath = "."
 venv = ".venv"
 

@@ -57,7 +57,7 @@ def model_settings(model: Model, thinking: Thinking) -> ModelSettings | None:
     if thinking == "off":
         return ModelSettings(thinking=False)
     level = ModelSettings() if thinking == "default" else ModelSettings(thinking=thinking)
-    return {**level, **_thinking_shown(model.profile, thinking)} or None  # type: ignore[return-value]
+    return {**level, **_thinking_shown(model.profile, thinking)} or None
 
 
 def _thinking_shown(profile: ModelProfile, thinking: Thinking) -> ModelSettings:
@@ -149,12 +149,12 @@ _LIST_ERRORS = (anthropic.APIError, openai.APIError, google_errors.APIError, htt
 LIST_TIMEOUT_SECONDS = 30.0
 
 
-async def _sdk_model_names(provider: Provider) -> list[str]:  # type: ignore[type-arg]
+async def _sdk_model_names(provider: Provider) -> list[str]:
     # anthropic 与 openai 两个 SDK 的分页器都会自动翻完所有页
     return [m.id async for m in provider.client.models.list(timeout=LIST_TIMEOUT_SECONDS)]
 
 
-async def _google_model_names(provider: Provider) -> list[str]:  # type: ignore[type-arg]
+async def _google_model_names(provider: Provider) -> list[str]:
     config = google_types.ListModelsConfig(
         http_options=google_types.HttpOptions(timeout=int(LIST_TIMEOUT_SECONDS * 1000))
     )
@@ -178,14 +178,14 @@ class ProviderKind:
     # 或本地 profile，可能把配置里的 key 发往别处。所以永远显式传地址。取值与各 SDK 内置默认一致。
     official_base_url: str
     # (api_key, base_url) → 客户端
-    provider: Callable[[str, str], Provider]  # type: ignore[type-arg]
+    provider: Callable[[str, str], Provider]
     # (模型名, 客户端, provider 配置) → 模型
-    model: Callable[[str, Provider, ProviderConfig], Model]  # type: ignore[type-arg]
+    model: Callable[[str, Provider, ProviderConfig], Model]
     # 向 provider 查询它提供的模型名（即 "<provider 名>:<模型名>" 里的模型名）
-    model_names: Callable[[Provider], Awaitable[list[str]]]  # type: ignore[type-arg]
+    model_names: Callable[[Provider], Awaitable[list[str]]]
 
 
-def _openai(api_key: str, base_url: str) -> Provider:  # type: ignore[type-arg]
+def _openai(api_key: str, base_url: str) -> Provider:
     return OpenAIProvider(api_key=api_key, base_url=base_url)
 
 
@@ -249,7 +249,7 @@ class ModelRegistry:
     def __init__(self, config: LlmConfig):
         self._config = config
         # 每个 provider 一个客户端，在所有 agent 间复用连接池
-        self._providers: dict[str, Provider] = {}  # type: ignore[type-arg]
+        self._providers: dict[str, Provider] = {}
         # 每个 provider 一个并发上限，这个 provider 下的所有模型共用
         self._limiters = {
             name: _ProviderLimiter(name, cfg.max_concurrency) for name, cfg in config.providers.items()
@@ -267,7 +267,7 @@ class ModelRegistry:
             )
         return name, cfg, model_name
 
-    def _provider(self, name: str, cfg: ProviderConfig) -> Provider:  # type: ignore[type-arg]
+    def _provider(self, name: str, cfg: ProviderConfig) -> Provider:
         provider = self._providers.get(name)
         if provider is None:
             kind = KINDS[cfg.type]

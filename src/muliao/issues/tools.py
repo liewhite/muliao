@@ -219,7 +219,7 @@ def issues_toolset(board: IssueService, agents: AgentService) -> FunctionToolset
         status: IssueStatus = NewIssue.status,
         priority: IssuePriority = NewIssue.priority,
         assignee: str | None = NewIssue.assignee,
-        depends_on: tuple[int, ...] = (),
+        depends_on: tuple[int, ...] = (),  # 单项只收编号，所以不用 NewIssue 的 int | str 缺省
         issues: tuple[NewIssueItem, ...] = (),
     ) -> str:
         """Create an issue. Each agent works on an issue in one conversation dedicated to it; while the issue is
