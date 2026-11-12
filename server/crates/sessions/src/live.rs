@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use chrono::{DateTime, Utc};
 use muliao_platform::bus::{Bus, ServerEvent};
 use muliao_platform::db::Tx;
 use muliao_platform::text::truncate;
@@ -62,10 +63,18 @@ pub struct SavedEvent {
     pub session_id: String,
 }
 
+/// 运行出了暂时性的错、在等下一次尝试（只在内存里，重启后从上一步续跑、不再有它）：会话页显示错误与下次尝试的时间。
+#[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
+pub struct Retrying {
+    pub error: String,
+    pub next_at: DateTime<Utc>,
+}
+
 #[derive(Clone)]
 pub struct Live {
     bus: Arc<Bus>,
     segments: Arc<Mutex<HashMap<String, LiveSegment>>>,
+    retrying: Arc<Mutex<HashMap<String, Retrying>>>,
 }
 
 fn publish_saved(bus: &Bus, session_id: &str) {
@@ -79,7 +88,26 @@ fn new_segment(after: Option<i64>) -> LiveSegment {
 
 impl Live {
     pub fn new(bus: Arc<Bus>) -> Self {
-        Self { bus, segments: Arc::default() }
+        Self { bus, segments: Arc::default(), retrying: Arc::default() }
+    }
+
+    /// 这次尝试暂时性地失败了，`delay` 之后再试。
+    pub(crate) fn retrying(&self, session_id: &str, error: &str, delay: std::time::Duration) {
+        let next_at = Utc::now() + chrono::Duration::from_std(delay).expect("retry delays are minutes");
+        let state = Retrying { error: error.to_owned(), next_at };
+        self.retrying.lock().expect("live lock").insert(session_id.to_owned(), state);
+        publish_saved(&self.bus, session_id);
+    }
+
+    /// 这次运行结束了（成功、最终失败或停止），不再在重试。两次尝试之间不清：下一次尝试进行中仍显示上次的错误。
+    pub(crate) fn retried(&self, session_id: &str) {
+        if self.retrying.lock().expect("live lock").remove(session_id).is_some() {
+            publish_saved(&self.bus, session_id);
+        }
+    }
+
+    pub fn retry_state(&self, session_id: &str) -> Option<Retrying> {
+        self.retrying.lock().expect("live lock").get(session_id).cloned()
     }
 
     pub(crate) fn begin(&self, session_id: &str, after_message_id: Option<i64>) {

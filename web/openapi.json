@@ -2119,7 +2119,7 @@
         "tags": [
           "sessions"
         ],
-        "summary": "手动压缩上下文：排在正在进行的运行之后，在后台做；做完界面随 changed 事件刷新。没有可压缩的（都在保留的最近几步里）\n时什么都不变；失败记在服务日志里。",
+        "summary": "手动压缩上下文：排在正在进行的运行之后，在后台做；开始与做完时会话页随 saved 事件刷新。没有可压缩的（都在保留的最近几步里）\n时什么都不变；失败记在服务日志里。",
         "operationId": "compact",
         "parameters": [
           {
@@ -6605,6 +6605,23 @@
           }
         }
       },
+      "Retrying": {
+        "type": "object",
+        "description": "运行出了暂时性的错、在等下一次尝试（只在内存里，重启后从上一步续跑、不再有它）：会话页显示错误与下次尝试的时间。",
+        "required": [
+          "error",
+          "next_at"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "next_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
       "RoleIn": {
         "type": "object",
         "required": [
@@ -7177,6 +7194,7 @@
           "run",
           "threads",
           "live",
+          "retrying",
           "state",
           "waits",
           "context",
@@ -7230,6 +7248,17 @@
               {
                 "$ref": "#/components/schemas/LiveSegment",
                 "description": "正在进行的运行当前这一段的事件（与 SSE 的 run 事件同一形状），让中途打开页面也能从这一段的开头看起；没有则为 null"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "retrying": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Retrying",
+                "description": "这次运行出过暂时性的错、正在自动重试（只在内存里）：上次的错误与下次尝试的时间；没有则为 null"
               },
               {
                 "type": "null"

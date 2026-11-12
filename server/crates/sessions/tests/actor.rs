@@ -490,13 +490,32 @@ async fn run_record_changes_tell_the_session_page() {
     w.service.retry(&s).await.unwrap();
     assert_eq!(w.settled(&s).await, WorkState::Idle);
     // 重试又失败了：没有保存新的一步，会话页照样要知道重新开始与再次失败（运行记录变了）
+    assert_eq!(saved_events(&mut events, &s).await, 2, "reopened and failed again");
+}
+
+#[tokio::test]
+async fn stopping_a_waiting_session_tells_its_page() {
+    let w = world().await;
+    let questions =
+        json!({"questions": [{"question": "哪个？", "header": "选", "options": [{"label": "a"}, {"label": "b"}]}]});
+    w.script.call("q1", "ask_user", questions);
+    let s = w.new_chat("问我").await;
+    assert_eq!(w.settled(&s).await, WorkState::Waiting);
+    // 在等用户回答：没有没结束的运行可改，停止事务照样要让看着它的页面重拉
+    let mut events = w.bus.subscribe();
+    w.service.stop(&s).await.unwrap();
+    assert_eq!(saved_events(&mut events, &s).await, 1);
+}
+
+/// 订阅到现在为止这个会话的 `saved` 有几个（等到 200ms 内没有新事件）
+async fn saved_events(events: &mut muliao_platform::bus::Subscription, session: &str) -> usize {
     let mut saved = 0;
     while let Ok(Ok(e)) = tokio::time::timeout(std::time::Duration::from_millis(200), events.next()).await {
-        if e.kind == "saved" && e.data["session_id"] == s.as_str() {
+        if e.kind == "saved" && e.data["session_id"] == session {
             saved += 1;
         }
     }
-    assert_eq!(saved, 2, "reopened and failed again");
+    saved
 }
 
 #[tokio::test]
@@ -506,7 +525,19 @@ async fn an_interrupted_step_is_not_replayed() {
     w.script.call("c1", "flaky", json!({}));
     w.script.text("我看看刚才做到哪了");
     let s = w.new_chat("会被打断").await;
+    // 退避期间会话页看得到上次的错误与下次尝试的时间
+    let retrying = async {
+        loop {
+            if let Some(r) = w.service.detail(&s).await.unwrap().retrying {
+                return r;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    };
+    let retrying = tokio::time::timeout(std::time::Duration::from_secs(3), retrying).await.expect("shows the retry");
+    assert!(!retrying.error.is_empty() && retrying.next_at > chrono::Utc::now());
     assert_eq!(w.settled(&s).await, WorkState::Idle);
+    assert!(w.service.detail(&s).await.unwrap().retrying.is_none(), "cleared once the run ended");
     let h = w.history(&s).await;
     assert!(texts(&h[2])[0].contains("Interrupted"), "{:?}", texts(&h[2]));
     assert_eq!(texts(h.last().unwrap())[0], "我看看刚才做到哪了");

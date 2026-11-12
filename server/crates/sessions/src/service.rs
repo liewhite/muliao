@@ -16,7 +16,7 @@ use crate::events::Events;
 use crate::halt::Halted;
 use crate::history::{self, Compaction, context_of};
 use crate::inbound::{Inbound, UserMessage, receive_in};
-use crate::live::{Live, LiveSegment, RunEvent};
+use crate::live::{Live, LiveSegment, Retrying, RunEvent};
 use crate::mailbox::{Mail, visible_in};
 use crate::runs::{self, RunRecord};
 use crate::thread_calls::call_threads_in;
@@ -36,6 +36,8 @@ pub struct SessionView {
     pub run: Option<RunRecord>,
     pub threads: Vec<Session>,
     pub live: Option<LiveSegment>,
+    /// 这次运行出过暂时性的错、正在自动重试：上次的错误与下次尝试的时间
+    pub retrying: Option<Retrying>,
     /// 工作状态（与会话列表同一条规则）：不是 idle 就显示停止
     pub state: WorkState,
     /// 在等的东西（与 state 同一次计算）
@@ -93,6 +95,7 @@ impl SessionService {
         // 先取快照再读库：快照这一段已在展示的消息不在历史里重复；之间换了段时，新保存的消息照旧由旧快照展示，saved 事件
         // 随后让前端重新拉取
         let live = self.live.snapshot(session_id);
+        let retrying = self.live.retry_state(session_id);
         let (id, renders, threshold) = (session_id.to_owned(), self.renders.clone(), self.threshold);
         self.db
             .read(move |c| {
@@ -122,6 +125,7 @@ impl SessionService {
                     run,
                     threads: directory::threads_of(c, &id)?,
                     live: live.map(|l| with_threads(l, &call_threads)),
+                    retrying,
                     state: status.state,
                     waits,
                     context_tokens: context_tokens(&context.messages, context.stale_responses),

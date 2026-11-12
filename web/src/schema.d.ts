@@ -570,7 +570,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * 手动压缩上下文：排在正在进行的运行之后，在后台做；做完界面随 changed 事件刷新。没有可压缩的（都在保留的最近几步里）
+         * 手动压缩上下文：排在正在进行的运行之后，在后台做；开始与做完时会话页随 saved 事件刷新。没有可压缩的（都在保留的最近几步里）
          *     时什么都不变；失败记在服务日志里。
          */
         post: operations["compact"];
@@ -1904,6 +1904,12 @@ export interface components {
                 [key: string]: components["schemas"]["Choice"];
             };
         };
+        /** @description 运行出了暂时性的错、在等下一次尝试（只在内存里，重启后从上一步续跑、不再有它）：会话页显示错误与下次尝试的时间。 */
+        Retrying: {
+            error: string;
+            /** Format: date-time */
+            next_at: string;
+        };
         RoleIn: {
             description: string;
             allow: string[];
@@ -2050,6 +2056,7 @@ export interface components {
             /** @description 这个会话开出的 thread */
             threads: components["schemas"]["SessionOut"][];
             live: components["schemas"]["LiveSegment"] | null;
+            retrying: components["schemas"]["Retrying"] | null;
             /** @description 工作状态（与会话列表同一条规则）：不是 idle 前端就显示停止 */
             state: components["schemas"]["WorkState"];
             /** @description 在等的东西：后台任务、委派、到点唤醒、提问、等批准 */

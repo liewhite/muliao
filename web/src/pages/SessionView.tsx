@@ -29,6 +29,7 @@ import {
   type QuestionAnswer,
   type Mail,
   type RunRecord,
+  type Retrying,
   type Session,
   type SessionDetail,
   type Wait,
@@ -470,8 +471,8 @@ function MailNote({ mail, ctx }: { mail: Mail; ctx: SessionContext }) {
   )
 }
 
-/** 最近一次运行还没正常结束：在跑（含出错后在自动重试），或最终失败（可重试）。手动压缩不算在内（接口不给） */
-function RunStatus({ run, onRetry }: { run: RunRecord; onRetry: () => void }) {
+/** 最近一次运行还没正常结束：在跑（出过暂时性的错时显示它与下次尝试的时间），或最终失败（可重试）。手动压缩不算在内（接口不给） */
+function RunStatus({ run, retrying, onRetry }: { run: RunRecord; retrying: Retrying | null; onRetry: () => void }) {
   if (run.outcome === 'failed') {
     return (
       <div className="flex flex-col gap-2 rounded-xl bg-danger-soft p-3 text-sm text-danger-soft-foreground">
@@ -487,8 +488,11 @@ function RunStatus({ run, onRetry }: { run: RunRecord; onRetry: () => void }) {
   }
   if (run.ended_at !== null) return null
   return (
-    <div className="flex items-center gap-2 self-end text-xs text-muted">
-      <Spinner size="sm" /> 运行中…
+    <div className="flex flex-col items-end gap-1 self-end text-xs text-muted">
+      <div className="flex items-center gap-2">
+        <Spinner size="sm" /> {retrying ? `出错了，自动重试中（下次 ${formatTime(retrying.next_at)}）` : '运行中…'}
+      </div>
+      {retrying && <div className="max-w-full break-all text-danger">上次错误：{retrying.error}</div>}
     </div>
   )
 }
@@ -555,7 +559,7 @@ function WaitRow({ wait, now, ctx, actions }: { wait: Wait; now: number; ctx: Se
   const detail = <span className="text-muted">{waitDetail(wait, now)}</span>
   switch (wait.kind) {
     case 'job': {
-      // 后台任务的详情与等待项不在同一事务里取，取不到（任务记录已经没了）时只显示编号
+      // 后台任务一定带详情（job 字段只对别的种类为 null，类型上分不开）
       const job = wait.job
       return (
         <Collapsible
@@ -1023,7 +1027,7 @@ export default function SessionView() {
               {d.mail.map((m) => (
                 <MailNote key={m.id} mail={m} ctx={ctx} />
               ))}
-              {d.run && <RunStatus run={d.run} onRetry={() => void action.run(() => api.retry(id))} />}
+              {d.run && <RunStatus run={d.run} retrying={d.retrying} onRetry={() => void action.run(() => api.retry(id))} />}
               {shownLive.length > 0 && (
                 <div className="flex flex-col gap-3 opacity-90">
                   <Blocks items={liveItems(shownLive)} ctx={{ ...ctx, view: 'live' }} />

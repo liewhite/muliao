@@ -225,7 +225,10 @@ async fn actor(inner: Arc<Inner>, id: String, mut rx: mpsc::UnboundedReceiver<Co
         }
         match has_work(&inner.core, &id).await {
             Ok(true) => {
-                if !run_with_retries(&inner, &id, &mut rx, &mut compactions).await {
+                let recorded = run_with_retries(&inner, &id, &mut rx, &mut compactions).await;
+                // 结束了（成功、最终失败或停止）：不再在等重试
+                inner.core.live.retried(&id);
+                if !recorded {
                     // 失败得连运行记录都没留下（开头的事务就出错）：不原地重来，等下一次叫醒；有排着的命令就回到主循环处理
                     // （处理完会再试一次，命令总会处理完，不会空转）
                     let mut actors = inner.actors.lock().expect("actors lock");
@@ -360,6 +363,7 @@ async fn run_with_retries(
         let since = *first_failure.get_or_insert_with(Instant::now);
         if failure.transient && since.elapsed() < RETRY_WINDOW {
             tracing::warn!(session_id = id, error = %failure.message, retry_in = ?delay, "run failed transiently; retrying");
+            core.live.retrying(id, &failure.message, delay);
             // 退避期间也能停止（停在两次尝试之间：没有已产生、没保存的部分）
             let sleep = tokio::time::sleep(delay);
             tokio::pin!(sleep);

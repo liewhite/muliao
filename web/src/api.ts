@@ -51,6 +51,8 @@ export type ViewBlock = NonNullable<Item['view']>[number]
 export type CompactionInfo = Schemas['CompactionOut']
 /** 会话最近一次还没正常结束的运行（在跑、在等重试，或最终失败） */
 export type RunRecord = Schemas['RunRecord']
+/** 运行出过暂时性的错、正在自动重试：上次的错误与下次尝试的时间 */
+export type Retrying = Schemas['Retrying']
 
 /** 一个分组的用量汇总；没有参与分组的维度为 null。input_tokens 已含缓存读写，不要相加 */
 export type Usage = WithAgentId<Schemas['UsageBucket'], 'agent_id'>
@@ -410,7 +412,7 @@ export const api = {
     call('post', '/api/notifications/issues/{issue_id}/read', { path: { issue_id } }),
   /** 停止正在进行的运行；停止前已经产生的部分照常保存 */
   stop: (session_id: string) => call('post', '/api/sessions/{session_id}/stop', { path: { session_id } }),
-  /** 压缩在后台做，做完界面随 changed 事件刷新 */
+  /** 压缩在后台做，开始与结束时会话页随 saved 事件刷新 */
   compact: (session_id: string) => call('post', '/api/sessions/{session_id}/compact', { path: { session_id } }),
   /** 重试最近一次最终失败的运行（同一次运行接着跑）；会话在跑或最近一次没失败时 409 */
   retry: (session_id: string) => call('post', '/api/sessions/{session_id}/retry', { path: { session_id } }),

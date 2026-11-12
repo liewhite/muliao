@@ -9,7 +9,7 @@ use muliao_sessions::activity::{Wait, WorkState};
 use muliao_sessions::answers::{CallResult, Choice, QuestionAnswer};
 use muliao_sessions::directory::{Listing, Session};
 use muliao_sessions::inbound::{UserMessage, UserTarget};
-use muliao_sessions::live::LiveSegment;
+use muliao_sessions::live::{LiveSegment, Retrying};
 use muliao_sessions::mailbox::{Mail, MailKind, MailState};
 use muliao_sessions::origins::{Origin, Sender, SessionOrigin};
 use muliao_sessions::runs::RunRecord;
@@ -291,6 +291,8 @@ pub struct SessionDetail {
     pub threads: Vec<SessionOut>,
     /// 正在进行的运行当前这一段的事件（与 SSE 的 run 事件同一形状），让中途打开页面也能从这一段的开头看起；没有则为 null
     pub live: Option<LiveSegment>,
+    /// 这次运行出过暂时性的错、正在自动重试（只在内存里）：上次的错误与下次尝试的时间；没有则为 null
+    pub retrying: Option<Retrying>,
     /// 工作状态（与会话列表同一条规则）：不是 idle 前端就显示停止
     pub state: WorkState,
     /// 在等的东西：后台任务、委派、到点唤醒、提问、等批准
@@ -326,6 +328,7 @@ async fn get_session(
         run: view.run,
         threads: outs,
         live: view.live,
+        retrying: view.retrying,
         state: view.state,
         waits: wait_outs(&s, &agent_id, view.waits).await?,
         context: ContextOut { tokens: view.context_tokens, threshold_tokens: view.compaction_threshold_tokens },
@@ -379,7 +382,7 @@ async fn stop(State(s): State<AppState>, Path(session_id): Path<String>) -> ApiR
     Ok(StatusCode::ACCEPTED)
 }
 
-/// 手动压缩上下文：排在正在进行的运行之后，在后台做；做完界面随 changed 事件刷新。没有可压缩的（都在保留的最近几步里）
+/// 手动压缩上下文：排在正在进行的运行之后，在后台做；开始与做完时会话页随 saved 事件刷新。没有可压缩的（都在保留的最近几步里）
 /// 时什么都不变；失败记在服务日志里。
 #[utoipa::path(post, path = "/api/sessions/{session_id}/compact", tag = "sessions",
     responses((status = 202), (status = 404, body = ErrorOut)))]

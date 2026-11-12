@@ -23,8 +23,8 @@ describe('send decodes responses by HTTP status and type', () => {
   })
 
   it('decodes a JSON body', async () => {
-    respond(202, '{"queued": true}', JSON_TYPE)
-    await expect(api.compact('s1')).resolves.toEqual({ queued: true })
+    respond(200, '{"count": 3}', JSON_TYPE)
+    await expect(api.unreadNotifications()).resolves.toEqual({ count: 3 })
   })
 
   it('fails when a declared JSON body is missing', async () => {

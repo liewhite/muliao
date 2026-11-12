@@ -65,6 +65,9 @@ pub(crate) async fn halt(
             }
             close_history_in(tx, &session_id, run_id)?;
             let stopped_runs = runs::stop_unfinished_in(tx, &live, &session_id)?;
+            // 没在跑的会话（在等后台任务、委派、唤醒）没有运行记录可改，可停止照样改了它看得见的内容（补上的结果、清掉的
+            // 等待项、丢弃的信）：看着它的页面也要重拉
+            live.saved_on_commit(tx, &session_id);
             let cleared = clear_in(tx, &session_id)?;
             let answer = history::latest_answer(tx, &session_id)?;
             let (settled, discarded) = settle_stopped_in(tx, &waker, &session, &answer)?;
