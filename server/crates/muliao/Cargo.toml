@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "muliao"
 path = "src/main.rs"
@@ -23,9 +26,18 @@ muliao-issues = { workspace = true }
 muliao-triggers = { workspace = true }
 muliao-history = { workspace = true }
 muliao-http = { workspace = true }
+anyhow = { workspace = true }
+axum = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
 
 [lints]
 workspace = true
 
 [dev-dependencies]
+futures = { workspace = true }
+reqwest = { workspace = true }
 serde_json = { workspace = true }
+tempfile = { workspace = true }
+tracing-subscriber = { workspace = true }
+wiremock = { workspace = true }
