@@ -62,7 +62,7 @@ export type View =
 export function toBlocks(items: Item[]): Block[] {
   const blocks: Block[] = []
   const tools = new Map<string, ToolView>()
-  // 提问的调用：结局已经体现在调用的状态里（后端 transcript.annotate_asks），结果不再单独成块。被退回的提问后端不给
+  // 提问的调用：结局已经体现在调用的状态里（后端 sessions 的 annotate_asks），结果不再单独成块。被退回的提问后端不给
   // 状态，按普通工具调用展示；运行中还没保存的那一段里它显示为「提问中」，保存后以历史为准
   const asks = new Set<string>()
   for (const item of items) {

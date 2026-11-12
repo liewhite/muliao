@@ -4,8 +4,8 @@ import type { components, paths } from './schema'
 
 export type Schemas = components['schemas']
 
-export type Origin = Schemas['Origin']
-export type TaskStatus = Schemas['TaskStatus']
+/** 会话来源的种类：用户在网页发起、触发器、agent 之间委派、issue 看板唤醒 */
+export type Origin = Schemas['SessionOrigin']['kind']
 
 /** agent 的 id 与名称都是字符串；品牌类型让编译器拦住「把名称当 id 传」 */
 export type AgentId = string & { readonly __brand: 'AgentId' }
@@ -28,34 +28,35 @@ export type ScriptGrant = Schemas['ScriptGrantOut']
 // 会话列表里的一行：多一个工作状态 state（在运行 / 在等 / 空闲），不空闲的（在运行、在等）排在最前（接口排序）
 export type SessionListItem = WithAgentId<Schemas['SessionListItem'], 'agent_id'>
 /** 一条通知（不叫 Notification：那是浏览器的全局对象） */
-export type AppNotification = Schemas['NotificationOut']
+export type AppNotification = Schemas['Notification']
 
-// 下面四个值与两个路由（sessionRoute、issues.ts 的 issueRoute）前后端各写一份，tests/test_frontend_contract.py 核对
-/** 指代用户的那个值（与后端 agents.api.USER 一致）：issue 的指派人、资源修改的作者等 */
+// 下面四个值与两个路由（sessionRoute、issues.ts 的 issueRoute）前后端各写一份，server/crates/muliao/tests/frontend_contract.rs 核对
+/** 指代用户的那个值（与后端 assets 的 naming::USER 一致）：issue 的指派人、资源修改的作者等 */
 export const USER = 'user'
-/** issue 时间线上系统自己的动作（删除 agent 时的清理）的 actor（与后端 issues.rules.SYSTEM_ACTOR 一致） */
+/** issue 时间线上系统自己的动作（删除 agent 时的清理）的 actor（与后端 issues 的 Actor::System 一致） */
 export const SYSTEM_ACTOR = 'system'
 
-/** 全局记忆的名字（与后端 agents.permissions.GLOBAL_MEMORY 一致）：base 固定收录，不能删 */
+/** 全局记忆的名字（与后端 assets 的 rules::GLOBAL_MEMORY 一致）：base 固定收录，不能删 */
 export const GLOBAL_MEMORY = 'global'
 
-/** 引用文件的地址前缀（与后端 muliao.files.FILES_PATH 一致）：回答里只有指向这里的图片会被渲染 */
+/** 引用文件的地址前缀（与后端 files 的 FILES_PATH 一致）：回答里只有指向这里的图片会被渲染 */
 export const FILES_PATH = '/api/files'
 
 export type FileInfo = Schemas['FileOut']
 /** 读不出来的资源文件（skill、MCP 配置）：列表接口不含它们，单独列出供删除 */
 export type Attachment = Schemas['Attachment']
 export type Item = Schemas['Item']
-/** 工具调用的参数或结果按工具的展示规则画成的一块（后端 platform/tool_views.py） */
+/** 工具调用的参数或结果按工具的展示规则画成的一块（后端 platform 的 tool_views.rs） */
 export type ViewBlock = NonNullable<Item['view']>[number]
 export type CompactionInfo = Schemas['CompactionOut']
-export type Task = WithAgentId<Schemas['TaskOut'], 'agent_id'>
+/** 会话最近一次还没正常结束的运行（在跑、在等重试，或最终失败） */
+export type RunRecord = Schemas['RunRecord']
 
 /** 一个分组的用量汇总；没有参与分组的维度为 null。input_tokens 已含缓存读写，不要相加 */
-export type Usage = WithAgentId<Schemas['UsageOut'], 'agent_id'>
-export type UsageGroup = Schemas['UsageGroup']
+export type Usage = WithAgentId<Schemas['UsageBucket'], 'agent_id'>
+export type UsageGroup = NonNullable<NonNullable<paths['/api/usage']['get']['parameters']['query']>['group_by']>[number]
 /** agent 做过的一件事（只追加，由 agent 在每日自进化时写） */
-export type HistoryEntry = WithAgentId<Schemas['HistoryOut'], 'agent_id'>
+export type HistoryEntry = WithAgentId<Schemas['Record'], 'agent_id'>
 
 export type Question = Schemas['Question']
 export type QuestionAnswer = Schemas['QuestionAnswer']
@@ -67,61 +68,48 @@ export type MailState = Schemas['MailState']
 export type Mail = Schemas['SessionDetail']['mail'][number]
 /** 条目或事件的来源：后端解析好的 thread、后台任务或其他（raw 是原文，同一来源按它归在一起） */
 export type ItemSource = NonNullable<Item['source']>
-export type SessionDetail = Omit<Schemas['SessionDetail'], 'session' | 'run' | 'threads'> & {
+export type SessionDetail = Omit<Schemas['SessionDetail'], 'session' | 'threads'> & {
   session: Session
-  run: Task | null
   threads: Session[]
 }
-export type LiveSegment = Schemas['LiveSegmentOut']
-/** 会话在等的东西（按 kind 区分）：后台任务、委派、到点唤醒、提问 */
+export type LiveSegment = Schemas['LiveSegment']
+/** 会话在等的东西（按 kind 区分）：后台任务（job 字段带详情）、委派、到点唤醒、提问、等批准 */
 export type Wait = SessionDetail['waits'][number]
 
 export type Skill = Schemas['SkillDetail']
 export type Memory = WithAgentId<Schemas['MemoryOut'], 'owner'>
-export type TriggerKind = Schemas['TriggerKindOut']
+/** 界面认识的一种触发方式（接口里 name 是字符串：触发方式由服务端登记） */
+export type TriggerKind = Schemas['TriggerKindOut'] & { name: TriggerKindName }
 export type Precheck = Schemas['Precheck']
 /** 按 kind 区分的联合：收窄 kind 后 config 与 status 就是这种方式的类型 */
-export type Trigger = WithAgentId<
-  Schemas['ScheduleTriggerOut'] | Schemas['OnceTriggerOut'] | Schemas['StreamTriggerOut'],
-  'agent_id'
->
+export type Trigger = WithAgentId<Schemas['TriggerOut'], 'agent_id'>
 export type TriggerKindName = Trigger['kind']
 /** 新建触发器的请求，同样按 kind 区分：有服务端默认值的配置项可省 */
-export type TriggerCreate =
-  | Schemas['ScheduleTriggerCreate']
-  | Schemas['OnceTriggerCreate']
-  | Schemas['StreamTriggerCreate']
+export type TriggerCreate = Schemas['TriggerCreate']
 export type McpServer = WithAgentId<Schemas['McpOut'], 'owner'>
 export type McpInput = WithAgentId<Schemas['McpIn'], 'owner'>
 /** AI 资产池里的一项（内置工具、skill、MCP server、secret、记忆），带收录它的角色与这一种自己的详情（按 kind 收窄）；
- * 后端 agents/catalog.py、api/assets.py */
-export type CatalogAsset = WithAgentId<
-  | Schemas['CatalogToolOut']
-  | Schemas['CatalogSkillOut']
-  | Schemas['CatalogMcpOut']
-  | Schemas['CatalogSecretOut']
-  | Schemas['CatalogMemoryOut'],
-  'owner'
->
+ * 后端 assets 的 catalog.rs */
+export type CatalogAsset = WithAgentId<Schemas['CatalogAssetOut'], 'owner'>
 export type AssetKind = CatalogAsset['kind']
 export type AssetOf<K extends AssetKind> = Extract<CatalogAsset, { kind: K }>
 /** 存成文件的资源种类（能改、能转移）：内置工具之外的四种 */
-export type StoredKind = Schemas['StoredKind']
-/** 角色（内置或自建）、它能用的工具与资产、带它的 agent；后端 agents/permissions.py、agents/distribution.py */
+export type StoredKind = Exclude<AssetKind, 'tool'>
+/** 角色（内置或自建）、它能用的工具与资产、带它的 agent；后端 assets 的 rules.rs、distribution.rs */
 export type Role = Omit<Schemas['RoleOut'], 'agents'> & { agents: AgentId[] }
 export type RoleInput = Schemas['RoleIn']
 export type ToolPermission = Schemas['ToolOut']
 export type Reach = Schemas['ReachOut']
-/** agent 能用的记忆、skill、secret、MCP 与各自来源，加记忆注入预览；后端 agents/distribution.py 的 assets */
+/** agent 能用的记忆、skill、secret、MCP 与各自来源，加记忆注入预览；后端 assets 的 distribution.rs */
 export type AgentAssets = Schemas['AgentAssetsOut']
 export type AgentAsset = Schemas['AssetOut']
-export type IssueStatus = Schemas['IssueStatus']
-export type IssuePriority = Schemas['IssuePriority']
+export type IssueStatus = Schemas['Status']
+export type IssuePriority = Schemas['Priority']
 /** assignee：agent id、'user'（用户），或 null（未指派） */
-export type Issue = Schemas['IssueOut']
-/** 时间线上的一条，按 kind 区分：收窄后就是这种的内容（body）与变化（change）；后端 api/issues.py */
+export type Issue = Schemas['BoardIssue']
+/** 时间线上的一条，按 kind 区分：收窄后就是这种的内容（body）与变化（change） */
 export type IssueActivity = IssueDetail['activities'][number]
-export type IssueDetail = Schemas['IssueDetailOut']
+export type IssueDetail = Schemas['IssueDetail']
 /** agent 工作目录里的一项；目录的 size 为 null */
 export type WorkspaceEntry = Schemas['EntryOut']
 
@@ -152,7 +140,7 @@ function withQuery(path: string, query?: Query): string {
 export const unauthorizedEvent = new EventTarget()
 
 // 请求的时限：服务端或网络卡住时报错，而不是让等它的操作（按钮）一直转。要大于服务端单个操作的上限，否则服务端随后
-// 成功或报出的真正原因被换成「超时」：最长的是探测 MCP server（连接 30 秒，agent_runtime/mcp.py 的 _CONNECT_TIMEOUT，再列工具）。
+// 成功或报出的真正原因被换成「超时」：最长的是探测 MCP server（连接 30 秒，runtime 的 mcp.rs CONNECT_TIMEOUT，再列工具）。
 // 传文件（上传、录音、预览）按大小与网速可能很久
 export const REQUEST_TIMEOUT_MS = 120_000
 const FILE_TIMEOUT_MS = 600_000
@@ -195,8 +183,7 @@ async function send<T>(
     }
     throw new ApiError(resp.status, `${resp.status}: ${message}`)
   }
-  // 204 按 HTTP 语义没有响应体。FastAPI 的 204 仍带着 JSONResponse 的 content-type: application/json
-  // （fastapi/routing.py 先建 JSONResponse 再清空响应体），所以不能按 Content-Type 判断
+  // 204 按 HTTP 语义没有响应体，即使带着 content-type: application/json（有的服务端框架会这样发），所以不能按 Content-Type 判断
   if (resp.status === 204) return undefined as T
   if (raw) return resp as T
   // 其余按响应的类型解码：JSON 响应体缺失时 resp.json() 直接报错；没有响应体的接口（stop 这类 202，接口描述里
@@ -259,7 +246,7 @@ export const branded = <T>(p: Promise<Unbranded<T>>) => p as Promise<unknown> as
 
 /** 前端路由：agent 页按 id（名称可改） */
 export const agentRoute = (id: AgentId) => `/agents/${id}`
-/** 会话页；通知点开的地址由后端 notifications.tables.Notification.url 生成，与它一致 */
+/** 会话页；通知点开的地址由后端 notifications 的 inbox::url_of 生成，与它一致 */
 export const sessionRoute = (id: string) => `/sessions/${id}`
 export const newSessionRoute = (agentId: AgentId) => `/new?${new URLSearchParams({ agent: agentId })}`
 /** agent 自定义页面的界面路由（页面本身在沙箱 iframe 里按接口给的签名地址打开） */
@@ -297,8 +284,19 @@ export const api = {
   /** 全部 AI 资源：内置工具在前，资源文件按种类、名称 */
   assets: () => branded<CatalogAsset[]>(call('get', '/api/assets')),
   /** 删掉 skill（整个目录）/ MCP server / secret / 平台记忆的文件；全局记忆不能删，私有记忆随 agent */
-  deleteAsset: (kind: StoredKind, name: string) =>
-    call('delete', '/api/assets/{kind}/{name}', { path: { kind, name } }),
+  deleteAsset: (kind: StoredKind, name: string) => {
+    const path = { path: { name } }
+    switch (kind) {
+      case 'skill':
+        return call('delete', '/api/assets/skill/{name}', path)
+      case 'mcp':
+        return call('delete', '/api/assets/mcp/{name}', path)
+      case 'secret':
+        return call('delete', '/api/assets/secret/{name}', path)
+      case 'memory':
+        return call('delete', '/api/assets/memory/{name}', path)
+    }
+  },
   /** 把 skill / MCP server / secret 挪到另一个 owner（null 归平台）的目录下；内容与收录它的角色不变。记忆不转移 */
   transferAsset: (kind: StoredKind, name: string, owner: AgentId | null) =>
     call('put', '/api/assets/{kind}/{name}/owner', { path: { kind, name }, body: { owner } }),
@@ -412,19 +410,20 @@ export const api = {
     call('post', '/api/notifications/issues/{issue_id}/read', { path: { issue_id } }),
   /** 停止正在进行的运行；停止前已经产生的部分照常保存 */
   stop: (session_id: string) => call('post', '/api/sessions/{session_id}/stop', { path: { session_id } }),
+  /** 压缩在后台做，做完界面随 changed 事件刷新 */
   compact: (session_id: string) => call('post', '/api/sessions/{session_id}/compact', { path: { session_id } }),
+  /** 重试最近一次最终失败的运行（同一次运行接着跑）；会话在跑或最近一次没失败时 409 */
+  retry: (session_id: string) => call('post', '/api/sessions/{session_id}/retry', { path: { session_id } }),
   deleteSession: (session_id: string) => call('delete', '/api/sessions/{session_id}', { path: { session_id } }),
   /** 结束 agent 的一个后台任务（同 job_kill）；结局照常作为事件回到发起它的会话 */
   killJob: (agent_id: string, job_id: number) =>
     call('post', '/api/agents/{agent_id}/jobs/{job_id}/kill', { path: { agent_id, job_id } }),
 
-  tasks: (status?: TaskStatus) => branded<Task[]>(call('get', '/api/tasks', { query: { status } })),
   /** [since, until) 之间的 token 用量，按给出的维度分组；天按服务端配置的时区划分 */
   usage: (since: Date, until: Date, group_by: UsageGroup[]) =>
     branded<Usage[]>(
       call('get', '/api/usage', { query: { since: since.toISOString(), until: until.toISOString(), group_by } }),
     ),
-  retryTask: (task_id: number) => branded<Task>(call('post', '/api/tasks/{task_id}/retry', { path: { task_id } })),
 
   triggerKinds: () => call('get', '/api/trigger-kinds'),
   /** finished 为 true 时列已结束的（跑完的一次性触发器），它们只能查看与删除 */

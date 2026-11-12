@@ -144,7 +144,7 @@ function currentInput(agent: Agent, config: NonNullable<Agent['config']>): Agent
 
 type Thinking = AgentInput['thinking']
 
-/** 思考档位：「默认」什么都不传（模型与服务端的默认）；其余交给 pydantic_ai 换算成各 provider 的参数 */
+/** 思考档位：「默认」什么都不传（模型与服务端的默认）；其余交给 agenter 换算成各 provider 的参数 */
 const THINKING_LABEL: Record<Thinking, string> = {
   default: '默认',
   off: '关闭',

@@ -10,8 +10,8 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Login */
-        post: operations["login_api_auth_login_post"];
+        /** 用密码登录，成功后下发登录 cookie。连续输错同一 IP 要等一段时间才能再试（429，带 Retry-After）。 */
+        post: operations["login"];
         delete?: never;
         options?: never;
         head?: never;
@@ -27,8 +27,45 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Logout */
-        post: operations["logout_api_auth_logout_post"];
+        /** 登出：删掉浏览器里的登录 cookie。 */
+        post: operations["logout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 已登录时 204，否则 401（前端据此判断要不要显示登录页）。 */
+        get: operations["me"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 事件流：连上先发一次心跳（订阅已建立，前端此时重新拉取不会漏事件），之后有事件就发，空闲满一个间隔发心跳；服务关停
+         *     （总线关闭）或跟不上被断开时结束，浏览器自己重连。断线重连的间隔用浏览器的默认值。
+         */
+        get: operations["events"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -42,12 +79,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * Agent Defaults
-         * @description 新建 agent 时表单预填的值：创建时套用的同一份缺省（AgentSpec 的字段缺省，模型取 AgentService.defaults），
-         *     前端不另写一份。
-         */
-        get: operations["agent_defaults_api_agent_defaults_get"];
+        /** 新建 agent 时表单预填的值：创建时套用的同一份缺省（AgentSpec 的缺省，模型取服务端配置），前端不另写一份。 */
+        get: operations["agent_defaults"];
         put?: never;
         post?: never;
         delete?: never;
@@ -66,11 +99,10 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Preview Agent
-         * @description agent 配置（还没保存的也行）最终能用的：自己的资产 + base + 角色 + allow / deny 放行的，与运行时同一套计算，
-         *     与保存时同样校验（不合法 422）。
+         * agent 配置（还没保存的也行）最终能用的：自己的资产 + base + 角色 + allow / deny 放行的，与运行时同一套计算，与保存时
+         *     同样校验（不合法 422）。
          */
-        post: operations["preview_agent_api_agent_preview_post"];
+        post: operations["preview_agent"];
         delete?: never;
         options?: never;
         head?: never;
@@ -84,11 +116,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * List Roles
-         * @description 全部角色：内置在前，自建的按名称。
-         */
-        get: operations["list_roles_api_roles_get"];
+        /** 全部角色：内置在前，自建的按名称。 */
+        get: operations["list_roles"];
         put?: never;
         post?: never;
         delete?: never;
@@ -106,11 +135,8 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /**
-         * Preview Role
-         * @description 角色规则（还没保存的也行）能用的，与保存时同样校验（不合法 422）。
-         */
-        post: operations["preview_role_api_role_preview_post"];
+        /** 角色规则（还没保存的也行）能用的，与保存时同样校验（不合法 422）。 */
+        post: operations["preview_role"];
         delete?: never;
         options?: never;
         head?: never;
@@ -126,20 +152,13 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Create Role */
-        post: operations["create_role_api_roles__name__post"];
-        /**
-         * Delete Role
-         * @description 有 agent 引用时 409。
-         */
-        delete: operations["delete_role_api_roles__name__delete"];
+        post: operations["create_role"];
+        /** 有 agent 引用时 409。 */
+        delete: operations["delete_role"];
         options?: never;
         head?: never;
-        /**
-         * Update Role
-         * @description 改角色的描述与可编辑的规则（内置角色也可以，固定的部分不变）；从带它的 agent 的下一次运行起生效。
-         */
-        patch: operations["update_role_api_roles__name__patch"];
+        /** 改角色的描述与可编辑的规则（内置角色也可以，固定的部分不变）；从带它的 agent 的下一次运行起生效。 */
+        patch: operations["update_role"];
         trace?: never;
     };
     "/api/agents": {
@@ -149,11 +168,9 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Agents */
-        get: operations["list_agents_api_agents_get"];
+        get: operations["list_agents"];
         put?: never;
-        /** Create Agent */
-        post: operations["create_agent_api_agents_post"];
+        post: operations["create_agent"];
         delete?: never;
         options?: never;
         head?: never;
@@ -167,16 +184,15 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get Agent */
-        get: operations["get_agent_api_agents__agent_id__get"];
+        /** 正在删除的按不存在处理。 */
+        get: operations["get_agent"];
         put?: never;
         post?: never;
-        /** Delete Agent */
-        delete: operations["delete_agent_api_agents__agent_id__delete"];
+        /** 删除 agent：它的会话、触发器、指派等各领域的数据一起清理，资源文件里别人还在用的转给平台。 */
+        delete: operations["delete_agent"];
         options?: never;
         head?: never;
-        /** Update Agent */
-        patch: operations["update_agent_api_agents__agent_id__patch"];
+        patch: operations["update_agent"];
         trace?: never;
     };
     "/api/agents/{agent_id}/assets": {
@@ -186,11 +202,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * Agent Assets
-         * @description agent 能用的记忆、skill、secret、MCP server 与各自的来源（不含 secret 的值），加上记忆合并后放进指令的样子。
-         */
-        get: operations["agent_assets_api_agents__agent_id__assets_get"];
+        /** agent 能用的记忆、skill、secret、MCP server 与各自的来源（不含 secret 的值），加上记忆合并后放进指令的样子。 */
+        get: operations["agent_assets"];
         put?: never;
         post?: never;
         delete?: never;
@@ -207,17 +220,11 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /**
-         * Set Default Agent
-         * @description 设为系统默认 agent（取代原来的默认）。
-         */
-        put: operations["set_default_agent_api_agents__agent_id__default_put"];
+        /** 设为系统默认 agent（取代原来的默认）。 */
+        put: operations["set_default_agent"];
         post?: never;
-        /**
-         * Unset Default Agent
-         * @description 取消它的系统默认身份；它不是默认时不做任何事。
-         */
-        delete: operations["unset_default_agent_api_agents__agent_id__default_delete"];
+        /** 取消它的系统默认身份；它不是默认时不做任何事。 */
+        delete: operations["unset_default_agent"];
         options?: never;
         head?: never;
         patch?: never;
@@ -231,17 +238,203 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /**
-         * Archive Agent
-         * @description 归档：不能再对话、委派、指派，它的触发器不触发；它忙或是默认 agent 时 409。
-         */
-        put: operations["archive_agent_api_agents__agent_id__archive_put"];
+        /** 归档：不能再对话、委派、指派，它的触发器不触发；它忙或是默认 agent 时 409。 */
+        put: operations["archive_agent"];
         post?: never;
+        /** 取消归档；没归档时不做任何事。 */
+        delete: operations["unarchive_agent"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/{agent_id}/memory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** agent 的私有记忆（正在删除的按不存在处理）。 */
+        get: operations["get_private_memory"];
+        /** 整体改写 agent 的私有记忆（没有时新建）。只有它自己用；规则不按名字指它。 */
+        put: operations["put_private_memory"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
         /**
-         * Unarchive Agent
-         * @description 取消归档；没归档时不做任何事。
+         * 全部资源：内置工具（当前配置下注册的，按注册顺序）在前，存成文件的按种类、名称；每种带自己的详情（工具的读写与管理类、
+         *     MCP 的配置与启停）。
          */
-        delete: operations["unarchive_agent_api_agents__agent_id__archive_delete"];
+        get: operations["list_assets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assets/{kind}/{name}/owner": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** 挪到另一个 owner 的目录下；内容与收录它的角色不变。记忆不转移（422）；内置工具归平台，不在这里（kind 不接受 tool）。 */
+        put: operations["transfer_asset"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assets/memory/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 平台的一块记忆（全局或共享）。 */
+        get: operations["get_memory"];
+        /** 新建（名字要是 slug）或整体改写平台的一块记忆。谁能用由角色收录它（`use:memory:<名>`）。 */
+        put: operations["put_memory"];
+        post?: never;
+        delete: operations["delete_memory"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assets/skill/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_skill"];
+        /** 新建的归 owner；已有的整体改写正文与描述（附件不变），owner 不变。 */
+        put: operations["put_skill"];
+        post?: never;
+        delete: operations["delete_skill"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assets/skill/{name}/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** skill 目录里 path（相对 skill 目录，空为根）这一层，同工作目录浏览：目录在前，各自按名称排序。 */
+        get: operations["list_skill_files"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assets/skill/{name}/file": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** skill 目录里一个文件的内容（同工作目录浏览：图片 inline，其余作为附件）。 */
+        get: operations["read_skill_file"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assets/mcp/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_mcp"];
+        /** 新增（启用的）server；同名的已存在 409（名字全局唯一，配置不能原地改写：删了再建）。 */
+        put: operations["add_mcp"];
+        post?: never;
+        delete: operations["delete_mcp"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assets/mcp/{name}/enabled": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["set_mcp_enabled"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assets/mcp/{name}/tools": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 连接一次，列出它的工具（测试连接）。 */
+        post: operations["probe_mcp"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assets/secret/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 不含值。 */
+        get: operations["get_secret"];
+        /** 新建的归 owner（缺省为平台）；已有的改值与描述，owner 不变。 */
+        put: operations["set_secret"];
+        post?: never;
+        delete: operations["delete_secret"];
         options?: never;
         head?: never;
         patch?: never;
@@ -254,11 +447,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * List Providers
-         * @description 配置里的 LLM provider 名，即 agent 模型 "<provider 名>:<模型名>" 的前半部分。
-         */
-        get: operations["list_providers_api_providers_get"];
+        /** 配置里的 LLM provider 名，即 agent 模型 "<provider 名>:<模型名>" 的前半部分。 */
+        get: operations["list_providers"];
         put?: never;
         post?: never;
         delete?: never;
@@ -274,11 +464,25 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * List Provider Models
-         * @description 向该 provider 实时查询的模型名；provider 出错时为 502 并带上原因。
-         */
-        get: operations["list_provider_models_api_providers__name__models_get"];
+        /** 向该 provider 实时查询的模型名；provider 出错时为 502 并带上原因。 */
+        get: operations["list_provider_models"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/features": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 服务端配置决定的界面行为：可选能力。 */
+        get: operations["features"];
         put?: never;
         post?: never;
         delete?: never;
@@ -294,14 +498,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * List Sessions
-         * @description 工作状态不是 idle 的会话（在全部符合筛选的会话里，不只是这一页）置顶，其余按最近更新排序。
-         */
-        get: operations["list_sessions_api_sessions_get"];
+        /** 工作状态不是 idle 的会话（在全部符合筛选的会话里，不只是这一页）置顶，其余按最近更新排序。 */
+        get: operations["list_sessions"];
         put?: never;
-        /** Start Session */
-        post: operations["start_session_api_sessions_post"];
+        /** 新建会话并发出第一条消息。 */
+        post: operations["start_session"];
         delete?: never;
         options?: never;
         head?: never;
@@ -315,12 +516,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get Session */
-        get: operations["get_session_api_sessions__session_id__get"];
+        get: operations["get_session"];
         put?: never;
         post?: never;
-        /** Delete Session */
-        delete: operations["delete_session_api_sessions__session_id__delete"];
+        /** 删除会话（它开出的 thread 保留）；会话忙时 409。 */
+        delete: operations["delete_session"];
         options?: never;
         head?: never;
         patch?: never;
@@ -335,8 +535,8 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Reply */
-        post: operations["reply_api_sessions__session_id__messages_post"];
+        /** 在会话里发一条消息（续写），或只回答提问、只批准调用。返回信进的会话。 */
+        post: operations["reply"];
         delete?: never;
         options?: never;
         head?: never;
@@ -352,12 +552,8 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /**
-         * Stop
-         * @description 停止这个会话：结束正在进行的运行（已经产生的部分照常保存）、清空信箱，连带停下它发起的异步工作
-         *     （docs/architecture.md「停止会话」）。
-         */
-        post: operations["stop_api_sessions__session_id__stop_post"];
+        /** 停止这个会话：结束正在进行的运行（已经产生的部分照常保存）、清空信箱，连带停下它发起的异步工作。返回时已生效。 */
+        post: operations["stop"];
         delete?: never;
         options?: never;
         head?: never;
@@ -374,10 +570,27 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Compact
-         * @description 手动压缩上下文（自动压缩见 sessions.compaction）：排在正在进行与排队的运行之后。
+         * 手动压缩上下文：排在正在进行的运行之后，在后台做；做完界面随 changed 事件刷新。没有可压缩的（都在保留的最近几步里）
+         *     时什么都不变；失败记在服务日志里。
          */
-        post: operations["compact_api_sessions__session_id__compact_post"];
+        post: operations["compact"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sessions/{session_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 重试最近一次最终失败的运行（同一次运行接着跑）。会话在跑、或最近一次运行没有失败时 409。 */
+        post: operations["retry"];
         delete?: never;
         options?: never;
         head?: never;
@@ -393,65 +606,42 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /**
-         * Mark Read
-         * @description 标记会话已读：会话的未读就是指向它的未读通知，由通知领域标为已读（幂等，会话不存在时什么都不做）。
-         */
-        post: operations["mark_read_api_sessions__session_id__read_post"];
+        /** 标记会话已读：会话的未读就是指向它的未读通知，由通知领域标为已读（幂等，会话不存在时什么都不做）。 */
+        post: operations["mark_session_read"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/tasks": {
+    "/api/files": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** List Tasks */
-        get: operations["list_tasks_api_tasks_get"];
+        get?: never;
+        put?: never;
+        /** 请求体就是文件内容，Content-Type 是它的类型（与 Matrix /media/upload 相同，不用 multipart），边读边写，超限即停。 */
+        post: operations["upload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/files/{file_id}/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 文件内容；每个文件只有一个规范地址（名字对不上 404）。内容按 id 永不改变，可以一直缓存。 */
+        get: operations["download"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tasks/{task_id}/retry": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Retry Task */
-        post: operations["retry_task_api_tasks__task_id__retry_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/agents/{agent_id}/jobs/{job_id}/kill": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Kill Job
-         * @description 结束这个 agent 的一个运行中的后台任务；结局（被结束）照常作为事件回到发起它的会话。已经结束的 409。
-         */
-        post: operations["kill_job_api_agents__agent_id__jobs__job_id__kill_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -465,11 +655,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * List Workspace
-         * @description 列出工作目录里 path（相对工作目录，空为根）这一层：目录在前，各自按名称排序。
-         */
-        get: operations["list_workspace_api_agents__agent_id__workspace_get"];
+        /** 列出工作目录里 path（相对工作目录，空为根）这一层：目录在前，各自按名称排序。 */
+        get: operations["list_workspace"];
         put?: never;
         post?: never;
         delete?: never;
@@ -485,11 +672,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * Read Workspace File
-         * @description 工作目录里一个文件的内容。
-         */
-        get: operations["read_workspace_file_api_agents__agent_id__workspace_file_get"];
+        /** 工作目录里一个文件的内容。 */
+        get: operations["read_workspace_file"];
         put?: never;
         post?: never;
         delete?: never;
@@ -505,11 +689,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * List Script Grants
-         * @description skill 脚本的「始终允许」（#531），新的在前。
-         */
-        get: operations["list_script_grants_api_script_grants_get"];
+        /** skill 脚本的「始终允许」（#531），新的在前。 */
+        get: operations["list_script_grants"];
         put?: never;
         post?: never;
         delete?: never;
@@ -528,38 +709,14 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /**
-         * Revoke Script Grant
-         * @description 撤销一条始终允许：之后同一调用重新要批准。
-         */
-        delete: operations["revoke_script_grant_api_script_grants__grant_id__delete"];
+        /** 撤销一条始终允许：之后同一调用重新要批准。 */
+        delete: operations["revoke_script_grant"];
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/assets": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Assets
-         * @description 全部资源：内置工具（当前配置下注册的，按注册顺序）在前，存成文件的按种类、名称；每种带自己的
-         *     详情（工具的读写与管理类、MCP 的配置与启停）。
-         */
-        get: operations["list_assets_api_assets_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/assets/{kind}/{name}": {
+    "/api/agents/{agent_id}/jobs/{job_id}/kill": {
         parameters: {
             query?: never;
             header?: never;
@@ -568,19 +725,47 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        post?: never;
-        /**
-         * Delete Asset
-         * @description 删掉文件（skill 是整个目录）。记忆只指平台的（私有记忆随 agent），全局记忆不能删（422）；内置工具不在这里（kind 不接受
-         *     tool）。
-         */
-        delete: operations["delete_asset_api_assets__kind___name__delete"];
+        /** 结束这个 agent 的一个运行中的后台任务；结局（被结束）照常作为事件回到发起它的会话。已经结束的 409。 */
+        post: operations["kill_job"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/assets/{kind}/{name}/owner": {
+    "/api/issues": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_issues"];
+        put?: never;
+        post: operations["create_issue"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/issues/{issue_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_issue"];
+        put?: never;
+        post?: never;
+        delete: operations["delete_issue"];
+        options?: never;
+        head?: never;
+        patch: operations["update_issue"];
+        trace?: never;
+    };
+    "/api/issues/{issue_id}/comments": {
         parameters: {
             query?: never;
             header?: never;
@@ -588,149 +773,15 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /**
-         * Transfer Asset
-         * @description 挪到另一个 owner 的目录下；内容与收录它的角色不变。记忆不转移（422）；内置工具归平台，不在这里（kind 不接受 tool）。
-         */
-        put: operations["transfer_asset_api_assets__kind___name__owner_put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/assets/memory/{name}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Memory
-         * @description 平台的一块记忆（全局或共享）。
-         */
-        get: operations["get_memory_api_assets_memory__name__get"];
-        /**
-         * Put Memory
-         * @description 新建（名字要是 slug）或整体改写平台的一块记忆。谁能用由角色收录它（`use:memory:<名>`）。
-         */
-        put: operations["put_memory_api_assets_memory__name__put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/agents/{agent_id}/memory": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Private Memory
-         * @description agent 的私有记忆（正在删除的按不存在处理）。
-         */
-        get: operations["get_private_memory_api_agents__agent_id__memory_get"];
-        /**
-         * Put Private Memory
-         * @description 整体改写 agent 的私有记忆（没有时新建）。只有它自己用；规则不按名字指它。
-         */
-        put: operations["put_private_memory_api_agents__agent_id__memory_put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/assets/skill/{name}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Skill */
-        get: operations["get_skill_api_assets_skill__name__get"];
-        /**
-         * Put Skill
-         * @description 新建的归 owner；已有的整体改写正文与描述（附件不变），owner 不变。
-         */
-        put: operations["put_skill_api_assets_skill__name__put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/assets/skill/{name}/files": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Skill Files
-         * @description skill 目录里 path（相对 skill 目录，空为根）这一层，同工作目录浏览：目录在前，各自按名称排序。
-         */
-        get: operations["list_skill_files_api_assets_skill__name__files_get"];
         put?: never;
-        post?: never;
+        post: operations["comment_issue"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/assets/skill/{name}/file": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Read Skill File
-         * @description skill 目录里一个文件的内容（同工作目录浏览：图片 inline，其余作为附件）。
-         */
-        get: operations["read_skill_file_api_assets_skill__name__file_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/assets/mcp/{name}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Mcp */
-        get: operations["get_mcp_api_assets_mcp__name__get"];
-        /**
-         * Add Mcp
-         * @description 新增（启用的）server；同名的已存在 409（名字全局唯一，配置不能原地改写：删了再建）。
-         */
-        put: operations["add_mcp_api_assets_mcp__name__put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/assets/mcp/{name}/enabled": {
+    "/api/issues/{issue_id}/approve": {
         parameters: {
             query?: never;
             header?: never;
@@ -738,16 +789,33 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Set Mcp Enabled */
-        put: operations["set_mcp_enabled_api_assets_mcp__name__enabled_put"];
-        post?: never;
+        put?: never;
+        /** 审核通过指派给用户的 issue：设为 done。没有指派给用户时 409。 */
+        post: operations["approve_issue"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/assets/mcp/{name}/tools": {
+    "/api/issues/{issue_id}/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 开工 backlog 里的 issue：指派给 owner 并进入 in_progress。不在 backlog 或没有 owner 时 409。 */
+        post: operations["start_issue"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/issues/{issue_id}/reject": {
         parameters: {
             query?: never;
             header?: never;
@@ -757,85 +825,10 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Probe Mcp
-         * @description 连接一次，列出它的工具（测试连接）。
+         * 打回指派给用户的 issue：理由记成评论，回到 in_progress，指派给把它交给用户的 agent。没有指派给用户、或不是 agent 交来的
+         *     时 409。
          */
-        post: operations["probe_mcp_api_assets_mcp__name__tools_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/assets/secret/{name}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Secret
-         * @description 不含值。
-         */
-        get: operations["get_secret_api_assets_secret__name__get"];
-        /**
-         * Set Secret
-         * @description 新建的归 owner（缺省为平台）；已有的改值与描述，owner 不变。
-         */
-        put: operations["set_secret_api_assets_secret__name__put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/push/vapid": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Vapid Key */
-        get: operations["vapid_key_api_push_vapid_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/push/subscriptions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Subscribe */
-        post: operations["subscribe_api_push_subscriptions_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/push/test": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Test Push */
-        post: operations["test_push_api_push_test_post"];
+        post: operations["reject_issue"];
         delete?: never;
         options?: never;
         head?: never;
@@ -849,8 +842,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Trigger Kinds */
-        get: operations["trigger_kinds_api_trigger_kinds_get"];
+        /** 登记的触发方式。 */
+        get: operations["trigger_kinds"];
         put?: never;
         post?: never;
         delete?: never;
@@ -866,11 +859,9 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Triggers */
-        get: operations["list_triggers_api_triggers_get"];
+        get: operations["list_triggers"];
         put?: never;
-        /** Create Trigger */
-        post: operations["create_trigger_api_triggers_post"];
+        post: operations["create_trigger"];
         delete?: never;
         options?: never;
         head?: never;
@@ -887,12 +878,10 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** Delete Trigger */
-        delete: operations["delete_trigger_api_triggers__trigger_id__delete"];
+        delete: operations["delete_trigger"];
         options?: never;
         head?: never;
-        /** Update Trigger */
-        patch: operations["update_trigger_api_triggers__trigger_id__patch"];
+        patch: operations["update_trigger"];
         trace?: never;
     };
     "/api/triggers/{trigger_id}/run": {
@@ -905,49 +894,10 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Run Trigger
-         * @description 立即触发一次（不带事件内容）。有前置检查时同样先跑检查，可以用来测试整条链路。
-         *
-         *     不消耗一次性触发器预定的那一次；已结束的触发器不能再运行。
+         * 立即触发一次（不带事件内容）。有前置检查时同样先跑检查，可以用来测试整条链路（检查失败 502 带原因）。不消耗一次性
+         *     触发器预定的那一次；已结束的触发器不能再运行。
          */
-        post: operations["run_trigger_api_triggers__trigger_id__run_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/files": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Upload
-         * @description 请求体就是文件内容，Content-Type 是它的类型（与 Matrix /media/upload 相同，不用 multipart），边读边写，超限即停。
-         */
-        post: operations["upload_api_files_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/files/{file_id}/{name}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Download */
-        get: operations["download_api_files__file_id___name__get"];
-        put?: never;
-        post?: never;
+        post: operations["run_trigger"];
         delete?: never;
         options?: never;
         head?: never;
@@ -961,8 +911,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Notifications */
-        get: operations["list_notifications_api_notifications_get"];
+        /** 通知，新的在前。 */
+        get: operations["list_notifications"];
         put?: never;
         post?: never;
         delete?: never;
@@ -978,8 +928,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Unread */
-        get: operations["unread_api_notifications_unread_get"];
+        get: operations["unread"];
         put?: never;
         post?: never;
         delete?: never;
@@ -997,8 +946,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Mark Read */
-        post: operations["mark_read_api_notifications_read_post"];
+        post: operations["mark_notifications_read"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1014,11 +962,58 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /**
-         * Mark Issue Read
-         * @description 打开了 issue：请用户审核它的通知标为已读。
-         */
-        post: operations["mark_issue_read_api_notifications_issues__issue_id__read_post"];
+        /** 打开了 issue：请用户审核它的通知标为已读。 */
+        post: operations["mark_issue_read"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/push/vapid": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["vapid_key"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/push/subscriptions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 登记这台设备的推送订阅（同一个 endpoint 再登记是更新）；订阅不合格式（不是 https、密钥解不开）422。 */
+        post: operations["subscribe"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/push/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 发一条测试通知（推到每台设备）。 */
+        post: operations["test_push"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1033,129 +1028,13 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Usage Summary
-         * @description [since, until) 之间的用量，按给出的维度分组；不给维度就只有一行总计。
-         *
-         *     since / until 必须带时区（`2026-03-01T00:00:00Z`）：不带时区的时刻没有确定含义，在边界上拒绝。
-         *     「天」按服务端配置的时区（`timezone`）划分日历日，与客户端所在时区无关。
+         * [since, until) 之间的用量，按给出的维度分组。「天」按服务端配置的时区划分日历日，与客户端所在时区无关。input_tokens 是
+         *     输入总数，已包含 cache_read_tokens 与 cache_write_tokens，展示时是总数与其中两部分的关系，不要相加。没有参与分组的维度
+         *     为 null。
          */
-        get: operations["usage_summary_api_usage_get"];
+        get: operations["usage_summary"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/issues": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Issues */
-        get: operations["list_issues_api_issues_get"];
-        put?: never;
-        /** Create Issue */
-        post: operations["create_issue_api_issues_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/issues/{issue_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Issue */
-        get: operations["get_issue_api_issues__issue_id__get"];
-        put?: never;
-        post?: never;
-        /** Delete Issue */
-        delete: operations["delete_issue_api_issues__issue_id__delete"];
-        options?: never;
-        head?: never;
-        /** Update Issue */
-        patch: operations["update_issue_api_issues__issue_id__patch"];
-        trace?: never;
-    };
-    "/api/issues/{issue_id}/comments": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Comment Issue */
-        post: operations["comment_issue_api_issues__issue_id__comments_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/issues/{issue_id}/approve": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Approve Issue
-         * @description 审核通过指派给用户的 issue：设为 done。没有指派给用户时 409。
-         */
-        post: operations["approve_issue_api_issues__issue_id__approve_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/issues/{issue_id}/start": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Start Issue
-         * @description 开工 backlog 里的 issue：指派给 owner 并进入 in_progress。不在 backlog 或没有 owner 时 409。
-         */
-        post: operations["start_issue_api_issues__issue_id__start_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/issues/{issue_id}/reject": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Reject Issue
-         * @description 打回指派给用户的 issue：理由记成评论，回到 in_progress，指派给把它交给用户的 agent。没有指派给用户、或不是 agent 交来的时 409。
-         */
-        post: operations["reject_issue_api_issues__issue_id__reject_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1169,11 +1048,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * Agent History
-         * @description agent 的工作历史：没给 query 按日期倒序；给了按关键词检索（规则同工具 history_search）。since / until 含两端。
-         */
-        get: operations["agent_history_api_agents__agent_id__history_get"];
+        /** agent 的工作历史：没给 query 按日期倒序；给了按关键词检索（规则同工具 history_search）。since / until 含两端。 */
+        get: operations["agent_history"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1191,31 +1067,8 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /**
-         * Transcribe
-         * @description 请求体是一段语音（webm、ogg、mp4、wav、mp3……），返回转写出的文字；转写服务出错时 502 并带上原因。
-         */
-        post: operations["transcribe_api_transcriptions_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/features": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Features
-         * @description 服务端配置决定的界面行为：可选能力。
-         */
-        get: operations["features_api_features_get"];
-        put?: never;
-        post?: never;
+        /** 请求体是一段语音（webm、ogg、mp4、wav、mp3……），返回转写出的文字；转写服务出错时 502 并带上原因；没配置语音转写时 404。 */
+        post: operations["transcribe"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1229,45 +1082,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * List Pages
-         * @description 全部 agent 的页面：按 agent 列表的顺序，各自按页面名排序。
-         */
-        get: operations["list_pages_api_pages_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/auth/me": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Me */
-        get: operations["me_api_auth_me_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/events": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Events */
-        get: operations["events_api_events_get"];
+        /** 全部 agent 的页面：按 agent 列表的顺序，各自按页面名排序。 */
+        get: operations["list_pages"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1280,2389 +1096,1260 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @enum {string} */
+        Access: "read" | "write";
+        /** @description 时间线上记下的一条：谁、什么时候、在哪个会话里，发生了什么。 */
+        Activity: components["schemas"]["Happening"] & {
+            /** Format: int64 */
+            id: number;
+            /** Format: int64 */
+            issue_id: number;
+            /** Format: date-time */
+            created_at: string;
+            /** @description 做这件事的人：agent id；用户为 `user`，系统自己的清理为 `system` */
+            actor: components["schemas"]["Actor"];
+            /** @description 这件事发生在哪个会话；用户在界面上的操作、系统的清理、会话已删除时为 null */
+            session_id: string | null;
+        };
+        Actor: string;
         /**
-         * AgentAnswer
-         * @description 被问的 agent 交回的结局（sessions.delegation）：给发问方模型的文字，它挂给用户的文件。做它的 thread 不在这里：
-         *     调用开出了哪个 thread 记在 sessions.thread_calls。更早投出的回答信件里的 thread 键忽略。
+         * @description 被问的 agent 交回的结局：给发问方模型的文字，它挂给用户的文件（交回时挂到发问方这次调用的结果上，文件就出现在用户
+         *     正在看的会话里）。
          */
         AgentAnswer: {
-            /** Text */
             text: string;
-            /** Attachments */
             attachments: components["schemas"]["Attachment"][];
         };
-        /**
-         * AgentAnswered
-         * @description 回答信件里一次 ask_agent 调用的结果：被问的 agent 的结局。
-         */
-        AgentAnswered: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            tool: "ask_agent";
-            result: components["schemas"]["AgentAnswer"];
-        };
-        /**
-         * AgentAssetsOut
-         * @description agent 能用的资产，按种类分组，各组按名称。
-         */
+        /** @description agent 能用的资产，按种类分组，各组按名称。 */
         AgentAssetsOut: {
-            /** Memories */
             memories: components["schemas"]["AssetOut"][];
-            /** Memory Preview */
+            /** @description 记忆注入 instructions 的那一段（与运行时同一个渲染函数） */
             memory_preview: string;
-            /** Skills */
             skills: components["schemas"]["AssetOut"][];
-            /** Secrets */
             secrets: components["schemas"]["AssetOut"][];
-            /** Mcp */
             mcp: components["schemas"]["McpAssetOut"][];
         };
-        /**
-         * AgentConfigOut
-         * @description agent.toml 里的配置。
-         */
+        /** @description agent.toml 里的配置。 */
         AgentConfigOut: {
-            /** Description */
             description: string;
-            /** Model */
             model: string;
-            /**
-             * Thinking
-             * @enum {string}
-             */
-            thinking: "default" | "off" | "low" | "medium" | "high" | "xhigh";
-            /** Group */
+            thinking: components["schemas"]["Thinking"];
+            /** @description 分组名，null 为不分组 */
             group: string | null;
         };
-        /** AgentCreate */
         AgentCreate: {
-            /** Name */
             name: string;
-            /** Description */
             description: string;
-            /** Model */
+            /** @description 缺省（null）时使用服务端配置的默认值 */
             model?: string | null;
-            /** Roles */
+            /** @description 角色，不含每个 agent 隐含的 base */
             roles?: string[];
-            /** Allow */
             allow?: string[];
-            /** Deny */
             deny?: string[];
-            /**
-             * Thinking
-             * @enum {string}
-             */
-            thinking?: "default" | "off" | "low" | "medium" | "high" | "xhigh";
-            /** Group */
+            /** @description 思考档位："default" 不指定，按模型与服务端的默认 */
+            thinking?: components["schemas"]["Thinking"];
+            /** @description 分组名；null 或空串为不分组 */
             group?: string | null;
         };
-        /**
-         * AgentDefaults
-         * @description 新建 agent 时表单预填的值。
-         */
+        /** @description 新建 agent 时表单预填的值。 */
         AgentDefaults: {
-            /** Name */
             name: string;
-            /** Description */
             description: string;
-            /** Model */
             model: string;
-            /** Roles */
             roles: string[];
-            /** Allow */
             allow: string[];
-            /** Deny */
             deny: string[];
-            /**
-             * Thinking
-             * @enum {string}
-             */
-            thinking: "default" | "off" | "low" | "medium" | "high" | "xhigh";
-            /** Group */
+            thinking: components["schemas"]["Thinking"];
+            /** @description 分组名；null 为不分组 */
             group: string | null;
         };
-        /** AgentOut */
         AgentOut: {
-            /** Id */
             id: string;
-            /** Name */
             name: string;
             config: components["schemas"]["AgentConfigOut"] | null;
-            /** Roles */
             roles: string[];
-            /** Allow */
             allow: string[];
-            /** Deny */
             deny: string[];
-            /**
-             * Created At
-             * Format: date-time
-             */
+            /** Format: date-time */
             created_at: string;
-            /** Is Default */
+            /** @description 系统默认 agent：Web 新对话默认选中它，最多一个 */
             is_default: boolean;
-            /** Archived At */
+            /**
+             * Format: date-time
+             * @description 归档时间；非空时不能对话、委派、指派，它的触发器不触发
+             */
             archived_at: string | null;
         };
-        /** AgentPreviewIn */
         AgentPreviewIn: {
-            /** Agent Id */
-            agent_id: string | null;
-            /** Roles */
+            /** @description 已有的 agent（它自己的资产总能用）；null 为还没建的 */
+            agent_id?: string | null;
             roles: string[];
-            /** Allow */
             allow: string[];
-            /** Deny */
             deny: string[];
         };
-        /**
-         * AgentUpdate
-         * @description 只改给出的字段（缺省或 null 是不变）：界面只提交用户改过的，编辑期间 agent 自己改了另一个字段不会被旧值盖掉。
-         */
+        /** @description 只改给出的字段（缺省或 null 是不变）：界面只提交用户改过的，编辑期间 agent 自己改了另一个字段不会被旧值盖掉。 */
         AgentUpdate: {
-            /** Name */
             name?: string | null;
-            /** Description */
             description?: string | null;
-            /** Model */
             model?: string | null;
-            /** Roles */
             roles?: string[] | null;
-            /** Allow */
             allow?: string[] | null;
-            /** Deny */
             deny?: string[] | null;
-            /** Thinking */
-            thinking?: ("default" | "off" | "low" | "medium" | "high" | "xhigh") | null;
-            /** Group */
+            thinking?: components["schemas"]["Thinking"] | null;
+            /** @description 空串为不分组 */
             group?: string | null;
         };
-        /** AnswerMailOut */
-        AnswerMailOut: {
-            /** Id */
-            id: number;
-            /** Content */
-            content: string;
-            /** Attachments */
-            attachments: components["schemas"]["FileOut"][];
-            state: components["schemas"]["MailState"];
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "answer";
-            /** Answers */
-            answers: {
-                [key: string]: components["schemas"]["UserAnswered"] | components["schemas"]["AgentAnswered"] | components["schemas"]["ApprovalAnswered"];
-            };
-        };
-        /** AnsweredQuestion */
         AnsweredQuestion: {
-            /** Question */
             question: string;
-            /** Selected */
             selected: string[];
-            /** Other */
             other: string | null;
         };
         /**
-         * ApprovalAnswered
-         * @description 回答信件里一次等批准的调用的结果：用户的决定。信封的 tool 是 approval，不是调用的工具名（同一个工具多数
-         *     调用不用批准）。
+         * @description 停下来等用户批准的工具调用的状态。
+         * @enum {string}
          */
-        ApprovalAnswered: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            tool: "approval";
-            result: components["schemas"]["Decision"];
-        };
-        /**
-         * ApprovalWait
-         * @description 在等用户批准一次工具调用（如 skill_run 执行 SKILL.md 里标了 approval 的脚本）。
-         */
-        ApprovalWait: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "approval";
-            /** Call Id */
-            call_id: string;
-            /** Tool Name */
-            tool_name: string;
-        };
-        /**
-         * Arrival
-         * @description 不是属性变化、只有一个值的记法（存为 {"from": null, "to": 值}）。
-         */
+        ApprovalState: "pending" | "submitted";
+        /** @description 不是属性变化、只有一个值的记法（存为 `{"from": null, "to": 值}`）。 */
         Arrival: {
-            /** From */
-            from: null;
-            /** To */
+            /** @default null */
+            from: unknown;
             to: string;
         };
-        /**
-         * AskResult
-         * @description 一次提问交给模型的结果（也是界面展示已回答提问的来源）：answered 区分用户回答了，还是没回答就发了新消息。
-         */
+        /** @description 一次提问交给模型的结果（也是界面展示已回答提问的来源）。 */
         AskResult: {
-            /** Answered */
             answered: boolean;
-            /** Answers */
             answers: components["schemas"]["AnsweredQuestion"][];
-            /** Note */
             note: string | null;
         };
         /**
-         * AskView
-         * @description ask_user 调用的状态，由后端按唯一规则给出（annotate_asks），前端只渲染：
-         *     asking 运行还没停下（还不能回答）；pending 现在能回答（显示表单）；submitted 回答已提交、还排着；answered 已回答；
-         *     not_answered 用户没回答（发了新消息或只回答了别的提问）。
+         * @description ask_user 调用的状态，由后端按唯一规则给出（[`annotate_asks`]），前端只渲染。
+         * @enum {string}
          */
+        AskStatus: "asking" | "pending" | "submitted" | "answered" | "not_answered";
         AskView: {
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "asking" | "pending" | "submitted" | "answered" | "not_answered";
-            /** Questions */
+            status: components["schemas"]["AskStatus"];
             questions: components["schemas"]["Question"][];
-            /** Answers */
+            /** @description answered 时每题的回答 */
             answers: components["schemas"]["AnsweredQuestion"][];
-            /** Note */
+            /** @description not_answered 时交给模型的说明 */
             note: string | null;
         };
-        /**
-         * AskWait
-         * @description 在等用户回答提问（ask_user）。
-         */
-        AskWait: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "ask";
-            /** Call Id */
-            call_id: string;
-            /** Headers */
-            headers: string[];
-        };
-        /** AssetOut */
         AssetOut: {
-            /** Name */
             name: string;
-            /** Owner */
+            /** @description null 归平台 */
             owner: string | null;
-            /** Description */
             description: string;
             source: components["schemas"]["AssetSourceOut"];
-            /** Editable */
+            /** @description 它能改（write） */
             editable: boolean;
         };
-        /**
-         * AssetSourceOut
-         * @description 为什么能用：它名下的、放行它的角色（含 base）、它自己的 allow 规则（至少一项）。
-         */
+        /** @description 为什么能用：它名下的、放行它的角色（含 base）、它自己的 allow 规则（至少一项）。 */
         AssetSourceOut: {
-            /** Own */
             own: boolean;
-            /** Roles */
             roles: string[];
-            /** Allow */
             allow: boolean;
         };
-        /** AssigneeChangedActivity */
-        AssigneeChangedActivity: {
-            /** Id */
-            id: number;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Actor */
-            actor: string;
-            /** Session Id */
-            session_id: string | null;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "assignee";
-            change: components["schemas"]["Change_Union_str__NoneType__"];
-        };
-        /** Attachment */
+        Assignee: string;
         Attachment: {
-            /** Url */
+            /** @description 文件存储的地址（files::file_url）：界面直接用它显示与下载 */
             url: string;
-            /** Name */
             name: string;
-            /** Media Type */
             media_type: string;
-            /** Inline */
+            /** @description 能内联显示的图片；其余是下载链接 */
             inline: boolean;
         };
-        /** CatalogMcpOut */
-        CatalogMcpOut: {
-            transport: components["schemas"]["McpTransport"];
-            /** Command */
-            command: string | null;
-            /** Args */
-            args: string[];
-            /** Url */
-            url: string | null;
-            /** Env */
-            env: {
-                [key: string]: string;
-            };
-            /** Headers */
-            headers: {
-                [key: string]: string;
-            };
-            /** Enabled */
-            enabled: boolean;
-            /** Name */
-            name: string;
-            /** Owner */
-            owner: string | null;
-            /** Description */
-            description: string;
-            /** Roles */
-            roles: string[];
-            /** Shared */
-            shared: boolean;
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
-            /** Path */
-            path: string;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "mcp";
-        };
+        /** @description 看板上的一个 issue：它本身加上谁在做（HTTP 返回的形状）。 */
+        BoardIssue: components["schemas"]["Issue"] & components["schemas"]["IssueWork"];
         /**
-         * CatalogMemoryOut
-         * @description 正文不在列表里：平台的记忆（owner 为 null）用 GET /assets/memory/{name} 读，agent 的私有记忆（owner 是它，name 是
-         *     它的名字，只作显示）用 GET /agents/{owner}/memory。
+         * @description 上一次触发开出的会话还没做完时它在干什么（不会是 idle）。
+         * @enum {string}
          */
-        CatalogMemoryOut: {
-            /** Name */
+        Busy: "running" | "waiting";
+        /** @description 回答信件里一次调用的结果。 */
+        CallResult: {
+            result: components["schemas"]["AskResult"];
+            /** @enum {string} */
+            tool: "ask_user";
+        } | {
+            result: components["schemas"]["AgentAnswer"];
+            /** @enum {string} */
+            tool: "ask_agent";
+        } | {
+            result: components["schemas"]["Decision"];
+            /** @enum {string} */
+            tool: "approval";
+        };
+        /** @description 资源池里的一项，在规则里写作 `<action>:<kind>:<name>`；按 kind 区分的详情。 */
+        CatalogAssetOut: components["schemas"]["CatalogDetail"] & {
             name: string;
-            /** Owner */
+            /** @description agent 的 id；null 归平台（内置工具、界面上建的、迁移前的公共资产） */
             owner: string | null;
-            /** Description */
             description: string;
-            /** Roles */
+            /** @description 收录它的角色（allow 放行、deny 没拦，含内置的 base、admin） */
             roles: string[];
-            /** Shared */
+            /**
+             * @description 分发出去了：base 收录它，或某个不是 owner 的 agent 的规则（角色或自己的 allow）放行它；否则只有 owner 能用（归平台的
+             *     就谁也用不了）。与删除 agent 时把资产转给平台同一个定义
+             */
             shared: boolean;
             /**
-             * Updated At
              * Format: date-time
+             * @description 文件的修改时间；内置工具在代码里定义，为 null
              */
-            updated_at: string;
-            /** Path */
-            path: string;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
+            updated_at: string | null;
+            /** @description 文件（skill 是目录）的位置；内置工具为 null */
+            path: string | null;
+        };
+        CatalogDetail: {
+            access: components["schemas"]["Access"];
+            /** @description 管理类工具：base 角色没有 */
+            admin: boolean;
+            /** @enum {string} */
+            kind: "tool";
+        } | {
+            /** @enum {string} */
+            kind: "skill";
+        } | (components["schemas"]["McpConfigOut"] & {
+            /** @enum {string} */
+            kind: "mcp";
+        }) | {
+            /** @description false：agent 自己写的命令不能注入，只有 skill_run 的 skill 脚本与 MCP 配置能用（#528） */
+            allow_shell: boolean;
+            /** @enum {string} */
+            kind: "secret";
+        } | {
+            /** @enum {string} */
             kind: "memory";
         };
-        /**
-         * CatalogSecretOut
-         * @description 值不返回。
-         */
-        CatalogSecretOut: {
-            /** Name */
-            name: string;
-            /** Owner */
-            owner: string | null;
-            /** Description */
-            description: string;
-            /** Roles */
-            roles: string[];
-            /** Shared */
-            shared: boolean;
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
-            /** Path */
-            path: string;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "secret";
-            /** Allow Shell */
-            allow_shell: boolean;
+        /** @description 属性从什么改成什么（存为 `{"from": ..., "to": ...}`）。 */
+        Change_Option_String: {
+            from: null | string;
+            to: null | string;
         };
-        /** CatalogSkillOut */
-        CatalogSkillOut: {
-            /** Name */
-            name: string;
-            /** Owner */
-            owner: string | null;
-            /** Description */
-            description: string;
-            /** Roles */
-            roles: string[];
-            /** Shared */
-            shared: boolean;
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
-            /** Path */
-            path: string;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "skill";
+        /** @description 属性从什么改成什么（存为 `{"from": ..., "to": ...}`）。 */
+        Change_Priority: {
+            /** @enum {string} */
+            from: "none" | "urgent" | "high" | "medium" | "low";
+            /** @enum {string} */
+            to: "none" | "urgent" | "high" | "medium" | "low";
         };
-        /**
-         * CatalogToolOut
-         * @description 内置工具：归平台、代码里定义，不能改。
-         */
-        CatalogToolOut: {
-            /** Name */
-            name: string;
-            /** Owner */
-            owner: string | null;
-            /** Description */
-            description: string;
-            /** Roles */
-            roles: string[];
-            /** Shared */
-            shared: boolean;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "tool";
-            /** Updated At */
-            updated_at: null;
-            /**
-             * Access
-             * @enum {string}
-             */
-            access: "read" | "write";
-            /** Admin */
-            admin: boolean;
+        /** @description 属性从什么改成什么（存为 `{"from": ..., "to": ...}`）。 */
+        Change_String: {
+            from: string;
+            to: string;
         };
-        /** Change[IssuePriority] */
-        Change_IssuePriority_: {
-            from: components["schemas"]["IssuePriority"];
-            to: components["schemas"]["IssuePriority"];
-        };
-        /** Change[Union[str, NoneType]] */
-        Change_Union_str__NoneType__: {
-            /** From */
-            from: string | null;
-            /** To */
-            to: string | null;
-        };
-        /** Change[list[int]] */
-        Change_list_int__: {
-            /** From */
+        /** @description 属性从什么改成什么（存为 `{"from": ..., "to": ...}`）。 */
+        Change_Vec_i64: {
             from: number[];
-            /** To */
             to: number[];
         };
-        /** Change[str] */
-        Change_str_: {
-            /** From */
-            from: string;
-            /** To */
-            to: string;
-        };
+        /** @description 服务端数据变了（不分类别）：正在显示的页面重新拉取。 */
+        ChangedEvent: Record<string, unknown>;
         /**
-         * ChangedEvent
-         * @description 服务端数据变了（推给前端 SSE，正在显示的页面重新拉取，#646 起不分类别）：写过表的事务提交后发（platform.db 的
-         *     after_commit）；资源文件（不在库里）有改动时也发（agents.source 的 watch）。不管是谁改的：页面自己、agent、触发器、
-         *     推送通知上的操作都一样。
+         * @description 用户在界面上对等批准的调用的选择。
+         * @enum {string}
          */
-        ChangedEvent: {
-            /**
-             * Type
-             * @default changed
-             * @constant
-             */
-            type: "changed";
-        };
-        /**
-         * CodeBlock
-         * @description 一段代码或文件内容（等宽），title 多为文件路径。
-         */
-        CodeBlock: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "code";
-            /** Title */
-            title: string | null;
-            /** Text */
-            text: string;
-        };
-        /** CommentIn */
+        Choice: "approve" | "deny" | "always";
         CommentIn: {
-            /** Body */
             body: string;
         };
-        /** CommentedActivity */
-        CommentedActivity: {
-            /** Id */
-            id: number;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Actor */
-            actor: string;
-            /** Session Id */
-            session_id: string | null;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "comment";
-            /** Body */
-            body: string;
-        };
-        /** CompactOut */
-        CompactOut: {
-            /** Queued */
-            queued: boolean;
-        };
-        /** CompactionOut */
         CompactionOut: {
-            /** Through Message Id */
-            through_message_id: number;
-            /** Summary */
-            summary: string;
             /**
-             * Created At
-             * Format: date-time
+             * Format: int64
+             * @description 这条消息及之前的已由 summary 代替发给模型（原文仍完整展示）
              */
+            through_message_id: number;
+            summary: string;
+            /** Format: date-time */
             created_at: string;
         };
-        /**
-         * ContextOut
-         * @description 发给模型的上下文有多大、到多大会压缩（sessions.compaction）。
-         */
+        /** @description 发给模型的上下文有多大、到多大会压缩。 */
         ContextOut: {
-            /** Tokens */
+            /**
+             * Format: int64
+             * @description 现在的大小：上一次模型请求的输入 token（含缓存读写）；还没有模型回复、或刚压缩过还没有新回复时为 null；0 表示模型
+             *     没有报告用量
+             */
             tokens: number | null;
-            /** Threshold Tokens */
+            /**
+             * Format: int64
+             * @description 上下文超过它就压缩
+             */
             threshold_tokens: number;
         };
-        /** CreatedActivity */
-        CreatedActivity: {
-            /** Id */
-            id: number;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Actor */
-            actor: string;
-            /** Session Id */
-            session_id: string | null;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "created";
-        };
         /**
-         * Decision
-         * @description 用户对一次等批准的调用的决定。always：批准时还要求以后同样的调用不再问（#531 之前的信件没有这一项）。pin：用户批准的
-         *     是哪一份——请求批准时工具定下、记在 approval_requests 的 pin，提交决定时记进来，批准时交回给工具比对（没记下、#570
-         *     之前的信件为 None，工具当作对不上）。
+         * @description 用户对一次等批准的调用的决定。pin：用户批准的是哪一份（请求批准时工具定下、记在 approval_requests 的指纹），批准时
+         *     交回工具比对（迁移来的旧信件可能没有，工具当作对不上）。
          */
         Decision: {
-            /** Approved */
             approved: boolean;
-            /**
-             * Always
-             * @default false
-             */
             always: boolean;
-            /** Pin */
-            pin?: string | null;
+            pin: string | null;
         };
-        /**
-         * DelegationOrigin
-         * @description 发起方是父会话（存在会话的 parent_session_id，不在来源里另存一份）。
-         */
-        DelegationOrigin: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "delegation";
-        };
-        /**
-         * DelegationWait
-         * @description 在等委派出去的工作交回结局（ask_agent，或 delegate_task 带 report_back）。
-         */
-        DelegationWait: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "delegation";
-            /** Thread Session Id */
-            thread_session_id: string;
-            /** Check Seconds */
-            check_seconds: number | null;
-            /**
-             * Since
-             * Format: date-time
-             */
-            since: string;
-        };
-        /** DependencyChange */
+        /** @enum {string} */
+        DeltaType: "assistant" | "thinking";
+        /** @description 一个上游完成（done / cancelled）：它的状态变化，状态的取值同 [`Happening::Status`]。 */
         DependencyChange: {
-            /** From */
-            from: string;
-            /** To */
-            to: string;
-            /** Issue */
+            /**
+             * Format: int64
+             * @description 完成的那个上游
+             */
             issue: number;
+            from: string;
+            to: string;
         };
-        /**
-         * DependencyFinishedActivity
-         * @description 一个上游完成（done / cancelled）：它的状态变化，状态的取值同 StatusChanged。
-         */
-        DependencyFinishedActivity: {
-            /** Id */
-            id: number;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Actor */
-            actor: string;
-            /** Session Id */
-            session_id: string | null;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "dependency";
-            change: components["schemas"]["DependencyChange"];
-        };
-        /** DependsOnChangedActivity */
-        DependsOnChangedActivity: {
-            /** Id */
-            id: number;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Actor */
-            actor: string;
-            /** Session Id */
-            session_id: string | null;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "depends_on";
-            change: components["schemas"]["Change_list_int__"];
-        };
-        /** DescriptionEditedActivity */
-        DescriptionEditedActivity: {
-            /** Id */
-            id: number;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Actor */
-            actor: string;
-            /** Session Id */
-            session_id: string | null;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "description";
-        };
-        /**
-         * DiffBlock
-         * @description 一处修改：统一 diff 格式的文本（以 `+`/`-`/空格开头的行），title 多为文件路径。
-         */
-        DiffBlock: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "diff";
-            /** Title */
-            title: string | null;
-            /** Text */
-            text: string;
-        };
-        /** EnabledIn */
         EnabledIn: {
-            /** Enabled */
             enabled: boolean;
         };
-        /** EntryOut */
         EntryOut: {
-            /** Name */
             name: string;
-            /** Is Dir */
             is_dir: boolean;
-            /** Size */
-            size: number | null;
             /**
-             * Modified
-             * Format: date-time
+             * Format: int64
+             * @description 目录为 null
              */
+            size: number | null;
+            /** Format: date-time */
             modified: string;
-            /** Inline */
+            /** @description 能内联显示的图片；其余读文件时作为附件返回 */
             inline: boolean;
         };
-        /** EventMailOut */
-        EventMailOut: {
-            /** Id */
-            id: number;
-            /** Content */
-            content: string;
-            /** Attachments */
-            attachments: components["schemas"]["FileOut"][];
-            state: components["schemas"]["MailState"];
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "event";
-            /** Source */
-            source: components["schemas"]["ThreadSource"] | components["schemas"]["JobSource"] | components["schemas"]["OtherSource"];
-            /** Check In */
-            check_in: boolean;
+        /** @description 错误响应体（各接口的 4xx、5xx 都是它）。 */
+        ErrorOut: {
+            detail: string;
+        };
+        /** @description 事件来源解析成的种类（界面用，不自己解析字符串）。 */
+        EventSource: {
+            raw: string;
+            session_id: string;
+            /** @enum {string} */
+            kind: "thread";
+        } | {
+            raw: string;
+            /** Format: int64 */
+            job_id: number;
+            /** @enum {string} */
+            kind: "job";
+        } | {
+            raw: string;
+            /** @enum {string} */
+            kind: "other";
         };
         /**
-         * FaultSource
          * @description 哪个脚本出的错。
          * @enum {string}
          */
         FaultSource: "precheck" | "stream";
-        /** FeaturesOut */
         FeaturesOut: {
-            /** Transcription */
+            /** @description 配置了 [transcription]：界面显示语音输入 */
             transcription: boolean;
         };
-        /** FieldRow */
         FieldRow: {
-            /** Label */
             label: string;
-            /** Value */
             value: string;
         };
-        /**
-         * FieldsBlock
-         * @description 键值对（如 issue 的状态、指派人）。
-         */
-        FieldsBlock: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "fields";
-            /** Rows */
-            rows: components["schemas"]["FieldRow"][];
-        };
-        /** FileOut */
         FileOut: {
-            /** Id */
             id: string;
-            /** Name */
             name: string;
-            /** Media Type */
             media_type: string;
-            /** Size */
+            /** Format: int64 */
             size: number;
-            /** Url */
             url: string;
-            /** Inline */
+            /** @description 能内联显示的图片；其余是下载链接 */
             inline: boolean;
-            /**
-             * Created At
-             * Format: date-time
-             */
+            /** Format: date-time */
             created_at: string;
         };
-        /** FiredOut */
+        /** @enum {string} */
+        FireWhen: "output" | "changed";
         FiredOut: {
-            /** Fired */
+            /** @description 是否投出了信（前置检查判定这次不触发时为 false） */
             fired: boolean;
-            /** Session Id */
+            /** @description 这次新开的会话；没触发时为 null */
             session_id: string | null;
         };
-        /** HTTPValidationError */
-        HTTPValidationError: {
-            /** Detail */
-            detail?: components["schemas"]["ValidationError"][];
+        /** @description 时间线上发生的一件事。 */
+        Happening: {
+            /** @enum {string} */
+            kind: "created";
+        } | {
+            body: string;
+            /** @enum {string} */
+            kind: "comment";
+        } | {
+            /** @enum {string} */
+            kind: "description";
+        } | {
+            change: components["schemas"]["Change_String"];
+            /** @enum {string} */
+            kind: "title";
+        } | {
+            change: components["schemas"]["Change_String"];
+            /** @enum {string} */
+            kind: "status";
+        } | {
+            change: components["schemas"]["Change_Priority"];
+            /** @enum {string} */
+            kind: "priority";
+        } | {
+            change: components["schemas"]["Change_Option_String"];
+            /** @enum {string} */
+            kind: "assignee";
+        } | {
+            change: components["schemas"]["Change_Option_String"];
+            /** @enum {string} */
+            kind: "owner";
+        } | {
+            change: components["schemas"]["Change_Vec_i64"];
+            /** @enum {string} */
+            kind: "depends_on";
+        } | {
+            change: components["schemas"]["DependencyChange"];
+            /** @enum {string} */
+            kind: "dependency";
+        } | {
+            body: string;
+            /** @enum {string} */
+            kind: "run_failed";
+        } | {
+            /** @enum {string} */
+            kind: "unsettled";
+        } | {
+            change: components["schemas"]["Arrival"];
+            /** @enum {string} */
+            kind: "stopped";
         };
         /**
-         * HeartbeatEvent
-         * @description 连上就发一次、之后每隔一段时间发一次：前端据此判断连接是否还活着（间隔随心跳下发），并比较前端构建的版本。
+         * @description 连上就发一次、之后每隔一段时间发一次：前端据此判断连接是否还活着（间隔随心跳下发，手机切后台、代理链路断开时
+         *     EventSource 往往收不到错误，只能靠「多久没收到消息」发现），并比较前端构建的版本（手机主屏应用常驻内存，升级后提示刷新）。
          */
         HeartbeatEvent: {
-            /**
-             * Type
-             * @default heartbeat
-             * @constant
-             */
-            type: "heartbeat";
-            /** Interval Seconds */
+            /** Format: double */
             interval_seconds: number;
-            /** Ui Version */
+            /** @description 服务端当前前端构建的版本；没有前端构建时为 null */
             ui_version: string | null;
         };
-        /** HistoryOut */
-        HistoryOut: {
-            /** Id */
+        /** @description 人与 agent 协作的一件事（读模型，也是 HTTP 返回的形状）。 */
+        Issue: {
+            /** Format: int64 */
             id: number;
-            /** Agent Id */
-            agent_id: string;
-            /**
-             * Day
-             * Format: date
-             */
-            day: string;
-            /** Title */
             title: string;
-            /** Summary */
-            summary: string;
-            /** Refs */
-            refs: string[];
-            /** Importance */
-            importance: number;
-            /**
-             * Created At
-             * Format: date-time
-             */
+            description: string;
+            status: components["schemas"]["Status"];
+            priority: components["schemas"]["Priority"];
+            /** @description 负责的项目（agent id）：创建时必填，不随指派变化，只能显式修改；只在负责的 agent 被删除后为空 */
+            owner: string | null;
+            assignee: components["schemas"]["Assignee"] | null;
+            /** @description 创建者：agent id；用户创建的为 `user` */
+            creator: components["schemas"]["Actor"];
+            /** Format: date-time */
             created_at: string;
+            /** Format: date-time */
+            updated_at: string;
         };
-        /** IssueCreate */
         IssueCreate: {
-            /** Title */
             title: string;
-            /** Owner */
+            /** @description 负责的项目（agent id），必填 */
             owner: string;
-            /** Description */
             description?: string;
-            status?: components["schemas"]["IssueStatus"];
-            priority?: components["schemas"]["IssuePriority"];
-            /** Assignee */
+            status?: components["schemas"]["Status"];
+            priority?: components["schemas"]["Priority"];
+            /** @description agent id、`user`，或 null */
             assignee?: string | null;
-            /** Depends On */
+            /** @description 依赖的上游 issue id；不能成环 */
             depends_on?: number[];
         };
-        /** IssueDetailOut */
-        IssueDetailOut: {
-            issue: components["schemas"]["IssueOut"];
-            /** Activities */
-            activities: (components["schemas"]["CreatedActivity"] | components["schemas"]["CommentedActivity"] | components["schemas"]["DescriptionEditedActivity"] | components["schemas"]["TitleChangedActivity"] | components["schemas"]["StatusChangedActivity"] | components["schemas"]["PriorityChangedActivity"] | components["schemas"]["AssigneeChangedActivity"] | components["schemas"]["OwnerChangedActivity"] | components["schemas"]["DependsOnChangedActivity"] | components["schemas"]["DependencyFinishedActivity"] | components["schemas"]["RunFailureActivity"] | components["schemas"]["UnsettledActivity"] | components["schemas"]["StoppedActivity"])[];
+        IssueDetail: {
+            issue: components["schemas"]["BoardIssue"];
+            activities: components["schemas"]["Activity"][];
         };
-        /** IssueOrigin */
-        IssueOrigin: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "issue";
-            /** Issue Id */
-            issue_id: number;
+        /** @description 只修改给出的字段。assignee 给出 null 表示取消指派，不出现表示不变。 */
+        IssuePatch: {
+            owner?: string | null;
+            title?: string | null;
+            description?: string | null;
+            status?: components["schemas"]["Status"] | null;
+            priority?: components["schemas"]["Priority"] | null;
+            /** @description agent id、`user`；null 取消指派，不出现不变 */
+            assignee?: string | null;
+            /** @description 依赖的上游 issue id，整体替换（[] 去掉全部）；不出现表示不变 */
+            depends_on?: number[] | null;
         };
-        /** IssueOut */
-        IssueOut: {
-            /** Id */
-            id: number;
-            /** Title */
-            title: string;
-            /** Description */
-            description: string;
-            status: components["schemas"]["IssueStatus"];
-            priority: components["schemas"]["IssuePriority"];
-            /** Owner */
-            owner: string | null;
-            /** Assignee */
-            assignee: string | null;
-            /** Creator */
-            creator: string;
-            /** Sessions */
+        /** @description 谁在这个 issue 上做事、它在等谁（从会话领域与依赖图派生，不存）。 */
+        IssueWork: {
+            /** @description 每个 agent 在这个 issue 上的会话：agent id -> 会话 id */
             sessions: {
                 [key: string]: string;
             };
             assignee_state: components["schemas"]["WorkState"] | null;
-            /** Stalled */
+            /** @description in_progress、指派给 agent，它的 issue 会话却空闲或不存在：该有人做却没人在做 */
             stalled: boolean;
-            /** Depends On */
+            /** @description 它依赖的上游、依赖它的下游、还没完成（不是 done / cancelled）的上游：非空时还轮不到它 */
             depends_on: number[];
-            /** Blocks */
             blocks: number[];
-            /** Waiting On */
             waiting_on: number[];
-            /** Finished */
+            /** @description 已结束（done / cancelled）：不再挡着依赖它的 issue */
             finished: boolean;
-            /** Reviewable */
+            /** @description 用户能审核（通过或打回）：指派给用户、还没结束 */
             reviewable: boolean;
-            /** Startable */
+            /** @description 用户能一键开工（指派给 owner 并进入 in_progress）：还在 backlog、有 owner */
             startable: boolean;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
         };
-        /**
-         * IssuePatch
-         * @description 只修改给出的字段。assignee 给出 null 表示取消指派，不出现表示不变。
-         */
-        IssuePatch: {
-            /** Owner */
-            owner?: string | null;
-            /** Title */
-            title?: string | null;
-            /** Description */
-            description?: string | null;
-            status?: components["schemas"]["IssueStatus"] | null;
-            priority?: components["schemas"]["IssuePriority"] | null;
-            /** Assignee */
-            assignee?: string | null;
-            /** Depends On */
-            depends_on?: number[] | null;
-        };
-        /**
-         * IssuePriority
-         * @enum {string}
-         */
-        IssuePriority: "none" | "urgent" | "high" | "medium" | "low";
-        /**
-         * IssueStatus
-         * @enum {string}
-         */
-        IssueStatus: "backlog" | "in_progress" | "in_review" | "blocked" | "done" | "cancelled";
-        /** Item */
         Item: {
-            /**
-             * Type
-             * @enum {string}
-             */
-            type: "user" | "event" | "assistant" | "thinking" | "tool_call" | "tool_result" | "tool_error" | "stopped";
-            /** Text */
+            type: components["schemas"]["ItemType"];
             text: string;
-            /** Tool Name */
+            /** @description 工具调用、结果与错误的工具名；其他条目为 None */
             tool_name: string | null;
-            /** Source */
-            source: (components["schemas"]["ThreadSource"] | components["schemas"]["JobSource"] | components["schemas"]["OtherSource"]) | null;
-            /** Check In */
+            source: components["schemas"]["EventSource"] | null;
+            /** @description 事件是运行中检查（工作还在进行）；其他条目为 false */
             check_in: boolean;
-            /** Tool Call Id */
             tool_call_id: string | null;
-            /** Message Id */
+            /**
+             * Format: int64
+             * @description 来源消息的数据库 id；会话接口填充，用于定位压缩点；实时条目为 None
+             */
             message_id: number | null;
-            /** Attachments */
+            /** @description 用户消息的附件，或工具结果挂上的文件（TOOL_ATTACHMENTS）；其他条目为空 */
             attachments: components["schemas"]["Attachment"][];
-            /** Threads */
+            /** @description 工具调用开出或续写的 thread（子会话 id），由会话接口按调用 id 填（[`annotate_threads`]）；其他条目为空 */
             threads: string[];
-            /** Images */
+            /** @description 工具交回给模型的图片（如浏览器截图）：属于这次调用的过程，不是给用户的文件；其他条目为空 */
             images: components["schemas"]["Attachment"][];
             ask: components["schemas"]["AskView"] | null;
-            /** Approval */
-            approval: ("pending" | "submitted") | null;
-            /** View */
-            view: (components["schemas"]["TerminalBlock"] | components["schemas"]["CodeBlock"] | components["schemas"]["DiffBlock"] | components["schemas"]["MarkdownBlock"] | components["schemas"]["FieldsBlock"] | components["schemas"]["TableBlock"] | components["schemas"]["LinksBlock"])[] | null;
-            /** At */
+            approval: components["schemas"]["ApprovalState"] | null;
+            /**
+             * @description 工具调用的参数、结果按工具自己的展示规则画成的展示块；None 显示原文（工具没定规则、参数或结果不合它的类型、
+             *     被退回的错误、事后补的结果、带图片的结果）。其他条目为 None
+             */
+            view: components["schemas"]["ViewBlock"][] | null;
+            /**
+             * Format: date-time
+             * @description 工具调用开始执行的时间（tool_call），工具结束的时间（tool_result、tool_error），或事件交给模型的时间（event，
+             *     所在请求的 timestamp）；其他条目，以及拿不到真实时间的（事后补的结果、没记结束时间的结果、调用方没给保存时间的
+             *     投影）为 None
+             */
             at: string | null;
         };
-        /** JobSource */
-        JobSource: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "job";
-            /** Raw */
-            raw: string;
-            /** Job Id */
-            job_id: number;
-        };
-        /**
-         * JobStatus
-         * @description 后台任务（workspace.runner）的状态。结束的三种：自己退出（看 exit_code）、被 job_kill 结束、因服务重启被中断。
-         * @enum {string}
-         */
-        JobStatus: "running" | "exited" | "killed" | "interrupted";
-        /**
-         * JobWaitOut
-         * @description 在等的后台任务，补上工作区领域的任务信息（与 job_status 同一份）。
-         */
-        JobWaitOut: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "job";
-            /** Job Id */
-            job_id: number;
-            /**
-             * Since
-             * Format: date-time
-             */
-            since: string;
-            /** Command */
+        /** @enum {string} */
+        ItemType: "user" | "event" | "assistant" | "thinking" | "tool_call" | "tool_result" | "tool_error" | "stopped";
+        /** @description 在等的后台任务的详情（与 job_status 同一份）。 */
+        JobOut: {
             command: string;
-            status: components["schemas"]["JobStatus"];
-            /** Log Path */
+            /** @description running、exited、killed、interrupted：取等待项与取任务信息不在同一事务，之间任务可能已经结束（结局还没交回） */
+            status: string;
+            /** @description 日志，相对 agent 工作目录 */
             log_path: string;
-            /** Tail */
+            /** @description 日志最后几行 */
             tail: string;
         };
-        /** Link */
+        KindInDoc: {
+            config: components["schemas"]["ScheduleConfig"];
+            /** @enum {string} */
+            kind: "schedule";
+        } | {
+            config: components["schemas"]["OnceConfig"];
+            /** @enum {string} */
+            kind: "once";
+        } | {
+            config: components["schemas"]["StreamConfig"];
+            /** @enum {string} */
+            kind: "stream";
+        };
+        /** @description config 与 status（这种方式自己给出的运行状态，不含凭证；存下的状态坏了时是 `{"error": 原因}`）按 kind 区分。 */
+        KindOutDoc: {
+            config: components["schemas"]["ScheduleConfig"];
+            status: components["schemas"]["ScheduleStatus"];
+            /** @enum {string} */
+            kind: "schedule";
+        } | {
+            config: components["schemas"]["OnceConfig"];
+            status: components["schemas"]["OnceStatus"];
+            /** @enum {string} */
+            kind: "once";
+        } | {
+            config: components["schemas"]["StreamConfig"];
+            status: components["schemas"]["StreamStatus"];
+            /** @enum {string} */
+            kind: "stream";
+        };
         Link: {
-            /** Title */
             title: string;
-            /** Url */
             url: string;
-            /** Summary */
             summary: string | null;
         };
-        /** LinksBlock */
-        LinksBlock: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "links";
-            /** Links */
-            links: components["schemas"]["Link"][];
-        };
-        /** LiveSegmentOut */
-        LiveSegmentOut: {
-            /** Segment Id */
+        LiveSegment: {
             segment_id: string;
-            /** Events */
-            events: (components["schemas"]["RunItemEvent"] | components["schemas"]["RunDeltaEvent"])[];
+            /**
+             * Format: int64
+             * @description 这一段开始时会话最后一条已保存消息的 id：这之后保存的消息由这一段的事件展示，历史里先不显示
+             */
+            after_message_id: number | null;
+            events: components["schemas"]["RunEventEnvelope"][];
         };
-        /** LoginIn */
         LoginIn: {
-            /** Password */
             password: string;
         };
-        /**
-         * MailState
-         * @enum {string}
-         */
+        MailKindOut: {
+            /** @enum {string} */
+            kind: "message";
+        } | {
+            /** @description 事件的来源 */
+            source: components["schemas"]["EventSource"];
+            /** @description 事件是运行中检查（工作还在进行） */
+            check_in: boolean;
+            /** @enum {string} */
+            kind: "event";
+        } | {
+            /** @description tool_call_id -> 那次挂起调用的结果（用户的回答，或被问 agent 的结局） */
+            answers: {
+                [key: string]: components["schemas"]["CallResult"];
+            };
+            /** @enum {string} */
+            kind: "answer";
+        };
+        /** @description 会话信箱里的一封信件（显示在历史之后：排队中的，以及最近一次停止丢弃的）。 */
+        MailOut: components["schemas"]["MailKindOut"] & {
+            /** Format: int64 */
+            id: number;
+            content: string;
+            attachments: components["schemas"]["FileOut"][];
+            state: components["schemas"]["MailState"];
+            /** Format: date-time */
+            created_at: string;
+        };
+        /** @enum {string} */
         MailState: "queued" | "consumed" | "discarded";
-        /** MarkReadIn */
         MarkReadIn: {
-            /** Through Id */
+            /**
+             * Format: int64
+             * @description 用户看到的最新一条；之后才到的保持未读
+             */
             through_id: number;
         };
-        /** MarkdownBlock */
-        MarkdownBlock: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "markdown";
-            /** Title */
-            title: string | null;
-            /** Text */
-            text: string;
-        };
-        /** McpAssetOut */
         McpAssetOut: {
-            /** Name */
             name: string;
-            /** Owner */
             owner: string | null;
-            /** Description */
             description: string;
             source: components["schemas"]["AssetSourceOut"];
-            /** Editable */
             editable: boolean;
             transport: components["schemas"]["McpTransport"];
-            /** Enabled */
             enabled: boolean;
         };
-        /** McpIn */
-        McpIn: {
-            /** Owner */
-            owner: string | null;
+        McpConfigOut: {
             transport: components["schemas"]["McpTransport"];
-            /** Command */
-            command?: string | null;
-            /** Args */
-            args?: string[];
-            /** Url */
-            url?: string | null;
-            /** Env */
-            env?: {
-                [key: string]: string;
-            };
-            /** Headers */
-            headers?: {
-                [key: string]: string;
-            };
-            /** Probe */
-            probe?: boolean;
-        };
-        /** McpOut */
-        McpOut: {
-            transport: components["schemas"]["McpTransport"];
-            /** Command */
             command: string | null;
-            /** Args */
             args: string[];
-            /** Url */
             url: string | null;
-            /** Env */
+            /** @description env / headers 里的 secret 只以 ${vault:KEY} 引用形式存储，可以原样返回 */
             env: {
                 [key: string]: string;
             };
-            /** Headers */
             headers: {
                 [key: string]: string;
             };
-            /** Enabled */
             enabled: boolean;
-            /** Owner */
+        };
+        McpIn: {
+            owner?: string | null;
+            transport: components["schemas"]["McpTransport"];
+            command?: string | null;
+            args?: string[];
+            url?: string | null;
+            env?: {
+                [key: string]: string;
+            };
+            headers?: {
+                [key: string]: string;
+            };
+            /** @description 先连接一次验证（按用户能用的 secret 解析引用），连不上 422、不保存 */
+            probe?: boolean;
+        };
+        McpOut: components["schemas"]["McpConfigOut"] & {
             owner: string | null;
-            /** Name */
             name: string;
-            /**
-             * Tools
-             * @default []
-             */
+            /** @description 新增时连接验证列出的工具（不验证时为空） */
             tools: string[];
         };
-        /**
-         * McpTransport
-         * @enum {string}
-         */
+        /** @enum {string} */
         McpTransport: "stdio" | "http";
-        /** MemoryIn */
         MemoryIn: {
-            /** Content */
             content: string;
-            /** Version */
-            version: string | null;
+            /** @description 打开编辑时的版本（MemoryOut.version），新建为 null；期间被别处改过、删掉或抢先建了时 409 */
+            version?: string | null;
         };
-        /** MemoryOut */
         MemoryOut: {
-            /** Name */
             name: string;
-            /** Owner */
             owner: string | null;
-            /** Content */
             content: string;
-            /**
-             * Updated At
-             * Format: date-time
-             */
+            /** Format: date-time */
             updated_at: string;
-            /** Path */
             path: string;
-            /** Max Chars */
+            /** @description 每一块的上限 */
             max_chars: number;
-            /** Version */
+            /** @description content 的版本：保存时交回 */
             version: string;
         };
-        /** MessageMailOut */
-        MessageMailOut: {
-            /** Id */
+        /** @description 一条通知（读模型）。 */
+        Notification: {
+            /** Format: int64 */
             id: number;
-            /** Content */
-            content: string;
-            /** Attachments */
-            attachments: components["schemas"]["FileOut"][];
-            state: components["schemas"]["MailState"];
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "message";
-        };
-        /**
-         * NotificationEvent
-         * @description 写下了一条新通知（推给前端 SSE，前端据此刷新通知页与未读数）。与有没有推送订阅无关。
-         */
-        NotificationEvent: {
-            /**
-             * Type
-             * @default notification
-             * @constant
-             */
-            type: "notification";
-            /** Notification Id */
-            notification_id: number;
-            /** Session Id */
-            session_id: string | null;
-        };
-        /** NotificationOut */
-        NotificationOut: {
-            /** Id */
-            id: number;
-            /** Title */
             title: string;
-            /** Body */
             body: string;
-            /** Session Id */
             session_id: string | null;
-            /** Issue Id */
+            /** Format: int64 */
             issue_id: number | null;
-            /** Url */
+            /** @description 点开打开的页面（推送与通知页共用）；系统通知为 None */
             url: string | null;
-            /** Unread */
             unread: boolean;
-            /**
-             * Created At
-             * Format: date-time
-             */
+            /** Format: date-time */
             created_at: string;
         };
-        /** OnceConfig */
+        /** @description 有新通知了（SSE 事件名 `notification`）：前端刷新通知页与未读数；正看着这个会话时把它标为已读。 */
+        NotificationEvent: {
+            /** Format: int64 */
+            notification_id: number;
+            session_id: string | null;
+        };
         OnceConfig: {
-            /**
-             * At
-             * Format: date-time
-             */
             at: string;
         };
-        /** OnceStatus */
         OnceStatus: {
-            /**
-             * Run At
-             * Format: date-time
-             */
             run_at: string;
         };
-        /** OnceTriggerCreate */
-        OnceTriggerCreate: {
-            /** Name */
-            name: string;
-            /** Agent Id */
-            agent_id: string;
-            /** Prompt */
-            prompt: string;
-            precheck?: components["schemas"]["Precheck"] | null;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "once";
-            config: components["schemas"]["OnceConfig"];
-        };
-        /** OnceTriggerOut */
-        OnceTriggerOut: {
-            /** Id */
-            id: number;
-            /** Name */
-            name: string;
-            /** Agent Id */
-            agent_id: string;
-            /** Prompt */
-            prompt: string;
-            /** Enabled */
-            enabled: boolean;
-            precheck: components["schemas"]["Precheck"] | null;
-            /** Last Checked At */
-            last_checked_at: string | null;
-            /** Last Fired At */
-            last_fired_at: string | null;
-            /** Last Session Id */
-            last_session_id: string | null;
-            /** Disabled Reason */
-            disabled_reason: string | null;
-            /** Faults */
-            faults: components["schemas"]["TriggerFault"][];
-            /** Finished At */
-            finished_at: string | null;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "once";
-            config: components["schemas"]["OnceConfig"];
-            status: components["schemas"]["OnceStatus"];
-        };
-        /** Option */
-        Option: {
-            /**
-             * Label
-             * @description Short choice text shown on the button.
-             */
-            label: string;
-            /**
-             * Description
-             * @description What choosing it means, if not obvious.
-             * @default
-             */
-            description: string;
-        };
-        /**
-         * Origin
-         * @description 会话来源：用户在网页发起、触发器（定时、外部事件……）、agent 之间委派、issue 看板唤醒被指派的 agent。
-         * @enum {string}
-         */
-        Origin: "user" | "trigger" | "delegation" | "issue";
-        /** OtherSource */
-        OtherSource: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "other";
-            /** Raw */
-            raw: string;
-        };
-        /** OwnerChangedActivity */
-        OwnerChangedActivity: {
-            /** Id */
-            id: number;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Actor */
-            actor: string;
-            /** Session Id */
-            session_id: string | null;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "owner";
-            change: components["schemas"]["Change_Union_str__NoneType__"];
-        };
-        /** OwnerIn */
+        /** @enum {string} */
+        Outcome: "done" | "stopped" | "failed";
         OwnerIn: {
-            /** Owner */
-            owner: string | null;
+            /** @description agent 的 id；null 归平台 */
+            owner?: string | null;
         };
-        /** Precheck */
+        /** @description 一个前置检查（存在触发器上，也是工具与接口的参数）。 */
         Precheck: {
-            /**
-             * Command
-             * @description bash command run before each firing.
-             */
+            /** @description bash command run before each firing. */
             command: string;
+            /** @description Vault keys exposed to the command as env vars. */
+            secrets?: string[];
             /**
-             * Secrets
-             * @description Vault keys exposed to the command as env vars.
-             * @default []
+             * @description 'output': fire when stdout is non-empty. 'changed': fire when stdout differs from the last run (the first run
+             *     only records it).
              */
-            secrets: string[];
-            /**
-             * Fire When
-             * @description 'output': fire when stdout is non-empty. 'changed': fire when stdout differs from the last run (the first run only records it).
-             * @default output
-             * @enum {string}
-             */
-            fire_when: "output" | "changed";
+            fire_when?: components["schemas"]["FireWhen"];
         };
-        /** PriorityChangedActivity */
-        PriorityChangedActivity: {
-            /** Id */
-            id: number;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Actor */
-            actor: string;
-            /** Session Id */
-            session_id: string | null;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "priority";
-            change: components["schemas"]["Change_IssuePriority_"];
-        };
-        /** PushKeys */
+        /** @enum {string} */
+        Priority: "none" | "urgent" | "high" | "medium" | "low";
         PushKeys: {
-            /** P256Dh */
             p256dh: string;
-            /** Auth */
             auth: string;
         };
-        /** PushSubscriptionIn */
+        /** @description 浏览器给的推送订阅（PushSubscription.toJSON() 的 endpoint 与 keys）。 */
         PushSubscriptionIn: {
-            /** Endpoint */
             endpoint: string;
             keys: components["schemas"]["PushKeys"];
         };
-        /** Question */
         Question: {
-            /**
-             * Question
-             * @description The full question.
-             */
+            /** @description The full question. */
             question: string;
-            /**
-             * Header
-             * @description Very short label, e.g. 'Timeframe'.
-             */
+            /** @description Very short label, e.g. 'Timeframe'. */
             header: string;
-            /** Options */
-            options: components["schemas"]["Option"][];
-            /**
-             * Multi Select
-             * @description Allow choosing several options.
-             * @default false
-             */
+            options: components["schemas"]["QuestionOption"][];
+            /** @description Allow choosing several options. */
             multi_select: boolean;
         };
-        /**
-         * QuestionAnswer
-         * @description 用户对一个问题的回答：选中的选项，和/或「其他」里填的文字。
-         */
+        /** @description 用户对一个问题的回答：选中的选项，和/或「其他」里填的文字。 */
         QuestionAnswer: {
-            /** Selected */
             selected?: string[];
-            /** Other */
             other?: string | null;
         };
-        /**
-         * ReachOut
-         * @description 一份配置能用（use）的内置工具与资产（skill、MCP server、secret、记忆，`kind:name`）。
-         */
+        QuestionOption: {
+            /** @description Short choice text shown on the button. */
+            label: string;
+            /** @description What choosing it means, if not obvious. */
+            description: string;
+        };
+        /** @description 一份配置能用（use）的内置工具与资产（skill、MCP server、secret、记忆，`kind:name`）。 */
         ReachOut: {
-            /** Tools */
             tools: components["schemas"]["ToolOut"][];
-            /** Assets */
             assets: string[];
         };
-        /** RejectIn */
+        /** @description 库里的一件事。 */
+        Record: {
+            /** Format: int64 */
+            id: number;
+            agent_id: string;
+            /** Format: date */
+            day: string;
+            title: string;
+            summary: string;
+            refs: string[];
+            /** Format: int64 */
+            importance: number;
+            /** Format: date-time */
+            created_at: string;
+        };
         RejectIn: {
-            /** Reason */
+            /** @description 打回的理由，记成评论 */
             reason: string;
         };
-        /** ReplyIn */
         ReplyIn: {
-            /** Prompt */
-            prompt: string;
-            /** Attachments */
+            prompt?: string;
             attachments?: string[];
-            /** Answers */
+            /** @description 对挂起提问的回答（条目里 ask.status 为 pending 的提问）；只回答时 prompt 可以为空 */
             answers?: {
                 [key: string]: components["schemas"]["QuestionAnswer"][];
             };
-            /** Approvals */
+            /**
+             * @description 对等批准的调用的决定（条目里 approval 为 pending 的工具调用）：approve 批准、deny 拒绝、always 始终允许（批准，以后
+             *     同样的调用不再问）；只做决定时 prompt 可以为空
+             */
             approvals?: {
-                [key: string]: "approve" | "deny" | "always";
+                [key: string]: components["schemas"]["Choice"];
             };
         };
-        /** RoleIn */
         RoleIn: {
-            /** Description */
             description: string;
-            /** Allow */
             allow: string[];
-            /** Deny */
             deny: string[];
         };
-        /** RoleOut */
         RoleOut: {
-            /** Name */
             name: string;
-            /** Description */
             description: string;
-            /** Fixed Allow */
+            /** @description 内置角色（base、admin）代码里固定的规则，不可改 */
             fixed_allow: string[];
-            /** Allow */
+            /** @description 可编辑的规则 */
             allow: string[];
-            /** Deny */
             deny: string[];
-            /** Builtin */
+            /** @description 内置角色不能删 */
             builtin: boolean;
-            /** Assignable */
+            /** @description 能写进 agent 的 roles：base 每个 agent 隐含，不能选 */
             assignable: boolean;
+            /** @description 只按这个角色的规则（固定的与可编辑的）能用的 */
             reach: components["schemas"]["ReachOut"];
-            /** Agents */
+            /** @description 带这个角色的 agent 的 id（含归档的）；base 是全部 agent */
             agents: string[];
         };
-        /** RolePreviewIn */
         RolePreviewIn: {
-            /** Name */
-            name: string | null;
-            /** Allow */
+            /** @description 已有的角色（内置的加上固定规则）；null 为还没建的 */
+            name?: string | null;
             allow: string[];
-            /** Deny */
             deny: string[];
         };
-        /**
-         * RoleUpdate
-         * @description 只改给出的字段（缺省或 null 是不变）：界面只提交用户改过的，编辑期间 agent 改了别的字段不会被旧值盖掉。
-         */
+        /** @description 只改给出的字段（缺省或 null 是不变）：界面只提交用户改过的，编辑期间 agent 改了别的字段不会被旧值盖掉。 */
         RoleUpdate: {
-            /** Description */
             description?: string | null;
-            /** Allow */
             allow?: string[] | null;
-            /** Deny */
             deny?: string[] | null;
         };
-        /**
-         * RunDeltaEvent
-         * @description 流式文字：接在同类的最后一条后面（或开始新的一条）。
-         */
-        RunDeltaEvent: {
-            /**
-             * Type
-             * @default run
-             * @constant
-             */
-            type: "run";
-            /** Session Id */
-            session_id: string;
-            /** Agent */
-            agent: string;
-            /** Segment Id */
-            segment_id: string;
-            /** Seq */
-            seq: number;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            event: "delta";
-            /**
-             * Item Type
-             * @enum {string}
-             */
-            item_type: "assistant" | "thinking";
-            /** Text */
-            text: string;
-        };
-        /**
-         * RunFailureActivity
-         * @description 某个 agent 在它这个 issue 的会话里的运行最终失败了：actor 是该 agent。
-         */
-        RunFailureActivity: {
-            /** Id */
-            id: number;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Actor */
-            actor: string;
-            /** Session Id */
-            session_id: string | null;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "run_failed";
-            /** Body */
-            body: string;
-        };
-        /**
-         * RunItemEvent
-         * @description 一条完整的会话条目（工具调用、工具结果），与历史同一个投影（transcript）；文字可能截断过。
-         */
-        RunItemEvent: {
-            /**
-             * Type
-             * @default run
-             * @constant
-             */
-            type: "run";
-            /** Session Id */
-            session_id: string;
-            /** Agent */
-            agent: string;
-            /** Segment Id */
-            segment_id: string;
-            /** Seq */
-            seq: number;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            event: "item";
+        /** @description 一条运行事件。 */
+        RunEvent: {
             item: components["schemas"]["Item"];
+            /** @enum {string} */
+            event: "item";
+        } | {
+            item_type: components["schemas"]["DeltaType"];
+            text: string;
+            /** @enum {string} */
+            event: "delta";
+        };
+        /** @description 推给前端的一条（SSE 事件名 `run`）。 */
+        RunEventEnvelope: components["schemas"]["RunEvent"] & {
+            session_id: string;
+            agent: string;
+            segment_id: string;
+            seq: number;
+        };
+        /** @enum {string} */
+        RunKind: "run" | "compaction";
+        RunRecord: {
+            /** Format: int64 */
+            id: number;
+            session_id: string;
+            kind: components["schemas"]["RunKind"];
+            /** Format: date-time */
+            started_at: string;
+            /** Format: date-time */
+            ended_at: string | null;
+            outcome: components["schemas"]["Outcome"] | null;
+            error: string | null;
         };
         /**
-         * SavedEvent
-         * @description 运行中又保存了一步（LiveSegments.step）：历史有了新内容，实时事件换成新的一段。
+         * @description 这个会话的历史或运行状态变了（SSE 事件名 `saved`）：运行中又保存了一步（实时事件换成新的一段），或运行记录变了
+         *     （运行或压缩开始、结束、失败、停止、重试）。会话页只按它重新拉取：整份会话可能有几 MB，不随全局的 changed 拉。
          */
         SavedEvent: {
-            /**
-             * Type
-             * @default saved
-             * @constant
-             */
-            type: "saved";
-            /** Session Id */
             session_id: string;
         };
-        /** ScheduleConfig */
         ScheduleConfig: {
-            /** Cron */
             cron: string;
         };
-        /** ScheduleStatus */
+        /** @description 界面与模型看到的状态。 */
         ScheduleStatus: {
-            /**
-             * Next Run At
-             * Format: date-time
-             */
             next_run_at: string;
             skipped: components["schemas"]["SkippedFires"] | null;
         };
-        /** ScheduleTriggerCreate */
-        ScheduleTriggerCreate: {
-            /** Name */
-            name: string;
-            /** Agent Id */
-            agent_id: string;
-            /** Prompt */
-            prompt: string;
-            precheck?: components["schemas"]["Precheck"] | null;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "schedule";
-            config: components["schemas"]["ScheduleConfig"];
-        };
-        /** ScheduleTriggerOut */
-        ScheduleTriggerOut: {
-            /** Id */
-            id: number;
-            /** Name */
-            name: string;
-            /** Agent Id */
-            agent_id: string;
-            /** Prompt */
-            prompt: string;
-            /** Enabled */
-            enabled: boolean;
-            precheck: components["schemas"]["Precheck"] | null;
-            /** Last Checked At */
-            last_checked_at: string | null;
-            /** Last Fired At */
-            last_fired_at: string | null;
-            /** Last Session Id */
-            last_session_id: string | null;
-            /** Disabled Reason */
-            disabled_reason: string | null;
-            /** Faults */
-            faults: components["schemas"]["TriggerFault"][];
-            /** Finished At */
-            finished_at: string | null;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "schedule";
-            config: components["schemas"]["ScheduleConfig"];
-            status: components["schemas"]["ScheduleStatus"];
-        };
-        /** ScriptGrantOut */
         ScriptGrantOut: {
-            /** Id */
+            /** Format: int64 */
             id: number;
-            /** Agent Id */
             agent_id: string;
-            /** Skill */
             skill: string;
-            /** Script */
             script: string;
-            /** Args */
             args: string[];
-            /** Secrets */
             secrets: string[];
-            /** Session Id */
+            /** @description 用户点「始终允许」的那次调用所在的会话（可能已删除） */
             session_id: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
+            /** Format: date-time */
             created_at: string;
-            /** Hits */
+            /**
+             * Format: int64
+             * @description 按它直接放行的次数与最后一次的时间
+             */
             hits: number;
-            /** Last Used At */
+            /** Format: date-time */
             last_used_at: string | null;
         };
-        /** SecretIn */
         SecretIn: {
-            /** Owner */
+            /** @description 新建时的 owner；已有的不变 */
             owner?: string | null;
-            /** Value */
             value: string;
-            /** Description */
             description?: string;
-            /** Allow Shell */
+            /** @description null：已有的保持原值，新建的允许 */
             allow_shell?: boolean | null;
         };
-        /** SecretOut */
         SecretOut: {
-            /** Owner */
             owner: string | null;
-            /** Name */
             name: string;
-            /** Description */
             description: string;
-            /** Allow Shell */
             allow_shell: boolean;
-            /**
-             * Updated At
-             * Format: date-time
-             */
+            /** Format: date-time */
             updated_at: string;
         };
-        /**
-         * ServerEvent
-         * @description SSE 里每条 data 的形状（api.app 的 /events）。具名是为了在 OpenAPI 里成为一个组件：前端的事件联合直接取它，
-         *     不另列一遍（openapi-typescript 还不认识 OpenAPI 3.2 的 itemSchema）。OpenAPI 的 discriminator 不能嵌套，这里不标。
-         */
-        ServerEvent: components["schemas"]["TaskEvent"] | components["schemas"]["SavedEvent"] | components["schemas"]["RunItemEvent"] | components["schemas"]["RunDeltaEvent"] | components["schemas"]["NotificationEvent"] | components["schemas"]["ChangedEvent"] | components["schemas"]["HeartbeatEvent"];
-        /** SessionDetail */
+        /** @description SSE 里每条 data 的形状（按 type 区分）。只用于接口描述：发出的是总线上各领域序列化好的事件加上 type。 */
+        ServerEvent: (components["schemas"]["RunEventEnvelope"] & {
+            /** @enum {string} */
+            type: "run";
+        }) | (components["schemas"]["SavedEvent"] & {
+            /** @enum {string} */
+            type: "saved";
+        }) | (components["schemas"]["NotificationEvent"] & {
+            /** @enum {string} */
+            type: "notification";
+        }) | (components["schemas"]["ChangedEvent"] & {
+            /** @enum {string} */
+            type: "changed";
+        }) | (components["schemas"]["HeartbeatEvent"] & {
+            /** @enum {string} */
+            type: "heartbeat";
+        });
         SessionDetail: {
             session: components["schemas"]["SessionOut"];
-            /** Items */
+            /** @description 完整原始历史的展示条目（正在进行的那一段由 live 展示） */
             items: components["schemas"]["Item"][];
-            /** Compactions */
+            /** @description 压缩点：through_message_id 及之前的消息已由 summary 代替发给模型（原文仍完整展示） */
             compactions: components["schemas"]["CompactionOut"][];
-            /** Mail */
-            mail: (components["schemas"]["MessageMailOut"] | components["schemas"]["EventMailOut"] | components["schemas"]["AnswerMailOut"])[];
-            run: components["schemas"]["TaskOut"] | null;
-            /** Threads */
+            /** @description 显示在历史之后的信件：排队中的（处理中的用户消息、已提交的回答），以及最近一次停止丢弃的 */
+            mail: components["schemas"]["MailOut"][];
+            run: components["schemas"]["RunRecord"] | null;
+            /** @description 这个会话开出的 thread */
             threads: components["schemas"]["SessionOut"][];
-            live: components["schemas"]["LiveSegmentOut"] | null;
+            live: components["schemas"]["LiveSegment"] | null;
+            /** @description 工作状态（与会话列表同一条规则）：不是 idle 前端就显示停止 */
             state: components["schemas"]["WorkState"];
-            /** Waits */
-            waits: (components["schemas"]["JobWaitOut"] | components["schemas"]["DelegationWait"] | components["schemas"]["WakeWait"] | components["schemas"]["AskWait"] | components["schemas"]["ApprovalWait"])[];
+            /** @description 在等的东西：后台任务、委派、到点唤醒、提问、等批准 */
+            waits: components["schemas"]["WaitOut"][];
             context: components["schemas"]["ContextOut"];
-            usage: components["schemas"]["UsageCounts"];
+            /** @description 这个会话名下全部运行的累计用量；一次运行的用量在每次模型回复后记上 */
+            usage: components["schemas"]["UsageTotals"];
         };
-        /**
-         * SessionListItem
-         * @description 会话列表里的一行：多一个只在列表里算的工作状态（在运行 / 在等后台任务、委派或用户回答 / 空闲；会话页看
-         *     SessionDetail.run）。
-         */
-        SessionListItem: {
-            /** Id */
-            id: string;
-            /** Agent Id */
-            agent_id: string;
-            /** Title */
-            title: string;
-            origin: components["schemas"]["SessionOrigin"];
-            /** Parent Session Id */
-            parent_session_id: string | null;
-            /** Thread */
-            thread: string | null;
-            /** Unread */
-            unread: boolean;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
+        /** @description 会话列表里的一行：多一个只在列表里算的工作状态（会话页看 SessionDetail.state）。 */
+        SessionListItem: components["schemas"]["SessionOut"] & {
             state: components["schemas"]["WorkState"];
         };
-        SessionOrigin: components["schemas"]["UserOrigin"] | components["schemas"]["DelegationOrigin"] | components["schemas"]["TriggerOrigin"] | components["schemas"]["IssueOrigin"];
-        /** SessionOut */
+        /** @description 会话的来源与发起方（界面按 `kind` 区分）。委派的发起方是父会话（存在 `parent_session_id`，不在这里另存一份）。 */
+        SessionOrigin: {
+            /** @enum {string} */
+            kind: "user";
+        } | {
+            /** @enum {string} */
+            kind: "delegation";
+        } | {
+            /** Format: int64 */
+            trigger_id: number;
+            /** @enum {string} */
+            kind: "trigger";
+        } | {
+            /** Format: int64 */
+            issue_id: number;
+            /** @enum {string} */
+            kind: "issue";
+        };
         SessionOut: {
-            /** Id */
             id: string;
-            /** Agent Id */
             agent_id: string;
-            /** Title */
             title: string;
+            /** @description 会话的来源与发起方（结构化，前端不认识库里的编号格式） */
             origin: components["schemas"]["SessionOrigin"];
-            /** Parent Session Id */
+            /** @description 委派产生的子会话：父会话与 thread 名 */
             parent_session_id: string | null;
-            /** Thread */
             thread: string | null;
-            /** Unread */
+            /** @description 有指向它的未读通知（用户在等的回答、提问、agent 主动通知、运行失败）：未读不另存，从通知派生 */
             unread: boolean;
-            /**
-             * Created At
-             * Format: date-time
-             */
+            /** Format: date-time */
             created_at: string;
-            /**
-             * Updated At
-             * Format: date-time
-             */
+            /** Format: date-time */
             updated_at: string;
         };
-        /** SitePageOut */
         SitePageOut: {
-            /** Agent Id */
             agent_id: string;
-            /** Name */
+            /** @description 页面目录名（site/<name>/） */
             name: string;
-            /** Title */
+            /** @description index.html 的 <title>，没有就是 name */
             title: string;
             /**
-             * Modified
              * Format: date-time
+             * @description 页面目录里最近改动的文件的时间（数据文件刷新也算）
              */
             modified: string;
-            /** Url */
+            /** @description 打开页面的签名地址（以 / 结尾，页面里的相对路径据此解析） */
             url: string;
         };
-        /** SkillDetail */
         SkillDetail: {
-            /** Name */
             name: string;
-            /** Description */
             description: string;
-            /** Owner */
             owner: string | null;
-            /** Body */
             body: string;
-            /** Version */
+            /** @description SKILL.md 的版本：保存时交回 */
             version: string;
         };
-        /** SkillIn */
         SkillIn: {
-            /** Owner */
-            owner: string | null;
-            /** Description */
+            /** @description 新建时的 owner；已有的不变 */
+            owner?: string | null;
             description: string;
-            /** Body */
             body: string;
-            /** Version */
-            version: string | null;
+            /** @description 打开编辑时的版本（SkillDetail.version），新建为 null；期间被别处改过、删掉或抢先建了时 409 */
+            version?: string | null;
         };
-        /** SkillOut */
         SkillOut: {
-            /** Name */
             name: string;
-            /** Description */
             description: string;
-            /** Owner */
             owner: string | null;
         };
-        /** SkippedFires */
+        /** @description 连续跳过（界面与模型看的部分）。 */
         SkippedFires: {
-            /** Count */
+            /**
+             * Format: int32
+             * @description 连续跳过了几次
+             */
             count: number;
             /**
-             * Since
              * Format: date-time
+             * @description 第一次跳过的时间
              */
             since: string;
-            previous_state: components["schemas"]["WorkState"];
+            /** @description 最近一次跳过时挡路的会话在运行还是在等待 */
+            previous_state: components["schemas"]["Busy"];
         };
-        /** StartIn */
         StartIn: {
-            /** Agent Id */
             agent_id: string;
-            /** Prompt */
             prompt: string;
-            /** Attachments */
+            /** @description 先经 POST /api/files 上传得到的 id */
             attachments?: string[];
         };
-        /** StatusChangedActivity */
-        StatusChangedActivity: {
-            /** Id */
-            id: number;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Actor */
-            actor: string;
-            /** Session Id */
-            session_id: string | null;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "status";
-            change: components["schemas"]["Change_str_"];
-        };
-        /**
-         * StoppedActivity
-         * @description actor 用 issue_stop 停掉了被指派 agent 在这个 issue 上的会话。
-         */
-        StoppedActivity: {
-            /** Id */
-            id: number;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Actor */
-            actor: string;
-            /** Session Id */
-            session_id: string | null;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "stopped";
-            change: components["schemas"]["Arrival"];
-        };
-        /**
-         * StoredKind
-         * @enum {string}
-         */
-        StoredKind: "skill" | "mcp" | "secret" | "memory";
-        /** StreamConfig */
-        "StreamConfig-Input": {
-            /** Command */
+        /** @enum {string} */
+        Status: "backlog" | "in_progress" | "in_review" | "blocked" | "done" | "cancelled";
+        StreamConfig: {
             command: string;
-            /** Secrets */
             secrets?: string[];
-            /** Debounce Seconds */
+            /** Format: double */
             debounce_seconds?: number;
         };
-        /** StreamConfig */
-        "StreamConfig-Output": {
-            /** Command */
-            command: string;
-            /**
-             * Secrets
-             * @default []
-             */
-            secrets: string[];
-            /**
-             * Debounce Seconds
-             * @default 5
-             */
-            debounce_seconds: number;
-        };
-        /** StreamStatus */
         StreamStatus: {
-            /** Running Since */
+            /**
+             * Format: date-time
+             * @description 当前进程的启动时间；没有在运行（停用、刚启用或改配置后还没起来、退出后在等重启）时为 null
+             */
             running_since: string | null;
-            /** Failures */
+            /**
+             * Format: int32
+             * @description 连续快速失败的次数（达到告警次数时原因在触发器的 faults 里）
+             */
             failures: number;
-            /** Stderr Log */
+            /** @description stderr 写到哪个文件（相对该 agent 的工作目录） */
             stderr_log: string;
         };
-        /** StreamTriggerCreate */
-        StreamTriggerCreate: {
-            /** Name */
-            name: string;
-            /** Agent Id */
-            agent_id: string;
-            /** Prompt */
-            prompt: string;
-            precheck?: components["schemas"]["Precheck"] | null;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "stream";
-            config: components["schemas"]["StreamConfig-Input"];
-        };
-        /** StreamTriggerOut */
-        StreamTriggerOut: {
-            /** Id */
-            id: number;
-            /** Name */
-            name: string;
-            /** Agent Id */
-            agent_id: string;
-            /** Prompt */
-            prompt: string;
-            /** Enabled */
-            enabled: boolean;
-            precheck: components["schemas"]["Precheck"] | null;
-            /** Last Checked At */
-            last_checked_at: string | null;
-            /** Last Fired At */
-            last_fired_at: string | null;
-            /** Last Session Id */
-            last_session_id: string | null;
-            /** Disabled Reason */
-            disabled_reason: string | null;
-            /** Faults */
-            faults: components["schemas"]["TriggerFault"][];
-            /** Finished At */
-            finished_at: string | null;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "stream";
-            config: components["schemas"]["StreamConfig-Output"];
-            status: components["schemas"]["StreamStatus"];
-        };
-        /** TableBlock */
-        TableBlock: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "table";
-            /** Columns */
-            columns: string[];
-            /** Rows */
-            rows: string[][];
-        };
         /**
-         * TaskEvent
-         * @description 一个 task 的状态变化，由 worker 发出：前端据此从数据库重新拉取（会话页按 session_id 只认自己会话的，不分种类）。
-         */
-        TaskEvent: {
-            /**
-             * Type
-             * @default task
-             * @constant
-             */
-            type: "task";
-            status: components["schemas"]["TaskStatus"];
-            /** Session Id */
-            session_id: string | null;
-        };
-        /** TaskOut */
-        TaskOut: {
-            /** Id */
-            id: number;
-            /** Kind */
-            kind: string;
-            /** Agent Id */
-            agent_id: string | null;
-            /** Session Id */
-            session_id: string | null;
-            status: components["schemas"]["TaskStatus"];
-            /** Attempts */
-            attempts: number;
-            /** Error */
-            error: string | null;
-            /**
-             * Not Before
-             * Format: date-time
-             */
-            not_before: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Finished At */
-            finished_at: string | null;
-        };
-        /**
-         * TaskStatus
+         * @description 思考档位：default 不指定档位，按模型与服务端的默认；off 关闭；其余是 effort 档位。怎么换算由模型层决定。
          * @enum {string}
          */
-        TaskStatus: "pending" | "running" | "done" | "failed";
-        /**
-         * TerminalBlock
-         * @description 终端：`$ command` 提示行、输出、状态行（如退出码、超时、后台任务）。界面把相邻的终端块（调用的命令与结果的
-         *     输出）画在同一个终端框里。
-         */
-        TerminalBlock: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "terminal";
-            /** Command */
-            command: string | null;
-            /** Output */
-            output: string | null;
-            /** Status */
-            status: string | null;
-            /** Failed */
-            failed: boolean;
-        };
-        /** ThreadSource */
-        ThreadSource: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "thread";
-            /** Raw */
-            raw: string;
-            /** Session Id */
-            session_id: string;
-        };
-        /** TitleChangedActivity */
-        TitleChangedActivity: {
-            /** Id */
-            id: number;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Actor */
-            actor: string;
-            /** Session Id */
-            session_id: string | null;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "title";
-            change: components["schemas"]["Change_str_"];
-        };
-        /**
-         * ToolOut
-         * @description 一个内置工具（当前配置下注册的，工具自己声明读写与是否管理类），在规则里写作 `tool:<name>`。
-         */
+        Thinking: "default" | "off" | "low" | "medium" | "high" | "xhigh";
+        /** @description 一个内置工具（当前配置下注册的，工具自己声明读写与是否管理类），在规则里写作 `tool:<name>`。 */
         ToolOut: {
-            /** Name */
             name: string;
-            /**
-             * Access
-             * @enum {string}
-             */
-            access: "read" | "write";
-            /** Admin */
+            access: components["schemas"]["Access"];
+            /** @description 管理类工具：base 角色没有 */
             admin: boolean;
         };
-        /** TranscriptOut */
         TranscriptOut: {
-            /** Text */
+            /** @description 听不到人说话时为空字符串 */
             text: string;
         };
-        /**
-         * TriggerFault
-         * @description 一条出错：来源、原因。
-         */
+        /** @description 新建触发器：kind 与 config 按方式区分（有默认值的配置项可以不填），config 原样交给触发方式校验、补默认值。 */
+        TriggerCreate: components["schemas"]["KindInDoc"] & {
+            name: string;
+            agent_id: string;
+            prompt: string;
+            precheck?: components["schemas"]["Precheck"] | null;
+        };
+        /** @description 一条出错：来源、原因。 */
         TriggerFault: {
             source: components["schemas"]["FaultSource"];
-            /** Error */
             error: string;
         };
-        /** TriggerKindOut */
         TriggerKindOut: {
-            /**
-             * Name
-             * @enum {string}
-             */
-            name: "schedule" | "once" | "stream";
-            /** Description */
+            name: string;
+            /** @description 什么时候触发、config 的格式 */
             description: string;
         };
-        /** TriggerOrigin */
-        TriggerOrigin: {
+        /** @description 一个触发器：各方式共有的字段，加上按 kind 区分的 config 与 status。 */
+        TriggerOut: components["schemas"]["KindOutDoc"] & {
+            /** Format: int64 */
+            id: number;
+            name: string;
+            agent_id: string;
+            prompt: string;
+            enabled: boolean;
+            precheck: components["schemas"]["Precheck"] | null;
+            /** Format: date-time */
+            last_checked_at: string | null;
+            /** Format: date-time */
+            last_fired_at: string | null;
+            /** @description 上一次触发开出的、还在的会话 */
+            last_session_id: string | null;
+            /** @description 被自动停用的原因（重新启用时清除） */
+            disabled_reason: string | null;
+            /** @description 脚本出错：前置检查失败、流式命令反复退出 */
+            faults: components["schemas"]["TriggerFault"][];
             /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
+             * Format: date-time
+             * @description 结束的时间：不为空表示它不会再触发了（一次性触发器跑完），只能查看与删除
              */
-            kind: "trigger";
-            /** Trigger Id */
-            trigger_id: number;
+            finished_at: string | null;
         };
-        /**
-         * TriggerPatch
-         * @description 只修改给出的字段。precheck 给出 null 表示去掉前置检查，不出现表示不变。
-         */
+        /** @description 只修改给出的字段。precheck 给出 null 表示去掉前置检查，不出现表示不变。 */
         TriggerPatch: {
-            /** Prompt */
             prompt?: string | null;
-            /** Config */
-            config?: {
-                [key: string]: unknown;
-            } | null;
-            /** Enabled */
+            /** @description 修改请求不带 kind：按已存的 kind 校验，格式同新建时这种方式的 config */
+            config?: Record<string, unknown> | null;
             enabled?: boolean | null;
             precheck?: components["schemas"]["Precheck"] | null;
         };
-        /** UnreadOut */
         UnreadOut: {
-            /** Count */
+            /** Format: int64 */
             count: number;
         };
-        /**
-         * UnsettledActivity
-         * @description 运行结束了，issue 却还是 in_progress、没人在做（rules.stalled）：请它表态。actor 是该 agent。
-         */
-        UnsettledActivity: {
-            /** Id */
-            id: number;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Actor */
-            actor: string;
-            /** Session Id */
-            session_id: string | null;
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "unsettled";
-        };
-        /**
-         * UsageCounts
-         * @description 用量的各项计数（usage.UsageTotals）。
-         *
-         *     input_tokens 是输入总数，**已包含** cache_read_tokens 与 cache_write_tokens（pydantic-ai 的口径），
-         *     展示时是总数与其中两部分的关系，不要相加。
-         */
-        UsageCounts: {
-            /** Requests */
-            requests: number;
-            /** Input Tokens */
-            input_tokens: number;
-            /** Output Tokens */
-            output_tokens: number;
-            /** Cache Read Tokens */
-            cache_read_tokens: number;
-            /** Cache Write Tokens */
-            cache_write_tokens: number;
-        };
-        /**
-         * UsageGroup
-         * @description 汇总时的分组维度，可以任意组合；没有选中的维度在结果里为 None。
-         * @enum {string}
-         */
-        UsageGroup: "agent" | "model" | "day";
-        /**
-         * UsageOut
-         * @description 一个分组的汇总。没有参与分组的维度为 null。
-         */
-        UsageOut: {
-            /** Requests */
-            requests: number;
-            /** Input Tokens */
-            input_tokens: number;
-            /** Output Tokens */
-            output_tokens: number;
-            /** Cache Read Tokens */
-            cache_read_tokens: number;
-            /** Cache Write Tokens */
-            cache_write_tokens: number;
-            /** Agent Id */
+        /** @description 一个分组的汇总。没有选中的维度为 None（例如只按模型分组时 agent_id 与 day 都是 None）。 */
+        UsageBucket: components["schemas"]["UsageTotals"] & {
             agent_id: string | null;
-            /** Model */
             model: string | null;
-            /** Day */
+            /**
+             * Format: date
+             * @description 配置时区里的日历日
+             */
             day: string | null;
         };
         /**
-         * UserAnswered
-         * @description 回答信件里一次 ask_user 调用的结果：用户的回答。
+         * @description 用量的各项计数（一笔的，或一组的和）。`input_tokens` 是输入总数，**已经包含**缓存读写两项，展示为「总数与其中两部分」，
+         *     不要相加。
          */
-        UserAnswered: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            tool: "ask_user";
-            result: components["schemas"]["AskResult"];
+        UsageTotals: {
+            /** Format: int64 */
+            requests: number;
+            /** Format: int64 */
+            input_tokens: number;
+            /** Format: int64 */
+            output_tokens: number;
+            /** Format: int64 */
+            cache_read_tokens: number;
+            /** Format: int64 */
+            cache_write_tokens: number;
         };
-        /** UserOrigin */
-        UserOrigin: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "user";
-        };
-        /** ValidationError */
-        ValidationError: {
-            /** Location */
-            loc: (string | number)[];
-            /** Message */
-            msg: string;
-            /** Error Type */
-            type: string;
-            /** Input */
-            input?: unknown;
-            /** Context */
-            ctx?: Record<string, never>;
-        };
-        /** VapidOut */
         VapidOut: {
-            /** Public Key */
             public_key: string;
         };
-        /**
-         * WakeWait
-         * @description 在等自己约的到点唤醒（wake_me）。
-         */
-        WakeWait: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "wake";
-            /**
-             * Due At
-             * Format: date-time
-             */
-            due_at: string;
-            /** Note */
-            note: string;
-            /**
-             * Since
-             * Format: date-time
-             */
-            since: string;
+        /** @description 一个展示块。输出时字段一律都在（没有就是 null），前端类型与实际输出一致。 */
+        ViewBlock: {
+            command: string | null;
+            output: string | null;
+            status: string | null;
+            failed: boolean;
+            /** @enum {string} */
+            kind: "terminal";
+        } | {
+            title: string | null;
+            text: string;
+            /** @enum {string} */
+            kind: "code";
+        } | {
+            title: string | null;
+            text: string;
+            /** @enum {string} */
+            kind: "diff";
+        } | {
+            title: string | null;
+            text: string;
+            /** @enum {string} */
+            kind: "markdown";
+        } | {
+            rows: components["schemas"]["FieldRow"][];
+            /** @enum {string} */
+            kind: "fields";
+        } | {
+            columns: string[];
+            rows: string[][];
+            /** @enum {string} */
+            kind: "table";
+        } | {
+            links: components["schemas"]["Link"][];
+            /** @enum {string} */
+            kind: "links";
         };
-        /**
-         * WorkState
-         * @description 会话此刻在不在处理事情。running 与 waiting 都是「事情还没做完」：等待中的会话结果回来会自动接着做，
-         *     所以除了展示，别的判断（issue 看板的「没人在处理」、触发器避免重叠）都只区分 idle 与否。
-         * @enum {string}
-         */
+        /** @description 会话在等的一项东西（会话页列出）。 */
+        Wait: {
+            /** Format: int64 */
+            job_id: number;
+            /** Format: date-time */
+            since: string;
+            /** @enum {string} */
+            kind: "job";
+        } | {
+            thread_session_id: string;
+            /** Format: double */
+            check_seconds: number | null;
+            /** Format: date-time */
+            since: string;
+            /** @enum {string} */
+            kind: "delegation";
+        } | {
+            /** Format: date-time */
+            due_at: string;
+            note: string;
+            /** Format: date-time */
+            since: string;
+            /** @enum {string} */
+            kind: "wake";
+        } | {
+            call_id: string;
+            headers: string[];
+            /** @enum {string} */
+            kind: "ask";
+        } | {
+            call_id: string;
+            tool_name: string;
+            /** @enum {string} */
+            kind: "approval";
+        };
+        /** @description 会话在等的一项东西；后台任务（kind 为 job）带上任务的详情。 */
+        WaitOut: components["schemas"]["Wait"] & {
+            job: components["schemas"]["JobOut"] | null;
+        };
+        /** @enum {string} */
         WorkState: "running" | "waiting" | "idle";
     };
     responses: never;
@@ -3673,7 +2360,7 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
-    login_api_auth_login_post: {
+    login: {
         parameters: {
             query?: never;
             header?: never;
@@ -3686,25 +2373,32 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
+            /** @description 已登录 */
             204: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Validation Error */
-            422: {
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    logout_api_auth_logout_post: {
+    logout: {
         parameters: {
             query?: never;
             header?: never;
@@ -3713,7 +2407,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description 已登出 */
             204: {
                 headers: {
                     [name: string]: unknown;
@@ -3722,7 +2416,7 @@ export interface operations {
             };
         };
     };
-    agent_defaults_api_agent_defaults_get: {
+    me: {
         parameters: {
             query?: never;
             header?: never;
@@ -3731,7 +2425,52 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description 已登录 */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    events: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 事件流（text/event-stream），每条 data 是一个 ServerEvent */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": components["schemas"]["ServerEvent"];
+                };
+            };
+        };
+    };
+    agent_defaults: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3742,7 +2481,7 @@ export interface operations {
             };
         };
     };
-    preview_agent_api_agent_preview_post: {
+    preview_agent: {
         parameters: {
             query?: never;
             header?: never;
@@ -3755,7 +2494,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3764,18 +2502,17 @@ export interface operations {
                     "application/json": components["schemas"]["ReachOut"];
                 };
             };
-            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    list_roles_api_roles_get: {
+    list_roles: {
         parameters: {
             query?: never;
             header?: never;
@@ -3784,7 +2521,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3795,7 +2531,7 @@ export interface operations {
             };
         };
     };
-    preview_role_api_role_preview_post: {
+    preview_role: {
         parameters: {
             query?: never;
             header?: never;
@@ -3808,7 +2544,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3817,18 +2552,17 @@ export interface operations {
                     "application/json": components["schemas"]["ReachOut"];
                 };
             };
-            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    create_role_api_roles__name__post: {
+    create_role: {
         parameters: {
             query?: never;
             header?: never;
@@ -3843,7 +2577,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             201: {
                 headers: {
                     [name: string]: unknown;
@@ -3852,18 +2585,25 @@ export interface operations {
                     "application/json": components["schemas"]["RoleOut"];
                 };
             };
-            /** @description Validation Error */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    delete_role_api_roles__name__delete: {
+    delete_role: {
         parameters: {
             query?: never;
             header?: never;
@@ -3874,25 +2614,31 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             204: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Validation Error */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    update_role_api_roles__name__patch: {
+    update_role: {
         parameters: {
             query?: never;
             header?: never;
@@ -3907,7 +2653,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3916,18 +2661,25 @@ export interface operations {
                     "application/json": components["schemas"]["RoleOut"];
                 };
             };
-            /** @description Validation Error */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    list_agents_api_agents_get: {
+    list_agents: {
         parameters: {
             query?: never;
             header?: never;
@@ -3936,7 +2688,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3947,7 +2698,7 @@ export interface operations {
             };
         };
     };
-    create_agent_api_agents_post: {
+    create_agent: {
         parameters: {
             query?: never;
             header?: never;
@@ -3960,7 +2711,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             201: {
                 headers: {
                     [name: string]: unknown;
@@ -3969,18 +2719,25 @@ export interface operations {
                     "application/json": components["schemas"]["AgentOut"];
                 };
             };
-            /** @description Validation Error */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    get_agent_api_agents__agent_id__get: {
+    get_agent: {
         parameters: {
             query?: never;
             header?: never;
@@ -3991,7 +2748,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4000,18 +2756,17 @@ export interface operations {
                     "application/json": components["schemas"]["AgentOut"];
                 };
             };
-            /** @description Validation Error */
-            422: {
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    delete_agent_api_agents__agent_id__delete: {
+    delete_agent: {
         parameters: {
             query?: never;
             header?: never;
@@ -4022,25 +2777,31 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             204: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Validation Error */
-            422: {
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    update_agent_api_agents__agent_id__patch: {
+    update_agent: {
         parameters: {
             query?: never;
             header?: never;
@@ -4055,7 +2816,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4064,18 +2824,33 @@ export interface operations {
                     "application/json": components["schemas"]["AgentOut"];
                 };
             };
-            /** @description Validation Error */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    agent_assets_api_agents__agent_id__assets_get: {
+    agent_assets: {
         parameters: {
             query?: never;
             header?: never;
@@ -4086,7 +2861,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4095,18 +2869,17 @@ export interface operations {
                     "application/json": components["schemas"]["AgentAssetsOut"];
                 };
             };
-            /** @description Validation Error */
-            422: {
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    set_default_agent_api_agents__agent_id__default_put: {
+    set_default_agent: {
         parameters: {
             query?: never;
             header?: never;
@@ -4117,7 +2890,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4126,18 +2898,25 @@ export interface operations {
                     "application/json": components["schemas"]["AgentOut"];
                 };
             };
-            /** @description Validation Error */
-            422: {
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    unset_default_agent_api_agents__agent_id__default_delete: {
+    unset_default_agent: {
         parameters: {
             query?: never;
             header?: never;
@@ -4148,7 +2927,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4157,18 +2935,17 @@ export interface operations {
                     "application/json": components["schemas"]["AgentOut"];
                 };
             };
-            /** @description Validation Error */
-            422: {
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    archive_agent_api_agents__agent_id__archive_put: {
+    archive_agent: {
         parameters: {
             query?: never;
             header?: never;
@@ -4179,7 +2956,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4188,18 +2964,25 @@ export interface operations {
                     "application/json": components["schemas"]["AgentOut"];
                 };
             };
-            /** @description Validation Error */
-            422: {
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    unarchive_agent_api_agents__agent_id__archive_delete: {
+    unarchive_agent: {
         parameters: {
             query?: never;
             header?: never;
@@ -4210,7 +2993,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4219,483 +3001,95 @@ export interface operations {
                     "application/json": components["schemas"]["AgentOut"];
                 };
             };
-            /** @description Validation Error */
-            422: {
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    list_providers_api_providers_get: {
+    get_private_memory: {
         parameters: {
             query?: never;
             header?: never;
-            path?: never;
+            path: {
+                agent_id: string;
+            };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": string[];
+                    "application/json": components["schemas"]["MemoryOut"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    list_provider_models_api_providers__name__models_get: {
+    put_private_memory: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": string[];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_sessions_api_sessions_get: {
-        parameters: {
-            query?: {
-                agent_id?: string | null;
-                origin?: components["schemas"]["Origin"][] | null;
-                /** @description 只列这个触发器发起的会话（不能再给 origin） */
-                trigger_id?: number | null;
-                /** @description 关键字：只列标题或消息含有它的会话（不区分 ASCII 大小写） */
-                q?: string | null;
-                limit?: number;
-                offset?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SessionListItem"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    start_session_api_sessions_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["StartIn"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SessionOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_session_api_sessions__session_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                session_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SessionDetail"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_session_api_sessions__session_id__delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                session_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    reply_api_sessions__session_id__messages_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                session_id: string;
+                agent_id: string;
             };
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ReplyIn"];
+                "application/json": components["schemas"]["MemoryIn"];
             };
         };
         responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": (components["schemas"]["MessageMailOut"] | components["schemas"]["EventMailOut"] | components["schemas"]["AnswerMailOut"])[];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    stop_api_sessions__session_id__stop_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                session_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    compact_api_sessions__session_id__compact_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                session_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CompactOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    mark_read_api_sessions__session_id__read_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                session_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_tasks_api_tasks_get: {
-        parameters: {
-            query?: {
-                status?: components["schemas"]["TaskStatus"] | null;
-                limit?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TaskOut"][];
+                    "application/json": components["schemas"]["MemoryOut"];
                 };
             };
-            /** @description Validation Error */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    retry_task_api_tasks__task_id__retry_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                task_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TaskOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    kill_job_api_agents__agent_id__jobs__job_id__kill_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                agent_id: string;
-                job_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_workspace_api_agents__agent_id__workspace_get: {
-        parameters: {
-            query?: {
-                path?: string;
-            };
-            header?: never;
-            path: {
-                agent_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["EntryOut"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    read_workspace_file_api_agents__agent_id__workspace_file_get: {
-        parameters: {
-            query: {
-                path: string;
-            };
-            header?: never;
-            path: {
-                agent_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_script_grants_api_script_grants_get: {
+    list_assets: {
         parameters: {
             query?: never;
             header?: never;
@@ -4704,102 +3098,23 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ScriptGrantOut"][];
+                    "application/json": components["schemas"]["CatalogAssetOut"][];
                 };
             };
         };
     };
-    revoke_script_grant_api_script_grants__grant_id__delete: {
+    transfer_asset: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                grant_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_assets_api_assets_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": (components["schemas"]["CatalogToolOut"] | components["schemas"]["CatalogSkillOut"] | components["schemas"]["CatalogMcpOut"] | components["schemas"]["CatalogSecretOut"] | components["schemas"]["CatalogMemoryOut"])[];
-                };
-            };
-        };
-    };
-    delete_asset_api_assets__kind___name__delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                kind: components["schemas"]["StoredKind"];
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    transfer_asset_api_assets__kind___name__owner_put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                kind: components["schemas"]["StoredKind"];
+                /** @description skill、mcp、secret 或 memory */
+                kind: string;
                 name: string;
             };
             cookie?: never;
@@ -4810,25 +3125,39 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             204: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Validation Error */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    get_memory_api_assets_memory__name__get: {
+    get_memory: {
         parameters: {
             query?: never;
             header?: never;
@@ -4839,7 +3168,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4848,18 +3176,17 @@ export interface operations {
                     "application/json": components["schemas"]["MemoryOut"];
                 };
             };
-            /** @description Validation Error */
-            422: {
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    put_memory_api_assets_memory__name__put: {
+    put_memory: {
         parameters: {
             query?: never;
             header?: never;
@@ -4874,7 +3201,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4883,84 +3209,25 @@ export interface operations {
                     "application/json": components["schemas"]["MemoryOut"];
                 };
             };
-            /** @description Validation Error */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    get_private_memory_api_agents__agent_id__memory_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                agent_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MemoryOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    put_private_memory_api_agents__agent_id__memory_put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                agent_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["MemoryIn"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MemoryOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_skill_api_assets_skill__name__get: {
+    delete_memory: {
         parameters: {
             query?: never;
             header?: never;
@@ -4971,7 +3238,41 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    get_skill: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4980,18 +3281,17 @@ export interface operations {
                     "application/json": components["schemas"]["SkillDetail"];
                 };
             };
-            /** @description Validation Error */
-            422: {
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    put_skill_api_assets_skill__name__put: {
+    put_skill: {
         parameters: {
             query?: never;
             header?: never;
@@ -5006,7 +3306,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -5015,84 +3314,25 @@ export interface operations {
                     "application/json": components["schemas"]["SkillOut"];
                 };
             };
-            /** @description Validation Error */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    list_skill_files_api_assets_skill__name__files_get: {
-        parameters: {
-            query?: {
-                path?: string;
-            };
-            header?: never;
-            path: {
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["EntryOut"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    read_skill_file_api_assets_skill__name__file_get: {
-        parameters: {
-            query: {
-                path: string;
-            };
-            header?: never;
-            path: {
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_mcp_api_assets_mcp__name__get: {
+    delete_skill: {
         parameters: {
             query?: never;
             header?: never;
@@ -5103,7 +3343,112 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    list_skill_files: {
+        parameters: {
+            query?: {
+                /** @description 相对目录根的路径，空为根 */
+                path?: string;
+            };
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EntryOut"][];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    read_skill_file: {
+        parameters: {
+            query?: {
+                /** @description 相对目录根的路径，空为根 */
+                path?: string;
+            };
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 文件内容 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    get_mcp: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -5112,18 +3457,17 @@ export interface operations {
                     "application/json": components["schemas"]["McpOut"];
                 };
             };
-            /** @description Validation Error */
-            422: {
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    add_mcp_api_assets_mcp__name__put: {
+    add_mcp: {
         parameters: {
             query?: never;
             header?: never;
@@ -5138,7 +3482,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             201: {
                 headers: {
                     [name: string]: unknown;
@@ -5147,18 +3490,52 @@ export interface operations {
                     "application/json": components["schemas"]["McpOut"];
                 };
             };
-            /** @description Validation Error */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    set_mcp_enabled_api_assets_mcp__name__enabled_put: {
+    delete_mcp: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    set_mcp_enabled: {
         parameters: {
             query?: never;
             header?: never;
@@ -5173,7 +3550,6 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -5182,18 +3558,25 @@ export interface operations {
                     "application/json": components["schemas"]["McpOut"];
                 };
             };
-            /** @description Validation Error */
-            422: {
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    probe_mcp_api_assets_mcp__name__tools_post: {
+    probe_mcp: {
         parameters: {
             query?: never;
             header?: never;
@@ -5204,7 +3587,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -5213,18 +3595,25 @@ export interface operations {
                     "application/json": string[];
                 };
             };
-            /** @description Validation Error */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    get_secret_api_assets_secret__name__get: {
+    get_secret: {
         parameters: {
             query?: never;
             header?: never;
@@ -5235,7 +3624,6 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -5244,18 +3632,17 @@ export interface operations {
                     "application/json": components["schemas"]["SecretOut"];
                 };
             };
-            /** @description Validation Error */
-            422: {
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    set_secret_api_assets_secret__name__put: {
+    set_secret: {
         parameters: {
             query?: never;
             header?: never;
@@ -5270,76 +3657,58 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             204: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Validation Error */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    vapid_key_api_push_vapid_get: {
+    delete_secret: {
         parameters: {
             query?: never;
             header?: never;
-            path?: never;
+            path: {
+                name: string;
+            };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["VapidOut"];
-                };
-            };
-        };
-    };
-    subscribe_api_push_subscriptions_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PushSubscriptionIn"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
             204: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Validation Error */
-            422: {
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    test_push_api_push_test_post: {
+    list_providers: {
         parameters: {
             query?: never;
             header?: never;
@@ -5348,40 +3717,85 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    trigger_kinds_api_trigger_kinds_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TriggerKindOut"][];
+                    "application/json": string[];
                 };
             };
         };
     };
-    list_triggers_api_triggers_get: {
+    list_provider_models: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    features: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeaturesOut"];
+                };
+            };
+        };
+    };
+    list_sessions: {
         parameters: {
             query?: {
-                /** @description 列已结束的（跑完的一次性触发器）而不是还会触发的 */
-                finished?: boolean;
+                agent_id?: string;
+                /** @description 只列这些来源的会话（可以重复给） */
+                origin?: string[];
+                /** @description 只列这个触发器发起的会话（不能再给 origin） */
+                trigger_id?: number;
+                /** @description 关键字：只列标题或消息含有它的会话（不区分 ASCII 大小写；不能为空串） */
+                q?: string;
+                /** @description 1–200，默认 50 */
+                limit?: number;
+                offset?: number;
             };
             header?: never;
             path?: never;
@@ -5389,27 +3803,25 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": (components["schemas"]["ScheduleTriggerOut"] | components["schemas"]["OnceTriggerOut"] | components["schemas"]["StreamTriggerOut"])[];
+                    "application/json": components["schemas"]["SessionListItem"][];
                 };
             };
-            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    create_trigger_api_triggers_post: {
+    start_session: {
         parameters: {
             query?: never;
             header?: never;
@@ -5418,137 +3830,282 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ScheduleTriggerCreate"] | components["schemas"]["OnceTriggerCreate"] | components["schemas"]["StreamTriggerCreate"];
+                "application/json": components["schemas"]["StartIn"];
             };
         };
         responses: {
-            /** @description Successful Response */
             201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ScheduleTriggerOut"] | components["schemas"]["OnceTriggerOut"] | components["schemas"]["StreamTriggerOut"];
+                    "application/json": components["schemas"]["SessionOut"];
                 };
             };
-            /** @description Validation Error */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    delete_trigger_api_triggers__trigger_id__delete: {
+    get_session: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                trigger_id: number;
+                session_id: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionDetail"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    delete_session: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
             204: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Validation Error */
-            422: {
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    update_trigger_api_triggers__trigger_id__patch: {
+    reply: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                trigger_id: number;
+                session_id: string;
             };
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["TriggerPatch"];
+                "application/json": components["schemas"]["ReplyIn"];
             };
         };
         responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ScheduleTriggerOut"] | components["schemas"]["OnceTriggerOut"] | components["schemas"]["StreamTriggerOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    run_trigger_api_triggers__trigger_id__run_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                trigger_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
             202: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["FiredOut"];
+                    "application/json": components["schemas"]["SessionOut"];
                 };
             };
-            /** @description Validation Error */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    upload_api_files_post: {
+    stop: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    compact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    retry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    mark_session_read: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    upload: {
         parameters: {
             query: {
+                /** @description 文件名 */
                 name: string;
             };
             header?: never;
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        /** @description 文件内容（任意类型） */
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
         responses: {
-            /** @description Successful Response */
             201: {
                 headers: {
                     [name: string]: unknown;
@@ -5557,18 +4114,25 @@ export interface operations {
                     "application/json": components["schemas"]["FileOut"];
                 };
             };
-            /** @description Validation Error */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    download_api_files__file_id___name__get: {
+    download: {
         parameters: {
             query?: never;
             header?: never;
@@ -5580,176 +4144,193 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description 文件内容 */
             200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_notifications_api_notifications_get: {
-        parameters: {
-            query?: {
-                limit?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NotificationOut"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    unread_api_notifications_unread_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnreadOut"];
-                };
-            };
-        };
-    };
-    mark_read_api_notifications_read_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["MarkReadIn"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            204: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Validation Error */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    list_workspace: {
+        parameters: {
+            query?: {
+                /** @description 相对目录根的路径，空为根 */
+                path?: string;
+            };
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EntryOut"][];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    mark_issue_read_api_notifications_issues__issue_id__read_post: {
+    read_workspace_file: {
+        parameters: {
+            query?: {
+                /** @description 相对目录根的路径，空为根 */
+                path?: string;
+            };
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 文件内容 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    list_script_grants: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScriptGrantOut"][];
+                };
+            };
+        };
+    };
+    revoke_script_grant: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                issue_id: number;
+                grant_id: number;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             204: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Validation Error */
-            422: {
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    usage_summary_api_usage_get: {
+    kill_job: {
         parameters: {
-            query: {
-                since: string;
-                until: string;
-                group_by?: components["schemas"]["UsageGroup"][] | null;
-            };
+            query?: never;
             header?: never;
-            path?: never;
+            path: {
+                agent_id: string;
+                job_id: number;
+            };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
-            200: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["UsageOut"][];
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
-            /** @description Validation Error */
-            422: {
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    list_issues_api_issues_get: {
+    list_issues: {
         parameters: {
             query?: {
-                status?: components["schemas"]["IssueStatus"][] | null;
-                assignee?: string | null;
-                owner?: string | null;
+                /** @description 只要这些状态（可以重复给）；不给是全部 */
+                status?: components["schemas"]["Status"][];
+                /** @description agent id 或 `user` */
+                assignee?: string;
+                /** @description 负责项目的 agent id */
+                owner?: string;
             };
             header?: never;
             path?: never;
@@ -5757,27 +4338,25 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["IssueOut"][];
+                    "application/json": components["schemas"]["BoardIssue"][];
                 };
             };
-            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    create_issue_api_issues_post: {
+    create_issue: {
         parameters: {
             query?: never;
             header?: never;
@@ -5790,27 +4369,33 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["IssueOut"];
+                    "application/json": components["schemas"]["BoardIssue"];
                 };
             };
-            /** @description Validation Error */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    get_issue_api_issues__issue_id__get: {
+    get_issue: {
         parameters: {
             query?: never;
             header?: never;
@@ -5821,27 +4406,25 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["IssueDetailOut"];
+                    "application/json": components["schemas"]["IssueDetail"];
                 };
             };
-            /** @description Validation Error */
-            422: {
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    delete_issue_api_issues__issue_id__delete: {
+    delete_issue: {
         parameters: {
             query?: never;
             header?: never;
@@ -5852,25 +4435,23 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             204: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Validation Error */
-            422: {
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    update_issue_api_issues__issue_id__patch: {
+    update_issue: {
         parameters: {
             query?: never;
             header?: never;
@@ -5885,27 +4466,41 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["IssueOut"];
+                    "application/json": components["schemas"]["BoardIssue"];
                 };
             };
-            /** @description Validation Error */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    comment_issue_api_issues__issue_id__comments_post: {
+    comment_issue: {
         parameters: {
             query?: never;
             header?: never;
@@ -5920,27 +4515,33 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CreatedActivity"] | components["schemas"]["CommentedActivity"] | components["schemas"]["DescriptionEditedActivity"] | components["schemas"]["TitleChangedActivity"] | components["schemas"]["StatusChangedActivity"] | components["schemas"]["PriorityChangedActivity"] | components["schemas"]["AssigneeChangedActivity"] | components["schemas"]["OwnerChangedActivity"] | components["schemas"]["DependsOnChangedActivity"] | components["schemas"]["DependencyFinishedActivity"] | components["schemas"]["RunFailureActivity"] | components["schemas"]["UnsettledActivity"] | components["schemas"]["StoppedActivity"];
+                    "application/json": components["schemas"]["Activity"];
                 };
             };
-            /** @description Validation Error */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    approve_issue_api_issues__issue_id__approve_post: {
+    approve_issue: {
         parameters: {
             query?: never;
             header?: never;
@@ -5951,27 +4552,33 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["IssueOut"];
+                    "application/json": components["schemas"]["BoardIssue"];
                 };
             };
-            /** @description Validation Error */
-            422: {
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    start_issue_api_issues__issue_id__start_post: {
+    start_issue: {
         parameters: {
             query?: never;
             header?: never;
@@ -5982,27 +4589,33 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["IssueOut"];
+                    "application/json": components["schemas"]["BoardIssue"];
                 };
             };
-            /** @description Validation Error */
-            422: {
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    reject_issue_api_issues__issue_id__reject_post: {
+    reject_issue: {
         parameters: {
             query?: never;
             header?: never;
@@ -6017,33 +4630,439 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["IssueOut"];
+                    "application/json": components["schemas"]["BoardIssue"];
                 };
             };
-            /** @description Validation Error */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    trigger_kinds: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TriggerKindOut"][];
+                };
+            };
+        };
+    };
+    list_triggers: {
+        parameters: {
+            query?: {
+                /** @description 列已结束的（跑完的一次性触发器）而不是还会触发的 */
+                finished?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TriggerOut"][];
+                };
+            };
+        };
+    };
+    create_trigger: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TriggerCreate"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TriggerOut"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    agent_history_api_agents__agent_id__history_get: {
+    delete_trigger: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                trigger_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    update_trigger: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                trigger_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TriggerPatch"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TriggerOut"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    run_trigger: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                trigger_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FiredOut"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    list_notifications: {
         parameters: {
             query?: {
-                query?: string | null;
-                since?: string | null;
-                until?: string | null;
+                /** @description 1–500，默认 100 */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Notification"][];
+                };
+            };
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    unread: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnreadOut"];
+                };
+            };
+        };
+    };
+    mark_notifications_read: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MarkReadIn"];
+            };
+        };
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    mark_issue_read: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                issue_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    vapid_key: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VapidOut"];
+                };
+            };
+        };
+    };
+    subscribe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PushSubscriptionIn"];
+            };
+        };
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    test_push: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    usage_summary: {
+        parameters: {
+            query: {
+                /** @description 带时区的时刻（`2026-03-01T00:00:00Z`）：不带时区的时刻没有确定含义，拒绝 */
+                since: string;
+                until: string;
+                /** @description 分组维度（可以重复给）；不给就只有一行总计 */
+                group_by?: ("agent" | "model" | "day")[];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageBucket"][];
+                };
+            };
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    agent_history: {
+        parameters: {
+            query?: {
+                /** @description 关键词（每个词都要出现在标题、摘要或引用里）；不给按日期倒序 */
+                query?: string;
+                /** @description 含两端的日期 */
+                since?: string;
+                until?: string;
+                /** @description 1–3，默认 1 */
                 min_importance?: number;
+                /** @description 默认 20，最多 200 */
                 limit?: number;
             };
             header?: never;
@@ -6054,36 +5073,46 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HistoryOut"][];
+                    "application/json": components["schemas"]["Record"][];
                 };
             };
-            /** @description Validation Error */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    transcribe_api_transcriptions_post: {
+    transcribe: {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        /** @description 一段语音 */
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -6092,29 +5121,41 @@ export interface operations {
                     "application/json": components["schemas"]["TranscriptOut"];
                 };
             };
-        };
-    };
-    features_api_features_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["FeaturesOut"];
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
                 };
             };
         };
     };
-    list_pages_api_pages_get: {
+    list_pages: {
         parameters: {
             query?: never;
             header?: never;
@@ -6123,51 +5164,12 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": components["schemas"]["SitePageOut"][];
-                };
-            };
-        };
-    };
-    me_api_auth_me_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    events_api_events_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "text/event-stream": unknown;
                 };
             };
         };

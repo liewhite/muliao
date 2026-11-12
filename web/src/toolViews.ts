@@ -1,4 +1,4 @@
-// 工具调用详情的展示块（后端 platform/tool_views.py 按各工具的展示规则给出）整理成要画的段，纯函数，与渲染分开。
+// 工具调用详情的展示块（后端 platform 的 tool_views.rs 按各工具的展示规则给出）整理成要画的段，纯函数，与渲染分开。
 
 import type { ViewBlock } from './api'
 

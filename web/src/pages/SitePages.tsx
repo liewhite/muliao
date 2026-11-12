@@ -12,7 +12,7 @@ import { CardGrid, EmptyHint, ErrorAlert, GroupSection, Loading, Page, relativeT
 import { agentLabel } from '../agentGroups'
 import { useLoad } from '../load'
 
-// 与服务端页面响应的 CSP sandbox（src/muliao/api/sites.py _PAGE_HEADERS）一致：浏览器取交集，改就两处一起改
+// 与服务端页面响应的 CSP sandbox（server/crates/http/src/api/sites.rs PAGE_HEADERS）一致：浏览器取交集，改就两处一起改
 const SANDBOX = 'allow-scripts allow-forms allow-popups allow-modals allow-downloads'
 
 /** 网格里的一张页面卡片，整张可点，打开页面 */

@@ -132,7 +132,8 @@ function MemoryItem({ item }: { item: AssetOf<'memory'> }) {
           <div className="min-w-0 flex-1">
             <div className="font-mono font-medium">{item.name}</div>
             <div className="truncate text-xs text-muted">
-              <span className="font-mono">{item.path}</span> · {formatTime(item.updated_at)}
+              <span className="font-mono">{item.path}</span>
+              {item.updated_at && <> · {formatTime(item.updated_at)}</>}
             </div>
           </div>
           {item.owner === null && item.name !== GLOBAL_MEMORY && (

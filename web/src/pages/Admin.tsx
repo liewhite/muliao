@@ -1,17 +1,15 @@
 import { useEffect, useState } from 'react'
 import { Button, Card, Chip, Form, toast } from '@heroui/react'
-import { BellRing, LogOut, RotateCcw, ShieldCheck, Trash2 } from 'lucide-react'
+import { BellRing, LogOut, ShieldCheck, Trash2 } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
-import { api, unauthorizedEvent, type AgentId, type TaskStatus, sessionRoute } from '../api'
+import { api, unauthorizedEvent, type AgentId, sessionRoute } from '../api'
 import { useReturnState } from '../nav'
 import { enablePush, pushState, unsubscribePush, type PushState } from '../push'
 import {
   ActionButton,
-  EmptyHint,
   ErrorAlert,
   Loading,
   Page,
-  Segmented,
   TextInput,
   formatTime,
   useAction,
@@ -20,96 +18,6 @@ import {
 } from '../ui'
 import { agentLabel } from '../agentGroups'
 import { useLoad, errorMessage } from '../load'
-
-const STATUS_FILTERS = {
-  failed: { label: '失败', status: 'failed' as TaskStatus },
-  pending: { label: '等待', status: 'pending' as TaskStatus },
-  running: { label: '运行中', status: 'running' as TaskStatus },
-  all: { label: '全部', status: undefined },
-}
-type StatusFilter = keyof typeof STATUS_FILTERS
-
-const STATUS_COLOR: Record<TaskStatus, 'danger' | 'success' | 'warning' | 'accent'> = {
-  failed: 'danger',
-  done: 'success',
-  pending: 'warning',
-  running: 'accent',
-}
-
-export function Tasks() {
-  const from = useReturnState()
-  const [filter, setFilter] = useState<StatusFilter>('failed')
-  const tasks = useLoad(() => api.tasks(STATUS_FILTERS[filter].status), [filter])
-  const agents = useAgents()
-  const action = useAction()
-  return (
-    <Page title="任务">
-      <Segmented
-        label="任务状态"
-        value={filter}
-        onChange={setFilter}
-        options={Object.entries(STATUS_FILTERS).map(([id, f]) => ({ id: id as StatusFilter, label: f.label }))}
-      />
-      <ErrorAlert error={action.error} />
-      <Loading state={tasks}>
-        {(list) =>
-          list.length === 0 ? (
-            <EmptyHint>没有任务</EmptyHint>
-          ) : (
-            <div className="flex flex-col gap-2">
-              {list.map((t) => (
-                <Card key={t.id}>
-                  <Card.Header>
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="font-mono text-sm font-medium">#{t.id}</span>
-                      <Chip size="sm" variant="secondary">
-                        {t.kind}
-                      </Chip>
-                      {t.agent_id && (
-                        <Chip size="sm" color="accent" variant="soft">
-                          {agentLabel(agents.data, t.agent_id)}
-                        </Chip>
-                      )}
-                      <Chip size="sm" color={STATUS_COLOR[t.status]} variant="soft">
-                        {t.status}
-                      </Chip>
-                    </div>
-                    <Card.Description>
-                      {formatTime(t.created_at)} · 尝试 {t.attempts} 次
-                      {t.session_id && (
-                        <>
-                          {' · '}
-                          <Link className="text-accent" to={sessionRoute(t.session_id)} state={from}>
-                            会话
-                          </Link>
-                        </>
-                      )}
-                    </Card.Description>
-                  </Card.Header>
-                  {t.error && (
-                    <Card.Content>
-                      <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-danger-soft p-2 font-mono text-xs text-danger-soft-foreground">
-                        {t.error}
-                      </pre>
-                    </Card.Content>
-                  )}
-                  {t.status === 'failed' && (
-                    <Card.Footer>
-                      <Button size="sm" variant="secondary" onPress={() => void action.run(() => api.retryTask(t.id))}>
-                        <RotateCcw className="size-4" />
-                        重试
-                      </Button>
-                    </Card.Footer>
-                  )}
-                </Card>
-              ))}
-            </div>
-          )
-        }
-      </Loading>
-    </Page>
-  )
-}
 
 const PUSH_TEXT: Record<PushState, string> = {
   unsupported: '此浏览器不支持推送通知。',

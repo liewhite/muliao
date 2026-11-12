@@ -61,7 +61,8 @@ export function relaxRequestDefaults(spec) {
 
 export async function generate() {
   const spec = JSON.parse(await readFile(SPEC, 'utf8'))
-  return HEADER + astToString(await openapiTS(relaxRequestDefaults(spec)))
+  // 没有字段的对象（如 ChangedEvent）默认生成 Record<string, never>，与 SSE 联合里加上的 type 字段相交就成了 never
+  return HEADER + astToString(await openapiTS(relaxRequestDefaults(spec), { emptyObjectsUnknown: true }))
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

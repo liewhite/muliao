@@ -28,7 +28,7 @@ import {
   type Item,
   type QuestionAnswer,
   type Mail,
-  type Task,
+  type RunRecord,
   type Session,
   type SessionDetail,
   type Wait,
@@ -470,33 +470,28 @@ function MailNote({ mail, ctx }: { mail: Mail; ctx: SessionContext }) {
   )
 }
 
-/** 最近一次运行还没正常结束：排队、运行中、等重试，或失败（可重试） */
-function RunStatus({ run, onRetry }: { run: Task; onRetry: (id: number) => void }) {
-  if (run.status === 'failed') {
+/** 最近一次运行（或压缩）还没正常结束：在跑、出错后在自动重试，或最终失败（可重试） */
+function RunStatus({ run, onRetry }: { run: RunRecord; onRetry: () => void }) {
+  const what = run.kind === 'compaction' ? '压缩' : '运行'
+  if (run.outcome === 'failed') {
     return (
       <div className="flex flex-col gap-2 rounded-xl bg-danger-soft p-3 text-sm text-danger-soft-foreground">
-        <div>运行失败了（尝试 {run.attempts} 次）</div>
+        <div>{what}失败了（{formatTime(run.ended_at ?? run.started_at)}）</div>
         <pre className={CODE_BLOCK}>{run.error}</pre>
-        <div className="text-xs">如果是上下文过长，先点右上角「压缩」，完成后再重试。重试从失败的那一步继续。</div>
-        <Button size="sm" variant="secondary" className="self-start" onPress={() => onRetry(run.id)}>
+        {run.kind === 'run' && (
+          <div className="text-xs">如果是上下文过长，先点右上角「压缩」，完成后再重试。重试从失败的那一步继续。</div>
+        )}
+        <Button size="sm" variant="secondary" className="self-start" onPress={onRetry}>
           <RotateCcw className="size-4" />
           重试
         </Button>
       </div>
     )
   }
+  if (run.ended_at !== null) return null
   return (
     <div className="flex items-center gap-2 self-end text-xs text-muted">
-      {run.status === 'running' ? (
-        <>
-          <Spinner size="sm" /> 处理中…
-        </>
-      ) : run.attempts > 0 ? (
-        `等待重试（${formatTime(run.not_before)}）`
-      ) : (
-        '排队中…'
-      )}
-      {run.error && <span>上次错误：{run.error}</span>}
+      <Spinner size="sm" /> {run.error ? `出错了，正在自动重试（上次错误：${run.error}）` : `${what}中…`}
     </div>
   )
 }
@@ -562,7 +557,9 @@ interface WaitActions {
 function WaitRow({ wait, now, ctx, actions }: { wait: Wait; now: number; ctx: SessionContext; actions: WaitActions }) {
   const detail = <span className="text-muted">{waitDetail(wait, now)}</span>
   switch (wait.kind) {
-    case 'job':
+    case 'job': {
+      // 后台任务的详情与等待项不在同一事务里取，取不到（任务记录已经没了）时只显示编号
+      const job = wait.job
       return (
         <Collapsible
           lead={
@@ -573,32 +570,35 @@ function WaitRow({ wait, now, ctx, actions }: { wait: Wait; now: number; ctx: Se
           }
           title={
             <span className="flex min-w-0 gap-2">
-              <span className="truncate font-mono">{wait.command.split('\n', 1)[0]}</span>
+              <span className="truncate font-mono">{job?.command.split('\n', 1)[0]}</span>
               <span className="shrink-0">{waitDetail(wait, now)}</span>
             </span>
           }
         >
-          <div className="flex flex-col gap-2">
-            <pre className={CODE_BLOCK}>{wait.command}</pre>
-            <div className="text-xs text-muted">日志 {wait.log_path}（在 agent 工作目录里）最后几行：</div>
-            <pre className={CODE_BLOCK}>{wait.tail || '（还没有输出）'}</pre>
-            {wait.status !== 'running' ? (
-              <div className="text-xs text-muted">已结束，等结局交回会话</div>
-            ) : (
-              <Button
-                size="sm"
-                variant="danger-soft"
-                className="self-start"
-                isDisabled={actions.busy}
-                onPress={() => actions.run(() => api.killJob(actions.agentId, wait.job_id))}
-              >
-                <Square className="size-3.5" />
-                结束任务
-              </Button>
-            )}
-          </div>
+          {job && (
+            <div className="flex flex-col gap-2">
+              <pre className={CODE_BLOCK}>{job.command}</pre>
+              <div className="text-xs text-muted">日志 {job.log_path}（在 agent 工作目录里）最后几行：</div>
+              <pre className={CODE_BLOCK}>{job.tail || '（还没有输出）'}</pre>
+              {job.status !== 'running' ? (
+                <div className="text-xs text-muted">已结束，等结局交回会话</div>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="danger-soft"
+                  className="self-start"
+                  isDisabled={actions.busy}
+                  onPress={() => actions.run(() => api.killJob(actions.agentId, wait.job_id))}
+                >
+                  <Square className="size-3.5" />
+                  结束任务
+                </Button>
+              )}
+            </div>
+          )}
         </Collapsible>
       )
+    }
     case 'delegation': {
       const id = wait.thread_session_id
       const thread = ctx.threads.get(id)
@@ -843,12 +843,11 @@ function UsageLine({ context, usage }: Pick<SessionDetail, 'context' | 'usage'>)
   )
 }
 
-/** 会话页按哪些事件重新拉取：连上了（之前可能丢了事件），这个会话又保存了一步，或它的任何任务（运行、压缩、推送通知、
- * 停止 thread 等）状态变了 */
+/** 会话页按哪些事件重新拉取：连上了（之前可能丢了事件），或这个会话的历史或运行状态变了（saved：又保存了一步，
+ * 或运行、压缩开始、结束、失败、停止、重试） */
 function refetchesSession(e: PageEvent, id: string): boolean {
   if (e.type === 'connected') return true
-  if (e.type === 'changed' || e.session_id !== id) return false
-  return e.type === 'saved' || e.type === 'task'
+  return e.type === 'saved' && e.session_id === id
 }
 
 /** 用户看过了这个会话：指向它的通知标为已读（会话的未读由通知派生），标记本身幂等 */
@@ -860,8 +859,8 @@ export default function SessionView() {
   const id = useRouteParam('id')
   const navigate = useNavigate()
   const confirm = useConfirm()
-  // 整份会话（含全部历史，大的有几 MB）不随任何会话的 changed 重新拉取：只按这个会话自己的事件刷新（连上了、又保存了一步、
-  // 它的任务状态变了），用户的操作之后照常一起刷新（load.refreshShown）
+  // 整份会话（含全部历史，大的有几 MB）不随任何会话的 changed 重新拉取：只按这个会话自己的事件刷新（连上了、saved），
+  // 用户的操作之后照常一起刷新（load.refreshShown）
   const detail = useLoad(() => api.session(id), [id], (e) => refetchesSession(e, id))
   const [live, setLive] = useState<RunEvent[]>([])
   const [draft, setDraft] = useState('')
@@ -1027,7 +1026,7 @@ export default function SessionView() {
               {d.mail.map((m) => (
                 <MailNote key={m.id} mail={m} ctx={ctx} />
               ))}
-              {d.run && <RunStatus run={d.run} onRetry={(tid) => void action.run(() => api.retryTask(tid))} />}
+              {d.run && <RunStatus run={d.run} onRetry={() => void action.run(() => api.retry(id))} />}
               {shownLive.length > 0 && (
                 <div className="flex flex-col gap-3 opacity-90">
                   <Blocks items={liveItems(shownLive)} ctx={{ ...ctx, view: 'live' }} />

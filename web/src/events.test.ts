@@ -54,33 +54,33 @@ describe('mergeLive', () => {
 
   it('shows the turn from its start when the page opens mid-turn, without duplicates', () => {
     // 订阅后先收到了 seq 3、4，快照里有 0..3
-    const merged = mergeLive({ segment_id: 'r', events: [at('r', 0), at('r', 1), at('r', 2), at('r', 3)] }, [at('r', 3), at('r', 4)])
+    const merged = mergeLive({ segment_id: 'r', after_message_id: null, events: [at('r', 0), at('r', 1), at('r', 2), at('r', 3)] }, [at('r', 3), at('r', 4)])
     expect(merged.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4])
     expect(merged.gap).toBe(false)
   })
 
   it('reports a gap between the snapshot and the first event received over SSE', () => {
     // 快照到 seq 1，订阅建立时已经到了 seq 4：2、3 两边都没有
-    const merged = mergeLive({ segment_id: 'r', events: [at('r', 0), at('r', 1)] }, [at('r', 4), at('r', 5)])
+    const merged = mergeLive({ segment_id: 'r', after_message_id: null, events: [at('r', 0), at('r', 1)] }, [at('r', 4), at('r', 5)])
     expect(merged.gap).toBe(true)
-    expect(mergeLive({ segment_id: 'r', events: [] }, [at('r', 0)]).gap).toBe(false)
-    expect(mergeLive({ segment_id: 'r', events: [] }, [at('r', 2)]).gap).toBe(true)
+    expect(mergeLive({ segment_id: 'r', after_message_id: null, events: [] }, [at('r', 0)]).gap).toBe(false)
+    expect(mergeLive({ segment_id: 'r', after_message_id: null, events: [] }, [at('r', 2)]).gap).toBe(true)
   })
 
   it('drops events of another run and keeps received events when there is no snapshot', () => {
-    expect(mergeLive({ segment_id: 'new', events: [at('new', 0)] }, [at('old', 7)]).events.map((e) => e.segment_id)).toEqual(['new'])
+    expect(mergeLive({ segment_id: 'new', after_message_id: null, events: [at('new', 0)] }, [at('old', 7)]).events.map((e) => e.segment_id)).toEqual(['new'])
     expect(mergeLive(null, [at('r', 0)]).events).toHaveLength(1)
   })
 
   it('drops received events the snapshot covers when the next one is in the same segment', () => {
-    const snapshot = { segment_id: 'r', events: [at('r', 0), at('r', 1)] }
+    const snapshot = { segment_id: 'r', after_message_id: null, events: [at('r', 0), at('r', 1)] }
     const kept = withoutCovered(snapshot, [at('old', 5), at('r', 1), at('r', 2)], at('r', 3))
     expect(kept.map((e) => [e.segment_id, e.seq])).toEqual([['r', 2]])
   })
 
   it('keeps every received event of a newer segment until its snapshot arrives', () => {
     // 快照还是上一段 a，新一段 b 的事件陆续到达：都要留着，新快照可能早于其中一些生成
-    const snapshot = { segment_id: 'a', events: [at('a', 0)] }
+    const snapshot = { segment_id: 'a', after_message_id: null, events: [at('a', 0)] }
     expect(withoutCovered(snapshot, [at('b', 0), at('b', 1)], at('b', 2))).toHaveLength(2)
     expect(withoutCovered(null, [at('r', 0)], at('r', 1))).toHaveLength(1)
   })

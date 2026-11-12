@@ -53,6 +53,11 @@ const KIND_LABELS: Record<TriggerKindName, { label: string; summary: string }> =
   stream: { label: '流式', summary: '托管一条常驻命令，它输出的每一行是一个事件' },
 }
 
+/** 界面认识的触发方式：服务端新加了一种而界面还没跟上时不列出 */
+function knownKind(k: Schemas['TriggerKindOut']): k is TriggerKind {
+  return Object.hasOwn(KIND_LABELS, k.name)
+}
+
 /** 新建时的初始配置。在打开表单、切换方式时才算：一次性触发器的默认时间是那时起一小时后 */
 function emptyConfig(kind: TriggerKindName): KindConfig {
   switch (kind) {
@@ -97,7 +102,7 @@ function RunAtEditor({ config, onChange }: { config: Schemas['OnceConfig']; onCh
   )
 }
 
-function StreamEditor({ config, onChange }: { config: Schemas['StreamConfig-Input']; onChange: ConfigChange }) {
+function StreamEditor({ config, onChange }: { config: Schemas['StreamConfig']; onChange: ConfigChange }) {
   const [command, setCommand] = useState(config.command)
   const [secrets, setSecrets] = useState((config.secrets ?? []).join(', '))
   const [debounce, setDebounce] = useState(config.debounce_seconds === undefined ? '' : String(config.debounce_seconds))
@@ -169,7 +174,9 @@ function ConfigEditor({ value, onChange }: { value: KindConfig; onChange: Config
   }
 }
 
-const FIRE_WHEN_LABELS: Record<Precheck['fire_when'], string> = {
+type FireWhen = NonNullable<Precheck['fire_when']>
+
+const FIRE_WHEN_LABELS: Record<FireWhen, string> = {
   output: '有输出就触发',
   changed: '输出变化才触发',
 }
@@ -179,9 +186,9 @@ function PrecheckEditor({ precheck, onChange }: { precheck: Precheck | null; onC
   const [on, setOn] = useState(precheck !== null)
   const [command, setCommand] = useState(precheck?.command ?? '')
   const [secrets, setSecrets] = useState((precheck?.secrets ?? []).join(', '))
-  const [fireWhen, setFireWhen] = useState<Precheck['fire_when']>(precheck?.fire_when ?? 'output')
+  const [fireWhen, setFireWhen] = useState<FireWhen>(precheck?.fire_when ?? 'output')
 
-  function emit(next: { on?: boolean; command?: string; secrets?: string; fireWhen?: Precheck['fire_when'] }) {
+  function emit(next: { on?: boolean; command?: string; secrets?: string; fireWhen?: FireWhen }) {
     const v = { on, command, secrets, fireWhen, ...next }
     onChange(
       v.on
@@ -224,7 +231,7 @@ function PrecheckEditor({ precheck, onChange }: { precheck: Precheck | null; onC
             label="触发条件"
             value={fireWhen}
             onChange={(value) => {
-              const next = value as Precheck['fire_when']
+              const next = value as FireWhen
               setFireWhen(next)
               emit({ fireWhen: next })
             }}
@@ -254,7 +261,7 @@ function PrecheckSummary({ trigger }: { trigger: Trigger }) {
   return (
     <div className="flex flex-col gap-1 text-xs text-muted">
       <div>
-        前置检查 · {FIRE_WHEN_LABELS[trigger.precheck.fire_when]}
+        前置检查 · {FIRE_WHEN_LABELS[trigger.precheck.fire_when ?? 'output']}
         {trigger.last_checked_at && <> · 上次检查 {formatTime(trigger.last_checked_at)}</>}
       </div>
       <pre className={CODE_BLOCK}>{trigger.precheck.command}</pre>
@@ -818,7 +825,7 @@ function FinishedTriggers() {
 /** 自动发起会话的入口：定时、一次性、流式，方式的差异只在各自的配置。按 agent 分组的卡片网格，点卡片看详情 */
 export default function Triggers() {
   const triggers = useLoad(() => api.triggers(), [])
-  const kinds = useLoad(() => api.triggerKinds(), [], never)
+  const kinds = useLoad(() => api.triggerKinds().then((list) => list.filter(knownKind)), [], never)
   const agents = useAgents()
   // 详情跟着列表走：重新加载后显示最新内容，删掉后自动关闭
   const [openId, setOpenId] = useState<number | null>(null)

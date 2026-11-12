@@ -1,7 +1,6 @@
 import { createContext, useContext } from 'react'
 import { useLocation, useParams } from 'react-router-dom'
 import {
-  Activity,
   BarChart3,
   Bell,
   Bot,
@@ -37,7 +36,6 @@ export const ADMIN_GROUPS: readonly { title: string; items: readonly NavItem[] }
     items: [
       { to: '/agents', label: 'Agents', Icon: Bot },
       { to: '/triggers', label: '触发器', Icon: Zap },
-      { to: '/tasks', label: '任务与失败记录', Icon: Activity },
       { to: '/usage', label: 'Token 用量', Icon: BarChart3 },
     ],
   },

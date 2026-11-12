@@ -38,7 +38,7 @@ export const PRIORITY_LABEL: Record<IssuePriority, string> = {
 /** 优先级的展示顺序：从 PRIORITY_LABEL 的键推导 */
 export const PRIORITIES = Object.keys(PRIORITY_LABEL) as readonly IssuePriority[]
 
-/** issue 页；通知点开的地址由后端 Notification.url 生成，与它一致（tests/test_frontend_contract.py） */
+/** issue 页；通知点开的地址由后端 Notification.url 生成，与它一致（server/crates/muliao/tests/frontend_contract.rs） */
 export const issueRoute = (id: number) => `/issues/${id}`
 
 /** 指派人下拉框里「未指派」的 id（选项 id 必须非空） */

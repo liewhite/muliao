@@ -40,8 +40,7 @@ describe('anyChange', () => {
   it('refetches after connecting or when any data changed, whoever changed it', () => {
     expect(anyChange({ type: 'connected' })).toBe(true)
     expect(anyChange({ type: 'changed' })).toBe(true)
-    const task = { type: 'task', status: 'done', session_id: 's' } as const
-    expect(anyChange(task)).toBe(false)
+    expect(anyChange({ type: 'saved', session_id: 's' })).toBe(false)
   })
 })
 
@@ -111,7 +110,7 @@ describe('Loader', () => {
         return new Response('[]', { status: 200, headers: { 'Content-Type': 'application/json' } })
       }),
     )
-    const loader = new Loader(() => api.tasks())
+    const loader = new Loader(() => api.notifications())
     const stop = loader.subscribe(() => {})
     await settle()
     expect(loader.snapshot().error).toBe('network down')
@@ -162,14 +161,14 @@ describe('Loader', () => {
 
   it('refreshes what is shown after a user action, not hidden or static data', async () => {
     const shown = new Loader(() => api.issues())
-    const hidden = new Loader(() => api.tasks())
+    const hidden = new Loader(() => api.notifications())
     const static_ = new Loader(() => api.features(), never)
     const stopShown = shown.subscribe(() => {})
     const stopStatic = static_.subscribe(() => {})
     hidden.subscribe(() => {})()
     await settle()
     await refreshShown()
-    expect([count('/api/issues'), count('/api/tasks'), count('/api/features')]).toEqual([2, 1, 1])
+    expect([count('/api/issues'), count('/api/notifications'), count('/api/features')]).toEqual([2, 1, 1])
     stopShown()
     stopStatic()
   })

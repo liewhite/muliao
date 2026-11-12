@@ -1,4 +1,4 @@
-// 分发规则 `action:kind:glob` 的前端辅助：拆分、补全候选、资产按种类与 owner 筛选。匹配本身只在服务端算（agents/permissions.py）
+// 分发规则 `action:kind:glob` 的前端辅助：拆分、补全候选、资产按种类与 owner 筛选。匹配本身只在服务端算（assets 的 rules.rs）
 
 import type { AgentId, CatalogAsset, AssetKind, AssetOf } from './api'
 

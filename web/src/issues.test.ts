@@ -75,7 +75,7 @@ describe('issues', () => {
   })
 
   it('describes changes in the timeline', () => {
-    const base = { id: 1, created_at: '', actor: 'user', session_id: null }
+    const base = { id: 1, issue_id: 7, created_at: '', actor: 'user', session_id: null }
     // 每种只写 kind 与它自己的内容、变化，公共字段用 base
     type Own<A> = A extends unknown ? Omit<A, keyof typeof base> : never
     const at = (a: Own<IssueActivity>): IssueActivity => ({ ...base, ...a })

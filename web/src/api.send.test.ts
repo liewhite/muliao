@@ -12,7 +12,7 @@ describe('send decodes responses by HTTP status and type', () => {
     vi.unstubAllGlobals()
   })
 
-  it('treats 204 as no content even with the JSON content type FastAPI sends', async () => {
+  it('treats 204 as no content even with a JSON content type', async () => {
     respond(204, '', JSON_TYPE)
     await expect(api.logout()).resolves.toBeUndefined()
   })

@@ -6,7 +6,7 @@ const a = asAgentId('agent-a')
 const common = (name: string, owner: CatalogAsset['owner']) => ({ name, owner, description: '', roles: [], shared: false })
 const AT = '2026-10-27T00:00:00Z'
 const ASSETS: CatalogAsset[] = [
-  { kind: 'tool', access: 'write', admin: false, updated_at: null, ...common('run_shell', null) },
+  { kind: 'tool', access: 'write', admin: false, updated_at: null, path: null, ...common('run_shell', null) },
   { kind: 'skill', updated_at: AT, path: '/a/platform/skills/relay-host', ...common('relay-host', null) },
   { kind: 'skill', updated_at: AT, path: '/a/agent-a/skills/mine', ...common('mine', a) },
 ]

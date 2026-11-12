@@ -3,12 +3,12 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react'
 import { api, type Item, type LiveSegment, type Schemas } from './api'
 
-/** 一条完整的会话条目（工具调用、工具结果），与历史同一个投影（后端 transcript）；文字可能截断过 */
-export type RunItemEvent = Schemas['RunItemEvent']
-/** 流式文字：接在同类的最后一条后面（或开始新的一条） */
-export type RunDeltaEvent = Schemas['RunDeltaEvent']
-/** segment_id 与 seq：这一段的编号与事件序号（后端 sessions.live.LiveSegments），快照与 SSE 事件据此合并、去重 */
-export type RunEvent = RunItemEvent | RunDeltaEvent
+/**
+ * 运行中的一条实时事件，按 event 区分：item 是一条完整的会话条目（工具调用、工具结果，与历史同一个投影，文字可能截断过）；
+ * delta 是流式文字，接在同类的最后一条后面（或开始新的一条）。segment_id 与 seq：这一段的编号与事件序号，快照与 SSE
+ * 事件据此合并、去重
+ */
+export type RunEvent = Schemas['RunEventEnvelope']
 
 export interface MergedLive {
   events: RunEvent[]
@@ -76,14 +76,14 @@ export function liveItems(events: RunEvent[]): Item[] {
 /**
  * 连上了（前端自己产生），第一次连接与重连都算：订阅建立之前、断线期间都可能错过事件，页面要重新拉取。
  * 第一次也要算：页面的首次请求可能早于订阅建立，中间的事件（如运行结束）两边都没有，页面会一直停在旧状态。
- * 在这条连接的第一次心跳时发，不在 onopen：服务端先建好订阅再发心跳（api/app.py 的 /events），而响应头早于订阅，
+ * 在这条连接的第一次心跳时发，不在 onopen：服务端先建好订阅再发心跳（http 的 events.rs），而响应头早于订阅，
  * 按 onopen 重新拉取可能落在订阅建立之前。
  */
 export interface ConnectedEvent {
   type: 'connected'
 }
 
-/** 服务端定时发的心跳（api/app.py），只用来判断连接是否还活着，不交给页面 */
+/** 服务端定时发的心跳（http 的 events.rs），只用来判断连接是否还活着，不交给页面 */
 type HeartbeatEvent = Schemas['HeartbeatEvent']
 
 /** 交给页面的事件：服务端发的（除了心跳），加上前端自己产生的连上事件 */

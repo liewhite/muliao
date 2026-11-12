@@ -6,7 +6,7 @@ import { api, unauthorizedEvent } from './api'
 import { closeServerEvents, useUiOutdated } from './events'
 import { useUnreadCount } from './unread'
 import { AgentCreate, AgentDetail, AgentList } from './pages/Agents'
-import { Login, Settings, Tasks } from './pages/Admin'
+import { Login, Settings } from './pages/Admin'
 import { Roles } from './pages/Permissions'
 import Triggers from './pages/Triggers'
 import Issues from './pages/Issues'
@@ -225,7 +225,6 @@ function Shell() {
                 <Route path="/mcp" element={<Navigate to="/ai-assets?kind=mcp" replace />} />
                 <Route path="/vault" element={<Navigate to="/ai-assets?kind=secret" replace />} />
                 <Route path="/memory" element={<Navigate to="/ai-assets?kind=memory" replace />} />
-                <Route path="/tasks" element={<Tasks />} />
                 <Route path="/pages" element={<SitePages />} />
                 <Route path="/pages/:agent/:name" element={<SitePageView />} />
                 <Route path="/usage" element={<UsagePage />} />
