@@ -22,7 +22,7 @@ from muliao.errors import InvalidInput
 from muliao.platform.db import Database
 from muliao.platform.tasks import TaskQueue
 from muliao.sessions.holds import get_in, hold_in, release
-from muliao.sessions.mailbox import has_queued_from, position_in, post_in, posted_with_key_in
+from muliao.sessions.mailbox import has_queued_from, position_in, post_in
 from muliao.sessions.pending import CallResult, paused
 from muliao.sessions.tables import HoldStatus, MailKind, Session, SessionHold
 
@@ -75,12 +75,11 @@ class SessionWork:
 
     async def ended_in(self, s: AsyncSession, session_id: str, holder: str, text: str) -> None:
         """这项工作结束了，在发送方记下结局的事务里：往会话的信箱投一封事件信件（来源是占用者），同时释放占用。占用
-        已被停止清掉、或会话已删除时不投；按占用者幂等。"""
+        已被停止清掉、或会话已删除时不投。"""
         await deliver_in(
             s,
             self._queue,
             await hold_of_in(s, session_id, holder),
-            key=f"{holder}:end",
             source=holder,
             event_text=text,
         )
@@ -109,16 +108,16 @@ async def deliver_in(
     queue: TaskQueue,
     hold: SessionHold | None,
     *,
-    key: str,
     source: str,
     event_text: str,
     answer: CallResult | None = None,
 ) -> Delivered:
     """交回这项占用的结局并释放它，唯一出口。hold 为 None：会话已删除（占用随它删除，见 hold_of_in）。会话还停在
     这项占用对应的挂起调用上、且给了 answer（那一种挂起调用的回答信封）时作为那次调用的结果（回答信件）；否则作为
-    事件信件（「迟到的回答改为事件」只在这里）。用户是否在等这封信随占用登记时记下的。按 key 幂等。"""
+    事件信件（「迟到的回答改为事件」只在这里）。用户是否在等这封信随占用登记时记下的。交回与结局的记录在同一个事务里，
+    所以每项占用只交回一次：已经释放过的再交回是 bug，当场报错。"""
     if hold is None:
-        log.info("outcome for a deleted session dropped", extra={"key": key})
+        log.info("outcome for a deleted session dropped", extra={"source": source})
         return Delivered.GONE
     session_id = hold.session_id
     before = release(hold)
@@ -127,8 +126,7 @@ async def deliver_in(
             "outcome for a stopped session dropped", extra={"session_id": session_id, "hold_id": hold.id}
         )
         return Delivered.DROPPED
-    if before == HoldStatus.RELEASED and not await posted_with_key_in(s, session_id, key):
-        # 重放带的是同一个 key（按它去重）；换了 key 再交回一次，是同一项工作被交回了两次
+    if before == HoldStatus.RELEASED:
         raise RuntimeError(f"hold {hold.id} of session {session_id} was already released by another delivery")
     waiting = paused(await position_in(s, session_id))
     if (
@@ -145,7 +143,6 @@ async def deliver_in(
             content="",
             answers={hold.call_id: answer.model_dump()},
             awaited=hold.awaited,
-            dedupe_key=key,
         )
         delivered = Delivered.ANSWER
     else:
@@ -157,12 +154,11 @@ async def deliver_in(
             source=source,
             content=event_text,
             awaited=hold.awaited,
-            dedupe_key=key,
         )
         delivered = Delivered.EVENT
     log.info(
         "outcome delivered",
-        extra={"session_id": session_id, "hold_id": hold.id, "delivered_as": delivered, "key": key},
+        extra={"session_id": session_id, "hold_id": hold.id, "delivered_as": delivered},
     )
     return delivered
 

@@ -10,8 +10,8 @@
   已由停止写进历史、记为已处理（sessions.halt.close_history_in）。
 - 唤醒（wake_in，唯一规则）：会话里有排队的信件、没有排队或运行中的运行，并且有信件在最近一次运行之后才到；
   会话停在挂起的调用上、还不能继续时（sessions.pending.position 的 Paused.ready）等回答或新消息，事件等它们一起
-  交给模型。调用方：投信时、运行结束时（含最终失败，RunHandler.failed_in 结清之后）、定期对账（MailReconciler，兜住投递时
-  事务失败与重启）。「最近一次运行之后才到」就是还没交给过它（taken_by），保证最终失败的运行不会因为同一批信件被无限重新投递：它被重试、或新信件
+  交给模型。调用方：投信时、运行结束时（含最终失败，RunHandler.failed_in 结清之后），都与投信或运行的结局同一个事务，
+  没有补漏的对账。「最近一次运行之后才到」就是还没交给过它（taken_by），保证最终失败的运行不会因为同一批信件被无限重新投递：它被重试、或新信件
   到达时再处理。
 """
 
@@ -76,9 +76,8 @@ async def post_in(
     attachments: Sequence[str] = (),
     answers: Mapping[str, Any] | None = None,
     delegation: int | None = None,
-    dedupe_key: str | None = None,
 ) -> Mail:
-    """在调用方事务里往会话信箱投一封信件，需要时唤醒消费者。带 dedupe_key 的投信只投一次：已经投过就返回那封。
+    """在调用方事务里往会话信箱投一封信件，需要时唤醒消费者。
     origin：来信入口投的信件的发送方来源（消息必有，事件没有，回答是 user 或没有）。"""
     if (
         (kind == MailKind.MESSAGE and origin is None)
@@ -97,9 +96,6 @@ async def post_in(
     session = await s.get(Session, session_id)
     if session is None:
         raise NotFound(f"session {session_id!r} not found")
-    if dedupe_key is not None and (existing := await _with_key_in(s, session_id, dedupe_key)):
-        log.info("duplicate mail ignored", extra={"session_id": session_id, "key": dedupe_key})
-        return existing
     mail = Mail(
         session_id=session_id,
         kind=kind,
@@ -111,7 +107,6 @@ async def post_in(
         answers=dict(answers or {}),
         awaited=awaited,
         delegation_id=delegation,
-        dedupe_key=dedupe_key,
     )
     s.add(mail)
     await s.flush()
@@ -120,15 +115,6 @@ async def post_in(
     )
     await wake_in(s, queue, session)
     return mail
-
-
-async def _with_key_in(s: AsyncSession, session_id: str, key: str) -> Mail | None:
-    return await s.scalar(select(Mail).where(Mail.session_id == session_id, Mail.dedupe_key == key))
-
-
-async def posted_with_key_in(s: AsyncSession, session_id: str, key: str) -> bool:
-    """带这个幂等键的信件已经投过。"""
-    return await _with_key_in(s, session_id, key) is not None
 
 
 async def sent_by_in(
@@ -238,28 +224,6 @@ async def delegated_mail_in(s: AsyncSession, session_id: str, states: Sequence[M
         select(Mail)
         .where(Mail.session_id == session_id, Mail.delegation_id.is_not(None), Mail.state.in_(states))
         .order_by(Mail.id)
-    )
-    return list(rows.all())
-
-
-async def sessions_with_delegations_in(
-    s: AsyncSession, delegation_ids: Collection[int], states: Sequence[MailState]
-) -> list[str]:
-    """带着这些委派、在这些状态的信件所在的会话（信箱对账补做失败的结清）。"""
-    if not delegation_ids:
-        return []
-    rows = await s.scalars(
-        select(Mail.session_id)
-        .where(Mail.delegation_id.in_(list(delegation_ids)), Mail.state.in_(states))
-        .distinct()
-    )
-    return list(rows.all())
-
-
-async def with_queued_in(s: AsyncSession) -> list[str]:
-    """有信件在排队的会话，按 id 排列（信箱对账的唤醒）。"""
-    rows = await s.scalars(
-        select(Mail.session_id).where(Mail.state == MailState.QUEUED).distinct().order_by(Mail.session_id)
     )
     return list(rows.all())
 

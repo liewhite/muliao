@@ -220,37 +220,13 @@ async def test_a_failed_run_is_not_redispatched_forever(container, make_agent, m
     await drain(container)
     assert (await tasks_of(container, RUN_TASK))[-1].status == TaskStatus.FAILED
 
-    # 信件随那次请求保存、已经交给过模型：对账不重复投递
-    assert await container.mail.reconcile() == 0
+    # 信件随那次请求保存、已经交给过模型：失败的收尾不再唤醒运行
+    assert [t for t in await tasks_of(container, RUN_TASK) if t.status == TaskStatus.PENDING] == []
     # 之后到达的信件唤醒新的运行：先从失败处续跑（重发那次请求），再处理新信件
     models.models["rec"] = scripted(recorder)
     await post(container, session.id, "second")
     await drain(container)
     assert recorder.prompts[-2:] == [[event("first")], [event("second")]]
-    assert await queued(container, session.id) == []
-
-
-async def test_reconcile_wakes_a_session_whose_mail_was_never_handed_to_a_run(container, make_agent, models):
-    agent = await make_agent("alpha", model="rec")
-    session = await start(container, agent.id, "hi", origin=Origin.TRIGGER)
-    models.models["rec"] = scripted(Recorder())
-    await drain(container)
-    # 绕过 post_in 直接写入：如同投信那一刻进程死掉，信件在、运行没有
-    async with container.db.transaction() as s:
-        s.add(
-            Mail(
-                session_id=session.id,
-                kind=MailKind.EVENT,
-                source="job:1",
-                content="orphan",
-                attachments=[],
-                answers={},
-                awaited=False,
-            )
-        )
-
-    assert await container.mail.reconcile() == 1
-    await drain(container)
     assert await queued(container, session.id) == []
 
 

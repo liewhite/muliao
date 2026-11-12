@@ -20,7 +20,7 @@ def thread_source(child_id: str) -> str:
 
 def job_holder(job_id: int) -> str:
     """后台任务在会话上的占用者（sessions.holds）：结束与运行中检查的命令按它找到占用；它同时就是这个任务投进会话的
-    事件信件的来源（`job:<id>`，parse_source 据此认出任务事件），幂等键也由它推出。"""
+    事件信件的来源（`job:<id>`，parse_source 据此认出任务事件）。"""
     return f"job:{job_id}"
 
 

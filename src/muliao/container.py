@@ -53,7 +53,6 @@ from muliao.sessions.consumer import Consumer
 from muliao.sessions.delegation import Delegations, ThreadChecks
 from muliao.sessions.halt import SessionStopper
 from muliao.sessions.live import LiveSegments
-from muliao.sessions.reconcile import MailReconciler
 from muliao.sessions.threads import Threads
 from muliao.sessions.wakeups import WakeUps
 from muliao.speech.api import Transcriber, build_transcriber
@@ -153,7 +152,6 @@ class Assembly:
     messaging: Messaging
     threads: Threads
     delegations: Delegations
-    mail: MailReconciler
     jobs: JobRunner
     script_grants: ScriptGrants
     confiner: Confiner
@@ -482,7 +480,6 @@ def assemble(
         messaging=messaging,
         threads=ports.threads,
         delegations=ports.delegations,
-        mail=session_domain.mail,
         jobs=workspace_domain.jobs,
         script_grants=workspace_domain.script_grants,
         confiner=confiner,

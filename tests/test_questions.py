@@ -174,15 +174,13 @@ async def test_stopping_keeps_a_submitted_answer_with_the_question_it_answers(
     client, container, make_agent, models
 ):
     # 回答属于它回答的提问：已提交、还排着的回答是停止前用户已给出的部分，停止把它写成提问的结果（不丢、提问也不
-    # 变回待回答）；同时排着的别的信件照常丢弃。回答不留在信箱里，对账不会再唤醒运行，模型在下一封信时看到它
+    # 变回待回答）；同时排着的别的信件照常丢弃。回答不留在信箱里，不会再唤醒运行，模型在下一封信时看到它
     session_id, asker = await _asked(client, container, make_agent, models)
     url = f"/api/sessions/{session_id}/messages"
     await client.post(url, json={"prompt": "先看看别的"})
     answers = {"q1": [{"selected": ["日线"]}, {"selected": ["成交量"]}]}
     assert (await client.post(url, json={"prompt": "", "answers": answers})).status_code == 202
     assert (await client.post(f"/api/sessions/{session_id}/stop")).status_code < 300
-    await drain(container)
-    await container.mail.reconcile()
     await drain(container)
 
     assert asker.requests == 1

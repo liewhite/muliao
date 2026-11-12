@@ -5,7 +5,7 @@
    由正在进行的运行的登记与 SessionHalt 组成）、委派（Threads、Delegations、ThreadChecks）、到点唤醒（WakeUps）、后台任务的占用
    与结局（SessionWork）、别的领域的来信（SenderInbox）、热历史（SessionRecall）。会话领域的工具集（提问、委派、到点唤醒、读会话）都由这一段交出：消费者要用
    组好的工具箱，第 2 段交不了。委派与到点唤醒的运行中检查、删除 agent 时会话忙不忙的检查也在这里。
-2. SessionDomain.build：有了运行时与工具箱之后，会话门面、压缩、消费者、信箱对账，与会话领域的任务处理器。
+2. SessionDomain.build：有了运行时与工具箱之后，会话门面、压缩、消费者，与会话领域的任务处理器。
    subscribe 登记会话领域的订阅（删除 agent 时清理它的会话）。
 """
 
@@ -25,7 +25,7 @@ from muliao.platform.db import Database
 from muliao.platform.messaging import Messaging
 from muliao.platform.tasks import Commit, TaskQueue
 from muliao.platform.tooling import RunScope
-from muliao.platform.wiring import Loop, Parts
+from muliao.platform.wiring import Parts
 from muliao.platform.worker import TaskHandler
 from muliao.sessions.activity import SessionActivity
 from muliao.sessions.ask_user import ask_user_toolset
@@ -43,7 +43,6 @@ from muliao.sessions.live import LiveSegments
 from muliao.sessions.origins import OriginNotes
 from muliao.sessions.recall import SessionRecall
 from muliao.sessions.recall_tools import recall_toolset
-from muliao.sessions.reconcile import MailReconciler
 from muliao.sessions.service import SessionService
 from muliao.sessions.steps import Steps
 from muliao.sessions.stopping import StoppableRuns
@@ -125,7 +124,6 @@ class SessionDomain(Parts):
     sessions: SessionService
     compactor: Compactor
     consumer: Consumer
-    mail: MailReconciler
     _ports: SessionPorts
     _db: Database
     _queue: TaskQueue
@@ -172,7 +170,6 @@ class SessionDomain(Parts):
             sessions=SessionService(db, queue, live, messaging, ports.stopper, compactor, renders),
             compactor=compactor,
             consumer=consumer,
-            mail=MailReconciler(db, queue),
             _ports=ports,
             _db=db,
             _queue=queue,
@@ -191,7 +188,3 @@ class SessionDomain(Parts):
             (COMPACTION_TASK, CompactionHandler(self._db, self.compactor, self._runtime)),
             (STOP_THREAD_TASK, StopThreadHandler(self._ports.stopper)),
         )
-
-    def loops(self) -> Sequence[tuple[str, Loop]]:
-        """信箱对账：收敛漏掉的唤醒与最终失败后没做完的结清（sessions.reconcile）。"""
-        return (("mail", self.mail.run_forever),)

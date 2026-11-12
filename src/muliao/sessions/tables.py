@@ -132,8 +132,6 @@ class Mail(Base):
     delegation_id: Mapped[int | None] = mapped_column(
         ForeignKey("thread_calls.id", ondelete="SET NULL", name="fk_mail_delegation_id")
     )
-    # 幂等键：带同一个键的投信只投一次（交回结局按占用者去重，sessions.work.deliver_in）
-    dedupe_key: Mapped[str | None] = mapped_column(String(200))
     state: Mapped[MailState] = mapped_column(StrEnumType(MailState), default=MailState.QUEUED)
     # 交给了哪次运行（只经 sessions.mailbox.give_in / consume_in 写）：投递运行时信箱里已有的、
     # 运行开头取走的、交给模型那一步保存的（这时 state 记为 consumed）。排着的信件之后被更新的运行取走时改指那次运行
@@ -144,9 +142,6 @@ class Mail(Base):
     # 查询几乎只看还在排队的，用部分索引
     __table_args__ = (
         Index("ix_mail_queued", "session_id", sqlite_where=state == MailState.QUEUED),
-        Index(
-            "uq_mail_dedupe_key", "session_id", "dedupe_key", unique=True, sqlite_where=dedupe_key.isnot(None)
-        ),
         Index("ix_mail_delegation_id", "delegation_id", sqlite_where=delegation_id.isnot(None)),
         # 外键的子表索引：删 tasks 时（保留策略）SQLite 按它查引用，没有它每删一行都扫整张 mail
         Index("ix_mail_taken_by", "taken_by", sqlite_where=taken_by.isnot(None)),

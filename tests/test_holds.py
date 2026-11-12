@@ -70,7 +70,6 @@ async def test_an_outcome_after_the_session_was_stopped_is_dropped_without_wakin
             s,
             container.queue,
             await hold_of_in(s, session.id, "job:1"),
-            key="k",
             source="job:1",
             event_text="done",
         )
@@ -79,6 +78,30 @@ async def test_an_outcome_after_the_session_was_stopped_is_dropped_without_wakin
     assert await _mail_count(container) == before
     [hold] = await _holds(container, session.id)
     assert hold.status == HoldStatus.CLEARED
+
+
+async def test_handing_back_a_released_hold_again_is_a_bug(container, make_agent):
+    """交回与结局的记录同一个事务，每项占用只交回一次：再交回一次当场报错，不靠去重悄悄吞掉。"""
+    agent = (await make_agent("alpha")).id
+    session = await start(container, agent, "go")
+    async with container.db.transaction() as s:
+        await hold_in(s, session.id, "job:1", awaited=False)
+
+    async def hand_back() -> Delivered:
+        async with container.db.transaction() as s:
+            return await deliver_in(
+                s,
+                container.queue,
+                await hold_of_in(s, session.id, "job:1"),
+                source="job:1",
+                event_text="done",
+            )
+
+    assert await hand_back() == Delivered.EVENT
+    before = await _mail_count(container)
+    with pytest.raises(RuntimeError, match="already released"):
+        await hand_back()
+    assert await _mail_count(container) == before
 
 
 async def test_an_outcome_for_a_hold_that_was_never_registered_is_a_bug(container, make_agent):
@@ -222,55 +245,6 @@ async def test_a_run_stopped_right_after_it_was_claimed_does_not_execute(contain
     assert called == []
 
 
-async def test_reconcile_settles_delegations_whose_failure_hook_failed(
-    container, make_agent, models, monkeypatch
-):
-    from muliao.sessions.consumer import RunHandler
-
-    lead = (await make_agent("lead", model="l")).id
-    reviewer = await container.agents.get((await make_agent("reviewer", model="v")).id)
-    recorder = Recorder()
-    models.models["l"] = scripted(recorder)
-
-    def broken(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        raise ModelHTTPError(status_code=400, model_name="v", body="bad request")
-
-    models.models["v"] = scripted(broken)
-    parent = await start(container, lead, "go")
-    await drain(container)
-    async with container.db.transaction() as s:
-        await container.delegations.dispatch(
-            s,
-            parent_id=parent.id,
-            agent=reviewer,
-            thread="review",
-            prompt="check",
-            call_id="k",
-            suspends=False,
-            awaited=False,
-        )
-
-    async def failing_settle(self, s, task):  # noqa: ANN001, ANN202
-        raise RuntimeError("could not settle")
-
-    monkeypatch.setattr(RunHandler, "failed_in", failing_settle)
-    await drain(container)
-    monkeypatch.undo()
-    async with container.db.transaction() as s:
-        assert (
-            await s.scalars(select(SessionHold).where(SessionHold.thread_call_id.is_not(None)))
-        ).one().status == HoldStatus.ACTIVE
-
-    await container.mail.reconcile()
-    await drain(container)
-
-    async with container.db.transaction() as s:
-        assert (
-            await s.scalars(select(SessionHold).where(SessionHold.thread_call_id.is_not(None)))
-        ).one().status == HoldStatus.RELEASED
-    assert any("failed" in p and "bad request" in p for p in recorder.prompts[-1])
-
-
 async def test_stopping_a_thread_the_user_already_deleted_is_not_an_error(container, make_agent, models):
     from muliao.sessions.halt import Halted
 
@@ -317,55 +291,10 @@ async def test_stopping_a_thread_hands_back_at_once_and_deleting_its_agent_later
     assert any("(reviewer) was stopped" in p for p in recorder.prompts[-1])
 
 
-async def test_a_thread_run_failing_before_its_first_step_with_a_failing_hook_is_settled_by_reconciliation(
-    container, make_agent, models
-):
-    """运行在第一次保存之前就最终失败、失败的收尾钩子自己又失败：委派信件还排着，不会再唤醒运行。信箱对账按同一条
-    规则补做结清，发起方拿到失败的结局，不会一直挂起。"""
-    from muliao.platform.tables import TaskStatus
-    from muliao.sessions.settlement import reconcile_failures
-
-    lead = (await make_agent("lead", model="l")).id
-    reviewer = await container.agents.get((await make_agent("reviewer", model="v")).id)
-    models.models["l"] = scripted(Recorder())
-    parent = await start(container, lead, "go")
-    await drain(container)
-    async with container.db.transaction() as s:
-        child = await container.delegations.dispatch(
-            s,
-            parent_id=parent.id,
-            agent=reviewer,
-            thread="review",
-            prompt="look",
-            call_id="k",
-            suspends=False,
-            awaited=False,
-        )
-    from tests.test_flow import side_tasks
-
-    await side_tasks(container)
-    run = await container.queue.claim([RUN_TASK])
-    assert run is not None and run.session_id == child.id
-
-    async def no_hook(_s, _task):  # noqa: ANN202  模拟 failed_in 没做成：worker 不带钩子记下失败
-        return None
-
-    failed = await container.queue.fail(run.id, "boom", retry=None, on_final=no_hook)
-    assert failed.status == TaskStatus.FAILED
-
-    assert await reconcile_failures(container.db, container.queue) == [child.id]
-    assert await reconcile_failures(container.db, container.queue) == []
-    await side_tasks(container)
-    events = [m for m in await _mail_of(container, parent.id) if m.source == f"thread:{child.id}"]
-    assert len(events) == 1 and "boom" in events[0].content
-
-
-async def test_a_failing_run_failed_subscriber_leaves_the_settlement_to_reconciliation(
-    container, make_agent, models
-):
-    """RunFailed 的订阅者在失败收尾的事务里执行：它出错时收尾整个回滚，失败照记（不带收尾），委派的结清由信箱对账补做。"""
+async def test_a_failing_run_failed_subscriber_rolls_back_the_settlement(container, make_agent, models):
+    """RunFailed 的订阅者在失败收尾的事务里执行：它出错时收尾整个回滚，失败照记（不带收尾）；没有补做的对账，委派
+    不结清、发起方的占用一直 active（要用户停止），这是删掉对账的代价。"""
     from muliao.sessions.events import RunFailed
-    from muliao.sessions.settlement import reconcile_failures
 
     lead = (await make_agent("lead", model="l")).id
     reviewer = await container.agents.get((await make_agent("reviewer", model="v")).id)
@@ -401,10 +330,9 @@ async def test_a_failing_run_failed_subscriber_leaves_the_settlement_to_reconcil
         ).all()
     assert run.status == TaskStatus.FAILED
     assert [m for m in await _mail_of(container, parent.id) if m.source == f"thread:{child.id}"] == []
-
-    assert await reconcile_failures(container.db, container.queue) == [child.id]
-    events = [m for m in await _mail_of(container, parent.id) if m.source == f"thread:{child.id}"]
-    assert len(events) == 1
+    async with container.db.transaction() as s:
+        [hold] = (await s.scalars(select(SessionHold).where(SessionHold.thread_call_id.is_not(None)))).all()
+    assert hold.status == HoldStatus.ACTIVE
 
 
 async def test_stopping_a_thread_is_a_task_that_survives_a_restart(container, make_agent, models):
@@ -448,67 +376,6 @@ async def test_stopping_a_thread_is_a_task_that_survives_a_restart(container, ma
 async def _mail_of(container, session_id: str) -> list[Mail]:
     async with container.db.transaction() as s:
         return list((await s.scalars(select(Mail).where(Mail.session_id == session_id))).all())
-
-
-async def test_reconciliation_leaves_delegation_mail_that_arrived_after_the_failed_run(
-    container, make_agent, models
-):
-    """候选会话范围放宽后，结清仍按同一条规则筛选：失败的运行之后才到的委派信件不结清，留给新的运行。"""
-    from muliao.platform.tables import TaskStatus
-    from muliao.sessions.settlement import reconcile_failures
-    from muliao.sessions.tables import MailState
-    from muliao.sessions.thread_calls import owed_in
-
-    lead = (await make_agent("lead", model="l")).id
-    reviewer = await container.agents.get((await make_agent("reviewer", model="v")).id)
-    models.models["l"] = scripted(Recorder())
-    parent = await start(container, lead, "go")
-    await drain(container)
-
-    async def dispatch(key: str):  # noqa: ANN202
-        async with container.db.transaction() as s:
-            return await container.delegations.dispatch(
-                s,
-                parent_id=parent.id,
-                agent=reviewer,
-                thread="review",
-                prompt=key,
-                call_id=key,
-                suspends=False,
-                awaited=False,
-            )
-
-    child = await dispatch("first")
-    run = await container.queue.claim([RUN_TASK])
-    assert run is not None and run.session_id == child.id
-
-    async def no_hook(_s, _task):  # noqa: ANN202
-        return None
-
-    await container.queue.fail(run.id, "boom", retry=None, on_final=no_hook)
-    # 失败之后才到：不属于那次运行
-    await dispatch("second")
-    async with container.db.transaction() as s:
-        # 新信件当场唤醒了一次新运行（信箱里的信都交给了它）；删掉它、把信改回唤醒之前交给谁，让失败的运行仍是最近
-        # 一次（如同唤醒没做成），只看对账怎么对待这封信
-        [woken] = (
-            await s.scalars(
-                select(Task).where(Task.session_id == child.id, Task.status == TaskStatus.PENDING)
-            )
-        ).all()
-        for m in (await s.scalars(select(Mail).where(Mail.session_id == child.id))).all():
-            m.taken_by = run.id if m.content.endswith("first") else None
-        await s.flush()
-        await s.delete(woken)
-
-    assert await reconcile_failures(container.db, container.queue) == [child.id]
-    late = [m for m in await _mail_of(container, child.id) if m.content.endswith("second")]
-    first = [m for m in await _mail_of(container, child.id) if m.content.endswith("first")]
-    async with container.db.transaction() as s:
-        owed = {o.delegation.id for o in await owed_in(s)}
-    # 结清没有只看委派（发起方的占用是否还 active）
-    assert [(m.state, m.delegation_id in owed) for m in late] == [(MailState.QUEUED, True)]
-    assert [(m.state, m.delegation_id in owed) for m in first] == [(MailState.DISCARDED, False)]
 
 
 async def test_deleting_a_stopped_asker_drops_its_threads_outcome(container, make_agent, models):

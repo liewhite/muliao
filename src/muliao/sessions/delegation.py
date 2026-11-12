@@ -155,7 +155,6 @@ async def hand_back_in(
             s,
             queue,
             o.hold,
-            key=f"delegation:{o.delegation.id}:settled",
             source=thread_source(child.id),
             event_text=event_text(name, agent.name, ending, text),
             answer=AgentAnswered.of(
@@ -255,7 +254,6 @@ def check_text(
         case WorkState.RUNNING if run is not None and run.pending and run.attempts:
             doing = f"is waiting to run again (attempt {run.attempts} so far)"
         case WorkState.RUNNING | WorkState.IDLE:
-            # idle 也会出现：委派信件到了，投信或运行结束（含最终失败）时的唤醒没做成（事务失败、重启），要等定期对账
-            # （MailReconciler）补唤醒下一次运行
+            # idle 也会出现：最终失败的收尾钩子自己出错时，唤醒随收尾一起回滚，委派信件排着、直到下一封信或用户停止
             doing = "has your task queued and has not started on it yet"
     return f"{who} {doing}. {keep}"

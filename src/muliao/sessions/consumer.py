@@ -331,7 +331,7 @@ async def _adopted(s: AsyncSession, session_id: str, run_id: int) -> list[Mail]:
 class RunHandler:
     """队列里的运行（run task）。"""
 
-    # mail.taken_by 指向运行（ON DELETE CASCADE）：删了会连带删掉它处理过的信件与幂等键
+    # mail.taken_by 指向运行（ON DELETE CASCADE）：删了会连带删掉它处理过的信件
     prunable = False
 
     def __init__(self, consumer: Consumer, queue: TaskQueue, messaging: Messaging):
@@ -349,10 +349,10 @@ class RunHandler:
         全部（包括早先停在挂起调用上的运行处理过的、被续跑接管的），加上交给过这次运行、还排着的——运行在第一次保存
         之前就失败时，交给它的信件一直排着，也不会再有运行因为它们被唤醒（mailbox.wake_in）；它们随结清一起
         退出信箱，不会在之后的运行里被悄悄执行。运行开始之后才到的不动：同一个事务里立即唤醒新的运行处理它们（如对
-        同一 thread 的第二项委派），不等信箱对账。队列已把这次运行记为 failed，唤醒不会把它当成忙。
+        同一 thread 的第二项委派）。队列已把这次运行记为 failed，唤醒不会把它当成忙。
 
-        同一事务发布 RunFailed。这个钩子自己失败时（worker 不带钩子记下
-        失败）不发：失败仍在任务页与日志里可见。"""
+        同一事务发布 RunFailed。这个钩子（含 RunFailed 的订阅者）自己失败时整个回滚，worker 不带钩子记下失败：
+        失败仍在任务页与日志里可见，但委派不结清、唤醒也没做，等它的发起方一直挂着，要用户停止（没有补做的对账）。"""
         if task.session_id is None or task.error is None:
             raise RuntimeError(f"run {task.id} has no session or no recorded error")
         child, agent = await load_session(s, task.session_id)

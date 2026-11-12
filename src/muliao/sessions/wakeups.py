@@ -122,7 +122,6 @@ class WakeUps:
                     s,
                     self._queue,
                     await hold_of_in(s, row.session_id, row.holder),
-                    key=f"{row.holder}:due",
                     source=WAKE_ME,
                     event_text=wake_text(row, self._tz),
                 )
