@@ -138,6 +138,10 @@ impl Distribution {
         // 还没建的没有名字：节名不影响校验
         let section = agent_id.and_then(|id| snapshot.names.get(id)).map_or(PREVIEW_SECTION, String::as_str);
         access_file::plan(&snapshot, |doc| access_file::set_agent_rules(doc, section, rules))?;
+        // plan 按磁盘上此刻的文件校验，下面按快照算：角色刚写进文件、快照还没跟上时请他重试
+        if let Some(r) = rules.roles.iter().find(|r| !snapshot.roles.contains_key(*r)) {
+            return Err(conflict(format!("role {r:?} was just changed; retry")));
+        }
         // 还没建的 agent 没有自己的资源，只看规则
         let grants = Grants { agent_id: agent_id.map(str::to_owned), rules: rules.effective(&snapshot.roles) };
         Ok(reach_of(&snapshot, &grants))

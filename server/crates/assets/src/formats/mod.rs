@@ -38,12 +38,37 @@ pub fn modified(path: &Path) -> std::io::Result<DateTime<Utc>> {
     Ok(DateTime::<Utc>::from(std::fs::metadata(path)?.modified()?))
 }
 
-/// 读文本文件；读不出、不是 UTF-8 时的说明（读树记成问题）。
+/// 读资源文本文件，换行统一成 `\n`（同 Python 的文本模式读：两版读出的正文、版本号一致）；读不出、不是 UTF-8 时的说明
+/// （读树记成问题）。
 pub(crate) fn read(path: &Path) -> Result<String, String> {
-    muliao_platform::fs::read_text(path).map_err(|e| match e.kind() {
-        std::io::ErrorKind::InvalidData => e.to_string(),
-        _ => format!("cannot read {}: {e}", path.display()),
-    })
+    muliao_platform::fs::read_text(path)
+        .map(|t| if t.contains('\r') { t.replace("\r\n", "\n").replace('\r', "\n") } else { t })
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::InvalidData => e.to_string(),
+            _ => format!("cannot read {}: {e}", path.display()),
+        })
+}
+
+/// Python 的 str.splitlines：这些字符都算换行（\r\n 算一个）。
+pub(crate) fn split_lines(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    let mut chars = text.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        if matches!(c, '\n' | '\r' | '\x0b' | '\x0c' | '\x1c' | '\x1d' | '\x1e' | '\u{85}' | '\u{2028}' | '\u{2029}') {
+            out.push(&text[start..i]);
+            let mut end = i + c.len_utf8();
+            if c == '\r' && chars.peek().is_some_and(|(_, n)| *n == '\n') {
+                chars.next();
+                end += 1;
+            }
+            start = end;
+        }
+    }
+    if start < text.len() {
+        out.push(&text[start..]);
+    }
+    out
 }
 
 /// 读文本，非 UTF-8 的字节换成 U+FFFD（只为比对：读坏了的也要能整个覆盖修好）；不存在为 None。

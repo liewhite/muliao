@@ -55,7 +55,7 @@ pub fn stored(text: &str, old: Option<&str>, limit: usize) -> Result<String, Str
 /// 每行去掉行尾空白，连续空行合并成一个，去掉首尾空行，不留结尾换行：存下的就是指令里显示的样子（#361）。
 pub fn tidy(content: &str) -> String {
     let mut lines: Vec<&str> = Vec::new();
-    for line in content.split('\n') {
+    for line in super::split_lines(content) {
         let line = line.trim_end();
         if !line.is_empty() || lines.last().is_some_and(|l| !l.is_empty()) {
             lines.push(line);
@@ -74,6 +74,7 @@ mod tests {
     #[test]
     fn tidy_and_limit() {
         assert_eq!(tidy("\n\na  \n\n\n b\r\n\n"), "a\n\n b");
+        assert_eq!(tidy("a\u{2028}b\rc\x0c"), "a\nb\nc");
         assert_eq!(stored("x\n", None, 10).unwrap(), "x\n");
         assert_eq!(stored("  \n", None, 10).unwrap(), "");
         assert!(stored("abcdefghijk", None, 10).is_err());

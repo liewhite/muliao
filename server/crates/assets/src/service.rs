@@ -107,7 +107,7 @@ impl AgentService {
         self.source.check_agent(&file)?;
         let w = self.source.writing().await?;
         let n = name.clone();
-        self.db.write(move |tx| agents::check_name_free_in(tx, &n, None)).await?;
+        self.db.read(move |c| agents::check_name_free_in(c, &n, None)).await?;
         check_directory_free(&w.snapshot, &name, None)?;
         // access.toml 的改动先算好（规则的校验都在这里）：它不合法时什么都不写
         let access = access_file::plan(&w.snapshot, |doc| access_file::set_agent_rules(doc, &name, &spec.rules))?;
@@ -150,7 +150,7 @@ impl AgentService {
         let file = directory.file.with(&patch.config).map_err(invalid)?;
         self.source.check_agent(&file)?;
         let (id, n) = (agent_id.to_owned(), name.clone());
-        self.db.write(move |tx| agents::check_name_free_in(tx, &n, Some(&id))).await?;
+        self.db.read(move |c| agents::check_name_free_in(c, &n, Some(&id))).await?;
         check_directory_free(&w.snapshot, &name, Some(&directory.name))?;
         let before = w.snapshot.rules_of(agent_id);
         let rules = AgentRules {
@@ -239,16 +239,6 @@ impl AgentService {
     pub async fn list_views(&self) -> Result<Vec<AgentView>> {
         let snapshot = self.source.snapshot().await?;
         Ok(self.list().await?.into_iter().map(|a| view_of(&snapshot, a)).collect())
-    }
-
-    /// 删除 agent 的工作目录（删除流程里）。删不干净（例如它留在后台的进程还在往里写）只记 warning：工作目录只是文件，
-    /// 不能让删除卡住；残留由启动检查列出（[`AgentService::report_leftovers`]）。
-    pub(crate) fn remove_workspace(&self, agent_id: &str) {
-        let workspace = self.workspace(agent_id);
-        if let Err(e) = remove(&workspace) {
-            tracing::warn!(agent = agent_id, path = %workspace.display(), error = %e,
-                "workspace of a deleted agent could not be fully removed");
-        }
     }
 }
 

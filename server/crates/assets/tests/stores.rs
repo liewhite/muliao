@@ -55,7 +55,8 @@ async fn skills_index_scripts_and_edit() {
     let skill = skills.read("tool").await.unwrap();
     assert_eq!(skill.body, "正文");
     let md = std::fs::read_to_string(&meta.path).unwrap();
-    std::fs::write(&meta.path, md.replace("description: 做事", "description: 做事\napproval: [run.sh]")).unwrap();
+    std::fs::write(&meta.path, md.replace("description: \"做事\"", "description: \"做事\"\napproval: [run.sh]"))
+        .unwrap();
     let scripts = skills.scripts("tool", &a).await.unwrap();
     assert_eq!(scripts.approval.len(), 1);
     assert!(scripts.needs_approval(&muliao_platform::fs::real(w.root().join("alice/skills/tool/run.sh")).unwrap()));

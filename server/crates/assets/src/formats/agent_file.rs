@@ -140,11 +140,26 @@ fn string(table: &toml::Table, key: &str) -> Result<Option<String>, String> {
     }
 }
 
+/// 文件里的键，按写出的顺序（读时只认这些，写时逐个写，[`AgentFile::fields`]）
+const KEYS: [&str; 5] = ["id", "description", "model", "thinking", "group"];
+
+impl AgentFile {
+    /// 每个键要写成的值（None 为没有这个键：不分组）。顺序同 [`KEYS`]。
+    fn fields(&self) -> [Option<&str>; 5] {
+        [
+            Some(&self.id),
+            Some(&self.description),
+            Some(&self.model),
+            Some(self.thinking.as_str()),
+            self.group.as_deref(),
+        ]
+    }
+}
+
 /// 不合格式时报错（原因）。
 pub fn parse(text: &str) -> Result<AgentFile, String> {
     let table: toml::Table = text.parse().map_err(|e: toml::de::Error| invalid(e.message().trim()))?;
-    let unknown: Vec<&String> =
-        table.keys().filter(|k| !matches!(k.as_str(), "id" | "description" | "model" | "thinking" | "group")).collect();
+    let unknown: Vec<&String> = table.keys().filter(|k| !KEYS.contains(&k.as_str())).collect();
     if !unknown.is_empty() {
         return Err(invalid(format!("unknown keys {unknown:?}")));
     }
@@ -158,20 +173,26 @@ pub fn parse(text: &str) -> Result<AgentFile, String> {
     AgentFile::new(required("id")?, required("description")?, required("model")?, thinking, string(&table, "group")?)
 }
 
-/// 要写成 data 时的全文：current 是已有文件的原文（在它上面改，保留注释与别的排版），没有文件为 None。
+/// 要写成 data 时的全文：current 是已有文件的原文（在它上面改，保留注释与别的排版），没有文件为 None。值没变的键原样
+/// 不动；变了的换值，行尾注释留着。
 pub fn render(current: Option<&str>, data: &AgentFile) -> Result<String, String> {
     let mut doc: toml_edit::DocumentMut = match current {
         Some(text) => text.parse().map_err(invalid)?,
         None => toml_edit::DocumentMut::new(),
     };
-    doc["id"] = toml_edit::value(data.id.as_str());
-    doc["description"] = toml_edit::value(data.description.as_str());
-    doc["model"] = toml_edit::value(data.model.as_str());
-    doc["thinking"] = toml_edit::value(data.thinking.as_str());
-    match &data.group {
-        Some(g) => doc["group"] = toml_edit::value(g.as_str()),
-        None => {
-            doc.remove("group");
+    for (key, value) in KEYS.into_iter().zip(data.fields()) {
+        let Some(value) = value else {
+            doc.remove(key);
+            continue;
+        };
+        match doc.get_mut(key).and_then(|i| i.as_value_mut()) {
+            Some(old) if old.as_str() == Some(value) => {}
+            Some(old) => {
+                let decor = old.decor().clone();
+                *old = value.into();
+                *old.decor_mut() = decor;
+            }
+            None => doc[key] = toml_edit::value(value),
         }
     }
     Ok(doc.to_string())
@@ -183,12 +204,15 @@ mod tests {
 
     #[test]
     fn parse_and_render_keep_comments() {
-        let text = "# 注释\nid = \"abc\"\ndescription = \"d\"\nmodel = \"p:m\"\ngroup = \"g\"\n";
+        let text = "# 注释\nid = \"abc\"\ndescription = \"d\"  # 说明\nmodel = \"p:m\" # 模型\ngroup = \"g\"\n";
         let file = parse(text).unwrap();
         assert_eq!(file.thinking(), Thinking::Default);
-        let changed = file.with(&AgentConfig { group: Some("  ".into()), ..Default::default() }).unwrap();
+        let config = AgentConfig { group: Some("  ".into()), description: Some("新".into()), ..Default::default() };
+        let changed = file.with(&config).unwrap();
         let out = render(Some(text), &changed).unwrap();
         assert!(out.starts_with("# 注释\n"), "{out}");
+        assert!(out.contains("description = \"新\"  # 说明\n"), "{out}");
+        assert!(out.contains("model = \"p:m\" # 模型\n"), "{out}");
         assert!(!out.contains("group"));
         assert_eq!(parse(&out).unwrap(), changed);
         assert!(parse("id = \"a\"\ndescription = \" \"\nmodel = \"m\"").is_err());

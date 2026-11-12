@@ -6,7 +6,7 @@ use std::path::Path;
 
 use muliao_platform::fs::{RealPath, resolve_within};
 use yaml_rust2::yaml::Hash;
-use yaml_rust2::{Yaml, YamlEmitter, YamlLoader};
+use yaml_rust2::{Yaml, YamlLoader};
 
 use super::{Draft, Loaded, modified, read};
 use crate::kinds::Content;
@@ -186,19 +186,41 @@ pub fn vet(draft: &Draft<'_>) -> Result<String, String> {
     Ok(draft.text.to_owned())
 }
 
-/// 界面整体改写 SKILL.md：在 current（已有的全文，新建为 None）的 frontmatter 上设 name 与 description（别的键保留），
-/// 正文换成 body。
+/// 界面整体改写 SKILL.md：在 current（已有的全文，新建为 None）的 frontmatter 上设 name 与 description，正文换成 body。
+/// 别的键按原文一字不动地留着（不重新生成 YAML：Python 按 YAML 1.1、这里按 1.2 认类型，重写会改变 `yes` 这类值的
+/// 意思）；name 与 description 写成双引号字符串（JSON 字符串是两个版本都认的字符串）。
 pub fn compose(current: Option<&str>, name: &str, description: &str, body: &str) -> Result<String, String> {
-    let mut meta = match current {
-        Some(text) => metadata(text, &format!("{name}/{SKILL_FILE}"))?,
-        None => Hash::new(),
+    let description = valid_description(description)?;
+    let kept = match current {
+        Some(text) => {
+            // 原来的 frontmatter 写坏了就报出来，不在它上面拼
+            metadata(text, &format!("{name}/{SKILL_FILE}"))?;
+            split(text).map(|(fm, _)| without_keys(fm, &["name", "description"])).unwrap_or_default()
+        }
+        None => String::new(),
     };
-    meta.insert(key("name"), key(name));
-    meta.insert(key("description"), key(&valid_description(description)?));
-    let mut yaml = String::new();
-    YamlEmitter::new(&mut yaml).dump(&Yaml::Hash(meta)).map_err(|e| format!("cannot write frontmatter: {e:?}"))?;
-    let yaml = yaml.strip_prefix("---\n").unwrap_or(&yaml);
-    Ok(format!("---\n{yaml}\n---\n\n{}\n", body.trim()))
+    let quote = |s: &str| serde_json::to_string(s).expect("a string serializes");
+    let text =
+        format!("---\nname: {}\ndescription: {}\n{kept}---\n\n{}\n", quote(name), quote(&description), body.trim());
+    parse_frontmatter(&text, name)?;
+    Ok(text)
+}
+
+/// frontmatter 去掉这些顶层键（连同它们缩进的续行）之后的原文；非空时以换行结尾。
+fn without_keys(fm: &str, keys: &[&str]) -> String {
+    let mut out = String::new();
+    let mut dropping = false;
+    for line in fm.lines() {
+        let top = !line.is_empty() && !line.starts_with([' ', '\t']);
+        if top {
+            dropping = keys.iter().any(|k| line.strip_prefix(k).is_some_and(|r| r.trim_start().starts_with(':')));
+        }
+        if !dropping {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -222,10 +244,13 @@ mod tests {
 
     #[test]
     fn compose_keeps_other_keys() {
-        let text = compose(Some("---\ndescription: old\nlicense: MIT\n---\nold body"), "s", "new", " body \n").unwrap();
+        let old = "---\ndescription: >-\n  old\n  lines\nflag: yes # 注释\nname: s\n---\nold body";
+        let text = compose(Some(old), "s", "yes", " body \n").unwrap();
         let fm = parse_frontmatter(&text, "s").unwrap();
-        assert_eq!(fm.description, "new");
-        assert!(text.contains("license: MIT"), "{text}");
+        assert_eq!(fm.description, "yes");
+        assert!(text.contains("\nflag: yes # 注释\n"), "{text}");
+        assert!(text.starts_with("---\nname: \"s\"\ndescription: \"yes\"\nflag"), "{text}");
+        assert!(!text.contains("old"), "{text}");
         assert_eq!(body_of(&text), "body");
         assert!(text.ends_with("body\n"));
     }

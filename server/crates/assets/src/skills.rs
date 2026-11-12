@@ -60,6 +60,8 @@ impl SkillScripts {
 }
 
 fn fingerprint_dir(dir: &Path, rel: &str, digest: &mut Sha256, seen: &mut Vec<(u64, u64)>) -> std::io::Result<()> {
+    // 读不了的目录整个跳过（同 os.walk：列不出的目录不出现）
+    let Ok(entries) = std::fs::read_dir(dir) else { return Ok(()) };
     let st = std::fs::metadata(dir)?;
     if seen.contains(&(st.dev(), st.ino())) {
         return Ok(());
@@ -68,7 +70,7 @@ fn fingerprint_dir(dir: &Path, rel: &str, digest: &mut Sha256, seen: &mut Vec<(u
     digest.update(format!("{rel}/\0").as_bytes());
     let mut dirs = Vec::new();
     let mut files = Vec::new();
-    for entry in std::fs::read_dir(dir)?.filter_map(|e| e.ok()) {
+    for entry in entries.filter_map(|e| e.ok()) {
         let name = entry.file_name().to_string_lossy().into_owned();
         if std::fs::metadata(entry.path()).is_ok_and(|m| m.is_dir()) {
             if name != "__pycache__" && !name.starts_with('.') {
@@ -134,7 +136,7 @@ impl SkillStore {
     pub async fn read(&self, name: &str) -> Result<Skill> {
         let snapshot = self.source.snapshot().await?;
         let asset = snapshot.asset(StoredKind::Skill, name)?;
-        let text = std::fs::read_to_string(asset.path.join(SKILL_FILE))?;
+        let text = crate::formats::read(&asset.path.join(SKILL_FILE)).map_err(invalid)?;
         Ok(Skill { meta: meta(asset), body: body_of(&text), version: version_of(&text) })
     }
 
@@ -157,7 +159,7 @@ impl SkillStore {
         let (md, current) = match snapshot.existing(StoredKind::Skill, name)? {
             Some(a) => {
                 let md = a.path.join(SKILL_FILE);
-                let text = std::fs::read_to_string(&md)?;
+                let text = crate::formats::read(&md).map_err(invalid)?;
                 (md, Some(text))
             }
             None => (snapshot.path_of(StoredKind::Skill, name, owner)?.join(SKILL_FILE), None),
@@ -166,8 +168,7 @@ impl SkillStore {
         let what = format!("skill {name:?}");
         // 此刻文件里的（写入口在锁里、紧挨着写之前调用）：期间被删、被抢先建、被改过都对不上
         let unchanged = |p: &Path| {
-            let now =
-                if p.is_file() { Some(std::fs::read_to_string(p).map_err(|e| conflict(e.to_string()))?) } else { None };
+            let now = if p.is_file() { Some(crate::formats::read(p).map_err(conflict)?) } else { None };
             check_version(now.as_deref(), version, &what)
         };
         self.source.write(&[(md, text)], Some(&unchanged)).await?;

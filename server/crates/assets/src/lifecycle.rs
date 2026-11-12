@@ -11,6 +11,7 @@
 //! 归档（[`AgentLifecycle::set_archived`]）是可以来回切换的停用：只在它空闲（各领域登记的 [`ArchiveBlocker`] 都说不挡）、
 //! 且不是默认 agent 时可做；之后给它派新工作的入口都拒绝（[`crate::agents::runnable_agent_in`]），数据都留着。
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use muliao_platform::db::{Database, Tx};
@@ -20,7 +21,6 @@ use crate::access::{Actor, Sharing};
 use crate::access_file::{self, AccessEdit};
 use crate::agents::{self, AgentInfo};
 use crate::error::{Result, conflict};
-use crate::service::AgentService;
 use crate::source::AssetSource;
 use crate::tree::{Owner, Snapshot, move_to, remove};
 
@@ -33,7 +33,8 @@ pub type ArchiveBlocker = Arc<dyn Fn(&Connection, &str) -> Result<bool> + Send +
 pub struct AgentLifecycle {
     db: Arc<Database>,
     source: Arc<AssetSource>,
-    service: Arc<AgentService>,
+    /// 各 agent 的工作目录所在（`<这里>/<id>`，同 [`crate::service::AgentService::workspace`]）
+    workspaces_dir: PathBuf,
     hooks: Arc<Vec<DeletionHook>>,
     blockers: Arc<Vec<(String, ArchiveBlocker)>>,
 }
@@ -42,14 +43,15 @@ impl AgentLifecycle {
     /// hooks、blockers：各领域登记的删除清理与归档前检查（组合根收集）。
     pub fn new(
         source: Arc<AssetSource>,
-        service: Arc<AgentService>,
+        workspaces_dir: PathBuf,
         hooks: Vec<DeletionHook>,
         blockers: Vec<(String, ArchiveBlocker)>,
     ) -> Self {
-        Self { db: source.db().clone(), source, service, hooks: Arc::new(hooks), blockers: Arc::new(blockers) }
+        Self { db: source.db().clone(), source, workspaces_dir, hooks: Arc::new(hooks), blockers: Arc::new(blockers) }
     }
 
-    /// 发起删除并删完文件。标记之后删文件失败时返回那个错误：agent 已不在列表里，服务下次启动时接着删。
+    /// 发起删除并删完文件。标记之后删文件失败时返回那个错误：agent 已不在列表里，服务下次启动时接着删。删文件
+    /// 放在独立的任务里：调用方被取消（客户端断开、调用它的运行被停）也照样删完。
     pub async fn delete(&self, agent_id: &str, actor: &Actor) -> Result<()> {
         let id = agent_id.to_owned();
         let agent = self.db.read(move |c| agents::deletable_in(c, &id)).await?;
@@ -66,33 +68,22 @@ impl AgentLifecycle {
             })
             .await?;
         tracing::info!(agent = agent_id, actor = actor.as_str(), "agent deletion started");
-        self.remove_files(agent_id).await
+        let removal = tokio::spawn(remove_files(
+            self.db.clone(),
+            self.source.clone(),
+            self.workspaces_dir.join(agent_id),
+            agent_id.to_owned(),
+        ));
+        removal.await.unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic()))
     }
 
     /// 启动时：接着删停在正在删除的 agent（上次删文件失败或服务中途重启）。失败的记 error，下次启动再试。
     pub async fn resume_deletions(&self) -> Result<()> {
         for (agent_id, _) in self.db.read(agents::deleting_in).await? {
-            if let Err(e) = self.remove_files(&agent_id).await {
+            let workspace = self.workspaces_dir.join(&agent_id);
+            if let Err(e) = remove_files(self.db.clone(), self.source.clone(), workspace, agent_id.clone()).await {
                 tracing::error!(agent = %agent_id, error = %e, "removing the files of a deleted agent failed again");
             }
-        }
-        Ok(())
-    }
-
-    /// 删工作目录、资源目录与 access.toml 里它的那一节，最后删这一行。行已不在时什么都不做。
-    async fn remove_files(&self, agent_id: &str) -> Result<()> {
-        let id = agent_id.to_owned();
-        let deleting = self.db.read(move |c| Ok::<_, crate::error::Error>(agents::agent_in(c, &id).ok())).await?;
-        let Some(agent) = deleting else { return Ok(()) };
-        assert!(agent.deleting, "agent {agent_id} reached file removal without being marked as deleting");
-        self.service.remove_workspace(agent_id);
-        {
-            let w = self.source.writing().await?;
-            retire_assets(&w.snapshot, agent_id)?;
-        }
-        let id = agent_id.to_owned();
-        if self.db.write(move |tx| agents::remove_in(tx, &id)).await? {
-            tracing::info!(agent = agent_id, "agent deleted");
         }
         Ok(())
     }
@@ -130,6 +121,30 @@ impl AgentLifecycle {
         }
         Ok(after)
     }
+}
+
+/// 删工作目录、资源目录与 access.toml 里它的那一节，最后删这一行。行已不在时什么都不做；每一步重做时是空操作。
+async fn remove_files(db: Arc<Database>, source: Arc<AssetSource>, workspace: PathBuf, agent_id: String) -> Result<()> {
+    let id = agent_id.clone();
+    let row = db.read(move |c| Ok::<_, crate::error::Error>(agents::agent_in(c, &id).ok())).await?;
+    let Some(agent) = row else { return Ok(()) };
+    assert!(agent.deleting, "agent {agent_id} reached file removal without being marked as deleting");
+    // 工作目录里可能有 venv、clone 的仓库：放到阻塞线程里删。删不干净（它留在后台的进程还在往里写）只记
+    // warning：工作目录只是文件，不能让删除卡住；残留由启动检查列出（AgentService::report_leftovers）
+    let path = workspace.clone();
+    if let Err(e) = tokio::task::spawn_blocking(move || remove(&path)).await.expect("removing a workspace panicked") {
+        tracing::warn!(agent = %agent_id, path = %workspace.display(), error = %e,
+            "workspace of a deleted agent could not be fully removed");
+    }
+    {
+        let w = source.writing().await?;
+        retire_assets(&w.snapshot, &agent_id)?;
+    }
+    let id = agent_id.clone();
+    if db.write(move |tx| agents::remove_in(tx, &id)).await? {
+        tracing::info!(agent = %agent_id, "agent deleted");
+    }
+    Ok(())
 }
 
 /// 删掉 agent 的资源目录与 access.toml 里它的那一节；它名下分发出去的资源（base 收录，或别的 agent 的规则收录）先挪到

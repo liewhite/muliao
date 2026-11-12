@@ -26,7 +26,9 @@ use toml_edit::{Array, DocumentMut, Item, Table, TableLike, Value};
 use crate::error::{Result, conflict, invalid};
 use crate::kinds::Kind;
 use crate::naming::{nfc, validate_slug};
-use crate::rules::{AgentRules, BASE, Role, Roles, Rules, ToolTable, fixed_rules, fnmatch, kind_of, matches_no_tool};
+use crate::rules::{
+    ADMIN, AgentRules, BASE, Role, Roles, Rules, ToolTable, fixed_rules, fnmatch, kind_of, matches_no_tool,
+};
 use crate::tree::Snapshot;
 
 pub const ACCESS_FILE: &str = "access.toml";
@@ -34,8 +36,8 @@ pub const ACCESS_FILE: &str = "access.toml";
 /// 内置角色没写描述时的描述
 fn builtin_description(name: &str) -> Option<&'static str> {
     match name {
-        "base" => Some("每个 agent 都有：全部非管理工具与全局记忆，加上这里收录的 skill、MCP server、secret、记忆"),
-        "admin" => Some("全部工具（含管理 agent 与角色），并且能改任何 AI 资源"),
+        BASE => Some("每个 agent 都有：全部非管理工具与全局记忆，加上这里收录的 skill、MCP server、secret、记忆"),
+        ADMIN => Some("全部工具（含管理 agent 与角色），并且能改任何 AI 资源"),
         _ => None,
     }
 }
@@ -232,6 +234,15 @@ impl<'a> Parser<'a> {
         if !unknown.is_empty() {
             self.invalid(format!("{what}: roles {unknown:?} are not defined in [roles]"));
         }
+        if let Some(id) = &agent_id
+            && self.rules.contains_key(id)
+        {
+            // 两节写法不同（NFC 与 NFD）却是同一个 agent：后一节盖掉前一节会悄悄丢掉它的 deny，所以整份作废
+            self.invalid(format!(
+                "{what}: another [agents.*] section already names this agent (same name, other encoding)"
+            ));
+            return;
+        }
         let Some(agent_id) = agent_id else {
             // 那个 agent 本来就跑不了（目录没加载），这一节暂时不起作用
             self.problem(format!("[agents.{name}]: no loaded agent directory has this name"), None);
@@ -335,11 +346,9 @@ pub fn vet(before: Option<&str>, after: &str, tools: &ToolTable, addressable: &[
         if old.contains(&p) || bad.contains(&p) || matches!(kind_of(&p), Ok(None | Some(Kind::Path))) {
             continue;
         }
-        let matched = addressable.iter().any(|i| {
-            [crate::rules::Action::Use, crate::rules::Action::Write]
-                .iter()
-                .any(|a| fnmatch(&format!("{}:{i}", a.as_str()), &p))
-        });
+        let matched = addressable
+            .iter()
+            .any(|i| crate::rules::Action::ALL.iter().any(|a| fnmatch(&format!("{}:{i}", a.as_str()), &p)));
         if !matched {
             bad.push(p);
         }
@@ -558,6 +567,14 @@ allow = []
             assert!(a.rules.is_empty());
             assert_eq!(a.roles.len(), 2);
         }
+    }
+
+    #[test]
+    fn one_agent_in_two_encodings_is_invalid() {
+        // 同一个 agent 的两种 Unicode 写法（NFC 与 NFD）：后一节会盖掉前一节的 deny
+        let agents = BTreeMap::from([("caf\u{e9}".to_owned(), "a1".to_owned())]);
+        let text = "[agents.\"caf\u{e9}\"]\ndeny = [\"use:tool:read_file\"]\n[agents.\"cafe\u{301}\"]\nallow = []\n";
+        assert!(!parse(Some(text), &agents, &tools()).readable);
     }
 
     #[test]
