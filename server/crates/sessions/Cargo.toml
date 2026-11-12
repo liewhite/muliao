@@ -10,6 +10,22 @@ muliao-assets = { workspace = true }
 muliao-files = { workspace = true }
 muliao-usage = { workspace = true }
 muliao-runtime = { workspace = true }
+agenter = { workspace = true }
+chrono = { workspace = true }
+chrono-tz = { workspace = true }
+futures = { workspace = true }
+rusqlite = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+wiremock = { workspace = true }
 
 [lints]
 workspace = true
