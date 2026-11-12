@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::process::Command;
 
-/// 领域 crate 的层（包名去掉 `muliao-`）。http、组合根、迁移程序在最上面，可以依赖所有领域
+/// 领域 crate 的层（包名去掉 `muliao-`）。http、组合根在最上面，可以依赖所有领域；迁移程序再上一层，用组合根的表结构与装配
 const LAYERS: &[(&str, u32)] = &[
     ("platform", 0),
     ("assets", 1),
@@ -21,7 +21,7 @@ const LAYERS: &[(&str, u32)] = &[
     ("history", 6),
     ("http", 7),
     ("server", 8),
-    ("migrate", 8),
+    ("migrate", 9),
 ];
 
 #[test]
