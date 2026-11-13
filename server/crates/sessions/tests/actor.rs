@@ -32,7 +32,6 @@ use muliao_sessions::answers::QuestionAnswer;
 use muliao_sessions::compaction::Compactor;
 use muliao_sessions::conventions::{STOPPED_TOOL_RESULT, is_stopped};
 use muliao_sessions::events::{Events, RunEnded, RunFailed, Subscribers};
-use muliao_sessions::halt::Halted;
 use muliao_sessions::history;
 use muliao_sessions::inbound::{UserMessage, UserTarget};
 use muliao_sessions::live::Live;
@@ -463,7 +462,7 @@ async fn stopping_a_running_tool_saves_what_happened() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     assert_eq!(w.state(&s).await, WorkState::Running);
-    assert_eq!(w.service.stop(&s).await.unwrap(), Halted::Stopped);
+    w.service.stop(&s).await.unwrap();
     assert_eq!(w.state(&s).await, WorkState::Idle);
     let h = w.history(&s).await;
     assert_eq!(h.len(), 3);

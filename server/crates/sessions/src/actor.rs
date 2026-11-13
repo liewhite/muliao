@@ -218,34 +218,22 @@ async fn actor(inner: Arc<Inner>, id: String, mut rx: mpsc::UnboundedReceiver<Co
             let _ = reply.send(compact(&inner.core, &id).await);
             continue;
         }
-        match has_work(&inner.core, &id).await {
-            Ok(true) => {
-                let recorded = run_with_retries(&inner, &id, &mut rx, &mut compactions).await;
-                if !recorded {
-                    // 失败得连运行记录都没留下（开头的事务就出错）：不原地重来，等下一次叫醒；有排着的命令就回到主循环处理
-                    // （处理完会再试一次，命令总会处理完，不会空转）
-                    let mut actors = inner.actors.lock().expect("actors lock");
-                    if rx.is_empty() {
-                        actors.remove(&id);
-                        return;
-                    }
-                }
-            }
-            Ok(false) => {
-                // 没事可做：在登记锁里确认没有新命令再退出（发命令的一方也在这把锁里发）
-                let mut actors = inner.actors.lock().expect("actors lock");
-                if rx.is_empty() {
-                    actors.remove(&id);
-                    return;
-                }
-            }
+        let idle = match has_work(&inner.core, &id).await {
+            // 失败得连运行记录都没留下（开头的事务就出错）：不原地重来，等下一次叫醒
+            Ok(true) => !run_with_retries(&inner, &id, &mut rx, &mut compactions).await,
+            Ok(false) => true,
             Err(e) => {
                 tracing::error!(session_id = %id, error = %e, "session actor could not read its state");
-                let mut actors = inner.actors.lock().expect("actors lock");
-                if rx.is_empty() {
-                    actors.remove(&id);
-                    return;
-                }
+                true
+            }
+        };
+        if idle {
+            // 在登记锁里确认没有新命令再退出（发命令的一方也在这把锁里发）；有排着的命令就回到主循环处理（处理完会再
+            // 试一次，命令总会处理完，不会空转）
+            let mut actors = inner.actors.lock().expect("actors lock");
+            if rx.is_empty() {
+                actors.remove(&id);
+                return;
             }
         }
     }

@@ -159,9 +159,12 @@ impl SessionService {
     }
 
     /// 用户停止会话：结束正在进行的运行（已产生的部分照常保存）、清空信箱，连带停下它发起的异步工作。返回时已生效。
-    pub async fn stop(&self, session_id: &str) -> Result<Halted> {
-        self.get(session_id).await?;
-        self.actors.stop(session_id).await
+    /// 会话不存在时 NotFound。
+    pub async fn stop(&self, session_id: &str) -> Result<()> {
+        match self.actors.stop(session_id).await? {
+            Halted::Stopped => Ok(()),
+            Halted::Gone => Err(not_found(format!("session {session_id:?} not found"))),
+        }
     }
 
     /// 用户删除会话（规则见 [`crate::deletion`]）：忙时 Conflict。
@@ -178,13 +181,11 @@ impl SessionService {
 
     /// 用户手动压缩上下文：排在当前运行之后，做完返回压缩的步数（0 是保留窗口之外没有可压缩的）。
     pub async fn compact(&self, session_id: &str) -> Result<usize> {
-        self.get(session_id).await?;
         self.actors.compact(session_id).await
     }
 
     /// 重试最近一次最终失败的运行。
     pub async fn retry(&self, session_id: &str) -> Result<()> {
-        self.get(session_id).await?;
         self.actors.retry(session_id).await
     }
 }

@@ -37,8 +37,10 @@ use muliao_sessions::work::SessionWork;
 pub use grants::ScriptGrants;
 pub use jobs::JobRunner;
 
-pub const MIGRATION: Migration =
-    Migration { domain: "workspace", steps: &[include_str!("../migrations/001_workspace.sql")] };
+pub const MIGRATION: Migration = Migration {
+    domain: "workspace",
+    steps: &[include_str!("../migrations/001_workspace.sql"), include_str!("../migrations/002_grant_keys.sql")],
+};
 
 /// 工作区领域要的外部依赖。
 pub struct WorkspaceDeps {

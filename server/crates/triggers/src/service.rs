@@ -126,7 +126,11 @@ enum Outcome {
 enum First {
     Done(Outcome),
     /// previous：changed 检查上一次的输出（基线）
-    Check { agent_id: String, precheck: Precheck, previous: Option<String> },
+    Check {
+        agent_id: String,
+        precheck: Precheck,
+        previous: Option<String>,
+    },
 }
 
 /// 谁在触发：决定前置检查失败怎么处理。

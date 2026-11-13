@@ -338,19 +338,6 @@ impl Run {
 impl Drop for Run {
     fn drop(&mut self) {
         let spent = *self.meter.spent.lock().expect("meter lock");
-        let unbilled = *self.meter.pending.lock().expect("meter lock");
-        if unbilled != UsageTotals::default() {
-            tracing::error!(
-                agent = %self.scope.agent_id,
-                session_id = %self.scope.session_id,
-                requests = unbilled.requests,
-                input_tokens = unbilled.input_tokens,
-                output_tokens = unbilled.output_tokens,
-                cache_read_tokens = unbilled.cache_read_tokens,
-                cache_write_tokens = unbilled.cache_write_tokens,
-                "the run ended with model usage that could not be recorded"
-            );
-        }
         tracing::info!(
             agent = %self.scope.agent_id,
             session_id = %self.scope.session_id,
@@ -365,8 +352,7 @@ impl Drop for Run {
 }
 
 /// 一次运行的计量：每次模型回复后记一笔（会话的累计随步骤更新，服务被硬杀只丢在途那次请求的）。用量是账目，不是运行的
-/// 一部分：记不上只记 error 日志、不改变运行的结果，没记上的并进这次运行的下一笔；运行结束时还有没记上的，只在
-/// error 日志里留下数目（便于人工补记）。交出去之后调用方被取消的，这笔照样会
+/// 一部分：记不上只记一条带数目的 error 日志（便于人工补记），不改变运行的结果。交出去之后调用方被取消的，这笔照样会
 /// 入账（UsageLog::record 的约定），按已入账算。
 struct Meter {
     usage: Arc<UsageLog>,
@@ -374,8 +360,6 @@ struct Meter {
     session_id: Option<String>,
     model: String,
     kind: RunKind,
-    /// 还没记上的
-    pending: Mutex<UsageTotals>,
     /// 整次运行花掉的（日志用）
     spent: Mutex<UsageTotals>,
 }
@@ -388,25 +372,19 @@ impl Meter {
             session_id: session_id.map(str::to_owned),
             model: model.to_owned(),
             kind,
-            pending: Mutex::default(),
             spent: Mutex::default(),
         }
     }
 
     async fn bill(&self, u: agenter::Usage) {
-        let this = UsageTotals {
+        let totals = UsageTotals {
             requests: 1,
             input_tokens: u.input_tokens,
             output_tokens: u.output_tokens,
             cache_read_tokens: u.cache_read_tokens,
             cache_write_tokens: u.cache_write_tokens,
         };
-        *self.spent.lock().expect("meter lock") += this;
-        let totals = {
-            let mut pending = self.pending.lock().expect("meter lock");
-            *pending += this;
-            std::mem::take(&mut *pending)
-        };
+        *self.spent.lock().expect("meter lock") += totals;
         let entry = UsageEntry {
             agent_id: self.agent_id.clone(),
             session_id: self.session_id.clone(),
@@ -415,8 +393,10 @@ impl Meter {
             totals,
         };
         if let Err(e) = self.usage.record(entry).await {
-            tracing::error!(agent = %self.agent_id, kind = self.kind.as_str(), error = %e, "recording model usage failed");
-            *self.pending.lock().expect("meter lock") += totals;
+            tracing::error!(agent = %self.agent_id, session_id = ?self.session_id, kind = self.kind.as_str(),
+                model = %self.model, input_tokens = totals.input_tokens, output_tokens = totals.output_tokens,
+                cache_read_tokens = totals.cache_read_tokens, cache_write_tokens = totals.cache_write_tokens,
+                error = %e, "recording model usage failed; this request is not in the usage log");
         }
     }
 }

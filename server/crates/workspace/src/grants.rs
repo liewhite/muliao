@@ -56,19 +56,17 @@ impl ScriptCall {
         }
     }
 
-    /// 查找与去重的键：与 Python 版逐字节相同（`json.dumps([...], ensure_ascii=False)` 的 sha256），迁过来的授权照样认。
+    /// 查找与去重的键：各项按顺序序列化成 JSON 数组后的 sha256。
     pub fn key(&self) -> String {
-        let s = |v: &str| serde_json::to_string(v).expect("strings serialize");
-        let list = |v: &[String]| format!("[{}]", v.iter().map(|x| s(x)).collect::<Vec<_>>().join(", "));
-        let data = format!(
-            "[{}, {}, {}, {}, {}, {}]",
-            s(&self.agent_id),
-            s(&self.skill),
-            s(&self.script),
-            list(&self.args),
-            list(&self.secrets),
-            s(&self.fingerprint)
-        );
+        let data = serde_json::to_string(&(
+            &self.agent_id,
+            &self.skill,
+            &self.script,
+            &self.args,
+            &self.secrets,
+            &self.fingerprint,
+        ))
+        .expect("strings serialize");
         format!("{:x}", Sha256::digest(data.as_bytes()))
     }
 }
@@ -215,11 +213,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn keys_match_python() {
-        // python3 -c 'import hashlib,json;print(hashlib.sha256(json.dumps(["a1","s","run.sh",["x y","中"],["K"],"fp"],
-        //   ensure_ascii=False).encode()).hexdigest())'
+    fn keys_identify_the_call() {
         let call = ScriptCall::new("a1", "s", "run.sh", &["x y".into(), "中".into()], &["K".into(), "K".into()], "fp");
         assert_eq!(call.secrets, ["K"]);
-        assert_eq!(call.key(), "b1efe18f12f79a9b6d985472943e68ec69753c11d5597bfbdeff25726a58392e");
+        // printf '%s' '["a1","s","run.sh",["x y","中"],["K"],"fp"]' | shasum -a 256
+        assert_eq!(call.key(), "dbcf5f88e65c2292e887ffbb2461069ae21546f1d9e4778482b514d436be17d1");
+        let other = ScriptCall::new("a1", "s", "run.sh", &["x".into(), "y 中".into()], &["K".into()], "fp");
+        assert_ne!(call.key(), other.key());
     }
 }

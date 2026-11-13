@@ -774,8 +774,11 @@ impl Tool<RunScope> for EditFile {
             .collect();
         let changed: Vec<PathBuf> = order.iter().filter(|t| after.contains_key(*t)).cloned().collect();
         // 读与写之间只隔几毫秒：期间别处改了同一个文件就盖掉那次改动（重做即可），不再核对
-        let in_tree: Vec<(PathBuf, String, Expect)> =
-            changed.iter().filter(|t| deps.assets.contains(t)).map(|t| (t.clone(), stored[t].clone(), Expect::Any)).collect();
+        let in_tree: Vec<(PathBuf, String, Expect)> = changed
+            .iter()
+            .filter(|t| deps.assets.contains(t))
+            .map(|t| (t.clone(), stored[t].clone(), Expect::Any))
+            .collect();
 
         // 资源目录里的先经写入口：全部校验通过才写（原子写入，记忆规整空白），回显按实际存下的
         if !in_tree.is_empty() {
