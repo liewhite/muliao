@@ -1528,8 +1528,7 @@ export interface components {
         };
         /** @description 事件信件的来源：交给模型时套在事件外面（[`EventSource::raw`]），界面按种类显示。 */
         EventSource: {
-            /** Format: int64 */
-            job_id: number;
+            job_id: components["schemas"]["JobId"];
             /** @enum {string} */
             kind: "job";
         } | {
@@ -1735,6 +1734,11 @@ export interface components {
             /** @enum {string} */
             type: "stopped";
         };
+        /**
+         * Format: int64
+         * @description 一个后台任务的编号（jobs 表的行号）
+         */
+        JobId: number;
         /** @description 在等的后台任务的详情（与 job_status 同一份）。 */
         JobOut: {
             command: string;
@@ -2496,8 +2500,7 @@ export interface components {
         };
         /** @description 会话在等的一项东西（会话领域的 [`Wait`]）；后台任务另带任务的详情。 */
         WaitOut: {
-            /** Format: int64 */
-            job_id: number;
+            job_id: components["schemas"]["JobId"];
             /** Format: date-time */
             since: string;
             job: components["schemas"]["JobOut"];
@@ -4493,7 +4496,8 @@ export interface operations {
             path: {
                 /** @description agent 的编号 */
                 agent_id: components["schemas"]["AgentId"];
-                job_id: number;
+                /** @description 后台任务的编号 */
+                job_id: components["schemas"]["JobId"];
             };
             cookie?: never;
         };

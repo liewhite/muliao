@@ -1,6 +1,7 @@
 //! 记录的编号与几种规整过的值。
 //!
-//! 各领域的编号各是一个类型（[`AgentId`]、[`SessionId`]、[`RunId`]、[`MailId`]、[`HoldId`]）：只是名字，不带领域规则，
+//! 各领域的编号各是一个类型（[`AgentId`]、[`SessionId`]、[`RunId`]、[`MailId`]、[`HoldId`]、[`JobId`]、
+//! [`DelegationId`]）：只是名字，不带领域规则，
 //! 放在这里因为各层都要传它们（共享内核，docs/architecture.md 第 3 节）。不同编号不能互传，传错位置编译不过。
 //! 只在读入边界构造：读库（`FromSql`）、HTTP 路径与请求体（`Deserialize`）、新建记录（`new`）；序列化、存库、
 //! 接口描述里都与内部的字符串或整数相同（旧数据、前端无感）。
@@ -128,6 +129,14 @@ row_id!(
 row_id!(
     /// 一项占用的编号（session_holds 表的行号）
     HoldId
+);
+row_id!(
+    /// 一个后台任务的编号（jobs 表的行号）
+    JobId
+);
+row_id!(
+    /// 一次委派的编号（thread_calls 表的行号）
+    DelegationId
 );
 
 /// 浏览器可以直接显示、模型也普遍能看的图片类型：只有这些按 inline 返回，并作为图片交给模型。SVG 不在其中：它能带脚本

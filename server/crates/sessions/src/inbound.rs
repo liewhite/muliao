@@ -8,7 +8,7 @@
 //! - 新建会话只有 [`create_session_in`] 一处实现（来信与 thread 都经过它）。会话只为能运行的 agent 新建、继续（在本事务里
 //!   检查 agent 没在删除、没归档）。
 
-use muliao_platform::ids::{AgentId, SessionId, new_id};
+use muliao_platform::ids::{AgentId, DelegationId, SessionId, new_id};
 
 use muliao_assets::agents::{Availability, agent_in, availability_in, runnable_agent_in};
 use muliao_files::{FileMeta, load_metas};
@@ -123,7 +123,7 @@ pub(crate) struct Inbound {
     /// 用户在等它的回答
     pub awaited: bool,
     /// 委派来的信件：是哪项委派（thread_calls 的行）
-    pub delegation: Option<i64>,
+    pub delegation: Option<DelegationId>,
 }
 
 /// 用户对已有会话里一次挂起调用的回复（[`reply_in`]）。
@@ -170,7 +170,7 @@ impl Inbound {
         thread_id: &SessionId,
         content: &str,
         awaited: bool,
-        delegation: Option<i64>,
+        delegation: Option<DelegationId>,
     ) -> Self {
         Inbound {
             from: Party::Parent(parent_id.to_owned()),

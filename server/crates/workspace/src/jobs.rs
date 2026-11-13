@@ -14,7 +14,7 @@
 //! - 任务对 agent 可见（工作目录本来就是 agent 级的，job_status / job_kill 按 agent 检查归属），事件归发起它的会话。日志
 //!   大小不设上限。
 
-use muliao_platform::ids::{AgentId, SessionId};
+use muliao_platform::ids::{AgentId, JobId, SessionId};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -43,7 +43,7 @@ fn log_tail(path: &std::path::Path) -> String {
 pub const JOBS_DIR: &str = "jobs";
 
 /// 任务的输出日志，相对 agent 工作目录（agent 用 read_file 读）
-pub fn log_path(job_id: i64) -> String {
+pub fn log_path(job_id: JobId) -> String {
     format!("{JOBS_DIR}/{job_id}.log")
 }
 
@@ -150,7 +150,7 @@ impl JobState {
 /// 库里的一行。
 #[derive(Debug, Clone)]
 struct Job {
-    id: i64,
+    id: JobId,
     session_id: SessionId,
     agent_id: AgentId,
     command: String,
@@ -189,26 +189,26 @@ fn jobs_where(c: &Connection, filter: &str, args: impl rusqlite::Params) -> Resu
     Ok(stmt.query_map(args, job_of)?.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-fn job_in(c: &Connection, job_id: i64) -> Result<Option<Job>> {
+fn job_in(c: &Connection, job_id: JobId) -> Result<Option<Job>> {
     Ok(jobs_where(c, "id = ?1", [job_id])?.pop())
 }
 
 /// 这个 agent 的任务（别的 agent 的按不存在报）。
-fn own_in(c: &Connection, job_id: i64, agent_id: &AgentId) -> Result<Job> {
+fn own_in(c: &Connection, job_id: JobId, agent_id: &AgentId) -> Result<Job> {
     job_in(c, job_id)?.filter(|j| &j.agent_id == agent_id).ok_or_else(|| not_found(format!("job {job_id} not found")))
 }
 
 /// 起来了的后台任务。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JobStarted {
-    pub id: i64,
+    pub id: JobId,
     pub log_path: String,
 }
 
 /// job_status 与界面看到的一个任务。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JobInfo {
-    pub id: i64,
+    pub id: JobId,
     pub command: String,
     pub state: JobState,
     pub log_path: String,
@@ -320,8 +320,8 @@ pub struct JobRunner {
     db: Arc<Database>,
     commands: Arc<AgentCommands>,
     work: SessionWork,
-    running: Mutex<HashMap<i64, Arc<Handle>>>,
-    beats: Mutex<CheckBeats<i64>>,
+    running: Mutex<HashMap<JobId, Arc<Handle>>>,
+    beats: Mutex<CheckBeats<JobId>>,
 }
 
 impl JobRunner {
@@ -384,7 +384,7 @@ impl JobRunner {
                      VALUES (?1, ?2, ?3, 'running', ?4, ?5, ?6)",
                     params![sid, aid, cmd, pgid, check_seconds, Utc::now()],
                 )?;
-                let id = tx.last_insert_rowid();
+                let id = JobId::new(tx.last_insert_rowid());
                 let log_path = log_path(id);
                 // 同一事务里在会话上登记占用（会话据此知道工作还没做完；用户是否在等结局记在占用上）
                 work.hold_in(tx, &sid, id, awaited)?;
@@ -418,7 +418,7 @@ impl JobRunner {
     /// 看着进程直到结局写进库。结局写不进去（数据库出错）时记 error，这一行停在 running，下次启动时收掉。
     async fn supervise(
         &self,
-        job_id: i64,
+        job_id: JobId,
         handle: Arc<Handle>,
         spawned: Spawned,
         shell: AgentShell,
@@ -451,7 +451,7 @@ impl JobRunner {
                     Some(s.code().unwrap_or_else(|| -s.signal().unwrap_or(0)))
                 }
                 Err(e) => {
-                    tracing::error!(job_id, error = %e, "waiting for a background job failed; its exit code is unknown");
+                    tracing::error!(%job_id, error = %e, "waiting for a background job failed; its exit code is unknown");
                     None
                 }
             };
@@ -459,7 +459,7 @@ impl JobRunner {
         };
         let (end, note) = match (recorded, ending) {
             (Err(e), _) => {
-                tracing::error!(job_id, error = %e, "background job output could not be recorded");
+                tracing::error!(%job_id, error = %e, "background job output could not be recorded");
                 (End::Interrupted, Some("its output could not be recorded (see server log)".to_owned()))
             }
             (Ok(()), Some(Ending::Interrupted(reason))) => (End::Interrupted, Some(reason)),
@@ -469,15 +469,15 @@ impl JobRunner {
             (Ok(()), None) => (End::Exited { code: exit_code }, (!drained).then(|| LEFT_RUNNING_NOTE.to_owned())),
         };
         if let Err(e) = self.finish(job_id, &log_file, end, note, &shell).await {
-            tracing::error!(job_id, error = %e, "background job outcome could not be recorded; it stays running until the next start");
+            tracing::error!(%job_id, error = %e, "background job outcome could not be recorded; it stays running until the next start");
             return;
         }
-        tracing::info!(job_id, end = ?end, "background job finished");
+        tracing::info!(%job_id, end = ?end, "background job finished");
     }
 
     async fn finish(
         &self,
-        job_id: i64,
+        job_id: JobId,
         log_file: &std::path::Path,
         end: End,
         note: Option<String>,
@@ -517,7 +517,7 @@ impl JobRunner {
     }
 
     /// 结束这个 agent 的一个运行中的任务；结果（killed）随后作为事件到达。
-    pub async fn kill(&self, job_id: i64, agent_id: &AgentId) -> Result<()> {
+    pub async fn kill(&self, job_id: JobId, agent_id: &AgentId) -> Result<()> {
         let agent = agent_id.to_owned();
         let job = self.db.read(move |c| own_in(c, job_id, &agent)).await?;
         if !job.state.running() {
@@ -528,14 +528,14 @@ impl JobRunner {
             // 进程刚好自己退出了，结局正在记下
             return Err(conflict(format!("job {job_id} has just ended; its final status will arrive as an event")));
         }
-        tracing::info!(job_id, "background job kill requested");
+        tracing::info!(%job_id, "background job kill requested");
         Ok(())
     }
 
     /// 会话被用户停止（订阅会话领域的事件，在停止的事务里）：提交之后结束被清掉的占用对应的后台任务（同 job_kill），结局
     /// 照常由照看者记下（killed）；会话的占用已经清掉，结局不再投信。
     pub fn on_stopped(self: &Arc<Self>, tx: &mut Tx<'_>, event: &SessionStopped) {
-        let jobs: Vec<i64> = event
+        let jobs: Vec<JobId> = event
             .cleared
             .iter()
             .filter_map(|h| match h {
@@ -549,7 +549,7 @@ impl JobRunner {
         let (this, session_id) = (self.clone(), event.session_id.clone());
         tx.on_commit(move || {
             let running = this.running.lock().expect("running lock");
-            let stopped: Vec<i64> =
+            let stopped: Vec<JobId> =
                 jobs.into_iter().filter(|id| running.get(id).is_some_and(|h| h.end(Ending::Killed))).collect();
             if !stopped.is_empty() {
                 tracing::info!(%session_id, job_ids = ?stopped, "background jobs stopped with their session");
@@ -557,7 +557,7 @@ impl JobRunner {
         });
     }
 
-    pub async fn info(&self, job_id: i64, agent_id: &AgentId) -> Result<JobInfo> {
+    pub async fn info(&self, job_id: JobId, agent_id: &AgentId) -> Result<JobInfo> {
         let agent = agent_id.to_owned();
         let job = self.db.read(move |c| own_in(c, job_id, &agent)).await?;
         let path = self.log_file(&job);
@@ -578,8 +578,8 @@ impl JobRunner {
         })
     }
 
-    async fn tails(&self, jobs: &[Job]) -> BTreeMap<i64, String> {
-        let files: Vec<(i64, PathBuf)> = jobs.iter().map(|j| (j.id, self.log_file(j))).collect();
+    async fn tails(&self, jobs: &[Job]) -> BTreeMap<JobId, String> {
+        let files: Vec<(JobId, PathBuf)> = jobs.iter().map(|j| (j.id, self.log_file(j))).collect();
         tokio::task::spawn_blocking(move || files.into_iter().map(|(id, path)| (id, log_tail(&path))).collect())
             .await
             .expect("reading logs panicked")
@@ -588,7 +588,7 @@ impl JobRunner {
     /// 给到了自己检查间隔的运行中任务各投一封检查信件（会话领域投；它上一封还在信箱里排着时不投，不堆积）。返回发出的
     /// 封数。只检查有人照看的任务。
     pub async fn check(&self) -> Result<usize> {
-        let supervised: BTreeSet<i64> = self.running.lock().expect("running lock").keys().copied().collect();
+        let supervised: BTreeSet<JobId> = self.running.lock().expect("running lock").keys().copied().collect();
         self.beats.lock().expect("beats lock").keep(&supervised);
         if supervised.is_empty() {
             return Ok(0);
@@ -608,7 +608,7 @@ impl JobRunner {
         }
         let tails = self.tails(&due).await;
         let work = self.work.clone();
-        let ids: Vec<i64> = due.iter().map(|j| j.id).collect();
+        let ids: Vec<JobId> = due.iter().map(|j| j.id).collect();
         // 在确认任务仍在运行的同一个事务里投检查信件：与记下结局（同一事务交回结局）互斥，检查要么先于结束，要么任务已经
         // 结束、不再发
         // 节拍按「到了就算检查过」前移（上一封还排着没投的也算），返回的是真投出的封数
@@ -658,7 +658,7 @@ impl JobRunner {
         }
         let tails = self.tails(&stale).await;
         let work = self.work.clone();
-        let ids: Vec<i64> = stale.iter().map(|j| j.id).collect();
+        let ids: Vec<JobId> = stale.iter().map(|j| j.id).collect();
         let closed = self
             .db
             .write(move |tx| {
@@ -690,7 +690,7 @@ impl JobRunner {
     /// 正常关停：杀掉所有后台任务的进程组，由照看者记为被中断并告诉 agent（事件在重启后处理）。等照看者写完最多
     /// [`SHUTDOWN_WAIT`]；没写完的下次启动时收掉。
     pub async fn shutdown(&self) {
-        let handles: Vec<(i64, Arc<Handle>)> =
+        let handles: Vec<(JobId, Arc<Handle>)> =
             self.running.lock().expect("running lock").iter().map(|(id, h)| (*id, h.clone())).collect();
         for (_, h) in &handles {
             // 进程已经自己结束、正在记结局的：给它时间写完，保留真实的退出码
@@ -703,7 +703,7 @@ impl JobRunner {
             }
         };
         if tokio::time::timeout(SHUTDOWN_WAIT, wait).await.is_err() {
-            let left: Vec<i64> = handles.iter().filter(|(_, h)| !*h.done.borrow()).map(|(id, _)| *id).collect();
+            let left: Vec<JobId> = handles.iter().filter(|(_, h)| !*h.done.borrow()).map(|(id, _)| *id).collect();
             tracing::warn!(job_ids = ?left, "background jobs did not record their outcome before shutdown");
         }
         if !handles.is_empty() {

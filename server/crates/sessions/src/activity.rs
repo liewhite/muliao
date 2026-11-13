@@ -6,7 +6,7 @@
 //! - 删除会不会打断工作（[`blocking_deletion_in`]）：挂起的提问没有人在外面做事，不挡删除。
 //! - 等待项（[`waits_of_in`]）：waiting 的原因逐项展开，会话页列出。
 
-use muliao_platform::ids::{AgentId, HoldId, SessionId};
+use muliao_platform::ids::{AgentId, HoldId, JobId, SessionId};
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
@@ -142,7 +142,7 @@ pub(crate) fn blocks_agent_in(c: &Connection, agent_id: &AgentId) -> Result<bool
 #[derive(Debug, Clone, PartialEq)]
 pub enum Wait {
     /// 后台任务（run_shell background）
-    Job { job_id: i64, since: DateTime<Utc> },
+    Job { job_id: JobId, since: DateTime<Utc> },
     /// 委派出去的工作（ask_agent，或 delegate_task 带 report_back）
     Delegation { thread_session_id: SessionId, check_seconds: Option<f64>, since: DateTime<Utc> },
     /// 自己约的到点唤醒

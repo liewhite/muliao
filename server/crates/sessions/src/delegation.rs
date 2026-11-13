@@ -10,7 +10,7 @@
 //! - 普通 delegate_task（[`send_in`]）不交回结局：只往 thread 投一封用户在等的信。
 //! - 运行中检查（[`check_threads`]）：report_back 的委派按 heartbeat_seconds 给发起方投检查信件；ask_agent 不设超时。
 
-use muliao_platform::ids::{AgentId, SessionId};
+use muliao_platform::ids::{AgentId, DelegationId, SessionId};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
@@ -159,7 +159,7 @@ pub(crate) fn hand_back_in(
             &event_text(name, agent.name.as_str(), ending, text),
             Some(answer),
         )?;
-        tracing::info!(delegation = o.delegation.id, session_id = %o.delegation.parent_id, thread_session_id = %child.id,
+        tracing::info!(delegation = %o.delegation.id, session_id = %o.delegation.parent_id, thread_session_id = %child.id,
             ending = ?ending, delivered_as = ?delivered, "delegation handed back");
     }
     Ok(())
@@ -198,7 +198,11 @@ pub(crate) fn threads_in(c: &Connection, parent_id: &SessionId) -> Result<Vec<Th
 }
 
 /// 委派的运行中检查：只看还没结清、report_back 的委派，每过一个间隔给发起方投一封检查信件，说 thread 在做什么。
-pub(crate) async fn check_threads(db: &Database, waker: &Waker, beats: &Arc<Mutex<CheckBeats<i64>>>) -> Result<usize> {
+pub(crate) async fn check_threads(
+    db: &Database,
+    waker: &Waker,
+    beats: &Arc<Mutex<CheckBeats<DelegationId>>>,
+) -> Result<usize> {
     let (waker, beats) = (waker.clone(), beats.clone());
     db.write(move |tx| {
         let now = Utc::now();

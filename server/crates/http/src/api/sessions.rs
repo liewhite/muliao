@@ -1,6 +1,6 @@
 //! 会话：列表、新建、会话页、发消息（含回答提问与批准调用）、停止、手动压缩、重试最终失败的运行、标记已读、删除。
 
-use muliao_platform::ids::{AgentId, MailId, SessionId};
+use muliao_platform::ids::{AgentId, JobId, MailId, SessionId};
 use std::collections::{BTreeMap, BTreeSet};
 
 use axum::extract::State;
@@ -225,7 +225,7 @@ pub struct JobOut {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum WaitOut {
     /// 后台任务（run_shell background）
-    Job { job_id: i64, since: DateTime<Utc>, job: JobOut },
+    Job { job_id: JobId, since: DateTime<Utc>, job: JobOut },
     /// 委派出去的工作（ask_agent，或 delegate_task 带 report_back）
     Delegation { thread_session_id: SessionId, check_seconds: Option<f64>, since: DateTime<Utc> },
     /// 自己约的到点唤醒

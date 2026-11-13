@@ -2,7 +2,7 @@
 //! 时机只有这几个：运行正常结束且工作做完（[`settle_finished_in`]）、运行最终失败、停止、删除。一项委派结清没有只看发起方
 //! 引用它的占用是否还 active：交回结局就释放占用，所以每项委派只交回一次。
 
-use muliao_platform::ids::{MailId, RunId, SessionId};
+use muliao_platform::ids::{DelegationId, MailId, RunId, SessionId};
 use std::collections::BTreeSet;
 
 use muliao_platform::db::Tx;
@@ -20,7 +20,7 @@ use muliao_platform::errors::Result;
 const LIVE: [MailState; 2] = [MailState::Queued, MailState::Consumed];
 
 fn owed_by(c: &Connection, mail: &[Mail]) -> Result<Vec<Owed>> {
-    let ids: Vec<i64> = mail
+    let ids: Vec<DelegationId> = mail
         .iter()
         .filter_map(|m| match m.body {
             MailBody::Message { delegation_id, .. } => delegation_id,
@@ -45,12 +45,12 @@ fn settle_in(
     ending: Ending,
     text: &str,
     attachments: &[SharedFile],
-) -> Result<Vec<i64>> {
+) -> Result<Vec<DelegationId>> {
     let owed = owed_by(tx, mail)?;
     if owed.is_empty() {
         return Ok(Vec::new());
     }
-    let settled: Vec<i64> = owed.iter().map(|o| o.delegation.id).collect();
+    let settled: Vec<DelegationId> = owed.iter().map(|o| o.delegation.id).collect();
     tracing::info!(session_id = %session.id, ending = ?ending, delegations = ?settled, "session settled its delegations");
     hand_back_in(tx, waker, session, &owed, ending, text, attachments)?;
     Ok(settled)
@@ -64,7 +64,7 @@ pub(crate) fn settle_finished_in(
     session: &Session,
     answer: &str,
     attachments: &[SharedFile],
-) -> Result<Vec<i64>> {
+) -> Result<Vec<DelegationId>> {
     let mail = delegated_mail_in(tx, &session.id, &[MailState::Consumed])?;
     settle_in(tx, waker, session, &mail, Ending::Finished, answer, attachments)
 }
@@ -75,7 +75,7 @@ pub(crate) fn settle_stopped_in(
     waker: &Waker,
     session: &Session,
     answer: &str,
-) -> Result<(Vec<i64>, Vec<MailId>)> {
+) -> Result<(Vec<DelegationId>, Vec<MailId>)> {
     let mail = delegated_mail_in(tx, &session.id, &LIVE)?;
     let settled = settle_in(tx, waker, session, &mail, Ending::Stopped, answer, &[])?;
     let queued: Vec<MailId> = queued_in(tx, &session.id)?.iter().map(|m| m.id).collect();
@@ -83,7 +83,7 @@ pub(crate) fn settle_stopped_in(
 }
 
 /// 会话被删除：交给它、还没结清的委派以「被删除」结清。
-pub(crate) fn settle_deleted_in(tx: &mut Tx<'_>, waker: &Waker, session: &Session) -> Result<Vec<i64>> {
+pub(crate) fn settle_deleted_in(tx: &mut Tx<'_>, waker: &Waker, session: &Session) -> Result<Vec<DelegationId>> {
     let mail = delegated_mail_in(tx, &session.id, &LIVE)?;
     settle_in(tx, waker, session, &mail, Ending::Deleted, "", &[])
 }
@@ -97,7 +97,7 @@ pub(crate) fn settle_failure_in(
     session: &Session,
     run_id: RunId,
     error: &str,
-) -> Result<Vec<i64>> {
+) -> Result<Vec<DelegationId>> {
     let queued: Vec<Mail> = delegated_mail_in(tx, &session.id, &[MailState::Queued])?
         .into_iter()
         .filter(|m| m.taken_by == Some(run_id))

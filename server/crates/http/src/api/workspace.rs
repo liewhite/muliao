@@ -8,7 +8,7 @@ use axum::extract::State;
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::Response;
 use chrono::{DateTime, Utc};
-use muliao_platform::ids::{AgentId, SessionId};
+use muliao_platform::ids::{AgentId, JobId, SessionId};
 use muliao_workspace::browse::{Entry, EntryKind, WorkspaceFile};
 use muliao_workspace::grants::GrantInfo;
 use serde::{Deserialize, Serialize};
@@ -152,8 +152,11 @@ async fn revoke_script_grant(State(s): State<AppState>, Path(grant_id): Path<i64
 /// 结束这个 agent 的一个运行中的后台任务；结局（被结束）照常作为事件回到发起它的会话。已经结束的 409。
 #[utoipa::path(post, path = "/api/agents/{agent_id}/jobs/{job_id}/kill", tag = "workspace",
     responses((status = 202), (status = 404, body = ErrorOut), (status = 409, body = ErrorOut)),
-    params(("agent_id" = AgentId, Path, description = "agent 的编号"), ("job_id" = i64, Path)))]
-async fn kill_job(State(s): State<AppState>, Path((agent_id, job_id)): Path<(AgentId, i64)>) -> ApiResult<StatusCode> {
+    params(("agent_id" = AgentId, Path, description = "agent 的编号"), ("job_id" = JobId, Path, description = "后台任务的编号")))]
+async fn kill_job(
+    State(s): State<AppState>,
+    Path((agent_id, job_id)): Path<(AgentId, JobId)>,
+) -> ApiResult<StatusCode> {
     s.services.jobs.kill(job_id, &agent_id).await?;
     Ok(StatusCode::ACCEPTED)
 }

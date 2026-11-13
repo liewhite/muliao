@@ -4,7 +4,7 @@
 //! 只用程序内置的 SQLite（rusqlite bundled）：命令行 sqlite3 版本不同，对 JSON 子类型的处理也不同，拿它手验看不出 004
 //! 把 muliao_parts 存成字符串的 bug。
 
-use muliao_platform::ids::{MediaType, RunId, SessionId};
+use muliao_platform::ids::{JobId, MediaType, RunId, SessionId};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -164,7 +164,11 @@ fn hold_kinds_are_backfilled_from_holders() {
     let kinds: Vec<HoldOf> = held[&SessionId::new(SESSION)].iter().map(|h| h.of.clone()).collect();
     assert_eq!(
         kinds,
-        [HoldOf::Job { job_id: 7 }, HoldOf::Wake, HoldOf::Delegation { row: None, call_id: Some("c1".into()) }]
+        [
+            HoldOf::Job { job_id: JobId::new(7) },
+            HoldOf::Wake,
+            HoldOf::Delegation { row: None, call_id: Some("c1".into()) }
+        ]
     );
 }
 
@@ -192,8 +196,8 @@ fn holders_become_a_job_column_and_wakeups_point_at_their_hold() {
     }
     db.upgrade_to(8);
     let c = db.conn();
-    let job = holds::job_in(&c, 12).unwrap().expect("the job's hold");
-    assert!(job.awaited && job.status == holds::HoldStatus::Active && job.of == HoldOf::Job { job_id: 12 });
+    let job = holds::job_in(&c, JobId::new(12)).unwrap().expect("the job's hold");
+    assert!(job.awaited && job.status == holds::HoldStatus::Active && job.of == HoldOf::Job { job_id: JobId::new(12) });
     let waiting = crate::wakeups::pending_of_in(&c, &SessionId::new(SESSION)).unwrap();
     let notes: Vec<&str> = waiting
         .iter()
@@ -265,7 +269,7 @@ fn event_indexes_and_mail_senders_become_part_marks() {
 
     let expected = vec![
         vec![
-            event(1, EventSource::Job { job_id: 12 }, false),
+            event(1, EventSource::Job { job_id: JobId::new(12) }, false),
             event(2, EventSource::Thread { session_id: SessionId::new("s2") }, true),
         ],
         vec![event(0, EventSource::Wake, false), sent(1, Origin::User), sent(2, Origin::User)],
@@ -374,7 +378,7 @@ fn part_marks_stored_as_strings_are_parsed_back() {
 
     let expected = vec![
         vec![sent(0, Origin::User)],
-        vec![sent(0, Origin::Issue), event(1, EventSource::Job { job_id: 3 }, false)],
+        vec![sent(0, Origin::Issue), event(1, EventSource::Job { job_id: JobId::new(3) }, false)],
         vec![sent(1, Origin::User)],
     ];
     db.upgrade_to(7);

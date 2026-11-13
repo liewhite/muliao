@@ -199,7 +199,12 @@ impl World {
     async fn waiting(&self, session_id: &SessionId) {
         self.idle(session_id).await;
         let sid = session_id.to_owned();
-        self.db.write(move |tx| SessionWork::new(Waker::channel().0).hold_in(tx, &sid, 1, false)).await.unwrap();
+        self.db
+            .write(move |tx| {
+                SessionWork::new(Waker::channel().0).hold_in(tx, &sid, muliao_platform::ids::JobId::new(1), false)
+            })
+            .await
+            .unwrap();
     }
 
     async fn notifications(&self) -> Vec<(String, Option<SessionId>)> {

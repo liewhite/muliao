@@ -369,6 +369,7 @@ pub(crate) fn open_asks_of(at: &Position, queued: &[Mail]) -> OpenAsks {
 
 #[cfg(test)]
 mod tests {
+    use muliao_platform::ids::JobId;
     use std::collections::BTreeMap;
 
     use agenter::{Request, RequestPart, Response, ResponsePart};
@@ -452,7 +453,7 @@ mod tests {
             &[mail(
                 1,
                 MailBody::Event {
-                    source: crate::work::EventSource::Job { job_id: 1 },
+                    source: crate::work::EventSource::Job { job_id: JobId::new(1) },
                     content: String::new(),
                     check_in: false,
                 },

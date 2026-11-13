@@ -4,7 +4,7 @@
 //! 要交回结局的调用（ask_agent、delegate_task(report_back)）就是一项委派，这一行是它的唯一主体：发起方的占用与 thread 的
 //! 信件只引用它的 id。委派结清没有只看引用它的占用是否还 active。
 
-use muliao_platform::ids::SessionId;
+use muliao_platform::ids::{DelegationId, SessionId};
 use std::collections::BTreeMap;
 
 use rusqlite::{Connection, Row, params};
@@ -16,7 +16,7 @@ use muliao_platform::errors::Result;
 /// 一次开出或续写 thread 的调用；发起方有引用它的占用时就是一项委派。
 #[derive(Debug, Clone, PartialEq)]
 pub struct CallRecord {
-    pub id: i64,
+    pub id: DelegationId,
     /// 发起会话
     pub parent_id: SessionId,
     pub call_id: String,
@@ -76,7 +76,7 @@ pub(crate) fn call_threads_in(c: &Connection, parent_id: &SessionId) -> Result<B
 }
 
 /// 这些委派行（thread 已删除的不在结果里）。
-pub(crate) fn delegations_among(c: &Connection, ids: &[i64]) -> Result<BTreeMap<i64, CallRecord>> {
+pub(crate) fn delegations_among(c: &Connection, ids: &[DelegationId]) -> Result<BTreeMap<DelegationId, CallRecord>> {
     if ids.is_empty() {
         return Ok(BTreeMap::new());
     }
@@ -86,8 +86,12 @@ pub(crate) fn delegations_among(c: &Connection, ids: &[i64]) -> Result<BTreeMap<
 
 /// 还没结清的委派（发起方引用它的占用还 active），按占用登记先后；给了 ids 只看这些委派；session_id：只看这个会话发起的。
 /// thread 已删除（占用引用已置空）的不在结果里。
-pub(crate) fn owed_in(c: &Connection, ids: Option<&[i64]>, session_id: Option<&SessionId>) -> Result<Vec<Owed>> {
-    let held: Vec<(i64, Hold)> = active_delegations_in(c, session_id)?
+pub(crate) fn owed_in(
+    c: &Connection,
+    ids: Option<&[DelegationId]>,
+    session_id: Option<&SessionId>,
+) -> Result<Vec<Owed>> {
+    let held: Vec<(DelegationId, Hold)> = active_delegations_in(c, session_id)?
         .into_iter()
         .filter_map(|h| match h.of {
             HoldOf::Delegation { row: Some(row), .. } => Some((row, h)),
@@ -95,7 +99,7 @@ pub(crate) fn owed_in(c: &Connection, ids: Option<&[i64]>, session_id: Option<&S
         })
         .filter(|(row, _)| ids.is_none_or(|ids| ids.contains(row)))
         .collect();
-    let rows: Vec<i64> = held.iter().map(|(row, _)| *row).collect();
+    let rows: Vec<DelegationId> = held.iter().map(|(row, _)| *row).collect();
     let mut records = delegations_among(c, &rows)?;
     Ok(held.into_iter().filter_map(|(row, hold)| Some(Owed { delegation: records.remove(&row)?, hold })).collect())
 }

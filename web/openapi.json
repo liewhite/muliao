@@ -2513,10 +2513,10 @@
           {
             "name": "job_id",
             "in": "path",
+            "description": "后台任务的编号",
             "required": true,
             "schema": {
-              "type": "integer",
-              "format": "int64"
+              "$ref": "#/components/schemas/JobId"
             }
           }
         ],
@@ -5300,8 +5300,7 @@
             ],
             "properties": {
               "job_id": {
-                "type": "integer",
-                "format": "int64"
+                "$ref": "#/components/schemas/JobId"
               },
               "kind": {
                 "type": "string",
@@ -6170,6 +6169,11 @@
           }
         ],
         "description": "一条展示条目：每种只带自己的字段。U 是用户消息条目：会话页是 [`UserItem`]，热历史的时间线另带发送方\n（[`crate::recall::SentUser`]）。"
+      },
+      "JobId": {
+        "type": "integer",
+        "format": "int64",
+        "description": "一个后台任务的编号（jobs 表的行号）"
       },
       "JobOut": {
         "type": "object",
@@ -9069,8 +9073,7 @@
             ],
             "properties": {
               "job_id": {
-                "type": "integer",
-                "format": "int64"
+                "$ref": "#/components/schemas/JobId"
               },
               "since": {
                 "type": "string",

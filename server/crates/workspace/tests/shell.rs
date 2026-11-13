@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use agenter::Approval;
 use common::{Out, World, world};
+use muliao_platform::ids::JobId;
 use muliao_sessions::events::SessionStopped;
 use muliao_sessions::mailbox::MailBody;
 use muliao_workspace::grants::GRANTED_NOTE;
@@ -32,11 +33,11 @@ fn make_skill(w: &World, name: &str, script: &str, executable: bool, approval: b
     base
 }
 
-fn job_id(started: &str) -> i64 {
-    started.split_whitespace().nth(3).unwrap().trim_end_matches(';').parse().unwrap()
+fn job_id(started: &str) -> JobId {
+    JobId::new(started.split_whitespace().nth(3).unwrap().trim_end_matches(';').parse().unwrap())
 }
 
-async fn wait_done(w: &World, id: i64) -> muliao_workspace::jobs::JobInfo {
+async fn wait_done(w: &World, id: JobId) -> muliao_workspace::jobs::JobInfo {
     for _ in 0..200 {
         let info = w.workspace.jobs.info(id, &w.me).await.unwrap();
         if info.state != JobState::Running {

@@ -7,7 +7,7 @@
 //!   保存时（这时同时记为已处理）。
 //! - 用户停止会话、运行最终失败时没交给模型的信件记为被丢弃（[`discard_in`]），留着记录。
 
-use muliao_platform::ids::{MailId, RunId, SessionId};
+use muliao_platform::ids::{DelegationId, MailId, RunId, SessionId};
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
@@ -26,7 +26,7 @@ use muliao_platform::errors::{Result, broken, not_found};
 pub enum MailBody {
     /// 交给模型的原文：用户在界面发的消息（可带附件）、触发器事件、另一个 agent 委派来的任务。origin 是经来信入口投进来的
     /// 发送方来源，「用户说了什么」只按它认；delegation_id：委派来的信件是哪项委派（thread_calls 的行）
-    Message { origin: Origin, content: String, attachments: Vec<String>, delegation_id: Option<i64> },
+    Message { origin: Origin, content: String, attachments: Vec<String>, delegation_id: Option<DelegationId> },
     /// 对挂起调用的回答（调用 id -> 结果）：作为那次调用的结果交回，不是一段新消息。from_user：用户的回答（否则是交回的
     /// 结局）
     Answer { answers: BTreeMap<String, CallResult>, from_user: bool },
@@ -154,7 +154,7 @@ struct RawMail {
     attachments: String,
     answers: String,
     awaited: bool,
-    delegation_id: Option<i64>,
+    delegation_id: Option<DelegationId>,
     state: String,
     taken_by: Option<RunId>,
     created_at: DateTime<Utc>,

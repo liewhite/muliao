@@ -12,7 +12,7 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use muliao_platform::db::placeholders;
 use muliao_platform::errors::{Result, broken};
-use muliao_platform::ids::{HoldId, SessionId};
+use muliao_platform::ids::{DelegationId, HoldId, JobId, SessionId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HoldStatus {
@@ -46,11 +46,11 @@ impl HoldStatus {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HoldOf {
     /// 后台任务（run_shell background）
-    Job { job_id: i64 },
+    Job { job_id: JobId },
     /// 到点唤醒（wake_me）：约的时刻与说明在引用它的 `wakeups` 行
     Wake,
     /// 委派：row 是委派行（thread 删除后置空）；call_id：结局作为这次挂起调用的结果交回（ask_agent），并发等待的为 None
-    Delegation { row: Option<i64>, call_id: Option<String> },
+    Delegation { row: Option<DelegationId>, call_id: Option<String> },
 }
 
 impl HoldOf {
@@ -86,7 +86,8 @@ impl Hold {
 
 const COLUMNS: &str = "id, session_id, kind, job_id, thread_call_id, call_id, awaited, status, created_at";
 
-type Raw = (HoldId, SessionId, String, Option<i64>, Option<i64>, Option<String>, bool, String, DateTime<Utc>);
+type Raw =
+    (HoldId, SessionId, String, Option<JobId>, Option<DelegationId>, Option<String>, bool, String, DateTime<Utc>);
 
 fn from_row(r: &Row<'_>) -> rusqlite::Result<Raw> {
     Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?))
@@ -110,7 +111,7 @@ fn query(c: &Connection, filter: &str, params: impl rusqlite::Params) -> Result<
 }
 
 /// 登记一项后台任务的占用（任务编号每次新生成，不会重复登记）。
-pub(crate) fn hold_job_in(c: &Connection, session_id: &SessionId, job_id: i64, awaited: bool) -> Result<Hold> {
+pub(crate) fn hold_job_in(c: &Connection, session_id: &SessionId, job_id: JobId, awaited: bool) -> Result<Hold> {
     insert(c, session_id, HoldOf::Job { job_id }, awaited)
 }
 
@@ -123,7 +124,7 @@ pub(crate) fn hold_wake_in(c: &Connection, session_id: &SessionId, awaited: bool
 pub(crate) fn hold_delegation_in(
     c: &Connection,
     session_id: &SessionId,
-    row: i64,
+    row: DelegationId,
     call_id: Option<String>,
     awaited: bool,
 ) -> Result<Hold> {
@@ -147,7 +148,7 @@ fn insert(c: &Connection, session_id: &SessionId, of: HoldOf, awaited: bool) -> 
 }
 
 /// 后台任务的占用。
-pub(crate) fn job_in(c: &Connection, job_id: i64) -> Result<Option<Hold>> {
+pub(crate) fn job_in(c: &Connection, job_id: JobId) -> Result<Option<Hold>> {
     Ok(query(c, "job_id = ?1", [job_id])?.pop())
 }
 

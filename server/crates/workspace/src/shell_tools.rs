@@ -13,6 +13,7 @@ use muliao_assets::secrets::SecretUse;
 use muliao_assets::skills::{SkillScripts, SkillStore};
 use muliao_platform::errors::DomainError;
 use muliao_platform::fs::{real, resolve_within};
+use muliao_platform::ids::JobId;
 use muliao_platform::shell::LEFT_RUNNING_NOTE;
 use muliao_platform::text::truncate;
 use muliao_platform::tool_views::{ToolRender, ViewBlock};
@@ -475,7 +476,7 @@ impl Tool<RunScope> for JobStatusTool {
     }
 
     async fn call(&self, ctx: ToolCtx<'_, RunScope>, a: JobArgs) -> Result<ToolOutput, ToolError> {
-        let info = self.0.jobs.info(a.job_id, &ctx.deps.agent_id).await?;
+        let info = self.0.jobs.info(JobId::new(a.job_id), &ctx.deps.agent_id).await?;
         let state = match info.state {
             JobState::Ended { end: End::Exited { code }, .. } => {
                 format!("exited with code {}", code.map_or("None".to_owned(), |c| c.to_string()))
@@ -505,7 +506,7 @@ impl Tool<RunScope> for JobKillTool {
     }
 
     async fn call(&self, ctx: ToolCtx<'_, RunScope>, a: JobArgs) -> Result<ToolOutput, ToolError> {
-        self.0.jobs.kill(a.job_id, &ctx.deps.agent_id).await?;
+        self.0.jobs.kill(JobId::new(a.job_id), &ctx.deps.agent_id).await?;
         Ok(agenter::tool::text(format!(
             "sent kill signal to job {}; its final status will arrive as an event",
             a.job_id

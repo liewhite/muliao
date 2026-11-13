@@ -386,6 +386,8 @@ fn strings(v: &Value, out: &mut Vec<String>) {
 
 #[cfg(test)]
 mod tests {
+    use muliao_platform::ids::JobId;
+
     use super::*;
 
     fn call(id: &str) -> ResponsePart {
@@ -426,7 +428,7 @@ mod tests {
 
     #[test]
     fn events_round_trip_and_run_context_shifts_indices() {
-        let job = EventSource::Job { job_id: 1 };
+        let job = EventSource::Job { job_id: JobId::new(1) };
         let e = format_event(&job, "done\nok");
         assert_eq!(event_content(&e, &job), "done\nok");
         assert_eq!(event_content("<event>x</event>", &job), "<event>x</event>");

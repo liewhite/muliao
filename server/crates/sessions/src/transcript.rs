@@ -485,6 +485,7 @@ pub(crate) fn to_text(items: &[Item], max_item_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use agenter::{FileSource, Response};
+    use muliao_platform::ids::JobId;
     use muliao_platform::tool_views::{ViewBlock, fields};
     use serde::Deserialize;
 
@@ -503,7 +504,7 @@ mod tests {
     }
 
     fn job7() -> EventSource {
-        EventSource::Job { job_id: 7 }
+        EventSource::Job { job_id: JobId::new(7) }
     }
 
     fn thread_s1() -> EventSource {
@@ -610,7 +611,7 @@ mod tests {
             items[2],
             Item::Event(EventItem {
                 text: "done".into(),
-                source: EventSource::Job { job_id: 7 },
+                source: EventSource::Job { job_id: JobId::new(7) },
                 check_in: false,
                 at: ts
             })

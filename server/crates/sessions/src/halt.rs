@@ -10,7 +10,7 @@
 //!    跑完的结局因占用已清掉而不投（罕见、只多花一段 token，不为它持久化停止任务）。
 //! 6. 发布 SessionStopped：工作区领域在提交后结束被清掉的后台任务。
 
-use muliao_platform::ids::{RunId, SessionId};
+use muliao_platform::ids::{DelegationId, RunId, SessionId};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -72,7 +72,7 @@ pub(crate) async fn halt(
             let cleared = clear_in(tx, &session_id)?;
             let answer = history::latest_answer(tx, &session_id)?;
             let (settled, discarded) = settle_stopped_in(tx, &waker, &session, &answer)?;
-            let rows: Vec<i64> = cleared
+            let rows: Vec<DelegationId> = cleared
                 .iter()
                 .filter_map(|h| match h.of {
                     HoldOf::Delegation { row, .. } => row,
