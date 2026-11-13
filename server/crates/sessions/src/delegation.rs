@@ -26,7 +26,7 @@ use crate::directory::{self, Session};
 use crate::error::{Result, broken, invalid};
 use crate::history::latest_answers_among;
 use crate::holds::{HoldOf, hold_in};
-use crate::inbound::{Inbound, Party, Spec, create_session_in, receive_in};
+use crate::inbound::{Inbound, Opener, create_session_in, receive_in};
 use crate::runs::{RunRecord, latest_among};
 use crate::thread_calls::{Owed, call_in, owed_in, record_call_in};
 use crate::work::{CheckBeats, Source, deliver_in, post_check_in};
@@ -42,7 +42,7 @@ pub fn validate_thread(name: &str) -> Result<String> {
 }
 
 pub fn thread_name(child: &Session) -> &str {
-    child.thread.as_deref().unwrap_or_else(|| panic!("session {} is a thread without a name", child.id))
+    child.origin.thread().unwrap_or_else(|| panic!("session {} is a thread without a name", child.id))
 }
 
 /// 取已有 thread 或新建。
@@ -51,11 +51,7 @@ pub(crate) fn open_in(c: &Connection, parent_id: &str, agent_id: &str, thread: &
     if let Some(existing) = directory::thread_in(c, parent_id, agent_id, &thread)? {
         return Ok(existing);
     }
-    create_session_in(
-        c,
-        &Party::Parent(parent_id.to_owned()),
-        Spec { agent_id, title: &thread, thread: Some((parent_id, &thread)) },
-    )
+    create_session_in(c, Opener::Thread { parent: parent_id, name: &thread }, agent_id, &thread)
 }
 
 /// 一次往 thread 投信的调用是哪一种。

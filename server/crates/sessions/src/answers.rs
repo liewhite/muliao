@@ -1,6 +1,6 @@
 //! 挂起调用的三种回答（回答信件 `mail.answers` 的值）：用户对提问（ask_user）的回答、被问的 agent 交回的结局（ask_agent）、
 //! 用户对等批准的调用的决定。每种自己给出：交给模型的结果、没等到回答就继续时的结果、调用结束后才到的回答怎么写。
-//! 挂起、唤醒与交回的规则在 [`crate::pending`]。存下的形状与 Python 版相同（`{"tool": ..., "result": ...}`）。
+//! 挂起、唤醒与交回的规则在 [`crate::pending`]。存下的形状是 `{"tool": ..., "result": ...}`。
 
 use agenter::{Approval, Content, Resolution};
 use muliao_runtime::conventions::Attachment;
@@ -113,6 +113,13 @@ pub struct AskResult {
     pub note: Option<String>,
 }
 
+impl AskResult {
+    /// 交给模型的结果正文。
+    pub fn text(&self) -> String {
+        serde_json::to_string(self).expect("ask results serialize")
+    }
+}
+
 fn not_answered(note: &str) -> AskResult {
     AskResult { answered: false, answers: Vec::new(), note: Some(note.to_owned()) }
 }
@@ -197,16 +204,14 @@ pub enum Choice {
 /// 交回工具比对（迁移来的旧信件可能没有，工具当作对不上）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Decision {
-    pub approved: bool,
-    #[serde(default)]
-    pub always: bool,
+    pub choice: Choice,
     #[serde(default)]
     pub pin: Option<String>,
 }
 
 impl Decision {
-    pub fn of(choice: Choice, pin: Option<String>) -> Self {
-        Decision { approved: choice != Choice::Deny, always: choice == Choice::Always, pin }
+    pub fn approved(&self) -> bool {
+        self.choice != Choice::Deny
     }
 }
 
@@ -269,7 +274,7 @@ impl CallResult {
     /// 交给模型的结果。
     pub fn resolution(&self) -> Resolution {
         match self {
-            CallResult::AskUser(r) => text(serde_json::to_string(r).expect("ask results serialize")),
+            CallResult::AskUser(r) => text(r.text()),
             CallResult::AskAgent(a) => {
                 let mut t = a.text.clone();
                 if !a.attachments.is_empty() {
@@ -281,9 +286,10 @@ impl CallResult {
                 }
                 text(t)
             }
-            CallResult::Approval(d) if d.approved => {
-                Resolution::Approved(Approval { always: d.always, pin: d.pin.clone().unwrap_or_default() })
-            }
+            CallResult::Approval(d) if d.approved() => Resolution::Approved(Approval {
+                always: d.choice == Choice::Always,
+                pin: d.pin.clone().unwrap_or_default(),
+            }),
             CallResult::Approval(_) => Resolution::Denied(DENIED.to_owned()),
         }
     }
@@ -307,7 +313,7 @@ impl CallResult {
                 CallResult::AskAgent(a) => lines.push(format!("An agent you asked earlier answered:\n{}", a.text)),
                 CallResult::Approval(d) => lines.push(format!(
                     "The user {} a call that had already been closed without running; it was not run.",
-                    if d.approved { "approved" } else { "denied" }
+                    if d.approved() { "approved" } else { "denied" }
                 )),
                 CallResult::AskUser(_) => {}
             }
@@ -322,7 +328,7 @@ pub fn skipped(kind: Waiting, given: &[&CallResult]) -> Resolution {
         Waiting::AskUser => {
             let answered_other = given.iter().any(|r| matches!(r, CallResult::AskUser(_)));
             let r = not_answered(if answered_other { SKIPPED } else { NOT_ANSWERED });
-            text(serde_json::to_string(&r).expect("ask results serialize"))
+            text(r.text())
         }
         Waiting::AskAgent => text(STILL_WORKING.to_owned()),
         Waiting::Approval => Resolution::Denied(NOT_DECIDED.to_owned()),
@@ -367,13 +373,10 @@ mod tests {
     }
 
     #[test]
-    fn stored_shape_matches_python() {
-        let r = CallResult::Approval(Decision::of(Choice::Always, Some("p".into())));
+    fn stored_shape() {
+        let r = CallResult::Approval(Decision { choice: Choice::Always, pin: Some("p".into()) });
         let v = serde_json::to_value(&r).unwrap();
-        assert_eq!(
-            v,
-            serde_json::json!({"tool": "approval", "result": {"approved": true, "always": true, "pin": "p"}})
-        );
+        assert_eq!(v, serde_json::json!({"tool": "approval", "result": {"choice": "always", "pin": "p"}}));
         let back: CallResult =
             serde_json::from_value(serde_json::json!({"tool": "ask_agent", "result": {"text": "x"}})).unwrap();
         assert_eq!(back, CallResult::AskAgent(AgentAnswer { text: "x".into(), attachments: vec![] }));

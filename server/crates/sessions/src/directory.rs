@@ -18,16 +18,15 @@ pub struct Session {
     pub agent_id: String,
     pub title: String,
     pub origin: SessionOrigin,
-    /// 委派开出的 thread：父会话（删除后为空）与 thread 名
+    /// 委派开出的 thread 的父会话（删除后为空）
     pub parent_session_id: Option<String>,
-    pub thread: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
 impl Session {
     pub fn is_thread(&self) -> bool {
-        self.origin == SessionOrigin::Delegation
+        self.origin.thread().is_some()
     }
 }
 
@@ -42,12 +41,11 @@ fn raw(r: &Row<'_>) -> rusqlite::Result<Raw> {
 
 fn session((id, agent_id, title, origin, reference, parent, thread, created_at, updated_at): Raw) -> Result<Session> {
     Ok(Session {
-        origin: SessionOrigin::parse(&origin, reference.as_deref())?,
+        origin: SessionOrigin::parse(&origin, reference.as_deref(), thread)?,
         id,
         agent_id,
         title,
         parent_session_id: parent,
-        thread,
         created_at,
         updated_at,
     })
@@ -66,7 +64,6 @@ pub(crate) struct NewSession<'a> {
     pub title: &'a str,
     pub origin: SessionOrigin,
     pub parent_session_id: Option<&'a str>,
-    pub thread: Option<&'a str>,
 }
 
 pub(crate) fn add_in(c: &Connection, s: NewSession<'_>) -> Result<Session> {
@@ -75,7 +72,7 @@ pub(crate) fn add_in(c: &Connection, s: NewSession<'_>) -> Result<Session> {
     c.execute(
         "INSERT INTO sessions (id, agent_id, title, origin, origin_ref, parent_session_id, thread, created_at, updated_at) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
-        params![s.id, s.agent_id, s.title, s.origin.origin().as_str(), reference, s.parent_session_id, s.thread, now],
+        params![s.id, s.agent_id, s.title, s.origin.origin().as_str(), reference, s.parent_session_id, s.origin.thread(), now],
     )?;
     Ok(get_in(c, s.id)?.expect("the session was just written"))
 }

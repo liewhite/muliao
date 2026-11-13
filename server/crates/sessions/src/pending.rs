@@ -12,7 +12,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use agenter::{Message, Resolution, ToolCall, ToolResult};
+use agenter::{Content, Message, Resolution, ToolCall, ToolResult};
 
 use crate::answers::{CallResult, Question, Waiting, questions_of, skipped};
 use crate::conventions::{is_stopped, unanswered_calls};
@@ -31,11 +31,6 @@ impl Waiting {
     /// 没有挂起、也没有结果的调用可以原样重新执行（按调用 id 幂等，没有别的副作用），续跑时不补「被中断」。
     fn replayable(self) -> bool {
         self == Waiting::AskAgent
-    }
-
-    /// 用户停止时不补「已停止」，仍挂着等回答。
-    fn kept_open_on_stop(self) -> bool {
-        self == Waiting::AskUser
     }
 }
 
@@ -246,19 +241,17 @@ pub fn closing_on_stop(at: &Position) -> StopClosing {
         Position::Paused(p) => {
             let mut closing = StopClosing { stopped: p.replays.clone(), ..Default::default() };
             for pc in &p.pending {
-                if !pc.kind.kept_open_on_stop() {
+                // 只有提问停止时仍挂着等回答；其余补「已停止」
+                if pc.kind != Waiting::AskUser {
                     closing.stopped.push(pc.call.clone());
                     continue;
                 }
-                let Some(answer) = p.answers.get(&pc.call.id) else { continue };
-                let Resolution::Result { content, is_error } = answer.resolution() else {
-                    panic!("{} is kept open on stop but its answer is not a plain result", pc.call.name);
-                };
+                let Some(CallResult::AskUser(answer)) = p.answers.get(&pc.call.id) else { continue };
                 closing.answered.push(ToolResult {
                     call_id: pc.call.id.clone(),
                     tool_name: pc.call.name.clone(),
-                    content,
-                    is_error,
+                    content: vec![Content::text(answer.text())],
+                    is_error: false,
                     metadata: None,
                 });
             }
@@ -276,52 +269,69 @@ pub fn closing_on_stop(at: &Position) -> StopClosing {
     }
 }
 
-/// 还没有结果、等用户的挂起调用（提问与等批准的调用）分成现在能回答的，与回答已提交、还在信箱里排着的。界面展示与投信
-/// 校验都经过这里。
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct OpenAsks {
-    /// 现在能回答的提问：调用 id 与问题，按出现顺序
-    pub answerable: Vec<(String, Vec<Question>)>,
-    /// 现在能批准的调用：调用 id 与工具名
-    pub approvable: Vec<(String, String)>,
-    pub submitted: HashSet<String>,
-    /// 决定已提交、还排着的等批准的调用（submitted 的子集）
-    pub approvals_submitted: HashSet<String>,
+/// 一次还没有结果、等用户的挂起调用现在怎样。
+#[derive(Debug, Clone, PartialEq)]
+pub enum OpenAsk {
+    /// 现在能回答的提问
+    Question(Vec<Question>),
+    /// 现在能批准的调用（工具名）
+    Approval(String),
+    /// 回答或决定已提交、还在信箱里排着（是哪一种调用的）
+    Submitted(Waiting),
 }
 
+/// 还没有结果、等用户的挂起调用（提问与等批准的调用），按出现顺序：现在能回答、能批准的，与已提交、还排着的。界面展示与
+/// 投信校验都经过这里。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct OpenAsks(pub Vec<(String, OpenAsk)>);
+
 impl OpenAsks {
+    pub fn get(&self, call_id: &str) -> Option<&OpenAsk> {
+        self.0.iter().find(|(k, _)| k == call_id).map(|(_, a)| a)
+    }
+
     pub fn question(&self, call_id: &str) -> Option<&[Question]> {
-        self.answerable.iter().find(|(k, _)| k == call_id).map(|(_, q)| q.as_slice())
+        match self.get(call_id)? {
+            OpenAsk::Question(q) => Some(q),
+            _ => None,
+        }
     }
 
     pub fn can_approve(&self, call_id: &str) -> bool {
-        self.approvable.iter().any(|(k, _)| k == call_id)
+        matches!(self.get(call_id), Some(OpenAsk::Approval(_)))
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.answerable.is_empty() && self.approvable.is_empty()
+    /// 有等用户现在操作的（能回答或能批准的）。
+    pub fn any_open(&self) -> bool {
+        self.0.iter().any(|(_, a)| !matches!(a, OpenAsk::Submitted(_)))
     }
 }
 
 pub fn open_asks_of(at: &Position, queued: &[Mail]) -> OpenAsks {
-    let submitted: HashSet<String> =
-        queued.iter().filter_map(|m| m.body.answers()).flat_map(|a| a.keys().cloned()).collect();
-    let mut asks = OpenAsks { submitted, ..Default::default() };
-    let Some(p) = at.paused() else { return asks };
-    for pc in &p.pending {
-        let id = &pc.call.id;
-        match pc.kind {
-            Waiting::AskUser if !asks.submitted.contains(id) => {
-                asks.answerable.push((id.clone(), questions_of(&pc.call.args)));
+    let submitted: Vec<(String, OpenAsk)> = queued
+        .iter()
+        .filter_map(|m| m.body.answers())
+        .flatten()
+        .map(|(id, r)| (id.clone(), OpenAsk::Submitted(r.kind())))
+        .collect();
+    let is_submitted = |id: &str| submitted.iter().any(|(k, _)| k == id);
+    let mut open = Vec::new();
+    if let Some(p) = at.paused() {
+        for pc in &p.pending {
+            let id = &pc.call.id;
+            match pc.kind {
+                Waiting::AskUser if !is_submitted(id) => {
+                    open.push((id.clone(), OpenAsk::Question(questions_of(&pc.call.args))));
+                }
+                Waiting::Approval if !is_submitted(id) => {
+                    open.push((id.clone(), OpenAsk::Approval(pc.call.name.clone())));
+                }
+                Waiting::AskUser | Waiting::Approval | Waiting::AskAgent => {}
             }
-            Waiting::Approval if asks.submitted.contains(id) => {
-                asks.approvals_submitted.insert(id.clone());
-            }
-            Waiting::Approval => asks.approvable.push((id.clone(), pc.call.name.clone())),
-            Waiting::AskUser | Waiting::AskAgent => {}
         }
     }
-    asks
+    open.extend(submitted);
+    OpenAsks(open)
 }
 
 #[cfg(test)]
@@ -444,7 +454,7 @@ mod tests {
         let gated = [response(vec![call("c1", "skill_run", "{}")])];
         let approvals = HandedOut { delegated: Default::default(), approvals: ["c1".to_owned()].into() };
         let at = position(&gated, &approvals, &[]).unwrap();
-        assert_eq!(open_asks_of(&at, &[]).approvable, vec![("c1".to_owned(), "skill_run".to_owned())]);
+        assert_eq!(open_asks_of(&at, &[]).0, vec![("c1".to_owned(), OpenAsk::Approval("skill_run".to_owned()))]);
         let closing = closing_on_stop(&at);
         assert_eq!(closing.stopped.len(), 1, "stopping does not keep calls waiting for approval");
     }

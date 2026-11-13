@@ -229,17 +229,15 @@ fn indented(text: &str) -> String {
 
 /// 会话从哪来：来源、发送方身份（issue 号等），thread 再加上名字与父会话 id 前缀。
 fn place(session: &Session) -> String {
-    let mut place = match session.origin {
-        SessionOrigin::Trigger { trigger_id: n } | SessionOrigin::Issue { issue_id: n } => {
-            format!("{} #{n}", session.origin.origin().as_str())
+    let origin = session.origin.origin().as_str();
+    match &session.origin {
+        SessionOrigin::Trigger { trigger_id: n } | SessionOrigin::Issue { issue_id: n } => format!("{origin} #{n}"),
+        SessionOrigin::User => origin.to_owned(),
+        SessionOrigin::Delegation { thread } => {
+            let parent = session.parent_session_id.as_deref().unwrap_or("(deleted)");
+            format!("{origin} thread {thread:?} of {}", chars(parent, 8))
         }
-        SessionOrigin::User | SessionOrigin::Delegation => session.origin.origin().as_str().to_owned(),
-    };
-    if let Some(thread) = &session.thread {
-        let parent = session.parent_session_id.as_deref().unwrap_or("(deleted)");
-        place.push_str(&format!(" thread {thread:?} of {}", chars(parent, 8)));
     }
-    place
 }
 
 /// 从第 offset 行起，到 max_chars 为止的整行；没完时最后一行写明从哪接着读（同 read_file）。

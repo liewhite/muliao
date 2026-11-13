@@ -247,6 +247,9 @@ interface SessionContext {
   view: 'history' | 'live'
 }
 
+/** 用户对等批准的调用的选择，显示在已提交的决定处 */
+const CHOICE_TEXT: Record<ApprovalChoice, string> = { approve: '已批准', always: '已始终允许', deny: '已拒绝' }
+
 function AskBlock({ block, ctx }: { block: AskBlockData; ctx: SessionContext }) {
   const { ask } = block
   const { state } = ask
@@ -460,7 +463,7 @@ function MailNote({ mail, ctx }: { mail: Mail; ctx: SessionContext }) {
           ) : result.tool === 'approval' ? (
             <QuestionNote
               key={i}
-              text={result.result.approved ? (result.result.always ? '已始终允许' : '已批准') : '已拒绝'}
+              text={CHOICE_TEXT[result.result.choice]}
             />
           ) : (
             <EventNote key={i} lead={<span className="shrink-0 text-foreground">agent 的回答</span>} text={result.result.text} />

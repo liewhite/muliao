@@ -36,5 +36,9 @@ use muliao_platform::db::Migration;
 
 pub const MIGRATION: Migration = Migration {
     domain: "sessions",
-    steps: &[include_str!("../migrations/001_sessions.sql"), include_str!("../migrations/002_hold_kinds.sql")],
+    steps: &[
+        include_str!("../migrations/001_sessions.sql"),
+        include_str!("../migrations/002_hold_kinds.sql"),
+        include_str!("../migrations/003_approval_choice.sql"),
+    ],
 };

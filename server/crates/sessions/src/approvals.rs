@@ -35,7 +35,7 @@ pub fn take_in(
     let mut interrupted = HashMap::new();
     for (call_id, r) in answers {
         let CallResult::Approval(d) = r else { continue };
-        if !d.approved {
+        if !d.approved() {
             continue;
         }
         let taken: Option<Option<String>> = c

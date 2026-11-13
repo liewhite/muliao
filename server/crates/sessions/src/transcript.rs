@@ -14,12 +14,13 @@ use muliao_platform::tool_views::{ToolRender, View, truncated};
 use muliao_runtime::conventions::{Attachment, attachment_of_ref, result_images, tool_attachments};
 use serde::Serialize;
 
+use crate::answers::Waiting;
 use crate::answers::{AnsweredQuestion, AskResult, Question, questions_of};
 use crate::conventions::{
     check_in_indices, event_indices, finished_at, is_stopped, made_up, parse_event, run_context_index,
 };
 use crate::error::{Result, broken};
-use crate::pending::{ASK_USER, OpenAsks};
+use crate::pending::{ASK_USER, OpenAsk, OpenAsks};
 use crate::work::{EventSource, parse_source};
 
 /// 各工具的展示规则（`Toolbox::renders`）；只要文字的投影给空的。
@@ -390,9 +391,11 @@ pub fn annotate_asks(items: &mut [Item], open: &OpenAsks) -> Result<()> {
                     AskState::NotAnswered { note: parsed.note }
                 };
             }
-            None if open.question(id).is_some() => ask.state = AskState::Pending,
-            None if open.submitted.contains(id) => ask.state = AskState::Submitted,
-            None => {}
+            None => match open.get(id) {
+                Some(OpenAsk::Question(_)) => ask.state = AskState::Pending,
+                Some(OpenAsk::Submitted(_)) => ask.state = AskState::Submitted,
+                Some(OpenAsk::Approval(_)) | None => {}
+            },
         }
     }
     Ok(())
@@ -404,12 +407,10 @@ pub fn annotate_approvals(items: &mut [Item], open: &OpenAsks) {
     for item in items.iter_mut() {
         let Item::ToolCall(call) = item else { continue };
         let id = &call.tool_call_id;
-        let state = if open.can_approve(id) {
-            ApprovalState::Pending
-        } else if open.approvals_submitted.contains(id) {
-            ApprovalState::Submitted
-        } else {
-            continue;
+        let state = match open.get(id) {
+            Some(OpenAsk::Approval(_)) => ApprovalState::Pending,
+            Some(OpenAsk::Submitted(Waiting::Approval)) => ApprovalState::Submitted,
+            _ => continue,
         };
         call.wait = Some(CallWait::Approval { state });
     }
@@ -451,8 +452,6 @@ pub fn to_text(items: &[Item], max_item_chars: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-
     use agenter::{FileSource, Response};
     use muliao_platform::tool_views::{ViewBlock, fields};
     use serde::Deserialize;
@@ -665,11 +664,10 @@ mod tests {
         ]));
         let mut items = to_items([&calls, &results], &Renders::new(), None).unwrap();
         assert!(items.iter().all(|i| !matches!(i, Item::ToolCall(c) if c.wait.is_none())));
-        let open = OpenAsks {
-            answerable: vec![("pending".into(), vec![])],
-            submitted: HashSet::from(["submitted".to_owned()]),
-            ..Default::default()
-        };
+        let open = OpenAsks(vec![
+            ("pending".into(), OpenAsk::Question(vec![])),
+            ("submitted".into(), OpenAsk::Submitted(Waiting::AskUser)),
+        ]);
         annotate_asks(&mut items, &open).unwrap();
         let state = |id: &str| match call_of(&items, id).wait {
             Some(CallWait::Ask(a)) => Some(a.state),
@@ -701,12 +699,10 @@ mod tests {
             ResponsePart::ToolCall(call("n", "t", "{}")),
         ]);
         let mut items = to_items([&m], &Renders::new(), None).unwrap();
-        let open = OpenAsks {
-            approvable: vec![("p".into(), "t".into())],
-            submitted: HashSet::from(["s".to_owned()]),
-            approvals_submitted: HashSet::from(["s".to_owned()]),
-            ..Default::default()
-        };
+        let open = OpenAsks(vec![
+            ("p".into(), OpenAsk::Approval("t".into())),
+            ("s".into(), OpenAsk::Submitted(Waiting::Approval)),
+        ]);
         annotate_approvals(&mut items, &open);
         assert_eq!(
             ["p", "s", "n"].map(|id| call_of(&items, id).wait),

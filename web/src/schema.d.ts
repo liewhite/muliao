@@ -1417,8 +1417,7 @@ export interface components {
          *     交回工具比对（迁移来的旧信件可能没有，工具当作对不上）。
          */
         Decision: {
-            approved: boolean;
-            always: boolean;
+            choice: components["schemas"]["Choice"];
             pin: string | null;
         };
         /** @enum {string} */
@@ -2160,11 +2159,15 @@ export interface components {
         SessionListItem: components["schemas"]["SessionOut"] & {
             state: components["schemas"]["WorkState"];
         };
-        /** @description 会话的来源与发起方（界面按 `kind` 区分）。委派的发起方是父会话（存在 `parent_session_id`，不在这里另存一份）。 */
+        /**
+         * @description 会话的来源与发起方（界面按 `kind` 区分）。委派开出的是 thread，带 thread 名；发起方是父会话（存在
+         *     `parent_session_id`，不在这里另存一份）。
+         */
         SessionOrigin: {
             /** @enum {string} */
             kind: "user";
         } | {
+            thread: string;
             /** @enum {string} */
             kind: "delegation";
         } | {
@@ -2184,7 +2187,7 @@ export interface components {
             title: string;
             /** @description 会话的来源与发起方（结构化，前端不认识库里的编号格式） */
             origin: components["schemas"]["SessionOrigin"];
-            /** @description 委派产生的子会话：父会话与 thread 名 */
+            /** @description 委派产生的子会话：父会话与 thread 名（thread 名取自 origin，方便界面直接用） */
             parent_session_id: string | null;
             thread: string | null;
             /** @description 有指向它的未读通知（用户在等的回答、提问、agent 主动通知、运行失败）：未读不另存，从通知派生 */

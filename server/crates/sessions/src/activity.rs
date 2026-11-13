@@ -21,7 +21,7 @@ use crate::history::since_last_response_among;
 use crate::holds::{Hold, HoldOf, active_among, called_among};
 use crate::mailbox::queued_among;
 use crate::origins::Sender;
-use crate::pending::{HandedOut, OpenAsks, open_asks_of, position};
+use crate::pending::{HandedOut, OpenAsk, OpenAsks, open_asks_of, position};
 use crate::runs::{latest_among, unfinished_among};
 use crate::thread_calls::owed_in;
 use crate::wakeups::pending_of_in;
@@ -56,7 +56,7 @@ pub struct Waiting {
 
 impl Waiting {
     pub fn any(&self) -> bool {
-        !self.holds.is_empty() || !self.asks.is_empty()
+        !self.holds.is_empty() || self.asks.any_open()
     }
 }
 
@@ -180,14 +180,18 @@ pub fn waits_of_in(c: &Connection, session_id: &str, waiting: &Waiting) -> Resul
     );
     held.sort_by_key(|(id, _)| *id);
     let mut waits: Vec<Wait> = held.into_iter().map(|(_, w)| w).collect();
-    for (call_id, questions) in &waiting.asks.answerable {
-        waits.push(Wait::Ask {
-            call_id: call_id.clone(),
-            headers: questions.iter().map(|q: &Question| q.header.clone()).collect(),
-        });
+    for (call_id, ask) in &waiting.asks.0 {
+        if let OpenAsk::Question(questions) = ask {
+            waits.push(Wait::Ask {
+                call_id: call_id.clone(),
+                headers: questions.iter().map(|q: &Question| q.header.clone()).collect(),
+            });
+        }
     }
-    for (call_id, tool) in &waiting.asks.approvable {
-        waits.push(Wait::Approval { call_id: call_id.clone(), tool_name: tool.clone() });
+    for (call_id, ask) in &waiting.asks.0 {
+        if let OpenAsk::Approval(tool) = ask {
+            waits.push(Wait::Approval { call_id: call_id.clone(), tool_name: tool.clone() });
+        }
     }
     Ok(waits)
 }

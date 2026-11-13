@@ -4881,16 +4881,12 @@
         "type": "object",
         "description": "用户对一次等批准的调用的决定。pin：用户批准的是哪一份（请求批准时工具定下、记在 approval_requests 的指纹），批准时\n交回工具比对（迁移来的旧信件可能没有，工具当作对不上）。",
         "required": [
-          "approved",
-          "always",
+          "choice",
           "pin"
         ],
         "properties": {
-          "approved": {
-            "type": "boolean"
-          },
-          "always": {
-            "type": "boolean"
+          "choice": {
+            "$ref": "#/components/schemas/Choice"
           },
           "pin": {
             "type": [
@@ -7712,9 +7708,13 @@
           {
             "type": "object",
             "required": [
+              "thread",
               "kind"
             ],
             "properties": {
+              "thread": {
+                "type": "string"
+              },
               "kind": {
                 "type": "string",
                 "enum": [
@@ -7762,7 +7762,7 @@
             }
           }
         ],
-        "description": "会话的来源与发起方（界面按 `kind` 区分）。委派的发起方是父会话（存在 `parent_session_id`，不在这里另存一份）。"
+        "description": "会话的来源与发起方（界面按 `kind` 区分）。委派开出的是 thread，带 thread 名；发起方是父会话（存在\n`parent_session_id`，不在这里另存一份）。"
       },
       "SessionOut": {
         "type": "object",
@@ -7796,7 +7796,7 @@
               "string",
               "null"
             ],
-            "description": "委派产生的子会话：父会话与 thread 名"
+            "description": "委派产生的子会话：父会话与 thread 名（thread 名取自 origin，方便界面直接用）"
           },
           "thread": {
             "type": [

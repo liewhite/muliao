@@ -66,36 +66,37 @@ impl Sender {
     }
 }
 
-/// 会话的来源与发起方（界面按 `kind` 区分）。委派的发起方是父会话（存在 `parent_session_id`，不在这里另存一份）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
+/// 会话的来源与发起方（界面按 `kind` 区分）。委派开出的是 thread，带 thread 名；发起方是父会话（存在
+/// `parent_session_id`，不在这里另存一份）。
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SessionOrigin {
     User,
-    Delegation,
+    Delegation { thread: String },
     Trigger { trigger_id: i64 },
     Issue { issue_id: i64 },
 }
 
 impl SessionOrigin {
-    pub fn origin(self) -> Origin {
+    pub fn origin(&self) -> Origin {
         match self {
             SessionOrigin::User => Origin::User,
-            SessionOrigin::Delegation => Origin::Delegation,
+            SessionOrigin::Delegation { .. } => Origin::Delegation,
             SessionOrigin::Trigger { .. } => Origin::Trigger,
             SessionOrigin::Issue { .. } => Origin::Issue,
         }
     }
 
-    pub fn sender(self) -> Option<Sender> {
-        match self {
+    pub fn sender(&self) -> Option<Sender> {
+        match *self {
             SessionOrigin::Trigger { trigger_id } => Some(Sender::Trigger { trigger_id }),
             SessionOrigin::Issue { issue_id } => Some(Sender::Issue { issue_id }),
-            SessionOrigin::User | SessionOrigin::Delegation => None,
+            SessionOrigin::User | SessionOrigin::Delegation { .. } => None,
         }
     }
 
-    /// 存下的两列的唯一解析；不合格式是数据坏了。
-    pub fn parse(origin: &str, reference: Option<&str>) -> Result<Self> {
+    /// 存下的三列（来源、发起方编号、thread 名）的唯一解析；不合格式是数据坏了。
+    pub fn parse(origin: &str, reference: Option<&str>, thread: Option<String>) -> Result<Self> {
         let origin = Origin::parse(origin)?;
         let number = || -> Result<i64> {
             reference
@@ -106,11 +107,25 @@ impl SessionOrigin {
             Origin::User | Origin::Delegation if reference.is_some() => {
                 return Err(broken(format!("a {} origin has no ref, got {reference:?}", origin.as_str())));
             }
+            Origin::Delegation => match thread {
+                Some(thread) => SessionOrigin::Delegation { thread },
+                None => return Err(broken("a delegation session has no thread name".to_owned())),
+            },
+            _ if thread.is_some() => {
+                return Err(broken(format!("a {} session has a thread name {thread:?}", origin.as_str())));
+            }
             Origin::User => SessionOrigin::User,
-            Origin::Delegation => SessionOrigin::Delegation,
             Origin::Trigger => SessionOrigin::Trigger { trigger_id: number()? },
             Origin::Issue => SessionOrigin::Issue { issue_id: number()? },
         })
+    }
+
+    /// 委派开出的 thread 的名字；别的会话没有。
+    pub fn thread(&self) -> Option<&str> {
+        match self {
+            SessionOrigin::Delegation { thread } => Some(thread),
+            _ => None,
+        }
     }
 }
 
@@ -157,11 +172,11 @@ mod tests {
     #[test]
     fn stored_origins_round_trip_and_bad_ones_are_reported() {
         let issue = SessionOrigin::Issue { issue_id: 7 };
-        assert_eq!(SessionOrigin::parse("issue", Some("7")).unwrap(), issue);
-        assert_eq!(SessionOrigin::parse("user", None).unwrap(), SessionOrigin::User);
-        assert!(SessionOrigin::parse("user", Some("1")).is_err());
-        assert!(SessionOrigin::parse("trigger", None).is_err());
-        assert!(SessionOrigin::parse("nope", None).is_err());
+        assert_eq!(SessionOrigin::parse("issue", Some("7"), None).unwrap(), issue);
+        assert_eq!(SessionOrigin::parse("user", None, None).unwrap(), SessionOrigin::User);
+        assert!(SessionOrigin::parse("user", Some("1"), None).is_err());
+        assert!(SessionOrigin::parse("trigger", None, None).is_err());
+        assert!(SessionOrigin::parse("nope", None, None).is_err());
         assert_eq!(serde_json::to_value(issue).unwrap(), serde_json::json!({"kind": "issue", "issue_id": 7}));
     }
 }

@@ -212,7 +212,7 @@ pub fn default_title(text: &str) -> String {
 fn sender_of(session: &Session) -> Option<Party> {
     match session.origin {
         SessionOrigin::User => Some(Party::User),
-        SessionOrigin::Delegation => session.parent_session_id.clone().map(Party::Parent),
+        SessionOrigin::Delegation { .. } => session.parent_session_id.clone().map(Party::Parent),
         SessionOrigin::Trigger { .. } | SessionOrigin::Issue { .. } => session.origin.sender().map(Party::Sender),
     }
 }
@@ -221,38 +221,25 @@ fn may_continue(session: &Session, from: &Party) -> bool {
     from.origin().writes_anywhere() || sender_of(session).as_ref() == Some(from)
 }
 
-/// 新建会话的描述。
-pub(crate) struct Spec<'a> {
-    pub agent_id: &'a str,
-    pub title: &'a str,
-    /// thread：父会话与名字（只有委派开 thread）
-    pub thread: Option<(&'a str, &'a str)>,
+/// 谁开出新会话：用户、别的领域的发送方，或父会话开 thread（只有委派开 thread）。
+pub(crate) enum Opener<'a> {
+    User,
+    Sender(Sender),
+    Thread { parent: &'a str, name: &'a str },
 }
 
 /// 新建会话的唯一实现（来信与开 thread 都经过这里）：只为能运行的 agent 建。
-pub(crate) fn create_session_in(c: &Connection, from: &Party, spec: Spec<'_>) -> Result<Session> {
-    runnable_agent_in(c, spec.agent_id)?;
-    let origin = match from {
-        Party::User => SessionOrigin::User,
-        Party::Parent(_) => SessionOrigin::Delegation,
-        Party::Sender(s) => SessionOrigin::from(*s),
+pub(crate) fn create_session_in(c: &Connection, opener: Opener<'_>, agent_id: &str, title: &str) -> Result<Session> {
+    runnable_agent_in(c, agent_id)?;
+    let (origin, parent_session_id) = match opener {
+        Opener::User => (SessionOrigin::User, None),
+        Opener::Sender(s) => (SessionOrigin::from(s), None),
+        Opener::Thread { parent, name } => (SessionOrigin::Delegation { thread: name.to_owned() }, Some(parent)),
     };
-    match (from, spec.thread) {
-        (Party::Parent(p), Some((parent, _))) if p == parent => {}
-        (Party::Parent(_), _) | (_, Some(_)) => panic!("only delegation creates threads, each by its own parent"),
-        _ => {}
-    }
     let id = new_id();
     directory::add_in(
         c,
-        NewSession {
-            id: &id,
-            agent_id: spec.agent_id,
-            title: &shorten(spec.title, TITLE_LENGTH),
-            origin,
-            parent_session_id: spec.thread.map(|(p, _)| p),
-            thread: spec.thread.map(|(_, n)| n),
-        },
+        NewSession { id: &id, agent_id, title: &shorten(title, TITLE_LENGTH), origin, parent_session_id },
     )
 }
 
@@ -353,7 +340,7 @@ fn resolve_answers(
                 return Err(conflict(format!("call {call_id:?} is not waiting for approval in session {session_id}")));
             }
             let pin = pins.get(call_id).cloned().flatten();
-            resolved.insert(call_id.clone(), CallResult::Approval(Decision::of(*choice, pin)));
+            resolved.insert(call_id.clone(), CallResult::Approval(Decision { choice: *choice, pin }));
         }
     }
     Ok(resolved)
@@ -369,6 +356,12 @@ fn receive_into(tx: &mut Tx<'_>, waker: &Waker, inbound: Inbound, checked: Check
     let session = match checked.session {
         Some(s) => s,
         None => {
+            let opener = match &inbound.from {
+                Party::User => Opener::User,
+                Party::Sender(s) => Opener::Sender(*s),
+                // 委派来的信只投给已开出的 thread（Target::Existing）
+                Party::Parent(_) => panic!("delegated mail resolved to no thread"),
+            };
             let (agent_id, title) = match &inbound.target {
                 Target::Existing(id) => panic!("inbound for session {id:?} resolved to no session"),
                 Target::New { agent_id, title: Some(t) } | Target::Keyed { agent_id, title: t } => {
@@ -385,7 +378,7 @@ fn receive_into(tx: &mut Tx<'_>, waker: &Waker, inbound: Inbound, checked: Check
                     (agent_id, title)
                 }
             };
-            create_session_in(tx, &inbound.from, Spec { agent_id, title: &title, thread: None })?
+            create_session_in(tx, opener, agent_id, &title)?
         }
     };
     directory::touch_in(tx, &session.id)?;

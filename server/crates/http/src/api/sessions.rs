@@ -44,7 +44,7 @@ pub struct SessionOut {
     pub title: String,
     /// 会话的来源与发起方（结构化，前端不认识库里的编号格式）
     pub origin: SessionOrigin,
-    /// 委派产生的子会话：父会话与 thread 名
+    /// 委派产生的子会话：父会话与 thread 名（thread 名取自 origin，方便界面直接用）
     pub parent_session_id: Option<String>,
     pub thread: Option<String>,
     /// 有指向它的未读通知（用户在等的回答、提问、agent 主动通知、运行失败）：未读不另存，从通知派生
@@ -60,9 +60,9 @@ impl SessionOut {
             id: s.id,
             agent_id: s.agent_id,
             title: s.title,
+            thread: s.origin.thread().map(str::to_owned),
             origin: s.origin,
             parent_session_id: s.parent_session_id,
-            thread: s.thread,
             created_at: s.created_at,
             updated_at: s.updated_at,
         }
