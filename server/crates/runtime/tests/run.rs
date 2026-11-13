@@ -172,7 +172,7 @@ base_url = "{}"
     );
     let settings = Settings::parse(&config, dir.path().join("config.toml")).unwrap();
     let models = Arc::new(ModelRegistry::new(&settings.llm, reqwest::Client::new()));
-    let table = Arc::new(ToolTable::new());
+    let (table, binder) = ToolTable::pending();
     let source = Arc::new(AssetSource::new(db.clone(), root.clone(), 4000, models.model_check(), table.clone()));
     let agents = Arc::new(AgentService::new(source.clone(), dir.path().join("workspaces"), "claude:m".into()));
     let files = Arc::new(FileStore::open(db.clone(), dir.path().join("files"), 1 << 20).unwrap());
@@ -189,7 +189,7 @@ base_url = "{}"
         builtin(Snap { attachment }, ToolTraits::read().secret_args(&["token"])),
         builtin(Hidden, ToolTraits::write().admin()),
     ]));
-    table.bind(toolbox.specs());
+    binder.bind(toolbox.specs());
     let confined = Arc::new(Mutex::new(Vec::new()));
     let seen = confined.clone();
     let home = dir.path().to_path_buf();

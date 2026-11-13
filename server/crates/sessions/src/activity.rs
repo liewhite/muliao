@@ -104,11 +104,10 @@ pub fn work_state_in(c: &Connection, session_id: &str) -> Result<WorkState> {
     Ok(work_states_in(c, &[session_id.to_owned()])?[session_id])
 }
 
-/// 一批（可能已删除的）会话的工作状态，按顺序；已删除的是 None。
-pub fn states_of_in(c: &Connection, session_ids: &[String]) -> Result<Vec<Option<WorkState>>> {
+/// 一批（可能已删除的）会话里还在的那些的工作状态，按 id；已删除的不在结果里。
+pub fn states_of_in(c: &Connection, session_ids: &[String]) -> Result<BTreeMap<String, WorkState>> {
     let existing: Vec<String> = directory::among_in(c, session_ids)?.into_keys().collect();
-    let states = work_states_in(c, &existing)?;
-    Ok(session_ids.iter().map(|id| states.get(id).copied()).collect())
+    work_states_in(c, &existing)
 }
 
 /// 按发送方定位的会话的工作状态（key：发送方与 agent id）；还没有这样的会话时为 None。

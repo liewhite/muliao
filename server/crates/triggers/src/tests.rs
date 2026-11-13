@@ -69,7 +69,7 @@ async fn world() -> World {
     let root = dir.path().join("assets");
     std::fs::create_dir_all(root.join("platform/memory")).unwrap();
     std::fs::write(root.join("platform/memory/global.md"), "全局记忆\n").unwrap();
-    let table = Arc::new(ToolTable::new());
+    let (table, binder) = ToolTable::pending();
     let source = Arc::new(AssetSource::new(db.clone(), root, 4000, Arc::new(|_, _| Ok(())), table.clone()));
     let workspaces = dir.path().join("workspaces");
     let agents = AgentService::new(source.clone(), workspaces.clone(), "claude:m".into());
@@ -109,7 +109,7 @@ async fn world() -> World {
     );
     let mut tools = workspace.tools();
     tools.extend(triggers.tools());
-    table.bind(muliao_runtime::toolbox::Toolbox::new(tools).specs());
+    binder.bind(muliao_runtime::toolbox::Toolbox::new(tools).specs());
     let me = agents
         .create(AgentSpec { name: "me".into(), description: "测试".into(), ..Default::default() }, &Actor::User)
         .await

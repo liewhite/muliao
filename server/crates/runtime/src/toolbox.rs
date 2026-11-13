@@ -1,5 +1,5 @@
 //! 运行的内置工具：各领域带着声明交来的工具（[`BuiltinTool`]），收集成分发用的工具表（[`Toolbox::specs`]，组合根交给
-//! 资源目录的 `ToolTable::bind`）、界面的展示规则（[`Toolbox::renders`]）、消息落库前的脱敏（[`Toolbox::redaction`]），
+//! 资源目录的 `TableBinder::bind`）、界面的展示规则（[`Toolbox::renders`]）、消息落库前的脱敏（[`Toolbox::redaction`]），
 //! 以及一次运行按 agent 的规则开放的那部分（[`Toolbox::allowed`]）。MCP 工具不在这里（[`crate::mcp`]，每次运行连接）。
 
 use std::collections::{HashMap, HashSet};
@@ -34,7 +34,7 @@ impl Toolbox {
         Self { tools }
     }
 
-    /// 分发用的工具表（组合根交给 `ToolTable::bind`）。
+    /// 分发用的工具表（组合根交给 `TableBinder::bind`）。
     pub fn specs(&self) -> Vec<ToolSpec> {
         self.tools
             .iter()

@@ -57,15 +57,13 @@ pub fn cannot_review(status: Status, assignee: Option<&Assignee>) -> Option<Stri
     None
 }
 
-/// 用户此刻不能一键开工（指派给 owner 并进入 in_progress）的原因；能开工为 None。只开工还在 backlog、有负责项目的 agent 的。
-pub fn cannot_start(status: Status, owner: Option<&str>) -> Option<String> {
-    if owner.is_none() {
-        return Some("has no owner: assign it to an agent yourself".into());
-    }
+/// 用户一键开工（指派给 owner 并进入 in_progress）时指派给谁；不能开工时是原因。只开工还在 backlog、有负责项目的 agent 的。
+pub fn start_assignee(status: Status, owner: Option<&str>) -> Result<&str, String> {
+    let owner = owner.ok_or("has no owner: assign it to an agent yourself")?;
     if status != Status::Backlog {
-        return Some(format!("is already {status}, not in the backlog"));
+        return Err(format!("is already {status}, not in the backlog"));
     }
-    None
+    Ok(owner)
 }
 
 /// issue_stop 不能把 issue 改成 status 的原因；能为 None。停下不是做完；留在 in_progress（打断后改方向）必须带消息告诉
@@ -209,9 +207,9 @@ mod tests {
         assert!(cannot_review(Status::InReview, Some(&Assignee::User)).is_none());
         assert!(cannot_review(Status::Done, Some(&Assignee::User)).is_some());
         assert!(cannot_review(Status::InReview, None).is_some());
-        assert!(cannot_start(Status::Backlog, Some("a")).is_none());
-        assert!(cannot_start(Status::Backlog, None).is_some());
-        assert!(cannot_start(Status::Blocked, Some("a")).is_some());
+        assert_eq!(start_assignee(Status::Backlog, Some("a")), Ok("a"));
+        assert!(start_assignee(Status::Backlog, None).is_err());
+        assert!(start_assignee(Status::Blocked, Some("a")).is_err());
         assert!(cannot_stop_into(Status::Done, true).is_some());
         assert!(cannot_stop_into(Status::InProgress, false).is_some());
         assert!(cannot_stop_into(Status::InProgress, true).is_none());

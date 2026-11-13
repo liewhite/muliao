@@ -44,28 +44,32 @@ pub struct ToolSpec {
     pub admin: bool,
 }
 
-/// 当前配置下注册的内置工具，按注册顺序。工具集要用资源目录与分发构造，资源目录又要它：组合根先建它、装好工具集后
-/// [`ToolTable::bind`] 一次；bind 之前用到是组合根的 bug，当场 panic。
+/// 当前配置下注册的内置工具，按注册顺序。工具集要用资源目录与分发构造，资源目录又要它：组合根先建一张待填的表
+/// （[`ToolTable::pending`]），装好工具集后用拿到的 [`TableBinder`] 填一次（它被消耗，填不了第二次）；组合期间不读快照，
+/// 填之前用到是组合根的 bug，启动时当场 panic。
 #[derive(Debug, Default)]
 pub struct ToolTable {
     specs: OnceLock<Vec<ToolSpec>>,
 }
 
+/// 填一张待填的工具表的唯一凭据。
+pub struct TableBinder(std::sync::Arc<ToolTable>);
+
+impl TableBinder {
+    pub fn bind(self, specs: Vec<ToolSpec>) {
+        self.0.specs.set(specs).expect("a binder fills its table once");
+    }
+}
+
 impl ToolTable {
-    pub fn new() -> Self {
-        Self::default()
+    /// 一张待填的表与填它的凭据。
+    pub fn pending() -> (std::sync::Arc<ToolTable>, TableBinder) {
+        let table = std::sync::Arc::new(Self::default());
+        (table.clone(), TableBinder(table))
     }
 
     pub fn of(specs: Vec<ToolSpec>) -> Self {
-        let table = Self::new();
-        table.bind(specs);
-        table
-    }
-
-    pub fn bind(&self, specs: Vec<ToolSpec>) {
-        if self.specs.set(specs).is_err() {
-            panic!("the tool table is already bound");
-        }
+        Self { specs: OnceLock::from(specs) }
     }
 
     pub fn specs(&self) -> &[ToolSpec] {

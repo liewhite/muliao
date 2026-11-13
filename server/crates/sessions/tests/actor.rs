@@ -214,7 +214,7 @@ async fn world() -> World {
     );
     let settings = Settings::parse(&config, dir.path().join("config.toml")).unwrap();
     let models = Arc::new(ModelRegistry::new(&settings.llm, reqwest::Client::new()));
-    let table = Arc::new(ToolTable::new());
+    let (table, binder) = ToolTable::pending();
     let source = Arc::new(AssetSource::new(db.clone(), root.clone(), 4000, models.model_check(), table.clone()));
     let agents = Arc::new(AgentService::new(source.clone(), dir.path().join("workspaces"), "claude:m".into()));
     let files = Arc::new(FileStore::open(db.clone(), dir.path().join("files"), 1 << 20).unwrap());
@@ -233,7 +233,7 @@ async fn world() -> World {
     let stashed = Arc::new(Mutex::new(Vec::new()));
     tools.push(builtin(Stash(stashed.clone()), ToolTraits::read().secret_args(&["value"])));
     let toolbox = Arc::new(Toolbox::new(tools));
-    table.bind(toolbox.specs());
+    binder.bind(toolbox.specs());
     let confine: Confine = Arc::new(|_agent: String| async { Err("no MCP in this test".into()) }.boxed());
     let mcp = Arc::new(McpConnector::new(Arc::new(McpRegistry::new(source.clone())), secrets, confine));
     let runtime = Arc::new(Runtime::new(RuntimeDeps {

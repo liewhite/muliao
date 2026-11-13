@@ -91,7 +91,7 @@ pub async fn world(max_output_chars: usize) -> World {
     let root = dir.path().join("assets");
     std::fs::create_dir_all(root.join("platform/memory")).unwrap();
     std::fs::write(root.join("platform/memory/global.md"), "全局记忆\n").unwrap();
-    let table = Arc::new(ToolTable::new());
+    let (table, binder) = ToolTable::pending();
     let source = Arc::new(AssetSource::new(db.clone(), root.clone(), 4000, Arc::new(|_, _| Ok(())), table.clone()));
     let workspaces = dir.path().join("workspaces");
     let agents = AgentService::new(source.clone(), workspaces.clone(), "claude:m".into());
@@ -115,7 +115,7 @@ pub async fn world(max_output_chars: usize) -> World {
         max_output_chars,
     });
     let tools = workspace.tools();
-    table.bind(Toolbox::new(tools.clone()).specs());
+    binder.bind(Toolbox::new(tools.clone()).specs());
     let events = Arc::new(Events::default());
     let mut subscribers = Subscribers::default();
     workspace.subscribe(&mut subscribers);

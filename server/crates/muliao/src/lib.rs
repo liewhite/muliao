@@ -88,8 +88,8 @@ pub async fn assemble(settings: Settings, web_dir: PathBuf) -> anyhow::Result<Ap
 
     // ---- 资源目录、agent、分发 ----
     let models = Arc::new(ModelRegistry::new(&settings.llm, client.clone()));
-    // 工具表：资源快照要用，工具又要用资源目录构造，所以先建、装好工具箱后 bind
-    let table = Arc::new(ToolTable::new());
+    // 工具表：资源快照要用，工具又要用资源目录构造，所以先建待填的表、装好工具箱后填
+    let (table, binder) = ToolTable::pending();
     let source = Arc::new(AssetSource::new(
         db.clone(),
         settings.assets_dir.clone(),
@@ -195,7 +195,7 @@ pub async fn assemble(settings: Settings, web_dir: PathBuf) -> anyhow::Result<Ap
         tools.extend(muliao_web::tools::tools(web.clone(), max_chars));
     }
     let toolbox = Arc::new(Toolbox::new(tools));
-    table.bind(toolbox.specs());
+    binder.bind(toolbox.specs());
 
     // ---- 运行端口与会话 actor ----
     let runtime = Arc::new(Runtime::new(RuntimeDeps {

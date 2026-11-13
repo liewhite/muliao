@@ -30,7 +30,7 @@ use crate::error::{Error, Result, conflict, invalid};
 use crate::graph::{Upstream, batch_label, check_batch, downstream_in, links_in, links_of_in, set_depends_on_in};
 use crate::model::{self, Actor, Assignee, By, Issue, Priority, Status, agent_of, issue_in};
 use crate::render::{render_activity, render_issue};
-use crate::rules::{ask_to_settle, cannot_review, cannot_start, cannot_stop_into, handed_by, stalled};
+use crate::rules::{ask_to_settle, cannot_review, cannot_stop_into, handed_by, stalled, start_assignee};
 
 /// 运行失败记进时间线的正文（错误原文）最多这么多字符，全文在会话页
 const RUN_FAILED_BODY_MAX: usize = 500;
@@ -159,7 +159,7 @@ fn work_in(c: &Connection, issues: &[Issue]) -> Result<BTreeMap<i64, IssueWork>>
                 waiting_on: snap.waiting_on,
                 finished: i.status.finished(),
                 reviewable: cannot_review(i.status, i.assignee.as_ref()).is_none(),
-                startable: cannot_start(i.status, i.owner.as_deref()).is_none(),
+                startable: start_assignee(i.status, i.owner.as_deref()).is_ok(),
             },
         );
     }
@@ -482,8 +482,9 @@ impl Board {
     pub async fn start(&self, issue_id: i64) -> Result<Issue> {
         self.as_user(issue_id, move |c| {
             let issue = c.issue();
-            refuse(issue_id, cannot_start(issue.status, issue.owner.as_deref()))?;
-            let owner = issue.owner.clone().expect("cannot_start checked the owner");
+            let owner = start_assignee(issue.status, issue.owner.as_deref())
+                .map_err(|r| conflict(format!("issue #{issue_id} {r}")))?
+                .to_owned();
             c.apply(Patch {
                 status: Some(Status::InProgress),
                 assignee: Some(Some(Assignee::Agent(owner))),

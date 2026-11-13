@@ -88,9 +88,7 @@ impl Busy {
 /// 定时据此跳过，流式据此让事件排队。
 pub(crate) fn busy_previous_in(c: &Connection, t: &Trigger) -> Result<Option<(String, Busy)>> {
     let Some(session_id) = t.last_session_id.clone() else { return Ok(None) };
-    let [state] = states_of_in(c, std::slice::from_ref(&session_id))?[..] else {
-        unreachable!("one state per session id")
-    };
+    let state = states_of_in(c, std::slice::from_ref(&session_id))?.remove(&session_id);
     Ok(match state {
         Some(WorkState::Running) => Some((session_id, Busy::Running)),
         Some(WorkState::Waiting) => Some((session_id, Busy::Waiting)),
@@ -267,14 +265,11 @@ impl TriggerService {
             .db
             .read(move |c| {
                 let ids: Vec<String> = triggers.iter().filter_map(|t| t.last_session_id.clone()).collect();
-                let mut states = states_of_in(c, &ids)?.into_iter();
+                let states = states_of_in(c, &ids)?;
                 triggers
                     .into_iter()
                     .map(|t| {
-                        let alive = match &t.last_session_id {
-                            Some(id) => states.next().flatten().map(|_| id.clone()),
-                            None => None,
-                        };
+                        let alive = t.last_session_id.clone().filter(|id| states.contains_key(id));
                         let status = match kinds.get(&t.kind)?.status(&t) {
                             Err(Error::Corrupt(e)) => serde_json::json!({ "error": e }),
                             other => other?,
