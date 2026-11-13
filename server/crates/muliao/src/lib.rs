@@ -48,7 +48,7 @@ use muliao_workspace::{ScriptGrants, Workspace, WorkspaceDeps};
 const BUS_BUFFER: usize = 1024;
 
 /// 所有表的迁移（各领域一串，按领域记版本）
-pub const MIGRATIONS: [muliao_platform::db::Migration; 9] = [
+const MIGRATIONS: [muliao_platform::db::Migration; 9] = [
     muliao_assets::agents::MIGRATION,
     muliao_files::MIGRATION,
     muliao_usage::MIGRATION,
