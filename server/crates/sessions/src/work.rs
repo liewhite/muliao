@@ -84,12 +84,12 @@ pub fn deliver_in(
                 tx,
                 waker,
                 session_id,
-                NewMail::answer(BTreeMap::from([(call_id.clone(), answer)]), None, hold.awaited),
+                NewMail::answer(BTreeMap::from([(call_id.clone(), answer)]), false, hold.awaited),
             )?;
             Delivered::Answer
         }
         _ => {
-            post_in(tx, waker, session_id, NewMail::event(source, event_text, hold.awaited))?;
+            post_in(tx, waker, session_id, NewMail::event(source, event_text, false, hold.awaited))?;
             Delivered::Event
         }
     };
@@ -104,9 +104,7 @@ pub fn post_check_in(tx: &mut Tx<'_>, waker: &Waker, hold: Option<&Hold>, source
     if has_queued_from(tx, &hold.session_id, source)? {
         return Ok(false);
     }
-    let mut mail = NewMail::event(source, text, false);
-    mail.check_in = true;
-    post_in(tx, waker, &hold.session_id, mail)?;
+    post_in(tx, waker, &hold.session_id, NewMail::event(source, text, true, false))?;
     Ok(true)
 }
 

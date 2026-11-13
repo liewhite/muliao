@@ -18,32 +18,59 @@ use crate::error::{Result, broken, not_found};
 use crate::origins::Origin;
 use muliao_platform::db::Tx;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MailKind {
-    /// 交给模型的原文：用户在界面发的消息（可带附件）、触发器事件、另一个 agent 委派来的任务
-    Message,
-    /// 对挂起调用的回答：作为那次调用的结果交回，不是一段新消息
-    Answer,
-    /// 后台任务、交回的结果、运行中检查：套上来源交给模型，界面单独显示
-    Event,
+/// 信件的种类与它自己的内容。
+#[derive(Debug, Clone, PartialEq)]
+pub enum MailBody {
+    /// 交给模型的原文：用户在界面发的消息（可带附件）、触发器事件、另一个 agent 委派来的任务。origin 是经来信入口投进来的
+    /// 发送方来源，「用户说了什么」只按它认；delegation_id：委派来的信件是哪项委派（thread_calls 的行）
+    Message { origin: Origin, content: String, attachments: Vec<String>, delegation_id: Option<i64> },
+    /// 对挂起调用的回答（调用 id -> 结果）：作为那次调用的结果交回，不是一段新消息。from_user：用户的回答（否则是交回的
+    /// 结局）
+    Answer { answers: BTreeMap<String, CallResult>, from_user: bool },
+    /// 后台任务、交回的结果、运行中检查（check_in）：套上来源（如 job:12、thread:<会话 id>）交给模型，界面单独显示
+    Event { source: String, content: String, check_in: bool },
 }
 
-impl MailKind {
-    fn as_str(self) -> &'static str {
+impl MailBody {
+    fn kind(&self) -> &'static str {
         match self {
-            MailKind::Message => "message",
-            MailKind::Answer => "answer",
-            MailKind::Event => "event",
+            MailBody::Message { .. } => "message",
+            MailBody::Answer { .. } => "answer",
+            MailBody::Event { .. } => "event",
         }
     }
 
-    fn parse(s: &str) -> Result<Self> {
-        Ok(match s {
-            "message" => MailKind::Message,
-            "answer" => MailKind::Answer,
-            "event" => MailKind::Event,
-            _ => return Err(broken(format!("unknown mail kind {s:?}"))),
-        })
+    /// 发送方来源（存在 origin 列，热历史按它认「用户说了什么」）：消息的发送方，用户的回答是 user，事件与交回的结局没有。
+    pub fn origin(&self) -> Option<Origin> {
+        match self {
+            MailBody::Message { origin, .. } => Some(*origin),
+            MailBody::Answer { from_user, .. } => from_user.then_some(Origin::User),
+            MailBody::Event { .. } => None,
+        }
+    }
+
+    /// 文字内容；回答没有。
+    pub fn content(&self) -> &str {
+        match self {
+            MailBody::Message { content, .. } | MailBody::Event { content, .. } => content,
+            MailBody::Answer { .. } => "",
+        }
+    }
+
+    /// 消息的附件（文件存储 id）。
+    pub fn attachments(&self) -> &[String] {
+        match self {
+            MailBody::Message { attachments, .. } => attachments,
+            _ => &[],
+        }
+    }
+
+    /// 回答的调用 id -> 结果；不是回答的为空。
+    pub fn answers(&self) -> Option<&BTreeMap<String, CallResult>> {
+        match self {
+            MailBody::Answer { answers, .. } => Some(answers),
+            _ => None,
+        }
     }
 }
 
@@ -81,92 +108,41 @@ impl MailState {
 pub struct Mail {
     pub id: i64,
     pub session_id: String,
-    pub kind: MailKind,
-    /// 事件的来源（如 job:12、thread:<会话 id>）
-    pub source: Option<String>,
-    /// 经来信入口投进来的发送方来源：消息一定有，用户对提问的回答是 user；事件与交回的结局没有。「用户说了什么」只按它认
-    pub origin: Option<Origin>,
-    pub content: String,
-    /// 运行中检查（事件的一种）
-    pub check_in: bool,
-    pub attachments: Vec<String>,
-    /// 回答：调用 id -> 结果
-    pub answers: BTreeMap<String, CallResult>,
+    pub body: MailBody,
     /// 用户在等它的回答
     pub awaited: bool,
-    /// 委派来的信件：是哪项委派（thread_calls 的行）
-    pub delegation_id: Option<i64>,
     pub state: MailState,
     pub taken_by: Option<i64>,
     pub created_at: DateTime<Utc>,
 }
 
-impl Mail {
-    /// 事件信件的来源（界面展示用）；事件却没记来源是数据坏了。
-    pub fn event_source(&self) -> Result<crate::work::EventSource> {
-        let raw = self.source.as_deref().ok_or_else(|| broken(format!("event mail {} has no source", self.id)))?;
-        Ok(crate::work::parse_source(raw))
-    }
-}
-
 /// 一封要投的信（[`post_in`] 的输入）。
 #[derive(Debug, Clone)]
 pub struct NewMail {
-    pub kind: MailKind,
-    pub content: String,
+    pub body: MailBody,
     pub awaited: bool,
-    pub origin: Option<Origin>,
-    pub source: Option<String>,
-    pub check_in: bool,
-    pub attachments: Vec<String>,
-    pub answers: BTreeMap<String, CallResult>,
-    pub delegation: Option<i64>,
 }
 
 impl NewMail {
     /// 来信入口投的原文消息。
     pub fn message(origin: Origin, content: impl Into<String>, awaited: bool) -> Self {
-        NewMail {
-            kind: MailKind::Message,
-            content: content.into(),
-            awaited,
-            origin: Some(origin),
-            source: None,
-            check_in: false,
-            attachments: Vec::new(),
-            answers: BTreeMap::new(),
-            delegation: None,
-        }
+        let body = MailBody::Message { origin, content: content.into(), attachments: Vec::new(), delegation_id: None };
+        NewMail { body, awaited }
     }
 
-    /// 事件（后台任务、交回的结果、到点唤醒）。
-    pub fn event(source: impl Into<String>, content: impl Into<String>, awaited: bool) -> Self {
-        NewMail {
-            kind: MailKind::Event,
-            content: content.into(),
-            awaited,
-            origin: None,
-            source: Some(source.into()),
-            check_in: false,
-            attachments: Vec::new(),
-            answers: BTreeMap::new(),
-            delegation: None,
-        }
+    /// 事件（后台任务、交回的结果、到点唤醒）；check_in：运行中检查。
+    pub fn event(source: impl Into<String>, content: impl Into<String>, check_in: bool, awaited: bool) -> Self {
+        let source = source.into();
+        assert!(
+            !source.is_empty() && source.chars().count() <= SOURCE_MAX && !source.contains('"'),
+            "event source must be 1-{SOURCE_MAX} characters without quotes, got {source:?}"
+        );
+        NewMail { body: MailBody::Event { source, content: content.into(), check_in }, awaited }
     }
 
-    /// 对挂起调用的回答。origin：用户的回答是 user，交回的结局没有。
-    pub fn answer(answers: BTreeMap<String, CallResult>, origin: Option<Origin>, awaited: bool) -> Self {
-        NewMail {
-            kind: MailKind::Answer,
-            content: String::new(),
-            awaited,
-            origin,
-            source: None,
-            check_in: false,
-            attachments: Vec::new(),
-            answers,
-            delegation: None,
-        }
+    /// 对挂起调用的回答。from_user：用户的回答（否则是交回的结局）。
+    pub fn answer(answers: BTreeMap<String, CallResult>, from_user: bool, awaited: bool) -> Self {
+        NewMail { body: MailBody::Answer { answers, from_user }, awaited }
     }
 }
 
@@ -215,18 +191,28 @@ impl RawMail {
     fn parse(self) -> Result<Mail> {
         let id = self.id;
         let bad = |what: &str, e: serde_json::Error| broken(format!("{what} of mail {id}: {e}"));
+        let origin = self.origin.as_deref().map(Origin::parse).transpose()?;
+        let body = match (self.kind.as_str(), origin, self.source) {
+            ("message", Some(origin), None) => MailBody::Message {
+                origin,
+                content: self.content,
+                attachments: serde_json::from_str(&self.attachments).map_err(|e| bad("attachments", e))?,
+                delegation_id: self.delegation_id,
+            },
+            ("answer", None | Some(Origin::User), None) => MailBody::Answer {
+                answers: serde_json::from_str(&self.answers).map_err(|e| bad("answers", e))?,
+                from_user: origin.is_some(),
+            },
+            ("event", None, Some(source)) => MailBody::Event { source, content: self.content, check_in: self.check_in },
+            (kind, origin, source) => {
+                return Err(broken(format!("mail {id} of kind {kind:?} has origin {origin:?} and source {source:?}")));
+            }
+        };
         Ok(Mail {
             id,
             session_id: self.session_id,
-            kind: MailKind::parse(&self.kind)?,
-            source: self.source,
-            origin: self.origin.as_deref().map(Origin::parse).transpose()?,
-            content: self.content,
-            check_in: self.check_in,
-            attachments: serde_json::from_str(&self.attachments).map_err(|e| bad("attachments", e))?,
-            answers: serde_json::from_str(&self.answers).map_err(|e| bad("answers", e))?,
+            body,
             awaited: self.awaited,
-            delegation_id: self.delegation_id,
             state: MailState::parse(&self.state)?,
             taken_by: self.taken_by,
             created_at: self.created_at,
@@ -243,44 +229,36 @@ fn query(c: &Connection, filter: &str, params: impl rusqlite::Params) -> Result<
 
 /// 在调用方事务里往会话信箱投一封信，提交后叫醒会话 actor。
 pub fn post_in(tx: &mut Tx<'_>, waker: &Waker, session_id: &str, mail: NewMail) -> Result<i64> {
-    let ok = match mail.kind {
-        MailKind::Message => mail.origin.is_some(),
-        MailKind::Event => mail.origin.is_none(),
-        MailKind::Answer => matches!(mail.origin, None | Some(Origin::User)),
-    };
-    assert!(ok, "a message needs its sender's origin, an event has none and an answer is the user's or has none");
-    if mail.kind == MailKind::Event {
-        let source = mail.source.as_deref().unwrap_or("");
-        assert!(
-            !source.is_empty() && source.chars().count() <= SOURCE_MAX && !source.contains('"'),
-            "event source must be 1-{SOURCE_MAX} characters without quotes, got {source:?}"
-        );
-    }
-    assert!(!mail.check_in || mail.kind == MailKind::Event, "only events can be check-ins");
     let exists: Option<i64> =
         tx.query_row("SELECT 1 FROM sessions WHERE id = ?1", [session_id], |r| r.get(0)).optional()?;
     if exists.is_none() {
         return Err(not_found(format!("session {session_id:?} not found")));
     }
+    let body = &mail.body;
+    let (source, check_in, delegation, answers) = match body {
+        MailBody::Message { delegation_id, .. } => (None, false, *delegation_id, None),
+        MailBody::Answer { answers, .. } => (None, false, None, Some(answers)),
+        MailBody::Event { source, check_in, .. } => (Some(source.as_str()), *check_in, None, None),
+    };
     tx.execute(
         "INSERT INTO mail (session_id, kind, source, origin, content, check_in, attachments, answers, awaited, \
          delegation_id, state, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'queued', ?11)",
         params![
             session_id,
-            mail.kind.as_str(),
-            mail.source,
-            mail.origin.map(Origin::as_str),
-            mail.content,
-            mail.check_in,
-            serde_json::to_string(&mail.attachments).expect("ids serialize"),
-            serde_json::to_string(&mail.answers).expect("answers serialize"),
+            body.kind(),
+            source,
+            body.origin().map(Origin::as_str),
+            body.content(),
+            check_in,
+            serde_json::to_string(body.attachments()).expect("ids serialize"),
+            serde_json::to_string(&answers.cloned().unwrap_or_default()).expect("answers serialize"),
             mail.awaited,
-            mail.delegation,
+            delegation,
             Utc::now(),
         ],
     )?;
     let id = tx.last_insert_rowid();
-    tracing::info!(session_id, mail_id = id, kind = mail.kind.as_str(), source = ?mail.source, "mail posted");
+    tracing::info!(session_id, mail_id = id, kind = body.kind(), source, "mail posted");
     waker.wake_on_commit(tx, session_id);
     Ok(id)
 }

@@ -12,14 +12,22 @@ use crate::actor::Waker;
 use crate::delegation::{Ending, hand_back_in};
 use crate::directory::Session;
 use crate::error::Result;
-use crate::mailbox::{Mail, MailState, delegated_mail_in, discard_in, queued_in};
+use crate::mailbox::{Mail, MailBody, MailState, delegated_mail_in, discard_in, queued_in};
 use crate::thread_calls::{Owed, owed_in};
 
 /// 交给会话、还没做完的信件所在的状态：排着的与已交给模型的
 const LIVE: [MailState; 2] = [MailState::Queued, MailState::Consumed];
 
 fn owed_by(c: &Connection, mail: &[Mail]) -> Result<Vec<Owed>> {
-    let ids: Vec<i64> = mail.iter().filter_map(|m| m.delegation_id).collect::<BTreeSet<_>>().into_iter().collect();
+    let ids: Vec<i64> = mail
+        .iter()
+        .filter_map(|m| match m.body {
+            MailBody::Message { delegation_id, .. } => delegation_id,
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
     owed_in(c, Some(&ids))
 }
 

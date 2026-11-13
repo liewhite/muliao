@@ -16,7 +16,7 @@ use crate::answers::{AskResult, CallResult, answer_lines};
 use crate::directory::{Session, among_in, with_prefix_in};
 use crate::error::{Result, broken, invalid, not_found};
 use crate::history::{Span, spans_between_in, transcript_in};
-use crate::mailbox::{Mail, MailKind, MailState, first_arrivals_between_in, sent_by_in};
+use crate::mailbox::{Mail, MailBody, MailState, first_arrivals_between_in, sent_by_in};
 use crate::origins::Origin;
 use crate::runs::started_between_in;
 use crate::transcript::{Item, Renders, UserItem, to_items};
@@ -106,9 +106,8 @@ pub fn between_in(
 }
 
 fn words_of(mail: &Mail) -> UserWords {
-    let text = if mail.kind == MailKind::Answer {
-        let asked: Vec<&AskResult> = mail
-            .answers
+    let text = if let MailBody::Answer { answers, .. } = &mail.body {
+        let asked: Vec<&AskResult> = answers
             .values()
             .filter_map(|r| match r {
                 CallResult::AskUser(a) => Some(a),
@@ -119,9 +118,10 @@ fn words_of(mail: &Mail) -> UserWords {
         lines.extend(answer_lines(&asked));
         lines.join("\n")
     } else {
-        mail.content.clone()
+        mail.body.content().to_owned()
     };
-    UserWords { session_id: mail.session_id.clone(), at: mail.created_at, text, attachments: mail.attachments.len() }
+    let attachments = mail.body.attachments().len();
+    UserWords { session_id: mail.session_id.clone(), at: mail.created_at, text, attachments }
 }
 
 /// 时间线里的用户消息条目与它的发送方来源：用户在界面上写的是 user，否则是会话的发起方（别的来源只续写自己发起的会话）。
@@ -164,10 +164,10 @@ pub fn timeline_in(c: &Connection, session: &str, since: Option<DateTime<Utc>>) 
     };
     let stored = transcript_in(c, &row.id, since)?;
     // 每次运行交给模型的用户消息（信件交给模型时原文作为一整段，content.rs）
-    let mut typed: BTreeMap<i64, Vec<Mail>> = BTreeMap::new();
+    let mut typed: BTreeMap<i64, Vec<String>> = BTreeMap::new();
     for m in sent_by_in(c, std::slice::from_ref(&row.id), Origin::User, None, None)? {
-        if let (MailKind::Message, MailState::Consumed, Some(run)) = (m.kind, m.state, m.taken_by) {
-            typed.entry(run).or_default().push(m);
+        if let (MailBody::Message { content, .. }, MailState::Consumed, Some(run)) = (m.body, m.state, m.taken_by) {
+            typed.entry(run).or_default().push(content);
         }
     }
     let renders = Renders::new();
@@ -185,10 +185,10 @@ pub fn timeline_in(c: &Connection, session: &str, since: Option<DateTime<Utc>>) 
     Ok(Timeline { session: row, entries })
 }
 
-/// 用户消息条目里有用户在界面上写的一封信：typed 是保存这条消息的那次运行处理的用户消息；只有附件的按条目带不带附件认。
-fn from_user(item: &UserItem, typed: &[Mail]) -> bool {
-    typed.iter().any(|m| {
-        if m.content.trim().is_empty() { !item.attachments.is_empty() } else { has_segment(&item.text, &m.content) }
+/// 用户消息条目里有用户在界面上写的一封信：typed 是保存这条消息的那次运行处理的用户消息的原文；只有附件的按条目带不带附件认。
+fn from_user(item: &UserItem, typed: &[String]) -> bool {
+    typed.iter().any(|content| {
+        if content.trim().is_empty() { !item.attachments.is_empty() } else { has_segment(&item.text, content) }
     })
 }
 

@@ -177,7 +177,13 @@ impl World {
 
     async fn mail(&self, session_id: &str) -> Vec<String> {
         let sid = session_id.to_owned();
-        self.db.read(move |c| queued_in(c, &sid)).await.unwrap().into_iter().map(|m| m.content).collect()
+        self.db
+            .read(move |c| queued_in(c, &sid))
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|m| m.body.content().to_owned())
+            .collect()
     }
 
     /// 让会话空闲：丢掉排着的信

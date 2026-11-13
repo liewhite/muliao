@@ -7,6 +7,7 @@ use std::time::Duration;
 use agenter::Approval;
 use common::{Out, World, world};
 use muliao_sessions::events::SessionStopped;
+use muliao_sessions::mailbox::MailBody;
 use muliao_workspace::grants::GRANTED_NOTE;
 use serde_json::json;
 
@@ -192,8 +193,8 @@ async fn a_finished_background_job_reports_back_with_its_output() {
     assert_eq!(std::fs::read_to_string(w.ws().join(&info.log_path)).unwrap(), "[secret:TOKEN]\ndone\n");
     let mail = w.queued().await;
     assert_eq!(mail.len(), 1);
-    assert_eq!(mail[0].source.as_deref(), Some(format!("job:{id}").as_str()));
-    let text = &mail[0].content;
+    assert!(matches!(&mail[0].body, MailBody::Event { source, .. } if *source == format!("job:{id}")));
+    let text = mail[0].body.content();
     assert!(
         text.starts_with(&format!("Background job {id} finished with exit code 2 after 0m00s.\nCommand: echo $TOKEN")),
         "{text}"
@@ -224,10 +225,12 @@ async fn running_jobs_get_check_events_without_piling_up_and_can_be_killed() {
     w.workspace.jobs.check().await.unwrap();
     let mail = w.queued().await;
     assert_eq!(mail.len(), 1);
-    assert!(mail[0].check_in);
-    assert!(mail[0].content.starts_with(&format!("Background job {id} is still running (0m00s so far).")));
-    assert!(mail[0].content.contains("Last lines of output:\nworking\n"));
-    assert!(mail[0].content.ends_with("you will get another check-in in 0.1 seconds and an event when it finishes."));
+    assert!(matches!(mail[0].body, MailBody::Event { check_in: true, .. }));
+    assert!(mail[0].body.content().starts_with(&format!("Background job {id} is still running (0m00s so far).")));
+    assert!(mail[0].body.content().contains("Last lines of output:\nworking\n"));
+    assert!(
+        mail[0].body.content().ends_with("you will get another check-in in 0.1 seconds and an event when it finishes.")
+    );
     assert_eq!(
         w.call("job_kill", json!({"job_id": id})).await.ok(),
         format!("sent kill signal to job {id}; its final status will arrive as an event")
@@ -236,7 +239,11 @@ async fn running_jobs_get_check_events_without_piling_up_and_can_be_killed() {
     assert_eq!(info.status, "killed");
     let mail = w.queued().await;
     assert!(
-        mail.last().unwrap().content.starts_with(&format!("Background job {id} was killed (job_kill) after 0m00s."))
+        mail.last()
+            .unwrap()
+            .body
+            .content()
+            .starts_with(&format!("Background job {id} was killed (job_kill) after 0m00s."))
     );
 }
 
@@ -249,9 +256,9 @@ async fn a_job_ends_when_its_process_exits_even_if_a_grandchild_keeps_the_output
     assert_eq!(info.status, "exited");
     let mail = w.queued().await;
     assert!(
-        mail[0].content.contains(&format!("Note: {}", muliao_platform::shell::LEFT_RUNNING_NOTE)),
+        mail[0].body.content().contains(&format!("Note: {}", muliao_platform::shell::LEFT_RUNNING_NOTE)),
         "{}",
-        mail[0].content
+        mail[0].body.content()
     );
 }
 
@@ -287,7 +294,7 @@ async fn jobs_left_running_by_a_previous_process_are_reported_interrupted() {
     let info = fresh.info(id, &w.me).await.unwrap();
     assert_eq!(info.status, "interrupted");
     let mail = w.queued().await;
-    let text = &mail[0].content;
+    let text = mail[0].body.content();
     assert!(
         text.contains("was interrupted after 0m00s: the service stopped unexpectedly. Its process group"),
         "{text}"
@@ -306,7 +313,7 @@ async fn shutting_down_reports_running_jobs_as_interrupted() {
     let info = w.workspace.jobs.info(id, &w.me).await.unwrap();
     assert_eq!(info.status, "interrupted");
     let mail = w.queued().await;
-    assert!(mail[0].content.starts_with(&format!(
+    assert!(mail[0].body.content().starts_with(&format!(
         "Background job {id} was interrupted after 0m00s: the service was stopped. It may have partly run."
     )));
 }
@@ -338,5 +345,5 @@ async fn an_unreadable_log_does_not_keep_the_job_from_ending() {
     let info = wait_done(&w, id).await;
     std::fs::set_permissions(&log, std::fs::Permissions::from_mode(0o644)).unwrap();
     assert_eq!(info.status, "exited");
-    assert!(w.queued().await[0].content.contains("Last lines of output:\n(could not read the log: "));
+    assert!(w.queued().await[0].body.content().contains("Last lines of output:\n(could not read the log: "));
 }

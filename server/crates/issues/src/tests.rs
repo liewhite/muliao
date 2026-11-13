@@ -81,7 +81,13 @@ impl World {
     /// agent 在这个 issue 会话里排着的信
     async fn letters(&self, issue_id: i64, agent_id: &str) -> Vec<String> {
         let Some(s) = self.session(issue_id, agent_id).await else { return vec![] };
-        self.db.read(move |c| queued_in(c, &s)).await.unwrap().into_iter().map(|m| m.content).collect()
+        self.db
+            .read(move |c| queued_in(c, &s))
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|m| m.body.content().to_owned())
+            .collect()
     }
 
     /// 信都被处理过了（会话空闲）

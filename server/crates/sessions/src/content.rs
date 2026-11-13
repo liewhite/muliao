@@ -10,7 +10,7 @@ use muliao_runtime::attachments::{copy_to_workspace, references};
 use crate::answers::CallResult;
 use crate::conventions::{format_event, mark_events};
 use crate::error::{Result, broken};
-use crate::mailbox::{Mail, MailKind};
+use crate::mailbox::{Mail, MailBody};
 
 /// 一批信件的内容段，以及其中哪些段是事件、哪些事件是运行中检查（下标从 0 起，在这批内容里）。
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -31,26 +31,25 @@ impl Content {
 pub async fn content_of(files: &FileStore, workspace: &Path, mail: &[Mail]) -> Result<Content> {
     let mut c = Content::default();
     for m in mail {
-        match m.kind {
-            MailKind::Answer => {
-                let results: Vec<CallResult> = m.answers.values().cloned().collect();
+        match &m.body {
+            MailBody::Answer { answers, .. } => {
+                let results: Vec<CallResult> = answers.values().cloned().collect();
                 c.parts.push(RequestPart::Text { text: CallResult::late_text(&results) });
             }
-            MailKind::Event => {
-                let source = m.source.as_deref().ok_or_else(|| broken(format!("event mail {} has no source", m.id)))?;
+            MailBody::Event { source, content, check_in } => {
                 c.events.push(c.parts.len());
-                if m.check_in {
+                if *check_in {
                     c.check_ins.push(c.parts.len());
                 }
-                c.parts.push(RequestPart::Text { text: format_event(source, &m.content) });
+                c.parts.push(RequestPart::Text { text: format_event(source, content) });
             }
-            MailKind::Message => {
-                let metas = files.referenced(m.attachments.clone()).await?;
+            MailBody::Message { content, attachments, .. } => {
+                let metas = files.referenced(attachments.clone()).await?;
                 copy_to_workspace(files, &metas, workspace)
                     .await
                     .map_err(|e| broken(format!("copying attachments of mail {} into the workspace: {e}", m.id)))?;
-                if !m.content.trim().is_empty() {
-                    c.parts.push(RequestPart::Text { text: m.content.clone() });
+                if !content.trim().is_empty() {
+                    c.parts.push(RequestPart::Text { text: content.clone() });
                 }
                 c.parts.extend(references(&metas));
             }

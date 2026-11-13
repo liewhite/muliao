@@ -10,11 +10,11 @@ use muliao_sessions::answers::{CallResult, Choice, QuestionAnswer};
 use muliao_sessions::directory::{Listing, Session};
 use muliao_sessions::inbound::{UserMessage, UserTarget};
 use muliao_sessions::live::{LiveSegment, Retrying};
-use muliao_sessions::mailbox::{Mail, MailKind, MailState};
+use muliao_sessions::mailbox::{Mail, MailBody, MailState};
 use muliao_sessions::origins::{Origin, Sender, SessionOrigin};
 use muliao_sessions::runs::RunRecord;
 use muliao_sessions::transcript::SavedItem;
-use muliao_sessions::work::EventSource;
+use muliao_sessions::work::{EventSource, parse_source};
 use muliao_usage::UsageTotals;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
@@ -192,28 +192,25 @@ pub enum MailKindOut {
 
 /// MailOut 的唯一构造入口：一次取齐这些信件的附件。
 async fn mail_outs(s: &AppState, mail: Vec<Mail>) -> ApiResult<Vec<MailOut>> {
-    let mut ids: Vec<String> = mail.iter().flat_map(|m| m.attachments.iter().cloned()).collect();
+    let mut ids: Vec<String> = mail.iter().flat_map(|m| m.body.attachments().iter().cloned()).collect();
     ids.sort();
     ids.dedup();
     let files: BTreeMap<String, FileOut> =
         s.services.files.referenced(ids).await?.iter().map(|f| (f.id.clone(), FileOut::of(f))).collect();
-    mail.into_iter()
+    Ok(mail
+        .into_iter()
         .map(|m| {
-            let kind = match m.kind {
-                MailKind::Message => MailKindOut::Message,
-                MailKind::Event => MailKindOut::Event { source: m.event_source()?, check_in: m.check_in },
-                MailKind::Answer => MailKindOut::Answer { answers: m.answers },
+            let attachments = m.body.attachments().iter().map(|id| files[id].clone()).collect();
+            let (content, kind) = match m.body {
+                MailBody::Message { content, .. } => (content, MailKindOut::Message),
+                MailBody::Event { source, content, check_in } => {
+                    (content, MailKindOut::Event { source: parse_source(&source), check_in })
+                }
+                MailBody::Answer { answers, .. } => (String::new(), MailKindOut::Answer { answers }),
             };
-            Ok(MailOut {
-                attachments: m.attachments.iter().map(|id| files[id].clone()).collect(),
-                id: m.id,
-                content: m.content,
-                state: m.state,
-                created_at: m.created_at,
-                kind,
-            })
+            MailOut { attachments, id: m.id, content, state: m.state, created_at: m.created_at, kind }
         })
-        .collect()
+        .collect())
 }
 
 #[derive(Serialize, ToSchema)]

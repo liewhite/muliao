@@ -20,7 +20,7 @@ use crate::actor::Waker;
 use crate::answers::{CallResult, Choice, Decision, QuestionAnswer, answer_result};
 use crate::directory::{self, NewSession, Session, keyed_among};
 use crate::error::{Error, Result, conflict, forbidden, invalid, not_found};
-use crate::mailbox::{NewMail, post_in, queued_in};
+use crate::mailbox::{MailBody, NewMail, post_in, queued_in};
 use crate::origins::{Origin, Sender, SessionOrigin};
 use crate::pending::open_asks_of;
 use crate::work::position_in;
@@ -392,13 +392,16 @@ fn receive_into(tx: &mut Tx<'_>, waker: &Waker, inbound: Inbound, checked: Check
     let origin = inbound.from.origin();
     if !inbound.answers.is_empty() || !inbound.approvals.is_empty() {
         let answers = resolve_answers(tx, &session.id, &inbound.answers, &inbound.approvals)?;
-        post_in(tx, waker, &session.id, NewMail::answer(answers, Some(origin), inbound.awaited))?;
+        post_in(tx, waker, &session.id, NewMail::answer(answers, origin == Origin::User, inbound.awaited))?;
     }
     if !inbound.content.trim().is_empty() || !inbound.attachments.is_empty() {
-        let mut mail = NewMail::message(origin, inbound.content.clone(), inbound.awaited);
-        mail.attachments = inbound.attachments.clone();
-        mail.delegation = inbound.delegation;
-        post_in(tx, waker, &session.id, mail)?;
+        let body = MailBody::Message {
+            origin,
+            content: inbound.content.clone(),
+            attachments: inbound.attachments.clone(),
+            delegation_id: inbound.delegation,
+        };
+        post_in(tx, waker, &session.id, NewMail { body, awaited: inbound.awaited })?;
     }
     tracing::info!(session_id = %session.id, sender = ?inbound.from, "message received");
     Ok(session)
