@@ -423,15 +423,15 @@ export function TextAreaInput({
   )
 }
 
-export interface Option {
-  id: string
+export interface Option<T extends string = string> {
+  id: T
   label: string
   description?: string
   /** 显示在标签前的标记（如负责项目的色点） */
   prefix?: ReactNode
 }
 
-export function SelectInput({
+export function SelectInput<T extends string>({
   label,
   hint,
   value,
@@ -443,9 +443,9 @@ export function SelectInput({
   label: string
   hint?: ReactNode
   /** null 表示未选择（显示 placeholder）；选项 id 都是非空字符串 */
-  value: string | null
-  onChange: (value: string) => void
-  options: Option[]
+  value: T | null
+  onChange: (value: T) => void
+  options: Option<T>[]
   placeholder?: string
   isDisabled?: boolean
 }) {
@@ -457,8 +457,9 @@ export function SelectInput({
       value={value}
       onChange={(key: Key | null) => {
         // 单选且无清除按钮：选中后不会回到未选择
-        if (key === null) throw new Error(`select "${label}" was cleared unexpectedly`)
-        onChange(String(key))
+        const picked = options.find((o) => o.id === key)
+        if (!picked) throw new Error(`select "${label}" picked ${String(key)}, which is not one of its options`)
+        onChange(picked.id)
       }}
       isDisabled={isDisabled}
     >

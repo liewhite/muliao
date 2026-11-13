@@ -230,8 +230,7 @@ function PrecheckEditor({ precheck, onChange }: { precheck: Precheck | null; onC
           <SelectInput
             label="触发条件"
             value={fireWhen}
-            onChange={(value) => {
-              const next = value as FireWhen
+            onChange={(next) => {
               setFireWhen(next)
               emit({ fireWhen: next })
             }}

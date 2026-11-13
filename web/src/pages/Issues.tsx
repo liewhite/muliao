@@ -444,13 +444,13 @@ function NewIssueForm() {
         <SelectInput
           label="状态"
           value={status}
-          onChange={(v) => setStatus(v as IssueStatus)}
+          onChange={setStatus}
           options={STATUSES.map((s) => ({ id: s, label: STATUS_LABEL[s] }))}
         />
         <SelectInput
           label="优先级"
           value={priority}
-          onChange={(v) => setPriority(v as IssuePriority)}
+          onChange={setPriority}
           options={PRIORITIES.map((p) => ({ id: p, label: PRIORITY_LABEL[p] }))}
         />
         <SelectInput label="指派给" value={assignee} onChange={setAssignee} options={assigneeOptions(agents)} />

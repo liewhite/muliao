@@ -153,6 +153,7 @@ const THINKING_LABEL: Record<Thinking, string> = {
   high: 'high',
   xhigh: 'xhigh',
 }
+const THINKINGS = Object.keys(THINKING_LABEL) as Thinking[]
 
 /** agent 的模型 "<provider 名>:<模型名>"：provider 来自服务端配置，模型名向该 provider 实时查询；旁边是它的思考档位 */
 function ModelInput({
@@ -201,8 +202,8 @@ function ModelInput({
           label="思考"
           hint="默认＝不传，按模型自己的默认"
           value={thinking}
-          onChange={(t) => onThinkingChange(t as Thinking)}
-          options={Object.entries(THINKING_LABEL).map(([id, label]) => ({ id, label }))}
+          onChange={onThinkingChange}
+          options={THINKINGS.map((id) => ({ id, label: THINKING_LABEL[id] }))}
         />
       </div>
       <ErrorAlert error={providers.error} title="读取 provider 失败" />

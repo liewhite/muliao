@@ -10,8 +10,6 @@ import {
   sessionRoute,
   type Agent,
   type IssueDetail,
-  type IssuePriority,
-  type IssueStatus,
 } from '../api'
 import { useReturnState, useRouteParam } from '../nav'
 import {
@@ -276,14 +274,14 @@ function Issue({ detail }: { detail: IssueDetail }) {
         <SelectInput
           label="状态"
           value={issue.status}
-          onChange={(v) => patch({ status: v as IssueStatus })}
+          onChange={(status) => patch({ status })}
           options={STATUSES.map((s) => ({ id: s, label: STATUS_LABEL[s] }))}
           isDisabled={change.busy}
         />
         <SelectInput
           label="优先级"
           value={issue.priority}
-          onChange={(v) => patch({ priority: v as IssuePriority })}
+          onChange={(priority) => patch({ priority })}
           options={PRIORITIES.map((p) => ({ id: p, label: PRIORITY_LABEL[p] }))}
           isDisabled={change.busy}
         />

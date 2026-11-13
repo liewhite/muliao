@@ -17,7 +17,7 @@ use crate::naming::{AgentName, PLATFORM};
 use crate::tree::{Owner, Place, Snapshot, place_of};
 use muliao_platform::errors::{Result, invalid};
 
-/// 模型（与思考档位）在当前配置下能不能运行；不能时的原因（运行端口给，[`crate::source::ModelCheck`]）。
+/// agent.toml 写的模型在当前配置下能不能运行；不能时的原因（运行端口给，[`crate::source::ModelCheck`]）。
 pub(crate) type CheckAgent<'a> = &'a dyn Fn(&AgentFile) -> std::result::Result<(), String>;
 
 /// path 在资源目录 root 里（按真实路径，不含 root 本身）。
