@@ -309,22 +309,12 @@ impl Snapshot {
     pub fn owner_dir(&self, owner: &Owner) -> Result<PathBuf> {
         match owner {
             Owner::Platform => Ok(self.root.join(PLATFORM)),
-            Owner::Agent(id) => {
-                self.not_deleting(id)?;
-                Ok(self.loaded_agent(id)?.path.clone())
-            }
-        }
-    }
-
-    /// 在资源树上，正在删除的 agent 按不存在处理（写入口、界面读它的私有记忆都经这里）。
-    pub(crate) fn not_deleting(&self, id: &AgentId) -> Result<()> {
-        if self.deleting.contains(id) {
-            return Err(not_found(format!(
-                "agent {:?} is being deleted; nothing can be read or written for it",
+            Owner::Agent(id) if self.deleting.contains(id) => Err(not_found(format!(
+                "agent {:?} is being deleted; nothing can be written for it",
                 self.names.get(id).map_or(id.as_str(), AgentName::as_str)
-            )));
+            ))),
+            Owner::Agent(id) => Ok(self.loaded_agent(id)?.path.clone()),
         }
-        Ok(())
     }
 
     pub fn owner_label(&self, owner: &Owner) -> String {

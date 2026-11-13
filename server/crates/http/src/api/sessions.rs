@@ -95,9 +95,9 @@ pub struct ListQuery {
     pub origin: Option<Vec<Origin>>,
     /// 只列这个触发器发起的会话（不能再给 origin）
     pub trigger_id: Option<i64>,
-    /// 关键字：只列标题或消息含有它的会话（不区分 ASCII 大小写；不能为空串）
+    /// 关键字：只列标题或消息含有它的会话（不区分 ASCII 大小写；空串不过滤）
     pub q: Option<String>,
-    /// 一页的条数，不给取默认；超出范围 422
+    /// 一页的条数，不给取默认
     pub limit: Option<usize>,
     pub offset: Option<usize>,
 }
@@ -114,9 +114,6 @@ async fn list_sessions(
         (Some(trigger_id), None) => Some(Sender::Trigger { trigger_id }),
         (None, _) => None,
     };
-    if q.q.as_deref() == Some("") {
-        return Err(ApiError::invalid("q must not be empty"));
-    }
     let limit = q.limit.unwrap_or(muliao_sessions::service::LIST_DEFAULT);
     let listing = Listing { agent_id: q.agent_id, origins: q.origin, sender, keyword: q.q };
     let listed = s.services.sessions.list(listing, limit, q.offset.unwrap_or(0)).await?;

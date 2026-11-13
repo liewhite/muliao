@@ -21,11 +21,10 @@ use crate::mailbox::{Mail, visible_in};
 use crate::runs::{self, RunRecord};
 use crate::thread_calls::call_threads_in;
 use crate::transcript::{Renders, SavedItem, annotate_approvals, annotate_asks, annotate_threads, to_items};
-use muliao_platform::errors::{Error, Result, invalid, not_found};
+use muliao_platform::errors::{Error, Result, not_found};
 
-/// 会话列表一页的条数：不给时的默认与上限
+/// 会话列表不给条数时一页多少条
 pub const LIST_DEFAULT: usize = 50;
-pub const LIST_MAX: usize = 200;
 
 /// 会话页看到的会话（读模型）：一次取齐，与实时快照对得上。
 #[derive(Debug, Clone)]
@@ -158,11 +157,7 @@ impl SessionService {
     }
 
     /// 会话列表（顶层会话与 thread）：不是 idle 的置顶（看筛选后的全部会话，所以第一页就含全部进行中的），其余按最近更新。
-    /// limit：1 到 [`LIST_MAX`]，不给时用 [`LIST_DEFAULT`]。
     pub async fn list(&self, listing: Listing, limit: usize, offset: usize) -> Result<Vec<ListedSession>> {
-        if !(1..=LIST_MAX).contains(&limit) {
-            return Err(invalid(format!("limit must be between 1 and {LIST_MAX}, got {limit}")));
-        }
         self.db
             .read(move |c| {
                 let ids = directory::listed_ids_in(c, &listing)?;

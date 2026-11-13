@@ -53,7 +53,7 @@ pub const TICK: Duration = Duration::from_secs(5);
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(2 * DRAIN.as_secs());
 
 /// 后台任务的状态（界面与 job_status 看到的）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum JobStatus {
     Running,
@@ -63,9 +63,7 @@ pub enum JobStatus {
 }
 
 impl JobStatus {
-    const ALL: [JobStatus; 4] = [JobStatus::Running, JobStatus::Exited, JobStatus::Killed, JobStatus::Interrupted];
-
-    /// 状态的名字（存库、报错、界面都是它；serde 的名字由测试钉住与它一致）。
+    /// 状态的名字（存库、报错时用；与 serde 的名字一致由测试钉住）。
     pub fn as_str(self) -> &'static str {
         match self {
             JobStatus::Running => "running",
@@ -75,8 +73,12 @@ impl JobStatus {
         }
     }
 
+    /// 存下的名字的解析：按 serde 的名字（唯一的一张表）。
     fn parse(name: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|s| s.as_str() == name)
+        use serde::de::IntoDeserializer;
+        <Self as serde::Deserialize>::deserialize(name.into_deserializer())
+            .map_err(|_: serde::de::value::Error| ())
+            .ok()
     }
 }
 
@@ -734,7 +736,7 @@ mod tests {
 
     #[test]
     fn status_names_are_one_table() {
-        for s in JobStatus::ALL {
+        for s in [JobStatus::Running, JobStatus::Exited, JobStatus::Killed, JobStatus::Interrupted] {
             assert_eq!(serde_json::to_value(s).unwrap(), s.as_str());
             assert_eq!(JobStatus::parse(s.as_str()), Some(s));
         }

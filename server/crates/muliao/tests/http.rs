@@ -242,7 +242,6 @@ async fn a_conversation_over_http_with_live_events() {
     assert_eq!(list[0]["state"], "idle");
     assert!(list[0]["unread"].is_boolean());
     w.call(Method::GET, "/api/sessions?trigger_id=1&origin=user", None, 422).await;
-    w.call(Method::GET, "/api/sessions?limit=0", None, 422).await;
     w.call(Method::GET, "/api/sessions?q=helper", None, 200).await;
 
     // 续写、重试（没失败的不能重试）、标已读、压缩（后台做）

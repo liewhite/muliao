@@ -27,7 +27,7 @@ pub struct HistoryQuery {
     pub until: Option<NaiveDate>,
     /// 1–3，默认 1
     pub min_importance: Option<Importance>,
-    /// 默认 20，最多 200
+    /// 条数，不给取默认；超出上限 422
     pub limit: Option<usize>,
 }
 

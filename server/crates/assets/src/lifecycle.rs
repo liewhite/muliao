@@ -91,9 +91,8 @@ impl AgentLifecycle {
         let (before, after) = self
             .db
             .write(move |tx| {
-                let before = agents::active_agent_in(tx, &id)?;
                 // 先记下（是不是默认 agent 在这里查），再问各领域忙不忙：忙时报错，整个事务回滚
-                let after = agents::set_archived_in(tx, &before, archived)?;
+                let (before, after) = agents::set_archived_in(tx, &id, archived)?;
                 if archived && !before.archived() {
                     let mut blocking = Vec::new();
                     for (name, blocked) in blockers.iter() {

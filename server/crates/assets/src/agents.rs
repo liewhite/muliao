@@ -275,14 +275,14 @@ pub(crate) fn remove_in(c: &Connection, agent_id: &AgentId) -> Result<bool> {
     Ok(c.execute("DELETE FROM agents WHERE id = ?1 AND deleting", [agent_id])? > 0)
 }
 
-/// 归档或取消归档 agent（调用方在同一事务里读出的、还可用的它）；已是目标状态时不改。归档要求它不是系统默认 agent。
-pub(crate) fn set_archived_in(c: &Connection, agent: &AgentInfo, archived: bool) -> Result<AgentInfo> {
-    let agent_id = &agent.id;
-    if agent.archived() != archived {
-        if archived && agent.is_default {
+/// 归档或取消归档还可用的 agent；已是目标状态时不改。归档要求它不是系统默认 agent。返回改之前与之后的它。
+pub(crate) fn set_archived_in(c: &Connection, agent_id: &AgentId, archived: bool) -> Result<(AgentInfo, AgentInfo)> {
+    let before = active_agent_in(c, agent_id)?;
+    if before.archived() != archived {
+        if archived && before.is_default {
             return Err(conflict(format!(
                 "agent {:?} is the default agent; unset it as default first, then archive",
-                agent.name
+                before.name
             )));
         }
         let at = archived.then(Utc::now);
@@ -291,7 +291,7 @@ pub(crate) fn set_archived_in(c: &Connection, agent: &AgentInfo, archived: bool)
             params![agent_id, at, Utc::now()],
         )?;
     }
-    agent_in(c, agent_id)
+    Ok((before, agent_in(c, agent_id)?))
 }
 
 /// 设为（或取消）系统默认 agent。设为默认时先清掉旧的，始终最多一个；归档的不能设为默认（新对话会默认选中一个不能

@@ -86,7 +86,6 @@ impl MemoryStore {
 
     pub async fn read_private(&self, agent_id: &AgentId) -> Result<MemoryInfo> {
         let snapshot = self.source.snapshot().await?;
-        snapshot.not_deleting(agent_id)?;
         match snapshot.private_memory(agent_id) {
             Some(a) => info(a),
             None => Err(not_found(format!(

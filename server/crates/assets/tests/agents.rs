@@ -213,10 +213,6 @@ async fn interrupted_deletion_resumes() {
     assert!(w.service.list().await.unwrap().is_empty());
     let r = w.source.write(&[(w.root().join("alice/memory.md"), "x".into(), muliao_assets::tree::Expect::Any)]).await;
     assert!(r.unwrap_err().to_string().contains("being deleted"));
-    // 界面读它的私有记忆也按不存在
-    let memory = muliao_assets::memory::MemoryStore::new(w.source.clone());
-    let e = memory.read_private(&a).await.unwrap_err();
-    assert!(e.to_string().contains("being deleted"), "{e}");
     let life = AgentLifecycle::new(w.source.clone(), w.workspaces(), vec![], vec![]);
     assert!(life.delete(&a, &Actor::User).await.unwrap_err().to_string().contains("already being deleted"));
     life.resume_deletions().await.unwrap();

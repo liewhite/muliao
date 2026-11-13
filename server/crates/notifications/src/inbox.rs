@@ -14,11 +14,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use muliao_platform::bus::{Bus, ServerEvent};
 use muliao_platform::db::{Database, Tx};
-use muliao_platform::errors::{Result, broken, invalid};
-
-/// 通知列表的条数：不给时的默认与上限
-pub const LIST_DEFAULT: usize = 100;
-pub const LIST_MAX: usize = 500;
+use muliao_platform::errors::{Result, broken};
 use muliao_platform::text::truncate;
 use muliao_sessions::answers::Waiting;
 use muliao_sessions::events::{RunEnded, RunFailed, SessionDeleted, Subscribers};
@@ -27,6 +23,9 @@ use serde::Serialize;
 use utoipa::ToSchema;
 
 use crate::push::Push;
+
+/// 通知列表不给条数时取多少条
+pub const LIST_DEFAULT: usize = 100;
 
 /// 运行失败的通知正文（错误原文）最多这么多字符，全文在会话页
 const FAILURE_BODY_MAX: usize = 500;
@@ -236,11 +235,8 @@ impl Notifications {
         Ok(())
     }
 
-    /// 最新的 limit 条（1 到 [`LIST_MAX`]，不给时用 [`LIST_DEFAULT`]），新的在前。
+    /// 最新的 limit 条（界面不给时用 [`LIST_DEFAULT`]），新的在前。
     pub async fn list(&self, limit: usize) -> Result<Vec<Notification>> {
-        if !(1..=LIST_MAX).contains(&limit) {
-            return Err(invalid(format!("limit must be between 1 and {LIST_MAX}, got {limit}")));
-        }
         Ok(self
             .db
             .read(move |c| {

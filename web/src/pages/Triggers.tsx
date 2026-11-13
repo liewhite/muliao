@@ -329,7 +329,7 @@ function TriggerSessions({ trigger }: { trigger: Trigger }) {
 
 function SessionList({ triggerId }: { triggerId: number }) {
   const from = useReturnState()
-  const sessions = useLoad(() => api.sessions({ trigger_id: triggerId, limit: 50 }), [triggerId])
+  const sessions = useLoad(() => api.sessions({ trigger_id: triggerId }), [triggerId])
   return (
     <Loading state={sessions}>
       {(list) =>

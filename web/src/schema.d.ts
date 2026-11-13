@@ -255,7 +255,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** agent 的私有记忆（正在删除的按不存在处理）。 */
+        /** agent 的私有记忆。 */
         get: operations["get_private_memory"];
         /** 整体改写 agent 的私有记忆（没有时新建）。只有它自己用；规则不按名字指它。 */
         put: operations["put_private_memory"];
@@ -3982,9 +3982,9 @@ export interface operations {
                 origin?: string[];
                 /** @description 只列这个触发器发起的会话（不能再给 origin） */
                 trigger_id?: number;
-                /** @description 关键字：只列标题或消息含有它的会话（不区分 ASCII 大小写；不能为空串） */
+                /** @description 关键字：只列标题或消息含有它的会话（不区分 ASCII 大小写；空串不过滤） */
                 q?: string;
-                /** @description 一页的条数，不给取默认；超出范围 422 */
+                /** @description 一页的条数，不给取默认 */
                 limit?: number;
                 offset?: number;
             };
@@ -5069,7 +5069,7 @@ export interface operations {
     list_notifications: {
         parameters: {
             query?: {
-                /** @description 条数，不给取默认；超出范围 422 */
+                /** @description 条数，不给取默认 */
                 limit?: number;
             };
             header?: never;
@@ -5263,7 +5263,7 @@ export interface operations {
                 until?: string;
                 /** @description 1–3，默认 1 */
                 min_importance?: components["schemas"]["Importance"];
-                /** @description 默认 20，最多 200 */
+                /** @description 条数，不给取默认；超出上限 422 */
                 limit?: number;
             };
             header?: never;

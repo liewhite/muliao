@@ -51,7 +51,7 @@ pub struct Question {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AskArgs {
-    /// The questions, each with 2-6 options; set multi_select when several may apply.
+    /// The questions; set multi_select when several may apply.
     #[schemars(length(min = QUESTIONS.0, max = QUESTIONS.1))]
     pub questions: Vec<Question>,
 }

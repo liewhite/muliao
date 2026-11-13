@@ -554,7 +554,7 @@ async fn unarchive_agent(State(s): State<AppState>, Path(agent_id): Path<AgentId
     Ok(axum::Json(out(&s, &a.id).await?))
 }
 
-/// agent 的私有记忆（正在删除的按不存在处理）。
+/// agent 的私有记忆。
 #[utoipa::path(get, path = "/api/agents/{agent_id}/memory", tag = "agents",
     responses((status = 200, body = MemoryOut), (status = 404, body = ErrorOut)),
     params(("agent_id" = AgentId, Path, description = "agent 的编号")))]

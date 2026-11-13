@@ -10,7 +10,6 @@ use axum::response::Response;
 use chrono::{DateTime, Utc};
 use futures::TryStreamExt;
 use muliao_files::FileMeta;
-use muliao_platform::errors::DomainError;
 use muliao_platform::ids::MediaType;
 use serde::{Deserialize, Serialize};
 use tokio_util::io::StreamReader;
@@ -81,9 +80,6 @@ async fn upload(
     body: Body,
 ) -> ApiResult<(StatusCode, axum::Json<FileOut>)> {
     let media_type = content_type(&headers, "the uploaded file")?;
-    if q.name.is_empty() {
-        return Err(DomainError::invalid("name must not be empty").into());
-    }
     let reader = StreamReader::new(body.into_data_stream().map_err(std::io::Error::other));
     let meta = s.services.files.put(&q.name, media_type, reader).await?;
     Ok((StatusCode::CREATED, axum::Json(FileOut::of(&meta))))

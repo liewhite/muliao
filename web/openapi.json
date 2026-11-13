@@ -807,7 +807,7 @@
         "tags": [
           "agents"
         ],
-        "summary": "agent 的私有记忆（正在删除的按不存在处理）。",
+        "summary": "agent 的私有记忆。",
         "operationId": "get_private_memory",
         "parameters": [
           {
@@ -1844,7 +1844,7 @@
           {
             "name": "q",
             "in": "query",
-            "description": "关键字：只列标题或消息含有它的会话（不区分 ASCII 大小写；不能为空串）",
+            "description": "关键字：只列标题或消息含有它的会话（不区分 ASCII 大小写；空串不过滤）",
             "required": false,
             "schema": {
               "type": "string"
@@ -1853,7 +1853,7 @@
           {
             "name": "limit",
             "in": "query",
-            "description": "一页的条数，不给取默认；超出范围 422",
+            "description": "一页的条数，不给取默认",
             "required": false,
             "schema": {
               "type": "integer",
@@ -3274,7 +3274,7 @@
           {
             "name": "limit",
             "in": "query",
-            "description": "条数，不给取默认；超出范围 422",
+            "description": "条数，不给取默认",
             "required": false,
             "schema": {
               "type": "integer",
@@ -3560,7 +3560,7 @@
           {
             "name": "limit",
             "in": "query",
-            "description": "默认 20，最多 200",
+            "description": "条数，不给取默认；超出上限 422",
             "required": false,
             "schema": {
               "type": "integer",

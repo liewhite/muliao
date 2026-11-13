@@ -26,7 +26,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
 #[derive(Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct ListQuery {
-    /// 条数，不给取默认；超出范围 422
+    /// 条数，不给取默认
     pub limit: Option<usize>,
 }
 
