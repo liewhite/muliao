@@ -13,7 +13,7 @@ use crate::access_file::ACCESS_FILE;
 use crate::error::{Result, forbidden};
 use crate::kinds::{Kind, StoredKind};
 use crate::naming::PLATFORM;
-use crate::rules::{Action, AgentRules, BASE, Role, Roles, Rules, ToolSpec, pattern_of, permission_of};
+use crate::rules::{Action, BASE, Role, Rules, ToolSpec, pattern_of, permission_of, permits};
 use crate::tree::{Asset, Owner, Snapshot};
 
 /// 做事的人：用户（界面），或某个 agent（id）。
@@ -33,22 +33,52 @@ impl Actor {
     }
 }
 
-/// 一个使用者能对哪些资产做什么：它名下的都能做，别的看规则。agent_id 为 None 的没有自己的资产：只按规则判断的一个角色
-/// 或还没建的 agent，以及用户（规则放行一切）。
+/// 一个使用者能对哪些资产做什么，以及为什么：它名下的都能做，别的看规则的各个来源。agent_id 为 None 的没有自己的资产：
+/// 只按规则判断的一个角色或还没建的 agent，以及用户（规则放行一切）。能不能做与是谁放行的是同一个判断（[`Grants::source`]）。
 #[derive(Debug, Clone)]
 pub struct Grants {
-    pub agent_id: Option<String>,
-    pub rules: Rules,
+    agent_id: Option<String>,
+    /// 规则的各个来源的 allow：(角色名, allow)，自己的 allow 为 None
+    allows: Vec<(Option<String>, Vec<String>)>,
+    /// 全部来源的并集（deny 作用于每个来源的 allow）
+    rules: Rules,
 }
 
 impl Grants {
+    /// sources：规则的各个来源（[`AgentRules::sources`] 的形状）。
+    pub fn new(agent_id: Option<String>, sources: Vec<(Option<String>, Rules)>) -> Self {
+        let rules = Rules::union(sources.iter().map(|(_, r)| r));
+        Self { agent_id, allows: sources.into_iter().map(|(n, r)| (n, r.allow)).collect(), rules }
+    }
+
     pub fn user() -> Self {
-        Self { agent_id: None, rules: Rules::new(vec!["*:*".into()], vec![]) }
+        Self::new(None, vec![(None, Rules::new(vec!["*:*".into()], vec![]))])
+    }
+
+    /// 最终规则（全部来源的并集）。
+    pub fn rules(&self) -> &Rules {
+        &self.rules
+    }
+
+    /// 能对这项资产做这个动作的来源：它名下的、放行它的角色（含 base）、它自己的 allow；都没有就是不能做。最终规则是各来源的
+    /// 并集，所以「某个来源放行」＝它的 allow 匹配且最终的 deny 没拦。
+    pub fn source(&self, action: Action, asset: &Asset) -> Source {
+        let (kind, name) = (asset.kind.kind(), asset.rule_name());
+        let granting: Vec<&Option<String>> = self
+            .allows
+            .iter()
+            .filter(|(_, allow)| permits(allow, &self.rules.deny, action, kind, name))
+            .map(|(n, _)| n)
+            .collect();
+        Source {
+            own: self.agent_id.as_deref().is_some_and(|id| asset.owner.is(id)),
+            roles: granting.iter().filter_map(|n| (*n).clone()).collect(),
+            allow: granting.iter().any(|n| n.is_none()),
+        }
     }
 
     pub fn can(&self, action: Action, asset: &Asset) -> bool {
-        self.agent_id.as_deref().is_some_and(|id| asset.owner.is(id))
-            || self.rules.allows(action, asset.kind.kind(), asset.rule_name())
+        self.source(action, asset).any()
     }
 
     pub fn uses(&self, asset: &Asset) -> bool {
@@ -64,13 +94,11 @@ impl Grants {
 pub fn grants_for(snapshot: &Snapshot, actor: &Actor) -> Grants {
     match actor {
         Actor::User => Grants::user(),
-        Actor::Agent(id) => {
-            Grants { agent_id: Some(id.clone()), rules: snapshot.rules_of(id).effective(&snapshot.roles) }
-        }
+        Actor::Agent(id) => Grants::new(Some(id.clone()), snapshot.rules_of(id).sources(&snapshot.roles)),
     }
 }
 
-/// 一个 agent 为什么能用某项资产：它名下的、放行它的角色（含 base）、它自己的 allow。
+/// 一个 agent 为什么能做某件事：它名下的、放行它的角色（含 base）、它自己的 allow。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Source {
     pub own: bool,
@@ -78,35 +106,9 @@ pub struct Source {
     pub allow: bool,
 }
 
-/// 只解释、不判断：能不能用由 Grants 判断，这里说明是哪些来源放行的。最终规则是各来源的并集，所以「某个来源放行」＝它的
-/// allow 匹配且最终的 deny 没拦。
-pub struct Provenance {
-    agent_id: String,
-    allows: Vec<(Option<String>, Vec<String>)>,
-    deny: Vec<String>,
-}
-
-impl Provenance {
-    pub fn of(agent_id: &str, rules: &AgentRules, known: &Roles) -> Self {
-        let sources = rules.sources(known);
-        let deny = Rules::union(sources.iter().map(|(_, r)| r)).deny;
-        Self { agent_id: agent_id.to_owned(), allows: sources.into_iter().map(|(n, r)| (n, r.allow)).collect(), deny }
-    }
-
-    /// use 的来源；Grants::uses 为假时三项都空。
-    pub fn explain(&self, asset: &Asset) -> Source {
-        let (kind, name) = (asset.kind.kind(), asset.rule_name());
-        let granting: Vec<&Option<String>> = self
-            .allows
-            .iter()
-            .filter(|(_, allow)| Rules::new(allow.clone(), self.deny.clone()).includes(kind, name))
-            .map(|(n, _)| n)
-            .collect();
-        Source {
-            own: asset.owner.is(&self.agent_id),
-            roles: granting.iter().filter_map(|n| (*n).clone()).collect(),
-            allow: granting.iter().any(|n| n.is_none()),
-        }
+impl Source {
+    pub fn any(&self) -> bool {
+        self.own || !self.roles.is_empty() || self.allow
     }
 }
 
@@ -242,7 +244,7 @@ pub fn write_scope(snapshot: &Snapshot, agent_id: &str) -> WriteScope {
         assets.extend(others.iter().filter(|a| grants.writes(a)).map(|a| a.path.clone()));
         (assets, Vec::new())
     };
-    let (granted, revoked) = grants.rules.paths();
+    let (granted, revoked) = grants.rules().paths();
     let access_path = snapshot.access_path();
     let located = snapshot
         .all()
@@ -293,7 +295,7 @@ pub fn reach_of(snapshot: &Snapshot, grants: &Grants) -> Reach {
         .flat_map(|k| usable(snapshot, k, grants).into_iter().map(move |a| pattern_of(k.kind(), &a.name)))
         .collect();
     let tools =
-        snapshot.tools.specs().iter().filter(|t| grants.rules.includes(Kind::Tool, Some(&t.name))).cloned().collect();
+        snapshot.tools.specs().iter().filter(|t| grants.rules().includes(Kind::Tool, Some(&t.name))).cloned().collect();
     Reach { tools, assets }
 }
 

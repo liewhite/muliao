@@ -232,15 +232,12 @@ impl Rules {
     /// 这组规则放行这个权限：allow 匹配、deny 没拦。全系统唯一的判断。name 为 None 是规则不按名字指的资产（agent 的
     /// 私有记忆）：只有不限种类的规则管得到它（[`Rules::allows_every`]）。
     pub fn allows(&self, action: Action, kind: Kind, name: Option<&str>) -> bool {
-        let Some(name) = name else { return self.allows_every(action) };
-        let permission = permission_of(action, kind, name);
-        self.allow.iter().any(|p| fnmatch(&permission, p)) && !self.deny.iter().any(|p| fnmatch(&permission, p))
+        permits(&self.allow, &self.deny, action, kind, name)
     }
 
     /// 不限种类的规则（`write:*`、`*:*`）放行这个动作、也没有不限种类的 deny 拦它：对一切资产都能做。写上就是 admin。
     pub fn allows_every(&self, action: Action) -> bool {
-        let every = [format!("{}:*", action.as_str()), "*:*".to_owned()];
-        self.allow.iter().any(|p| every.contains(p)) && !self.deny.iter().any(|p| every.contains(p))
+        permits_every(&self.allow, &self.deny, action)
     }
 
     /// 收录：放行 use。
@@ -259,6 +256,18 @@ impl Rules {
     pub fn tools<'a>(&self, available: impl IntoIterator<Item = &'a str>) -> Vec<&'a str> {
         available.into_iter().filter(|n| self.includes(Kind::Tool, Some(n))).collect()
     }
+}
+
+/// [`Rules::allows`] 的判断本身：allow 与 deny 可以来自不同的规则（某一来源的 allow 对最终的 deny，[`crate::access::Grants`]）。
+pub fn permits(allow: &[String], deny: &[String], action: Action, kind: Kind, name: Option<&str>) -> bool {
+    let Some(name) = name else { return permits_every(allow, deny, action) };
+    let permission = permission_of(action, kind, name);
+    allow.iter().any(|p| fnmatch(&permission, p)) && !deny.iter().any(|p| fnmatch(&permission, p))
+}
+
+fn permits_every(allow: &[String], deny: &[String], action: Action) -> bool {
+    let every = [format!("{}:*", action.as_str()), "*:*".to_owned()];
+    allow.iter().any(|p| every.contains(p)) && !deny.iter().any(|p| every.contains(p))
 }
 
 pub const BASE: &str = "base";

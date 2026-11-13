@@ -60,19 +60,37 @@ pub struct Access {
     pub readable: bool,
 }
 
+/// 读树时 access.toml 的原文：快照里的角色与规则就是从它读出的，改这个文件（[`plan`]）也从它出发，所以预览、写入与
+/// 快照算的是同一份。
+#[derive(Debug, Clone)]
+pub enum AccessText {
+    /// 合法的内容（没有文件为 None）
+    Valid(Option<String>),
+    /// 读不出或不合法：每一处的说明
+    Invalid(String),
+}
+
 /// 读 path（没有这个文件就是空的）。agents：加载成功的 agent，名字 → id。
-pub fn read(path: &Path, agents: &BTreeMap<String, String>, tools: &ToolTable) -> Access {
-    if !path.is_file() {
-        return parse(None, agents, tools);
-    }
-    match muliao_platform::fs::read_text(path) {
-        Ok(text) => parse(Some(&text), agents, tools),
-        Err(e) => {
-            let mut p = Parser::new(agents, tools);
-            p.invalid(format!("cannot read: {e}"));
-            p.done()
+pub fn read(path: &Path, agents: &BTreeMap<String, String>, tools: &ToolTable) -> (Access, AccessText) {
+    let text = if path.is_file() {
+        match muliao_platform::fs::read_text(path) {
+            Ok(text) => Some(text),
+            Err(e) => {
+                let mut p = Parser::new(agents, tools);
+                p.invalid(format!("cannot read: {e}"));
+                return (p.done(), AccessText::Invalid(format!("cannot read: {e}")));
+            }
         }
-    }
+    } else {
+        None
+    };
+    let access = parse(text.as_deref(), agents, tools);
+    let text = if access.readable {
+        AccessText::Valid(text)
+    } else {
+        AccessText::Invalid(access.problems.iter().map(|p| p.reason.as_str()).collect::<Vec<_>>().join("; "))
+    };
+    (access, text)
 }
 
 /// 文件内容（没有这个文件为 None）读成 [`Access`]。
@@ -387,12 +405,17 @@ fn rules_in(text: Option<&str>) -> Vec<String> {
     out
 }
 
-/// 平台改 access.toml 的唯一入口：读出它（不存在就是空文档）、交给 change 改、按 [`vet`] 校验，返回还没写的改动。现在的
-/// 文件不合法时 Conflict，由 admin 先修好它；改完过不了 vet 时 InvalidInput。要先写别的文件的调用方（建、改名 agent）先
-/// plan 再动手：不合法时什么都没写。界面的预览也只 plan 不 apply。
+/// 平台改 access.toml 的唯一入口：从快照读到的原文出发（不存在就是空文档）、交给 change 改、按 [`vet`] 校验，返回还没写
+/// 的改动。快照里的文件不合法时 Conflict，由 admin 先修好它；改完过不了 vet 时 InvalidInput。要先写别的文件的调用方（建、
+/// 改名 agent）先 plan 再动手：不合法时什么都没写。界面的预览也只 plan 不 apply。
 pub fn plan(snapshot: &Snapshot, change: impl FnOnce(&mut DocumentMut) -> Result<()>) -> Result<AccessEdit> {
     let path = snapshot.access_path();
-    let text = valid_text(&path, &snapshot.tools)?;
+    let text = match &snapshot.access_text {
+        AccessText::Valid(text) => text.clone(),
+        AccessText::Invalid(reasons) => {
+            return Err(conflict(format!("{} is invalid ({reasons}); fix it first", path.display())));
+        }
+    };
     let mut doc: DocumentMut = match &text {
         Some(t) => t.parse().map_err(|e| conflict(format!("{} cannot be edited: {e}", path.display())))?,
         None => DocumentMut::new(),
@@ -401,21 +424,6 @@ pub fn plan(snapshot: &Snapshot, change: impl FnOnce(&mut DocumentMut) -> Result
     let after = doc.to_string();
     vet(text.as_deref(), &after, &snapshot.tools, &snapshot.addressable())?;
     Ok(AccessEdit { path, before: text, after })
-}
-
-/// 合法的现有内容（没有文件为 None），否则 Conflict 列出不合法的每一处。
-fn valid_text(path: &Path, tools: &ToolTable) -> Result<Option<String>> {
-    let text = if path.is_file() {
-        Some(muliao_platform::fs::read_text(path).map_err(|e| conflict(format!("{e}; fix it first")))?)
-    } else {
-        None
-    };
-    let access = parse(text.as_deref(), &BTreeMap::new(), tools);
-    if !access.readable {
-        let reasons: Vec<&str> = access.problems.iter().map(|p| p.reason.as_str()).collect();
-        return Err(conflict(format!("{} is invalid ({}); fix it first", path.display(), reasons.join("; "))));
-    }
-    Ok(text)
 }
 
 fn section<'d>(doc: &'d mut DocumentMut, name: &str) -> &'d mut dyn TableLike {

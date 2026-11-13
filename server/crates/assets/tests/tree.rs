@@ -198,8 +198,8 @@ async fn grants_and_write_scope() {
     assert!(alice.uses(team) && alice.writes(team));
     let bobs = s.get(StoredKind::Skill, "bobs").unwrap();
     assert!(alice.uses(bobs) && !alice.writes(bobs));
-    assert!(!alice.rules.includes(muliao_assets::kinds::Kind::Tool, Some("run_shell")));
-    assert!(!alice.rules.includes(muliao_assets::kinds::Kind::Tool, Some("create_agent")));
+    assert!(!alice.rules().includes(muliao_assets::kinds::Kind::Tool, Some("run_shell")));
+    assert!(!alice.rules().includes(muliao_assets::kinds::Kind::Tool, Some("create_agent")));
     // 私有记忆只有自己与 admin
     assert!(!alice.uses(s.private_memory(&b).unwrap()));
 

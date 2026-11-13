@@ -3,14 +3,12 @@
 
 use std::sync::Arc;
 
-use crate::access::{
-    Actor, Grants, Provenance, Reach, Source, WriteScope, grants_for, holders_of, reach_of, usable, write_scope,
-};
+use crate::access::{Actor, Grants, Reach, Source, WriteScope, grants_for, holders_of, reach_of, write_scope};
 use crate::access_file;
 use crate::error::{Result, conflict, invalid, not_found};
 use crate::kinds::StoredKind;
 use crate::mcp::{McpServer, server_of};
-use crate::rules::{AgentRules, BUILTIN_ROLES, Role, Rules};
+use crate::rules::{Action, AgentRules, BUILTIN_ROLES, Role, Rules};
 use crate::source::AssetSource;
 use crate::tree::{Owner, Snapshot};
 
@@ -56,7 +54,7 @@ fn role_view(snapshot: &Snapshot, role: &Role) -> RoleView {
     // reach 只按角色自己的规则，不含任何 agent 自己的资源
     RoleView {
         role: role.clone(),
-        reach: reach_of(snapshot, &Grants { agent_id: None, rules: role.effective() }),
+        reach: reach_of(snapshot, &Grants::new(None, vec![(Some(role.name.clone()), role.effective())])),
         holders: holders_of(snapshot, role),
     }
 }
@@ -79,7 +77,7 @@ impl Distribution {
 
     /// agent 的最终规则（base + 角色 + 自己的 allow / deny），按角色现在的定义算：运行开放哪些工具。
     pub async fn rules(&self, agent_id: &str) -> Result<Rules> {
-        Ok(grants_for(&*self.source.snapshot().await?, &Actor::Agent(agent_id.to_owned())).rules)
+        Ok(grants_for(&*self.source.snapshot().await?, &Actor::Agent(agent_id.to_owned())).rules().clone())
     }
 
     /// agent 现在能写哪里（写沙箱用）：资源树按归属，加 `write:path` 授权。
@@ -99,22 +97,18 @@ impl Distribution {
     }
 
     /// agent 能用的 skill、MCP server、secret、记忆（按种类、名称），每项带来源与能不能改：界面的 agent 详情。与运行时
-    /// 同一套判断，来源由 [`Provenance`] 解释，两者对不上是代码错误。
+    /// 同一套判断（能用就是有来源放行）。
     pub async fn assets(&self, agent_id: &str) -> Result<Vec<UsedAsset>> {
         self.check_agent(agent_id).await?;
         let snapshot = self.source.snapshot().await?;
-        let rules = snapshot.rules_of(agent_id);
-        let grants = Grants { agent_id: Some(agent_id.to_owned()), rules: rules.effective(&snapshot.roles) };
-        let provenance = Provenance::of(agent_id, &rules, &snapshot.roles);
+        let grants = grants_for(&snapshot, &Actor::Agent(agent_id.to_owned()));
         let mut used = Vec::new();
         for kind in StoredKind::ALL {
-            for a in usable(&snapshot, kind, &grants) {
-                let source = provenance.explain(a);
-                assert!(
-                    source.own || !source.roles.is_empty() || source.allow,
-                    "no source explains why {agent_id} can use {kind} {:?}",
-                    a.name
-                );
+            for a in snapshot.of_kind(kind) {
+                let source = grants.source(Action::Use, a);
+                if !source.any() {
+                    continue;
+                }
                 used.push(UsedAsset {
                     kind,
                     name: a.name.clone(),
@@ -137,13 +131,10 @@ impl Distribution {
         let snapshot = self.source.snapshot().await?;
         // 还没建的没有名字：节名不影响校验
         let section = agent_id.and_then(|id| snapshot.names.get(id)).map_or(PREVIEW_SECTION, String::as_str);
+        // plan 与下面的计算都从同一份快照出发：plan 认的角色快照里都有
         access_file::plan(&snapshot, |doc| access_file::set_agent_rules(doc, section, rules))?;
-        // plan 按磁盘上此刻的文件校验，下面按快照算：角色刚写进文件、快照还没跟上时请他重试
-        if let Some(r) = rules.roles.iter().find(|r| !snapshot.roles.contains_key(*r)) {
-            return Err(conflict(format!("role {r:?} was just changed; retry")));
-        }
         // 还没建的 agent 没有自己的资源，只看规则
-        let grants = Grants { agent_id: agent_id.map(str::to_owned), rules: rules.effective(&snapshot.roles) };
+        let grants = Grants::new(agent_id.map(str::to_owned), rules.sources(&snapshot.roles));
         Ok(reach_of(&snapshot, &grants))
     }
 
@@ -236,7 +227,7 @@ impl Distribution {
             None => rules.clone(),
             Some(r) => Rules::union([&r.fixed, rules]),
         };
-        Ok(reach_of(&snapshot, &Grants { agent_id: None, rules: effective }))
+        Ok(reach_of(&snapshot, &Grants::new(None, vec![(None, effective)])))
     }
 }
 

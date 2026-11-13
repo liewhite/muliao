@@ -197,6 +197,8 @@ pub struct Snapshot {
     pub roles: Roles,
     /// access.toml 里各 agent 的规则，按 id；没写的 agent 只有 base
     rules: BTreeMap<String, AgentRules>,
+    /// 读出 roles 与 rules 的 access.toml 原文（读坏时沿用上一份规则，这里记着读坏的原因）
+    pub access_text: access_file::AccessText,
     /// 读这棵树时用的内置工具表
     pub tools: Arc<ToolTable>,
     pub problems: Vec<Problem>,
@@ -671,7 +673,7 @@ pub fn load_tree(
         StoredKind::ALL.into_iter().map(|k| (k, r.resolved(k))).collect();
     let path = root.join(PLATFORM).join(ACCESS_FILE);
     let by_name: BTreeMap<String, String> = agents.values().map(|a| (a.name.clone(), a.id().to_owned())).collect();
-    let access = access_file::read(&path, &by_name, &tools);
+    let (access, access_text) = access_file::read(&path, &by_name, &tools);
     let (roles, rules, consequence) = if access.readable {
         (access.roles, access.rules, "")
     } else if let Some(last) = last {
@@ -698,6 +700,7 @@ pub fn load_tree(
         private: r.private,
         roles,
         rules,
+        access_text,
         tools,
         problems: r.problems,
         unloaded: r.unloaded,
