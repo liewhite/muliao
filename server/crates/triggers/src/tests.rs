@@ -1,6 +1,6 @@
 //! 触发器的测试：真库、真的会话来信入口与通知、真起命令（写沙箱 enforce）；时间由测试给（`fire_due(now)`）。
 
-use muliao_platform::ids::{AgentId, SessionId};
+use muliao_platform::ids::{AgentId, JobId, SessionId};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -200,9 +200,7 @@ impl World {
         self.idle(session_id).await;
         let sid = session_id.to_owned();
         self.db
-            .write(move |tx| {
-                SessionWork::new(Waker::channel().0).hold_in(tx, &sid, muliao_platform::ids::JobId::new(1), false)
-            })
+            .write(move |tx| SessionWork::new(Waker::channel().0).hold_in(tx, &sid, JobId::new(1), false))
             .await
             .unwrap();
     }
