@@ -440,7 +440,7 @@ impl StreamRunner {
     async fn run_once(&self, spec: &Spec, config: &StreamConfig, pending: &Pending) -> (String, bool) {
         let shell = match self.commands.prepare(&spec.agent_id, &config.secrets, true).await {
             Ok(shell) => shell,
-            Err(e) => return (format!("stream secrets unavailable: {e}"), false),
+            Err(e) => return (format!("stream could not start: {e}"), false),
         };
         let log_file = shell.cwd.join(stderr_log(&spec.name));
         let started = format!("--- started {} ---", Utc::now().to_rfc3339());

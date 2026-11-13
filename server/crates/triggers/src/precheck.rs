@@ -211,7 +211,7 @@ impl PrecheckRunner {
     ) -> Result<std::result::Result<String, Failed>> {
         let shell = match self.commands.prepare(agent_id, &p.secrets, true).await.map_err(Error::from) {
             Ok(shell) => shell,
-            Err(Error::Domain(e)) => return Ok(Err(Failed(format!("precheck secrets unavailable: {e}")))),
+            Err(Error::Domain(e)) => return Ok(Err(Failed(format!("precheck could not start: {e}")))),
             Err(e) => return Err(e),
         };
         let started = Instant::now();

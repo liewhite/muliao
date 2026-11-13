@@ -10,13 +10,16 @@
 //! 读只拦一处（#539）：平台的私有文件（配置、备份、推送私钥）只有 admin 能读，命令由沙箱拒绝、文件工具由 [`reach`] 拒绝，
 //! 补的说明同样走 `Confinement::explain`。防误操作（把密钥打进会话记录），不防故意。
 
+use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use muliao_assets::distribution::Distribution;
 use muliao_assets::error::Result as AssetsResult;
 use muliao_assets::service::workspace_of;
 use muliao_platform::errors::{DomainError, ErrorKind};
+use muliao_platform::fs::RealPath;
 use muliao_platform::sandbox::{Category, Confinement, Sandbox, WritablePaths, covers, expand, real_forms};
 
 use crate::text::split_lines;
@@ -62,6 +65,8 @@ pub struct Confiner {
     home: PathBuf,
     /// 平台的私有文件（配置的 private_files）：只有 admin 能读写
     private: Vec<PathBuf>,
+    /// 每个 agent 一个：它的路径同一时间只有一处在认（卡住的只卡它自己）
+    resolving: Mutex<HashMap<String, Arc<Resolving>>>,
 }
 
 impl Confiner {
@@ -72,7 +77,11 @@ impl Confiner {
         home: PathBuf,
         private: Vec<PathBuf>,
     ) -> Self {
-        Self { sandbox, workspaces_dir, distribution, home, private }
+        Self { sandbox, workspaces_dir, distribution, home, private, resolving: Mutex::default() }
+    }
+
+    fn resolving(&self, agent_id: &str) -> Arc<Resolving> {
+        self.resolving.lock().expect("resolving lock").entry(agent_id.to_owned()).or_default().clone()
     }
 
     pub async fn of(&self, agent_id: &str) -> AssetsResult<Confinement> {
@@ -90,14 +99,21 @@ impl Confiner {
         rules.extend(scope.withheld.iter().map(|p| (false, p.clone())));
         // 平台的私有文件排在最后：任何授权都放不开
         rules.extend(private.iter().map(|p| (false, p.clone())));
-        // 换成真实路径要读文件系统
+        // 换成真实路径要读文件系统，限时（见 [`Resolving`]）
         let owner = agent_id.to_owned();
-        let (writable, unreadable) = tokio::task::spawn_blocking(move || {
-            let unreadable: Vec<_> = private.iter().flat_map(|p| real_forms(p)).collect();
-            (WritablePaths::of(rules, owner), unreadable)
-        })
-        .await
-        .expect("resolving writable paths panicked");
+        let (writable, unreadable) = self
+            .resolving(agent_id)
+            .run(RESOLVE_LIMIT, move |resolve| {
+                let unreadable: Vec<_> = private.iter().flat_map(|p| resolve(p)).collect();
+                let rules: Vec<_> =
+                    rules.into_iter().flat_map(|(w, p)| resolve(&p).into_iter().map(move |f| (w, f))).collect();
+                (WritablePaths::resolved(rules, owner), unreadable)
+            })
+            .await
+            .map_err(|stuck| {
+                tracing::warn!(agent = agent_id, path = ?stuck, "resolving a writable path is stuck");
+                DomainError::new(ErrorKind::Conflict, stuck_message(&stuck))
+            })?;
         let private_forms = unreadable.clone();
         let explain = Arc::new(move |path: &Path| {
             if matches!(covers(&private_forms, path), Ok(true)) {
@@ -107,6 +123,65 @@ impl Confiner {
         });
         Ok(Confinement { sandbox: self.sandbox.clone(), writable, home: self.home.clone(), explain, unreadable })
     }
+}
+
+/// 认一个 agent 的可写路径最多等这么久。正常只要几毫秒；macOS 上碰到要授权才能访问的目录（如 iCloud 云盘），系统在等用户
+/// 回答文件访问授权弹窗时，读文件系统的调用会一直不返回（#722：muliao 的前置检查与 run_shell 因此卡了两个小时，前置检查
+/// 自己的时限管不到起命令之前的这一步）。
+const RESOLVE_LIMIT: Duration = Duration::from_secs(10);
+
+/// 一个 agent 认路径的过程：同一时间只有一处在认，记着正在认哪个路径，卡住时报出它。
+///
+/// 卡住的系统调用打断不了，只能不等它：调用方到时报错，那个线程留着等它自己返回。卡住期间后来的调用排队等到时限就报错、
+/// 不再起新线程：否则每分钟一次的前置检查会一个个占满阻塞线程池，拖垮数据库等所有用它的地方。
+#[derive(Default)]
+struct Resolving {
+    gate: Arc<tokio::sync::Mutex<()>>,
+    current: Mutex<Option<PathBuf>>,
+}
+
+impl Resolving {
+    /// 在阻塞线程里跑 work（它经传给它的 resolve 认路径），连排队在内最多等 limit；到时返回卡在哪个路径上（不知道时 None）。
+    async fn run<T: Send + 'static>(
+        self: Arc<Self>,
+        limit: Duration,
+        work: impl FnOnce(&dyn Fn(&Path) -> Vec<RealPath>) -> T + Send + 'static,
+    ) -> Result<T, Option<PathBuf>> {
+        let deadline = tokio::time::Instant::now() + limit;
+        let Ok(turn) = tokio::time::timeout_at(deadline, self.gate.clone().lock_owned()).await else {
+            return Err(self.stuck_at());
+        };
+        let this = self.clone();
+        let job = tokio::task::spawn_blocking(move || {
+            let _turn = turn;
+            let resolve = |p: &Path| {
+                *this.current.lock().expect("current lock") = Some(p.to_path_buf());
+                real_forms(p)
+            };
+            let out = work(&resolve);
+            *this.current.lock().expect("current lock") = None;
+            out
+        });
+        match tokio::time::timeout_at(deadline, job).await {
+            Ok(done) => Ok(done.expect("resolving writable paths panicked")),
+            Err(_) => Err(self.stuck_at()),
+        }
+    }
+
+    fn stuck_at(&self) -> Option<PathBuf> {
+        self.current.lock().expect("current lock").clone()
+    }
+}
+
+fn stuck_message(path: &Option<PathBuf>) -> String {
+    let what = path.as_ref().map_or_else(|| "a path".to_owned(), |p| p.display().to_string());
+    format!(
+        "Could not work out where this agent may write, so nothing was run or written: checking {what} on disk has not \
+         returned for over {}s. On macOS this usually means the system is waiting for someone to answer a file access \
+         permission prompt (e.g. for iCloud Drive) on the Mac running muliao, or the muliao service lacks Full Disk \
+         Access; tell the user. It works again by itself once that check returns.",
+        RESOLVE_LIMIT.as_secs()
+    )
 }
 
 /// 文件工具对一个路径要做的：只读（read_file、share_file），或写（write_file、edit_file；写的也要读得了）。
@@ -229,5 +304,34 @@ mod tests {
         assert_eq!(absolute(ws, home, "./a//b/"), PathBuf::from("/ws/a/b"));
         assert_eq!(absolute(ws, home, "~/x"), PathBuf::from("/h/x"));
         assert_eq!(absolute(ws, home, "/abs/../y"), PathBuf::from("/abs/../y"));
+    }
+
+    /// #722：认路径卡住（等系统授权弹窗）时到时报出卡在哪个路径；卡住期间后来的不再起新线程，也到时报错；卡住的返回后恢复
+    #[tokio::test]
+    async fn stuck_resolution_times_out_without_piling_up_threads() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let limit = Duration::from_millis(200);
+        let resolving = Arc::new(Resolving::default());
+        let slow = Path::new("/slow");
+
+        let started = std::time::Instant::now();
+        let stuck = resolving.clone().run(limit, move |resolve| {
+            resolve(slow);
+            std::thread::sleep(Duration::from_millis(800));
+        });
+        assert_eq!(stuck.await.unwrap_err(), Some(slow.to_path_buf()));
+        assert!(started.elapsed() < Duration::from_millis(600));
+
+        let ran = Arc::new(AtomicBool::new(false));
+        let flag = ran.clone();
+        let queued = resolving.clone().run(limit, move |_| flag.store(true, Ordering::SeqCst)).await;
+        assert_eq!(queued.unwrap_err(), Some(slow.to_path_buf()));
+        assert!(!ran.load(Ordering::SeqCst), "must not start another resolution while one is stuck");
+
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        let tmp = std::env::temp_dir();
+        let forms = resolving.clone().run(limit, move |resolve| resolve(&tmp)).await.unwrap();
+        assert!(!forms.is_empty());
+        assert_eq!(resolving.stuck_at(), None);
     }
 }

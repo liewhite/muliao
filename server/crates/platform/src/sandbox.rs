@@ -85,9 +85,13 @@ pub struct WritablePaths {
 impl WritablePaths {
     /// rules 的路径可以带符号链接：在这里换成真实路径（读文件系统）。
     pub fn of(rules: impl IntoIterator<Item = (bool, PathBuf)>, owner: impl Into<String>) -> Self {
-        let rules =
-            rules.into_iter().flat_map(|(w, p)| real_forms(&p).into_iter().map(move |form| (w, form))).collect();
-        Self { rules, owner: owner.into() }
+        let rules = rules.into_iter().flat_map(|(w, p)| real_forms(&p).into_iter().map(move |form| (w, form)));
+        Self::resolved(rules, owner)
+    }
+
+    /// 规则的路径已由调用方换成真实路径（[`real_forms`]）时用：调用方要自己掌握逐条读文件系统的过程（如限时）。
+    pub fn resolved(rules: impl IntoIterator<Item = (bool, RealPath)>, owner: impl Into<String>) -> Self {
+        Self { rules: rules.into_iter().collect(), owner: owner.into() }
     }
 
     pub fn rules(&self) -> &[(bool, RealPath)] {
