@@ -14,9 +14,9 @@ use muliao_platform::db::Database;
 use crate::access::Actor;
 use crate::access_file::{self, AccessEdit};
 use crate::agents::{self, AgentInfo, AgentNames};
-use crate::error::{Result, conflict, invalid};
+use crate::error::{Result, invalid};
 use crate::formats::agent_file::{self, AGENT_FILE, AgentConfig, AgentFile, Thinking};
-use crate::naming::{new_agent_id, new_agent_name};
+use crate::naming::{AgentName, new_agent_id};
 use crate::rules::AgentRules;
 use crate::source::AssetSource;
 use crate::tree::{AgentDir, PRIVATE_MEMORY_FILE, Snapshot, move_to, remove};
@@ -99,10 +99,9 @@ impl AgentService {
     /// actor：创建者。建资源目录（agent.toml、空的私有记忆）、写它的规则、建工作目录、插行。
     pub async fn create(&self, spec: AgentSpec, actor: &Actor) -> Result<AgentInfo> {
         let agent_id = new_agent_id();
-        let name = new_agent_name(&spec.name)?;
+        let name = AgentName::new(&spec.name)?;
         let group = spec.group.as_deref().map(str::trim).filter(|g| !g.is_empty()).map(str::to_owned);
         let file = AgentFile::new(
-            agent_id.clone(),
             spec.description,
             spec.model.unwrap_or_else(|| self.default_model.clone()),
             spec.thinking,
@@ -113,12 +112,12 @@ impl AgentService {
         let w = self.source.writing().await?;
         let n = name.clone();
         self.db.read(move |c| agents::check_name_free_in(c, &n, None)).await?;
-        check_directory_free(&w.snapshot, &name, None)?;
         // access.toml 的改动先算好（规则的校验都在这里）：它不合法时什么都不写
-        let access = access_file::plan(&w.snapshot, |doc| access_file::set_agent_rules(doc, &name, &spec.rules))?;
-        let directory = w.snapshot.root.join(&name);
+        let access =
+            access_file::plan(&w.snapshot, |doc| access_file::set_agent_rules(doc, &agent_id, &name, &spec.rules))?;
+        let directory = w.snapshot.root.join(name.as_str());
         std::fs::create_dir_all(&w.snapshot.root)?;
-        // 先单独建目录：已存在（绕开锁用 shell 建的）就在这里失败，下面的撤回只删自己建的
+        // 先单独建目录：已存在（绕开锁用 shell 建的，或只差大小写的）就在这里失败，下面的撤回只删自己建的
         std::fs::create_dir(&directory)?;
         let workspace = self.workspace(&agent_id);
         let done = async {
@@ -141,22 +140,21 @@ impl AgentService {
         }
     }
 
-    /// 只修改给出的字段：配置改 agent.toml（保留人手写的注释），规则改 access.toml，改名先挪目录、再改 access.toml 里那
-    /// 一节，最后在同一把锁里写数据库（名字只认数据库）。agent 自己改描述、模型、思考档位是直接改它的 agent.toml。
+    /// 只修改给出的字段：配置改 agent.toml（保留人手写的注释），规则改 access.toml，改名先挪目录（access.toml 里
+    /// 那一节按 id，只换行尾注释里的名字），最后在同一把锁里写数据库（名字只认数据库）。agent 自己改描述、模型、思考档位是直接改它的 agent.toml。
     pub async fn update(&self, agent_id: &str, patch: AgentPatch) -> Result<AgentInfo> {
         let w = self.source.writing().await?;
         let id = agent_id.to_owned();
         let row = self.db.read(move |c| agents::active_agent_in(c, &id)).await?;
         let directory = w.snapshot.loaded_agent(agent_id)?.clone();
         let name = match &patch.name {
-            Some(n) => new_agent_name(n)?,
+            Some(n) => AgentName::new(n)?,
             None => row.name.clone(),
         };
         let file = directory.file.with(&patch.config).map_err(invalid)?;
         self.source.check_agent(&file)?;
         let (id, n) = (agent_id.to_owned(), name.clone());
         self.db.read(move |c| agents::check_name_free_in(c, &n, Some(&id))).await?;
-        check_directory_free(&w.snapshot, &name, Some(&directory.name))?;
         let before = w.snapshot.rules_of(agent_id);
         let rules = AgentRules {
             roles: patch.roles.unwrap_or(before.roles),
@@ -164,17 +162,14 @@ impl AgentService {
             deny: patch.deny.unwrap_or(before.deny),
         };
         // 与建 agent 同：access.toml 的改动先算好，不合法时不动目录
-        let access = access_file::plan(&w.snapshot, |doc| {
-            if name != directory.name {
-                access_file::rename_agent(doc, &directory.name, &name);
-            }
-            access_file::set_agent_rules(doc, &name, &rules)
-        })?;
+        let access = access_file::plan(&w.snapshot, |doc| access_file::set_agent_rules(doc, agent_id, &name, &rules))?;
         let old_toml = std::fs::read_to_string(directory.path.join(AGENT_FILE))?;
-        let target = directory.path.with_file_name(&name);
+        // 只改大小写也挪：目录名跟着名字的写法
+        let renamed = name.as_str() != directory.name.as_str();
+        let target = directory.path.with_file_name(name.as_str());
         let mut moved = false;
         let done = async {
-            if name != directory.name {
+            if renamed {
                 move_to(&directory.path, &target)?;
                 moved = true;
             }
@@ -250,23 +245,6 @@ impl AgentService {
 /// agent 的工作目录：`<workspaces_dir>/<id>`。
 pub fn workspace_of(workspaces_dir: &Path, agent_id: &str) -> PathBuf {
     workspaces_dir.join(agent_id)
-}
-
-/// 名字要没被资源目录里已有的目录占着（大小写不敏感的文件系统上只差大小写也算）；own 是这个 agent 现在的目录名。
-fn check_directory_free(snapshot: &Snapshot, name: &str, own: Option<&str>) -> Result<()> {
-    let fold = |s: &str| caseless::default_case_fold_str(s);
-    let Ok(entries) = std::fs::read_dir(&snapshot.root) else { return Ok(()) };
-    let taken = entries
-        .filter_map(|e| e.ok())
-        .map(|e| fold(&e.file_name().to_string_lossy()))
-        .any(|n| n == fold(name) && own.is_none_or(|o| fold(o) != n));
-    if taken {
-        return Err(conflict(format!(
-            "agent name {name:?} is already taken by a directory in {}",
-            snapshot.root.display()
-        )));
-    }
-    Ok(())
 }
 
 fn write_agent_file(directory: &Path, file: &AgentFile) -> Result<()> {

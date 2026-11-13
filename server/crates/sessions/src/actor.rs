@@ -402,7 +402,7 @@ async fn fail(core: &Core, id: &str, error: &str) -> bool {
                 &RunFailed {
                     session_id: session.id.clone(),
                     agent_id: session.agent_id.clone(),
-                    agent_name,
+                    agent_name: agent_name.to_string(),
                     run_id: run.id,
                     origin: session.origin,
                     error: message.clone(),

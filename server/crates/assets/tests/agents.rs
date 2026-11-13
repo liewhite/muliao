@@ -30,7 +30,7 @@ async fn create_writes_files_rules_and_row() {
         ..Default::default()
     };
     let info = w.service.create(spec, &Actor::User).await.unwrap();
-    assert_eq!(info.name, "交易");
+    assert_eq!(info.name.as_str(), "交易");
     let view = w.service.view(&info.id).await.unwrap();
     let config = view.config.unwrap();
     assert_eq!(config.file.model(), "p:default");
@@ -39,7 +39,7 @@ async fn create_writes_files_rules_and_row() {
     assert_eq!(view.rules.allow, vec!["use:tool:create_agent".to_owned()]);
     assert!(w.root().join("交易/memory.md").is_file());
     assert!(w.workspaces().join(&info.id).is_dir());
-    assert!(read(w.root().join("platform/access.toml")).contains("[agents.\"交易\"]"));
+    assert!(read(w.root().join("platform/access.toml")).contains(&format!("[agents.{}] # 交易\n", info.id)));
 
     // 名字被占（库里、目录只差大小写）、规则写错、模型不能用：什么都不写
     let again = |name: &str, rules: AgentRules, model: Option<&str>| {
@@ -54,8 +54,11 @@ async fn create_writes_files_rules_and_row() {
         async move { s.create(spec, &Actor::User).await }
     };
     assert!(again("交易", AgentRules::default(), None).await.unwrap_err().to_string().contains("already taken"));
+    // 只差大小写的目录：macOS 的文件系统不分大小写，建目录时就失败
     std::fs::create_dir(w.root().join("Bob")).unwrap();
-    assert!(again("bob", AgentRules::default(), None).await.unwrap_err().to_string().contains("directory"));
+    assert!(again("bob", AgentRules::default(), None).await.is_err());
+    // 只差大小写的名字算同一个
+    assert!(again("交易", AgentRules::default(), None).await.is_err());
     let bad = AgentRules { allow: vec!["use:skill:nope".into()], ..Default::default() };
     assert!(again("carol", bad, None).await.is_err());
     assert!(again("carol", AgentRules::default(), Some("q:x")).await.is_err());
@@ -81,7 +84,7 @@ async fn update_renames_and_rolls_back() {
     let w = world().await;
     let id = w.create("alice").await;
     let access = w.root().join("platform/access.toml");
-    write(&access, "# 人写的注释\n[agents.alice]\nroles = [\"admin\"]\n");
+    write(&access, &format!("# 人写的注释\n[agents.{id}]\nroles = [\"admin\"]\n"));
     let toml = w.root().join("alice/agent.toml");
     write(&toml, &format!("# alice 的注释\n{}", read(toml.clone())));
 
@@ -91,19 +94,19 @@ async fn update_renames_and_rolls_back() {
         ..Default::default()
     };
     let info = w.service.update(&id, patch).await.unwrap();
-    assert_eq!(info.name, "alice2");
+    assert_eq!(info.name.as_str(), "alice2");
     assert!(!w.root().join("alice").exists());
     assert!(read(w.root().join("alice2/agent.toml")).starts_with("# alice 的注释\n"));
     assert!(read(w.root().join("alice2/agent.toml")).contains("新描述"));
     let text = read(access.clone());
-    assert!(text.starts_with("# 人写的注释\n") && text.contains("[agents.alice2]") && !text.contains("[agents.alice]"));
+    assert!(text.starts_with("# 人写的注释\n") && text.contains(&format!("[agents.{id}] # alice2\n")), "{text}");
     let view = w.service.view(&id).await.unwrap();
     assert_eq!(view.rules.roles, vec!["admin".to_owned()]);
     assert_eq!(view.config.unwrap().file.description(), "新描述");
 
     // 只改大小写也行（同一个目录）
     w.service.update(&id, AgentPatch { name: Some("Alice2".into()), ..Default::default() }).await.unwrap();
-    assert_eq!(w.service.view(&id).await.unwrap().config.unwrap().name, "Alice2");
+    assert_eq!(w.service.view(&id).await.unwrap().config.unwrap().name.as_str(), "Alice2");
 
     // 写库失败：目录挪回、agent.toml 与 access.toml 改回
     w.db.write(|tx| {
@@ -161,7 +164,7 @@ async fn delete_cleans_up_and_keeps_shared_assets() {
     write(&root.join("alice/skills/mine/SKILL.md"), "---\ndescription: 只有自己用\n---\n");
     write(
         &access(&root),
-        "[agents.alice]\nallow = [\"use:tool:read_file\"]\n[agents.bob]\nallow = [\"use:skill:used\"]\n",
+        &format!("[agents.{a}]\nallow = [\"use:tool:read_file\"]\n[agents.{b}]\nallow = [\"use:skill:used\"]\n"),
     );
     std::fs::write(w.workspaces().join(&a).join("f"), "x").unwrap();
 
@@ -188,7 +191,7 @@ async fn delete_cleans_up_and_keeps_shared_assets() {
     let s = w.source.snapshot().await.unwrap();
     assert_eq!(s.get(StoredKind::Skill, "used").unwrap().owner, Owner::Platform);
     assert!(s.get(StoredKind::Skill, "mine").is_none());
-    assert!(!read(access(&root)).contains("alice"));
+    assert!(!read(access(&root)).contains(&a));
     assert!(s.problems.is_empty(), "{:?}", s.problems);
 }
 

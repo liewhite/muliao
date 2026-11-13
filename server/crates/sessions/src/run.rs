@@ -272,7 +272,7 @@ async fn begin(core: &Core, session_id: &str) -> Result<Begun> {
                 run_id,
                 context: history::load_context(tx, &session_id)?,
                 delegated: delegated_in(tx, &session_id)?,
-                agent_name,
+                agent_name: agent_name.to_string(),
                 session,
                 queued,
                 at,

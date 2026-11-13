@@ -1,8 +1,7 @@
-//! `<agent 名>/agent.toml` 的格式：读（[`parse`]）与平台自己写（[`render`]）在这一处。名字不在文件里：目录名就是名字；
-//! 目录与数据库里 agent 的对应在读树（[`crate::tree`]）。
+//! `<agent 名>/agent.toml` 的格式：读（[`parse`]）与平台自己写（[`render`]）在这一处。名字与 id 都不在文件里：目录名
+//! 就是名字，读树（[`crate::tree`]）按目录名对上数据库里的 agent。
 //!
 //! ```toml
-//! id = "143cd08d29b0"        # 把目录与 agent 绑在一起，不改
 //! description = "…"
 //! model = "claude:claude-x"  # <provider>:<模型名>
 //! thinking = "high"          # 可省略，缺省 default
@@ -60,14 +59,13 @@ impl fmt::Display for Thinking {
 /// agent.toml 的内容（校验过：只能经 [`parse`] 或 [`AgentFile::new`] 得到）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentFile {
-    id: String,
     description: String,
     model: String,
     thinking: Thinking,
     group: Option<String>,
 }
 
-/// 能改的配置字段（id 不改）：新建时没给的取默认，修改时 None 为不变。
+/// 能改的配置字段：新建时没给的取默认，修改时 None 为不变。
 #[derive(Debug, Clone, Default)]
 pub struct AgentConfig {
     pub description: Option<String>,
@@ -82,13 +80,7 @@ fn invalid(reason: impl fmt::Display) -> String {
 }
 
 impl AgentFile {
-    pub fn new(
-        id: String,
-        description: String,
-        model: String,
-        thinking: Thinking,
-        group: Option<String>,
-    ) -> Result<Self, String> {
+    pub fn new(description: String, model: String, thinking: Thinking, group: Option<String>) -> Result<Self, String> {
         if description.trim().is_empty() {
             return Err(invalid("description must not be empty"));
         }
@@ -99,17 +91,16 @@ impl AgentFile {
                 "group must be 1-{GROUP_MAX} characters without leading or trailing whitespace, got {g:?}"
             )));
         }
-        Ok(Self { id, description, model, thinking, group })
+        Ok(Self { description, model, thinking, group })
     }
 
-    /// 这份配置改上 config 里给出的字段之后的样子（id 不变）。
+    /// 这份配置改上 config 里给出的字段之后的样子。
     pub fn with(&self, config: &AgentConfig) -> Result<Self, String> {
         let group = match &config.group {
             None => self.group.clone(),
             Some(g) => Some(g.trim().to_owned()).filter(|g| !g.is_empty()),
         };
         Self::new(
-            self.id.clone(),
             config.description.clone().unwrap_or_else(|| self.description.clone()),
             config.model.clone().unwrap_or_else(|| self.model.clone()),
             config.thinking.unwrap_or(self.thinking),
@@ -117,9 +108,6 @@ impl AgentFile {
         )
     }
 
-    pub fn id(&self) -> &str {
-        &self.id
-    }
     pub fn description(&self) -> &str {
         &self.description
     }
@@ -143,18 +131,12 @@ fn string(table: &toml::Table, key: &str) -> Result<Option<String>, String> {
 }
 
 /// 文件里的键，按写出的顺序（读时只认这些，写时逐个写，[`AgentFile::fields`]）
-const KEYS: [&str; 5] = ["id", "description", "model", "thinking", "group"];
+const KEYS: [&str; 4] = ["description", "model", "thinking", "group"];
 
 impl AgentFile {
     /// 每个键要写成的值（None 为没有这个键：不分组）。顺序同 [`KEYS`]。
-    fn fields(&self) -> [Option<&str>; 5] {
-        [
-            Some(&self.id),
-            Some(&self.description),
-            Some(&self.model),
-            Some(self.thinking.as_str()),
-            self.group.as_deref(),
-        ]
+    fn fields(&self) -> [Option<&str>; 4] {
+        [Some(&self.description), Some(&self.model), Some(self.thinking.as_str()), self.group.as_deref()]
     }
 }
 
@@ -172,7 +154,7 @@ pub fn parse(text: &str) -> Result<AgentFile, String> {
             invalid(format!("thinking must be one of {:?}, got {t:?}", Thinking::ALL.map(Thinking::as_str)))
         })?,
     };
-    AgentFile::new(required("id")?, required("description")?, required("model")?, thinking, string(&table, "group")?)
+    AgentFile::new(required("description")?, required("model")?, thinking, string(&table, "group")?)
 }
 
 /// 要写成 data 时的全文：current 是已有文件的原文（在它上面改，保留注释与别的排版），没有文件为 None。值没变的键原样
@@ -206,7 +188,7 @@ mod tests {
 
     #[test]
     fn parse_and_render_keep_comments() {
-        let text = "# 注释\nid = \"abc\"\ndescription = \"d\"  # 说明\nmodel = \"p:m\" # 模型\ngroup = \"g\"\n";
+        let text = "# 注释\ndescription = \"d\"  # 说明\nmodel = \"p:m\" # 模型\ngroup = \"g\"\n";
         let file = parse(text).unwrap();
         assert_eq!(file.thinking(), Thinking::Default);
         let config = AgentConfig { group: Some("  ".into()), description: Some("新".into()), ..Default::default() };
@@ -217,10 +199,10 @@ mod tests {
         assert!(out.contains("model = \"p:m\" # 模型\n"), "{out}");
         assert!(!out.contains("group"));
         assert_eq!(parse(&out).unwrap(), changed);
-        assert!(parse("id = \"a\"\ndescription = \" \"\nmodel = \"m\"").is_err());
-        assert!(parse("id = \"a\"\ndescription = \"d\"\nmodel = \"m\"\nextra = 1").is_err());
-        assert!(parse("id = \"a\"\ndescription = \"d\"\nmodel = \"m\"\nthinking = \"max\"").is_err());
-        assert!(parse("id = \"a\"\ndescription = \"d\"\nmodel = \"m\"\ngroup = \" g\"").is_err());
-        assert!(parse("id = 1\ndescription = \"d\"\nmodel = \"m\"").is_err());
+        assert!(parse("description = \" \"\nmodel = \"m\"").is_err());
+        assert!(parse("description = \"d\"\nmodel = \"m\"\nextra = 1").is_err());
+        assert!(parse("description = \"d\"\nmodel = \"m\"\nthinking = \"max\"").is_err());
+        assert!(parse("description = \"d\"\nmodel = \"m\"\ngroup = \" g\"").is_err());
+        assert!(parse("id = \"a\"\ndescription = \"d\"\nmodel = \"m\"").is_err());
     }
 }

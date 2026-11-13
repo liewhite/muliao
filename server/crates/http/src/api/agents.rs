@@ -69,7 +69,7 @@ impl AgentOut {
         let archived_at = info.archived_at();
         AgentOut {
             id: info.id,
-            name: info.name,
+            name: info.name.to_string(),
             config: config.map(|d| AgentConfigOut {
                 description: d.file.description().to_owned(),
                 model: d.file.model().to_owned(),

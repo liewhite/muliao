@@ -13,11 +13,12 @@ use muliao_platform::db::{Database, Migration};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use crate::error::{Error, Result, conflict, not_found};
-use crate::naming::{nfc, normalize_agent_name};
+use crate::naming::AgentName;
 
 pub const MIGRATION: Migration = Migration {
     domain: "agents",
-    steps: &["
+    steps: &[
+        "
         CREATE TABLE agents (
             -- 系统生成、不可变：主键、目录名（工作目录）、URL 与工具调用都用它
             id TEXT PRIMARY KEY NOT NULL,
@@ -33,7 +34,15 @@ pub const MIGRATION: Migration = Migration {
             updated_at TEXT NOT NULL
         );
         CREATE UNIQUE INDEX uq_agents_default ON agents (is_default) WHERE is_default;
-    "],
+    ",
+        "
+        -- 名字的比较键（AgentName::key，大小写折叠）：只差大小写的名字是同一个（资源目录在不分大小写的文件系统上）。
+        -- 旧行用 lower()：它只折叠 ASCII，上线时已有的名字都是小写 ASCII 与中文（两者折叠结果相同，11-13 核对）
+        ALTER TABLE agents ADD COLUMN name_key TEXT NOT NULL DEFAULT '';
+        UPDATE agents SET name_key = lower(name);
+        CREATE UNIQUE INDEX uq_agents_name_key ON agents (name_key);
+    ",
+    ],
 };
 
 /// 还可用（不在删除中）的 agent
@@ -44,7 +53,7 @@ const COLUMNS: &str = "id, name, is_default, archived_at, created_at, deleting_b
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentInfo {
     pub id: String,
-    pub name: String,
+    pub name: AgentName,
     pub created_at: DateTime<Utc>,
     /// 系统默认 agent，最多一个
     pub is_default: bool,
@@ -133,24 +142,24 @@ pub fn runnable_agent_in(c: &Connection, agent_id: &str) -> Result<AgentInfo> {
     Ok(agent)
 }
 
-/// 按名称找还可用的 agent（名称唯一），没有时 None。只做和存名字时一样的 NFC 与去空白。
-pub fn named_or_none_in(c: &Connection, name: &str) -> Result<Option<AgentInfo>> {
-    one(c, &format!("name = ?1 AND {LIVE}"), nfc(name).trim())
+/// 按名称找还可用的 agent（名称唯一），没有时 None。
+pub fn named_or_none_in(c: &Connection, name: &AgentName) -> Result<Option<AgentInfo>> {
+    one(c, &format!("name_key = ?1 AND {LIVE}"), name.key())
 }
 
 /// 按名称找还可用的 agent（模型按名称指代 agent，不接触 id）。名称不合规则时 InvalidInput；没有时 NotFound，列出可用的
 /// 名称。
 pub fn named_in(c: &Connection, name: &str) -> Result<AgentInfo> {
-    if let Some(a) = named_or_none_in(c, &normalize_agent_name(name)?)? {
+    if let Some(a) = named_or_none_in(c, &AgentName::parse(name)?)? {
         return Ok(a);
     }
-    let names: Vec<String> = listed_in(c)?.into_iter().map(|a| a.name).collect();
+    let names: Vec<String> = listed_in(c)?.into_iter().map(|a| a.name.to_string()).collect();
     Err(not_found(format!("no agent named {name:?}; available agents: {names:?}")))
 }
 
 /// 列表里的 agent（正在删除的不列出），按名称。
 pub fn listed_in(c: &Connection) -> Result<Vec<AgentInfo>> {
-    let mut stmt = c.prepare(&format!("SELECT {COLUMNS} FROM agents WHERE {LIVE} ORDER BY name"))?;
+    let mut stmt = c.prepare(&format!("SELECT {COLUMNS} FROM agents WHERE {LIVE} ORDER BY name_key"))?;
     let rows = stmt.query_map([], info)?.collect::<rusqlite::Result<_>>()?;
     Ok(rows)
 }
@@ -171,13 +180,15 @@ pub fn agent_names_in(c: &Connection) -> Result<AgentNames> {
     Ok(AgentNames(names))
 }
 
-/// 读资源树时按 id 对上 agent 目录的依据：全部 agent（id → 名字，含正在删除的）与其中正在删除的。一条语句读出，两者一致。
-pub(crate) async fn identities(db: &Database) -> Result<(BTreeMap<String, String>, BTreeSet<String>)> {
+/// 读资源树时按目录名对上 agent 的依据：全部 agent（id → 名字，含正在删除的）与其中正在删除的。一条语句读出，两者一致。
+pub(crate) async fn identities(db: &Database) -> Result<(BTreeMap<String, AgentName>, BTreeSet<String>)> {
     db.read(|c| {
         let mut stmt = c.prepare("SELECT id, name, deleting_by IS NOT NULL FROM agents")?;
         let mut known = BTreeMap::new();
         let mut deleting = BTreeSet::new();
-        for row in stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, bool>(2)?)))? {
+        for row in
+            stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, AgentName>(1)?, r.get::<_, bool>(2)?)))?
+        {
             let (id, name, gone) = row?;
             if gone {
                 deleting.insert(id.clone());
@@ -191,25 +202,28 @@ pub(crate) async fn identities(db: &Database) -> Result<(BTreeMap<String, String
 
 // ---- agent 领域自己的写入（服务与删除、归档流程用） ----
 
-pub(crate) fn insert_in(c: &Connection, agent_id: &str, name: &str) -> Result<AgentInfo> {
+pub(crate) fn insert_in(c: &Connection, agent_id: &str, name: &AgentName) -> Result<AgentInfo> {
     let now = Utc::now();
     c.execute(
-        "INSERT INTO agents (id, name, is_default, created_at, updated_at) VALUES (?1, ?2, 0, ?3, ?3)",
-        params![agent_id, name, now],
+        "INSERT INTO agents (id, name, name_key, is_default, created_at, updated_at) VALUES (?1, ?2, ?3, 0, ?4, ?4)",
+        params![agent_id, name.as_str(), name.key(), now],
     )?;
     agent_in(c, agent_id)
 }
 
-pub(crate) fn rename_in(c: &Connection, agent_id: &str, name: &str) -> Result<AgentInfo> {
+pub(crate) fn rename_in(c: &Connection, agent_id: &str, name: &AgentName) -> Result<AgentInfo> {
     active_agent_in(c, agent_id)?;
-    c.execute("UPDATE agents SET name = ?2, updated_at = ?3 WHERE id = ?1", params![agent_id, name, Utc::now()])?;
+    c.execute(
+        "UPDATE agents SET name = ?2, name_key = ?3, updated_at = ?4 WHERE id = ?1",
+        params![agent_id, name.as_str(), name.key(), Utc::now()],
+    )?;
     agent_in(c, agent_id)
 }
 
-/// 名字被数据库里别的 agent（含目录坏掉、没加载的、正在删除的）占着时 Conflict。
-pub(crate) fn check_name_free_in(c: &Connection, name: &str, agent_id: Option<&str>) -> Result<()> {
+/// 名字被数据库里别的 agent（含目录坏掉、没加载的、正在删除的）占着时 Conflict（只差大小写也算）。
+pub(crate) fn check_name_free_in(c: &Connection, name: &AgentName, agent_id: Option<&str>) -> Result<()> {
     let holder: Option<String> =
-        c.query_row("SELECT id FROM agents WHERE name = ?1", [name], |r| r.get(0)).optional()?;
+        c.query_row("SELECT id FROM agents WHERE name_key = ?1", [name.key()], |r| r.get(0)).optional()?;
     match holder {
         Some(h) if Some(h.as_str()) != agent_id => {
             Err(conflict(format!("agent name {name:?} is already taken by another agent")))

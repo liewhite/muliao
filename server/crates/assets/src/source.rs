@@ -43,7 +43,7 @@ pub struct Written {
 #[derive(PartialEq, Eq)]
 struct Key {
     tree: Vec<(PathBuf, i128, u64)>,
-    known: BTreeMap<String, String>,
+    known: BTreeMap<String, crate::naming::AgentName>,
     deleting: BTreeSet<String>,
 }
 
@@ -145,7 +145,7 @@ impl AssetSource {
                 (self.check_model)(a.file.model(), a.file.thinking()).err().map(|e| Problem {
                     path: a.path.join(AGENT_FILE),
                     reason: format!("{e}; the agent cannot run until this is fixed"),
-                    agent: Some(a.id().to_owned()),
+                    agent: Some(a.id.clone()),
                 })
             })
             .collect();

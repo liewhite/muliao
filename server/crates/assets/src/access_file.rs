@@ -6,7 +6,7 @@
 //! description = "交易账户"
 //! allow = ["use:skill:binance-*", "use:secret:BINANCE_*"]
 //!
-//! [agents."交易员"]
+//! [agents.3ae657ce1d2e] # 交易员
 //! roles = ["trading"]
 //! allow = ["write:path:~/projects/arb"]
 //! deny = ["use:tool:delete_agent"]
@@ -17,15 +17,17 @@
 //! agent 目录、匹配不上任何工具的规则）只收窄：记一条问题，其余照常。
 //! 写之前的校验只有 [`vet`] 一个：文件工具改它与平台自己改它（[`plan`]）都调它。平台的改动在原文上改（toml_edit），人手
 //! 写的注释与排版保留。
+//!
+//! `[agents.*]` 的节名是 agent 的 id（改名不用动这个文件），行尾注释是它的名字：平台写这一节时写上，只给人看，读时不认。
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
 use toml_edit::{Array, DocumentMut, Item, Table, TableLike, Value};
 
 use crate::error::{Result, conflict, invalid};
 use crate::kinds::Kind;
-use crate::naming::{nfc, validate_slug};
+use crate::naming::{AgentName, is_agent_id, validate_slug};
 use crate::rules::{
     ADMIN, AgentRules, BASE, Role, Roles, Rules, ToolTable, fixed_rules, fnmatch, kind_of, matches_no_tool,
 };
@@ -70,8 +72,8 @@ pub enum AccessText {
     Invalid(String),
 }
 
-/// 读 path（没有这个文件就是空的）。agents：加载成功的 agent，名字 → id。
-pub fn read(path: &Path, agents: &BTreeMap<String, String>, tools: &ToolTable) -> (Access, AccessText) {
+/// 读 path（没有这个文件就是空的）。agents：加载成功的 agent 的 id。
+pub fn read(path: &Path, agents: &BTreeSet<String>, tools: &ToolTable) -> (Access, AccessText) {
     let text = if path.is_file() {
         match muliao_platform::fs::read_text(path) {
             Ok(text) => Some(text),
@@ -94,18 +96,16 @@ pub fn read(path: &Path, agents: &BTreeMap<String, String>, tools: &ToolTable) -
 }
 
 /// 文件内容（没有这个文件为 None）读成 [`Access`]。
-pub fn parse(text: Option<&str>, agents: &BTreeMap<String, String>, tools: &ToolTable) -> Access {
+pub fn parse(text: Option<&str>, agents: &BTreeSet<String>, tools: &ToolTable) -> Access {
     Parser::new(agents, tools).parse(text)
 }
 
 struct Parser<'a> {
-    agents: &'a BTreeMap<String, String>,
+    agents: &'a BTreeSet<String>,
     tools: &'a ToolTable,
     problems: Vec<AccessProblem>,
     roles: Roles,
     rules: BTreeMap<String, AgentRules>,
-    /// 读过的 [agents.*] 节名（NFC）：同一个名字的两种写法不依赖 agent 表也认得出（写入口校验时没有 agent 表）
-    sections: HashSet<String>,
 }
 
 fn builtin_roles(tools: &ToolTable) -> Roles {
@@ -127,15 +127,8 @@ struct Entry {
 }
 
 impl<'a> Parser<'a> {
-    fn new(agents: &'a BTreeMap<String, String>, tools: &'a ToolTable) -> Self {
-        Self {
-            agents,
-            tools,
-            problems: Vec::new(),
-            roles: builtin_roles(tools),
-            rules: BTreeMap::new(),
-            sections: HashSet::new(),
-        }
+    fn new(agents: &'a BTreeSet<String>, tools: &'a ToolTable) -> Self {
+        Self { agents, tools, problems: Vec::new(), roles: builtin_roles(tools), rules: BTreeMap::new() }
     }
 
     fn problem(&mut self, reason: String, agent_id: Option<String>) {
@@ -172,8 +165,8 @@ impl<'a> Parser<'a> {
         for (name, raw) in self.table(&data, "roles") {
             self.role(&name, &raw);
         }
-        for (name, raw) in self.table(&data, "agents") {
-            self.agent(&name, &raw);
+        for (id, raw) in self.table(&data, "agents") {
+            self.agent(&id, &raw);
         }
         self.done()
     }
@@ -249,10 +242,18 @@ impl<'a> Parser<'a> {
         self.roles.insert(name.to_owned(), Role { name: name.to_owned(), description, rules, fixed });
     }
 
-    fn agent(&mut self, name: &str, raw: &toml::Value) {
-        let what = format!("agent {name:?}");
+    fn agent(&mut self, id: &str, raw: &toml::Value) {
+        let what = format!("[agents.{id}]");
         let Some(entry) = self.entry(raw, &["roles", "allow", "deny"], &what) else { return };
-        let agent_id = self.agents.get(&nfc(name)).cloned();
+        if !is_agent_id(id) {
+            // 照旧习惯写成了名字：不报的话这一节的规则（尤其 deny）悄悄不生效
+            self.invalid(format!(
+                "{what}: sections under [agents] are named by agent id (12 hex characters, shown by get_agent), \
+                 with the name as a comment, e.g. [agents.143cd08d29b0] # muliao"
+            ));
+            return;
+        }
+        let agent_id = self.agents.contains(id).then(|| id.to_owned());
         let allow = self.patterns(&entry.allow, &what, agent_id.clone());
         let deny = self.patterns(&entry.deny, &what, agent_id.clone());
         // 角色定义与对它的引用在同一个文件里：引用了没定义的角色是文件自相矛盾（拼错、手删了定义），跳过它会丢掉那个
@@ -261,16 +262,9 @@ impl<'a> Parser<'a> {
         if !unknown.is_empty() {
             self.invalid(format!("{what}: roles {unknown:?} are not defined in [roles]"));
         }
-        if !self.sections.insert(nfc(name)) {
-            // 两节写法不同（NFC 与 NFD）却是同一个 agent：后一节盖掉前一节会悄悄丢掉它的 deny，所以整份作废
-            self.invalid(format!(
-                "{what}: another [agents.*] section already names this agent (same name, other encoding)"
-            ));
-            return;
-        }
         let Some(agent_id) = agent_id else {
-            // 那个 agent 本来就跑不了（目录没加载），这一节暂时不起作用
-            self.problem(format!("[agents.{name}]: no loaded agent directory has this name"), None);
+            // 那个 agent 本来就跑不了（不存在或目录没加载），这一节暂时不起作用
+            self.problem(format!("{what}: no loaded agent has this id"), None);
             return;
         };
         let implicit: Vec<&String> =
@@ -356,7 +350,7 @@ impl AccessEdit {
 ///   `kind:名`）里的一项，拼错的在写入时报出。已有的不查：资源删掉再建时分发不丢；比整个文件而不按节，agent 改名时它
 ///   那一节换了名字也不算新加。不限种类的（`write:*`）与路径规则（目录可以还没建）不查。
 pub fn vet(before: Option<&str>, after: &str, tools: &ToolTable, addressable: &[String]) -> Result<()> {
-    let access = parse(Some(after), &BTreeMap::new(), tools);
+    let access = parse(Some(after), &BTreeSet::new(), tools);
     if !access.readable {
         return Err(invalid(access.problems.iter().map(|p| p.reason.as_str()).collect::<Vec<_>>().join("; ")));
     }
@@ -492,8 +486,9 @@ pub fn delete_role(doc: &mut DocumentMut, name: &str) {
     section(doc, "roles").remove(name);
 }
 
-/// agent 的规则；全空时去掉这一节（只有 base）。roles 不能写 base（每个 agent 隐含），角色有没有定义由 vet 查。
-pub fn set_agent_rules(doc: &mut DocumentMut, agent: &str, rules: &AgentRules) -> Result<()> {
+/// agent（id，名字写进行尾注释）的规则；全空时去掉这一节（只有 base）。roles 不能写 base（每个 agent 隐含），角色有没有
+/// 定义由 vet 查。
+pub fn set_agent_rules(doc: &mut DocumentMut, agent_id: &str, name: &AgentName, rules: &AgentRules) -> Result<()> {
     if rules.roles.iter().any(|r| r == BASE) {
         return Err(invalid(format!("role {BASE:?} is implicit for every agent; do not list it in roles")));
     }
@@ -507,23 +502,18 @@ pub fn set_agent_rules(doc: &mut DocumentMut, agent: &str, rules: &AgentRules) -
         .collect();
     let agents = section(doc, "agents");
     if fields.is_empty() {
-        agents.remove(agent);
-    } else {
-        replace(agents, agent, rules_table(&fields));
+        agents.remove(agent_id);
+        return Ok(());
+    }
+    replace(agents, agent_id, rules_table(&fields));
+    if let Some(Item::Table(t)) = agents.get_mut(agent_id) {
+        t.decor_mut().set_suffix(format!(" # {name}"));
     }
     Ok(())
 }
 
-/// agent 改名：它的那一节跟着改名（规则不按名字指 agent 的私有记忆，别处不用改）。
-pub fn rename_agent(doc: &mut DocumentMut, old: &str, new: &str) {
-    let agents = section(doc, "agents");
-    if let Some(item) = agents.remove(old) {
-        agents.insert(new, item);
-    }
-}
-
-pub fn remove_agent(doc: &mut DocumentMut, agent: &str) {
-    section(doc, "agents").remove(agent);
+pub fn remove_agent(doc: &mut DocumentMut, agent_id: &str) {
+    section(doc, "agents").remove(agent_id);
 }
 
 #[cfg(test)]
@@ -538,19 +528,21 @@ mod tests {
         ])
     }
 
+    const A1: &str = "0123456789ab";
+
     #[test]
     fn reads_roles_and_agents() {
-        let agents = BTreeMap::from([("交易".to_owned(), "a1".to_owned())]);
+        let agents = BTreeSet::from([A1.to_owned()]);
         let text = r#"
 [roles.base]
 allow = ["use:skill:x"]
 [roles.trading]
 description = "t"
 allow = ["use:tool:nope_*"]
-[agents."交易"]
+[agents.0123456789ab] # 交易
 roles = ["trading", "base", "trading"]
 deny = ["use:tool:read_file"]
-[agents.ghost]
+[agents.ffffffffffff]
 allow = []
 "#;
         let a = parse(Some(text), &agents, &tools());
@@ -559,7 +551,7 @@ allow = []
         assert_eq!(a.roles["base"].description, builtin_description("base").unwrap());
         assert!(a.roles["base"].fixed.allow.contains(&"use:tool:read_file".to_owned()));
         assert!(!a.roles["base"].fixed.allow.contains(&"use:tool:create_agent".to_owned()));
-        assert_eq!(a.rules["a1"].roles, ["trading"]);
+        assert_eq!(a.rules[A1].roles, ["trading"]);
         assert_eq!(a.problems.len(), 3, "{:?}", a.problems);
 
         for bad in [
@@ -567,8 +559,10 @@ allow = []
             "[roles.Bad]\ndescription = \"d\"",
             "[roles.r]\nallow = []",
             "[roles.r]\ndescription = \"d\"\nallow = [\"use:bad\"]",
-            "[agents.\"交易\"]\nroles = [\"missing\"]",
-            "[agents.\"交易\"]\nextra = 1",
+            "[agents.0123456789ab]\nroles = [\"missing\"]",
+            "[agents.0123456789ab]\nextra = 1",
+            // 节名写成名字（旧格式）：整份作废，写入口也拦下
+            "[agents.\"交易\"]\ndeny = [\"use:tool:read_file\"]",
             "[roles.r]\ndescription = 1",
             "not toml [",
         ] {
@@ -577,16 +571,6 @@ allow = []
             assert!(a.rules.is_empty());
             assert_eq!(a.roles.len(), 2);
         }
-    }
-
-    #[test]
-    fn one_agent_in_two_encodings_is_invalid() {
-        // 同一个 agent 的两种 Unicode 写法（NFC 与 NFD）：后一节会盖掉前一节的 deny
-        let agents = BTreeMap::from([("caf\u{e9}".to_owned(), "a1".to_owned())]);
-        let text = "[agents.\"caf\u{e9}\"]\ndeny = [\"use:tool:read_file\"]\n[agents.\"cafe\u{301}\"]\nallow = []\n";
-        assert!(!parse(Some(text), &agents, &tools()).readable);
-        // 写入口没有 agent 表，照样拦下
-        assert!(vet(None, text, &tools(), &["tool:read_file".to_owned()]).is_err());
     }
 
     #[test]
@@ -606,7 +590,8 @@ allow = []
         let mut doc: DocumentMut =
             "# 头注释\n[roles.r]\n# 角色注释\ndescription = \"d\"\nallow = []\n".parse().unwrap();
         let rules = AgentRules { roles: vec!["r".into()], allow: vec![], deny: vec![] };
-        set_agent_rules(&mut doc, "交易", &rules).unwrap();
+        let name = |n: &str| AgentName::parse(n).unwrap();
+        set_agent_rules(&mut doc, A1, &name("交易"), &rules).unwrap();
         set_role(
             &mut doc,
             "s",
@@ -614,26 +599,35 @@ allow = []
             &Rules::new(vec!["use:skill:a".into(), "use:skill:b".into(), "use:skill:c".into()], vec![]),
         )
         .unwrap();
-        rename_agent(&mut doc, "交易", "交易员");
+        // 改名：只换行尾注释
+        set_agent_rules(&mut doc, A1, &name("交易员"), &rules).unwrap();
         let out = doc.to_string();
         assert!(out.starts_with("# 头注释\n[roles.r]\n# 角色注释\n"), "{out}");
-        assert!(out.contains("[agents.\"交易员\"]\nroles = [\"r\"]"), "{out}");
+        assert!(out.contains("[agents.0123456789ab] # 交易员\nroles = [\"r\"]"), "{out}");
+        assert!(!out.contains("# 交易\n"), "{out}");
         assert!(
             out.contains("allow = [\n    \"use:skill:a\",\n    \"use:skill:b\",\n    \"use:skill:c\",\n]"),
             "{out}"
         );
         assert!(!out.contains("[roles]") && !out.contains("[agents]\n"), "{out}");
-        let back = parse(Some(&out), &BTreeMap::from([("交易员".into(), "id".into())]), &tools());
+        let back = parse(Some(&out), &BTreeSet::from([A1.to_owned()]), &tools());
         assert!(back.readable, "{:?}", back.problems);
-        assert_eq!(back.rules["id"].roles, ["r"]);
-        set_agent_rules(&mut doc, "交易员", &AgentRules::default()).unwrap();
+        assert_eq!(back.rules[A1].roles, ["r"]);
+        set_agent_rules(&mut doc, A1, &name("交易员"), &AgentRules::default()).unwrap();
         assert!(!doc.to_string().contains("交易员"));
+        let x = name("x");
         assert!(
-            set_agent_rules(&mut doc, "x", &AgentRules { roles: vec!["base".into()], ..Default::default() }).is_err()
+            set_agent_rules(&mut doc, A1, &x, &AgentRules { roles: vec!["base".into()], ..Default::default() })
+                .is_err()
         );
         assert!(
-            set_agent_rules(&mut doc, "x", &AgentRules { roles: vec!["r".into(), "r".into()], ..Default::default() })
-                .is_err()
+            set_agent_rules(
+                &mut doc,
+                A1,
+                &x,
+                &AgentRules { roles: vec!["r".into(), "r".into()], ..Default::default() }
+            )
+            .is_err()
         );
     }
 }

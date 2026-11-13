@@ -145,15 +145,18 @@ pub(crate) fn hand_back_in(
     let agent = agent_in(tx, &child.agent_id)?;
     for o in owed {
         // 作为 ask_agent 调用的结果：完成时就是回答本身（发问方问的就是它）
-        let result_text =
-            if ending == Ending::Finished { text.to_owned() } else { event_text(name, &agent.name, ending, text) };
+        let result_text = if ending == Ending::Finished {
+            text.to_owned()
+        } else {
+            event_text(name, agent.name.as_str(), ending, text)
+        };
         let answer = CallResult::AskAgent(AgentAnswer { text: result_text, attachments: attachments.to_vec() });
         let delivered = deliver_in(
             tx,
             waker,
             Some(&o.hold),
             &EventSource::Thread { session_id: child.id.clone() },
-            &event_text(name, &agent.name, ending, text),
+            &event_text(name, agent.name.as_str(), ending, text),
             Some(answer),
         )?;
         tracing::info!(delegation = o.delegation.id, session_id = %o.delegation.parent_id, thread_session_id = %child.id,

@@ -50,13 +50,13 @@ impl AgentLifecycle {
         Self { db: source.db().clone(), source, workspaces_dir, hooks: Arc::new(hooks), blockers: Arc::new(blockers) }
     }
 
-    /// 发起删除并删完文件。标记之后删文件失败时返回那个错误：agent 已不在列表里，服务下次启动时接着删。删文件
-    /// 放在独立的任务里：调用方被取消（客户端断开、调用它的运行被停）也照样删完。
+    /// 发起删除并删完文件。标记之后删文件失败（或调用方中途被取消）时 agent 已不在列表里，停在正在删除，服务下次启动时
+    /// 接着删。
     pub async fn delete(&self, agent_id: &str, actor: &Actor) -> Result<()> {
         let id = agent_id.to_owned();
         let agent = self.db.read(move |c| agents::deletable_in(c, &id)).await?;
         // 删除最后要改 access.toml：同样的改动现在就算一遍，不合法时先拒绝，不让 agent 停在正在删除、删文件一直失败
-        retire_plan(&*self.source.snapshot().await?, &agent.name)?;
+        retire_plan(&*self.source.snapshot().await?, &agent.id)?;
         let (id, by, hooks) = (agent_id.to_owned(), actor.as_str().to_owned(), self.hooks.clone());
         self.db
             .write(move |tx| {
@@ -68,18 +68,8 @@ impl AgentLifecycle {
             })
             .await?;
         tracing::info!(agent = agent_id, actor = actor.as_str(), "agent deletion started");
-        let removal = tokio::spawn(remove_files(
-            self.db.clone(),
-            self.source.clone(),
-            crate::service::workspace_of(&self.workspaces_dir, agent_id),
-            agent_id.to_owned(),
-        ));
-        match removal.await {
-            Ok(done) => done,
-            Err(e) if e.is_panic() => std::panic::resume_unwind(e.into_panic()),
-            // 服务关停时被取消：停在正在删除，下次启动接着删
-            Err(e) => Err(std::io::Error::other(format!("removing the agent's files was interrupted: {e}")).into()),
-        }
+        let workspace = crate::service::workspace_of(&self.workspaces_dir, agent_id);
+        remove_files(self.db.clone(), self.source.clone(), workspace, agent_id.to_owned()).await
     }
 
     /// 启动时：接着删停在正在删除的 agent（上次删文件失败或服务中途重启）。失败的记 error，下次启动再试。
@@ -155,7 +145,7 @@ async fn remove_files(db: Arc<Database>, source: Arc<AssetSource>, workspace: Pa
 
 /// 删掉 agent 的资源目录与 access.toml 里它的那一节；它名下分发出去的资源（base 收录，或别的 agent 的规则收录）先挪到
 /// 平台目录，私有记忆不分发、随目录删掉。目录没加载成功（agent.toml 坏了等）时它名下没有加载出的资源可挪，照样按数据库
-/// 里的名字删目录与那一节，不留下占着这个名字的残留。
+/// 里的名字删目录、按 id 删那一节，不留下占着这个名字的残留。
 fn retire_assets(snapshot: &Snapshot, agent_id: &str) -> Result<()> {
     let directory = snapshot.own_dir(agent_id).expect("an agent being deleted is still in the database");
     if !snapshot.agents.contains_key(agent_id) && directory.exists() {
@@ -172,16 +162,15 @@ fn retire_assets(snapshot: &Snapshot, agent_id: &str) -> Result<()> {
             }
         }
     }
-    let name = directory.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    retire_plan(snapshot, &name)?.apply()?;
+    retire_plan(snapshot, agent_id)?.apply()?;
     remove(&directory)?;
     Ok(())
 }
 
-/// 去掉 access.toml 里名为 name 的 agent 那一节的改动（还没写）。
-fn retire_plan(snapshot: &Snapshot, name: &str) -> Result<AccessEdit> {
+/// 去掉 access.toml 里这个 agent 那一节的改动（还没写）。
+fn retire_plan(snapshot: &Snapshot, agent_id: &str) -> Result<AccessEdit> {
     access_file::plan(snapshot, |doc| {
-        access_file::remove_agent(doc, name);
+        access_file::remove_agent(doc, agent_id);
         Ok(())
     })
 }

@@ -72,27 +72,23 @@ async fn conflicts_broken_files_and_platform_priority() {
 async fn agent_directories_must_match_the_database() {
     let (w, a, _b) = two_agents().await;
     let root = w.root();
-    // 手动改名的目录整个不加载，报给它
+    // 手动改名的目录对不上任何 agent：不加载，agent 自己没有目录
     std::fs::rename(root.join("alice"), root.join("alice2")).unwrap();
-    // id 不认识的
-    write(&root.join("ghost/agent.toml"), "id = \"000000000000\"\ndescription = \"d\"\nmodel = \"p:m\"\n");
     let s = w.source.snapshot().await.unwrap();
     assert!(!s.agents.contains_key(&a));
-    assert!(reasons_for(&s, "alice2")[0].contains("under another name"));
-    assert!(reasons_for(&s, "ghost")[0].contains("not an existing agent"));
-    assert!(s.loaded_agent(&a).unwrap_err().to_string().contains("under another name"));
+    assert!(reasons_for(&s, "alice2")[0].contains("no agent is named"));
+    assert!(s.loaded_agent(&a).unwrap_err().to_string().contains("has no directory named"));
     assert!(s.owner_dir(&Owner::Agent(a.clone())).is_err());
-
-    // 拷了一份的：名字对的那份照常加载，拷贝报出
     std::fs::rename(root.join("alice2"), root.join("alice")).unwrap();
+
+    // agent.toml 坏了：报给它
     let toml = std::fs::read_to_string(root.join("alice/agent.toml")).unwrap();
-    write(&root.join("copy/agent.toml"), &toml);
+    write(&root.join("alice/agent.toml"), &format!("id = \"{a}\"\n{toml}"));
     let s = w.source.snapshot().await.unwrap();
-    assert!(s.agents.contains_key(&a));
-    assert!(reasons_for(&s, "copy")[0].contains("under another name"));
+    assert!(!s.agents.contains_key(&a));
+    assert!(s.problems_for(&a).iter().any(|p| p.reason.contains("unknown keys")));
 
     // 模型在当前配置下不能用：照常加载，记成问题
-    std::fs::remove_dir_all(root.join("copy")).unwrap();
     write(&root.join("alice/agent.toml"), &toml.replace("p:default", "q:x"));
     let s = w.source.snapshot().await.unwrap();
     assert!(s.agents.contains_key(&a));
@@ -103,12 +99,12 @@ async fn agent_directories_must_match_the_database() {
 async fn snapshot_is_cached_and_access_toml_survives_breakage() {
     let (w, a, _b) = two_agents().await;
     let access = w.root().join("platform/access.toml");
-    write(&access, "[agents.alice]\nroles = [\"admin\"]\n");
+    write(&access, &format!("[agents.{a}]\nroles = [\"admin\"]\n"));
     let s1 = w.source.snapshot().await.unwrap();
     assert!(std::sync::Arc::ptr_eq(&s1, &w.source.snapshot().await.unwrap()), "unchanged tree is not re-read");
     assert!(s1.administers(&a));
     // 写坏整份：沿用上一份，并报给 admin
-    write(&access, "[agents.alice]\nroles = [\"admin\"]\ndeny = [\"nonsense\"]\n");
+    write(&access, &format!("[agents.{a}]\nroles = [\"admin\"]\ndeny = [\"nonsense\"]\n"));
     let s2 = w.source.snapshot().await.unwrap();
     assert!(!std::sync::Arc::ptr_eq(&s1, &s2));
     assert!(s2.administers(&a), "the last good rules stay");
@@ -148,10 +144,10 @@ async fn write_entry_vets_like_the_reader() {
     assert!(r.reason.contains("vault_set"));
     assert!(r.for_agent().contains("section 'Secrets'"), "{}", r.for_agent());
     assert!(r.whose.contains("alice"));
-    // agent.toml 的 id 不能改
+    // agent.toml 按格式校验
     let toml = std::fs::read_to_string(root.join("alice/agent.toml")).unwrap();
-    let r = rejected(write(root.join("alice/agent.toml"), &toml.replace(&a, "aaaaaaaaaaaa")).await.unwrap_err());
-    assert!(r.reason.contains("id must stay"));
+    let r = rejected(write(root.join("alice/agent.toml"), &format!("{toml}extra = 1\n")).await.unwrap_err());
+    assert!(r.reason.contains("unknown keys"));
     // 模型不能用的不写
     assert!(write(root.join("alice/agent.toml"), &toml.replace("p:default", "q:x")).await.is_err());
     // skill 附件要先有 SKILL.md；SKILL.md 按 frontmatter 校验；approval 要指向存在的脚本
@@ -169,8 +165,11 @@ async fn write_entry_vets_like_the_reader() {
     assert!(write(root.join("x.md"), "x").await.is_err());
     assert!(write(root.join("alice/skills"), "x").await.is_err());
     // access.toml：新加的规则要匹配得上
-    assert!(write(root.join("platform/access.toml"), "[agents.alice]\nallow = [\"use:skill:typo\"]\n").await.is_err());
-    write(root.join("platform/access.toml"), "[agents.alice]\nallow = [\"use:skill:s\"]\n").await.unwrap();
+    let access = root.join("platform/access.toml");
+    assert!(write(access.clone(), &format!("[agents.{a}]\nallow = [\"use:skill:typo\"]\n")).await.is_err());
+    // 节名是 id，写成名字的拒绝
+    assert!(write(access.clone(), "[agents.alice]\nallow = [\"use:skill:s\"]\n").await.is_err());
+    write(access, &format!("[agents.{a}]\nallow = [\"use:skill:s\"]\n")).await.unwrap();
     // 隐藏文件不校验
     write(root.join("alice/.cache"), "x").await.unwrap();
     // 有一份不合预期就一份都不写
@@ -196,9 +195,11 @@ async fn grants_and_write_scope() {
     write(&root.join("platform/memory/team.md"), "共享\n");
     write(
         &root.join("platform/access.toml"),
-        "[roles.team]\ndescription = \"团队\"\nallow = [\"*:memory:team\", \"use:skill:bobs\"]\n\
-         [agents.alice]\nroles = [\"team\"]\nallow = [\"write:path:~/projects/x\"]\ndeny = [\"use:tool:run_shell\"]\n\
-         [agents.bob]\nroles = [\"admin\"]\ndeny = [\"write:memory:global\"]\n",
+        &format!(
+            "[roles.team]\ndescription = \"团队\"\nallow = [\"*:memory:team\", \"use:skill:bobs\"]\n\
+             [agents.{a}]\nroles = [\"team\"]\nallow = [\"write:path:~/projects/x\"]\ndeny = [\"use:tool:run_shell\"]\n\
+             [agents.{b}]\nroles = [\"admin\"]\ndeny = [\"write:memory:global\"]\n"
+        ),
     );
     let s = w.source.snapshot().await.unwrap();
     let alice = grants_for(&s, &Actor::Agent(a.clone()));

@@ -13,7 +13,7 @@ use crate::error::{AssetRejected, Error, Result};
 use crate::formats::agent_file::{self, AgentFile};
 use crate::formats::{Draft, read_lossy};
 use crate::kinds::{Section, StoredKind};
-use crate::naming::PLATFORM;
+use crate::naming::{AgentName, PLATFORM};
 use crate::tree::{Owner, Place, Snapshot, place_of};
 
 /// 模型（与思考档位）在当前配置下能不能运行；不能时的原因（运行端口给，[`crate::source::ModelCheck`]）。
@@ -54,7 +54,8 @@ pub(crate) fn vet(
     let owner = if head == PLATFORM {
         Some(Owner::Platform)
     } else {
-        snapshot.names.iter().find(|(_, n)| *n == head).map(|(id, _)| Owner::Agent(id.clone()))
+        let name = AgentName::parse(head).ok();
+        snapshot.names.iter().find(|(_, n)| Some(*n) == name.as_ref()).map(|(id, _)| Owner::Agent(id.clone()))
     };
     let whose = match &owner {
         Some(Owner::Platform) => "the platform's".to_owned(),
@@ -118,15 +119,9 @@ fn check(
                     .map_err(|e| (e.to_string(), Section::RolesAndPermissions))?;
                 Ok(text.to_owned())
             }
-            Owner::Agent(id) => {
+            Owner::Agent(_) => {
                 let data = agent_file::parse(text).map_err(|e| (e, Section::AgentToml))?;
                 check_agent(&data).map_err(|e| (e, Section::AgentToml))?;
-                if data.id() != id {
-                    return Err((
-                        format!("id must stay {id:?} (it ties the directory to the agent)"),
-                        Section::AgentToml,
-                    ));
-                }
                 Ok(text.to_owned())
             }
         },
@@ -137,7 +132,7 @@ fn check(
         }
         Place::PrivateMemory => {
             let id = owner.agent().expect("private memory is in an agent directory");
-            draft(StoredKind::Memory, &snapshot.names[id], &[], false)
+            draft(StoredKind::Memory, snapshot.names[id].as_str(), &[], false)
         }
         Place::Entry { kind, name, inner } => draft(kind, &name, &inner, true),
     }

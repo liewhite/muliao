@@ -50,7 +50,7 @@ async fn world() -> World {
     db.write(|tx| {
         for (id, name) in [(A, "alpha"), (B, "beta")] {
             tx.execute(
-                "INSERT INTO agents (id, name, is_default, created_at, updated_at) VALUES (?1, ?2, 0, ?3, ?3)",
+                "INSERT INTO agents (id, name, name_key, is_default, created_at, updated_at) VALUES (?1, ?2, ?2, 0, ?3, ?3)",
                 rusqlite::params![id, name, Utc::now()],
             )?;
         }

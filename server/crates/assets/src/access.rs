@@ -270,7 +270,7 @@ pub fn write_scope(snapshot: &Snapshot, agent_id: &str) -> WriteScope {
         revoked,
         admin,
         own,
-        others: snapshot.names.iter().filter(|(a, _)| *a != agent_id).map(|(_, n)| n.clone()).collect(),
+        others: snapshot.names.iter().filter(|(a, _)| *a != agent_id).map(|(_, n)| n.to_string()).collect(),
         located,
     }
 }

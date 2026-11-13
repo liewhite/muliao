@@ -38,7 +38,7 @@ async fn world() -> World {
     db.write(|tx| {
         for (id, name, archived) in [(A, "alpha", false), (B, "beta", false), (C, "gamma", true)] {
             tx.execute(
-                "INSERT INTO agents (id, name, is_default, archived_at, created_at, updated_at) VALUES (?1, ?2, 0, ?3, ?4, ?4)",
+                "INSERT INTO agents (id, name, name_key, is_default, archived_at, created_at, updated_at) VALUES (?1, ?2, ?2, 0, ?3, ?4, ?4)",
                 rusqlite::params![id, name, archived.then(chrono::Utc::now), chrono::Utc::now()],
             )?;
         }

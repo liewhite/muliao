@@ -68,7 +68,7 @@ pub fn agent_directory(agents: &[AgentView]) -> Vec<AgentGroup> {
     for a in agents {
         let Some(config) = a.config.as_ref().filter(|_| !a.info.archived()) else { continue };
         let group = config.file.group().map(str::to_owned);
-        let entry = AgentEntry { name: a.info.name.clone(), description: config.file.description().to_owned() };
+        let entry = AgentEntry { name: a.info.name.to_string(), description: config.file.description().to_owned() };
         match groups.iter_mut().find(|g| g.group == group) {
             Some(g) => g.agents.push(entry),
             None => groups.push(AgentGroup { group, agents: vec![entry] }),
@@ -130,6 +130,8 @@ impl RoleDetail {
 #[derive(Debug, Serialize)]
 pub struct AgentDetail {
     name: String,
+    /// access.toml 里它那一节的节名（`[agents.<id>]`）
+    id: String,
     description: String,
     group: Option<String>,
     /// 已归档：不能对话、委派、指派，它的触发器不触发；用户在界面上取消
@@ -170,7 +172,7 @@ impl Tool<RunScope> for GetAgent {
     fn description(&self) -> &str {
         "Show an agent's configuration, the built-in tools and the skills/MCP servers/secrets/memories it ends up \
          with, every role and every built-in tool. Use your own name to see yours. Returns a JSON object with \
-         `name`, `description`, `group`, `archived`, `model`, `thinking`, `roles` (besides `base`), `allow`, \
+         `name`, `id` (its section in access.toml is `[agents.<id>]`), `description`, `group`, `archived`, `model`, `thinking`, `roles` (besides `base`), `allow`, \
          `deny`, `tools` (the built-in tools it ends up with), `assets` (`kind:name` of the skills, MCP servers, \
          secrets and memory blocks it can use), `available_roles` (every role: `name`, `description`, \
          `fixed_allow`, `allow`, `deny`) and `all_tools` (every built-in tool)."
@@ -188,7 +190,8 @@ impl Tool<RunScope> for GetAgent {
         };
         let reach = self.distribution.reach(&view.info.id).await?;
         let detail = AgentDetail {
-            name: view.info.name.clone(),
+            name: view.info.name.to_string(),
+            id: view.info.id.clone(),
             description: config.file.description().to_owned(),
             group: config.file.group().map(str::to_owned),
             archived: view.info.archived(),

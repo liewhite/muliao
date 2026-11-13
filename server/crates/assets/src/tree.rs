@@ -33,7 +33,7 @@ use crate::access_file::{self, ACCESS_FILE};
 use crate::error::{Result, conflict, not_found};
 use crate::formats::agent_file::{self, AGENT_FILE, AgentFile};
 use crate::kinds::{Content, Kind, Section, StoredKind};
-use crate::naming::{PLATFORM, nfc};
+use crate::naming::{AgentName, PLATFORM};
 use crate::rules::{Action, AgentRules, Roles, ToolTable, pattern_of};
 
 pub const PRIVATE_MEMORY_FILE: &str = "memory.md";
@@ -132,18 +132,13 @@ impl Owner {
     }
 }
 
-/// 一个加载成功的 agent 目录：名字（目录名，只认数据库）与它的 agent.toml（配置的唯一来源）。
+/// 一个加载成功的 agent 目录：目录名对上的数据库里的 agent（id 与名字），与它的 agent.toml（配置的唯一来源）。
 #[derive(Debug, Clone)]
 pub struct AgentDir {
-    pub name: String,
+    pub id: String,
+    pub name: AgentName,
     pub path: PathBuf,
     pub file: AgentFile,
-}
-
-impl AgentDir {
-    pub fn id(&self) -> &str {
-        self.file.id()
-    }
 }
 
 /// 一项资源。path：记忆、MCP、secret 是那个文件，skill 是它的目录。私有记忆的 name 是它的 agent 的名字，只用于显示。
@@ -186,7 +181,7 @@ pub struct Problem {
 pub struct Snapshot {
     pub root: PathBuf,
     /// 数据库里的 agent（id → 名字，含正在删除的）：目录读坏、没加载的 agent 也知道自己的目录该叫什么
-    pub names: BTreeMap<String, String>,
+    pub names: BTreeMap<String, AgentName>,
     /// 正在删除的 agent 的 id：它们的目录照常读，但不再往里写（[`Snapshot::owner_dir`]、写入口）
     pub deleting: BTreeSet<String>,
     /// 加载成功的 agent 目录，按 id（按目录名的顺序）
@@ -302,7 +297,7 @@ impl Snapshot {
             Owner::Platform => Ok(self.root.join(PLATFORM)),
             Owner::Agent(id) if self.deleting.contains(id) => Err(not_found(format!(
                 "agent {:?} is being deleted; nothing can be written for it",
-                self.names.get(id).map_or(id.as_str(), String::as_str)
+                self.names.get(id).map_or(id.as_str(), AgentName::as_str)
             ))),
             Owner::Agent(id) => Ok(self.loaded_agent(id)?.path.clone()),
         }
@@ -385,7 +380,7 @@ fn file_name(path: &Path) -> String {
 /// 读一棵树：一次性的状态（收集到的资源与问题）。
 struct Reader<'a> {
     root: &'a Path,
-    known: &'a BTreeMap<String, String>,
+    known: &'a BTreeMap<String, AgentName>,
     memory_max_chars: usize,
     problems: Vec<Problem>,
     /// 每种资源：名字 → 找到的各处（冲突时不止一处）
@@ -414,7 +409,8 @@ impl Reader<'_> {
                 return agents;
             }
         };
-        let mut claimed: IndexMap<String, Vec<AgentDir>> = IndexMap::new();
+        let known = self.known;
+        let by_name: BTreeMap<&AgentName, &String> = known.iter().map(|(id, name)| (name, id)).collect();
         for entry in entries {
             if file_name(&entry) == PLATFORM {
                 continue;
@@ -423,26 +419,12 @@ impl Reader<'_> {
                 self.problem(entry, "unexpected file; the root holds only platform/ and agent directories", None);
                 continue;
             }
-            if let Some(agent) = self.agent_dir(&entry) {
-                claimed.entry(agent.id().to_owned()).or_default().push(agent);
+            if let Some(agent) = self.agent_dir(&entry, &by_name) {
+                agents.insert(agent.id.clone(), agent);
             }
-        }
-        for (agent_id, dirs) in claimed {
-            if dirs.len() > 1 {
-                for d in &dirs {
-                    let others: Vec<&str> = dirs.iter().filter(|x| x.path != d.path).map(|x| x.name.as_str()).collect();
-                    self.problem(
-                        d.path.join(AGENT_FILE),
-                        format!("id {agent_id} is also claimed by {others:?}; none of these directories is loaded"),
-                        None,
-                    );
-                }
-                continue;
-            }
-            agents.insert(agent_id, dirs.into_iter().next().expect("one directory"));
         }
         for agent in agents.values() {
-            self.owner_assets(&agent.path, &Owner::Agent(agent.id().to_owned()));
+            self.owner_assets(&agent.path, &Owner::Agent(agent.id.clone()));
         }
         let platform = self.root.join(PLATFORM);
         if platform.is_dir() {
@@ -451,36 +433,34 @@ impl Reader<'_> {
         agents
     }
 
-    fn agent_dir(&mut self, path: &Path) -> Option<AgentDir> {
-        let name = nfc(&file_name(path));
+    /// 目录名（按 [`AgentName`] 比较：大小写、编码形式不同也算）对上数据库里的 agent，再读它的 agent.toml。
+    fn agent_dir(&mut self, path: &Path, by_name: &BTreeMap<&AgentName, &String>) -> Option<AgentDir> {
+        let dir = file_name(path);
+        let Some((name, id)) = AgentName::parse(&dir).ok().and_then(|n| by_name.get_key_value(&n)) else {
+            self.problem(
+                path.to_path_buf(),
+                format!(
+                    "no agent is named {dir:?}: agent directories are named after their agent, made by create_agent \
+                     and renamed only in the app"
+                ),
+                None,
+            );
+            return None;
+        };
         let file = path.join(AGENT_FILE);
         if !file.is_file() {
-            self.problem(path.to_path_buf(), format!("no {AGENT_FILE}: not an agent directory"), None);
+            self.problem(path.to_path_buf(), format!("no {AGENT_FILE}"), Some(id));
             return None;
         }
-        let data = match crate::formats::read(&file).and_then(|t| agent_file::parse(&t)) {
-            Ok(d) => d,
-            Err(e) => {
-                self.problem(file, e, None);
-                return None;
+        match crate::formats::read(&file).and_then(|t| agent_file::parse(&t)) {
+            Ok(data) => {
+                Some(AgentDir { id: (*id).clone(), name: (*name).clone(), path: path.to_path_buf(), file: data })
             }
-        };
-        let Some(known) = self.known.get(data.id()) else {
-            self.problem(file, format!("id {:?} is not an existing agent", data.id()), None);
-            return None;
-        };
-        if *known != name {
-            // 名字只认数据库：目录被手动改了名（或拷错了地方），不猜，整个不加载
-            let reason = format!(
-                "this is agent {known:?}'s directory (id {}) under another name; agents are renamed only in the app — \
-                 move it back to {known:?}",
-                data.id()
-            );
-            let id = data.id().to_owned();
-            self.problem(path.to_path_buf(), reason, Some(&id));
-            return None;
+            Err(e) => {
+                self.problem(file, e, Some(id));
+                None
+            }
         }
-        Some(AgentDir { name, path: path.to_path_buf(), file: data })
     }
 
     /// owner 目录里的每一项，按布局（[`place_of`]）认出是什么再读；配置文件另外读。
@@ -524,7 +504,7 @@ impl Reader<'_> {
                     return self.problem(path, "expected a file", Some(&id));
                 }
                 // 显示的名字是 agent 名
-                let name = self.known[&id].clone();
+                let name = self.known[&id].to_string();
                 if let Some(asset) = self.loaded(StoredKind::Memory, &name, path, owner) {
                     self.private.insert(id, asset);
                 }
@@ -634,11 +614,11 @@ impl Reader<'_> {
     }
 }
 
-/// 读整棵树。known 是数据库里的 agent（id → 名字，含正在删除的）：agent 目录按 agent.toml 的 id 对上它们；deleting 是
+/// 读整棵树。known 是数据库里的 agent（id → 名字，含正在删除的）：agent 目录按目录名对上它们；deleting 是
 /// 其中正在删除的。last 是上一份快照（本进程还没读过为 None）：access.toml 整个读不出来时沿用它的角色与规则。同步 IO。
 pub fn load_tree(
     root: &Path,
-    known: &BTreeMap<String, String>,
+    known: &BTreeMap<String, AgentName>,
     deleting: &BTreeSet<String>,
     memory_max_chars: usize,
     last: Option<&Snapshot>,
@@ -663,8 +643,8 @@ pub fn load_tree(
             r.problem(
                 root.join(name),
                 format!(
-                    "agent {name:?} ({agent_id}) has no directory with an {AGENT_FILE} carrying its id; it cannot run \
-                     until its directory is fixed"
+                    "agent {name:?} ({agent_id}) has no directory named {name:?}; it cannot run until its directory \
+                     is back"
                 ),
                 Some(agent_id),
             );
@@ -673,8 +653,8 @@ pub fn load_tree(
     let assets: BTreeMap<StoredKind, BTreeMap<String, Asset>> =
         StoredKind::ALL.into_iter().map(|k| (k, r.resolved(k))).collect();
     let path = root.join(PLATFORM).join(ACCESS_FILE);
-    let by_name: BTreeMap<String, String> = agents.values().map(|a| (a.name.clone(), a.id().to_owned())).collect();
-    let (access, access_text) = access_file::read(&path, &by_name, &tools);
+    let loaded: BTreeSet<String> = agents.keys().cloned().collect();
+    let (access, access_text) = access_file::read(&path, &loaded, &tools);
     let (roles, rules, consequence) = if access.readable {
         (access.roles, access.rules, "")
     } else if let Some(last) = last {

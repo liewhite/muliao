@@ -124,13 +124,13 @@ impl Runtime {
         origin_note: &str,
         summary: Option<&str>,
     ) -> Result<String, AssetError> {
-        let id = config.id();
+        let id = config.id.as_str();
         let memories = self.d.memory.for_run(id).await?;
         let skills = self.d.skills.index(id).await?;
         let workspace = self.d.agents.workspace(id);
         Ok(build_instructions(&InstructionParts {
             agent_id: id,
-            agent_name: &config.name,
+            agent_name: config.name.as_str(),
             agent_description: config.file.description(),
             workspace: &workspace,
             asset_dir: &config.path,
@@ -162,7 +162,7 @@ impl Runtime {
     /// 组装一次运行：按 agent 现在的规则开放内置工具，连上它的 MCP server（连不上的跳过，写进 notices），组装指令与模型。
     pub async fn start(&self, spec: RunSpec<'_>) -> Result<Run, StartError> {
         let config = spec.config;
-        let agent_id = config.id();
+        let agent_id = config.id.as_str();
         let model = self.d.models.resolve(config.file.model())?;
         let workspace = self.d.agents.workspace(agent_id);
         let mut notices = self.asset_problems(agent_id).await?;
@@ -221,8 +221,13 @@ impl Runtime {
             timestamp: Utc::now(),
             metadata: None,
         })];
-        let meter =
-            Meter::new(self.d.usage.clone(), config.id(), Some(session_id), config.file.model(), RunKind::Compaction);
+        let meter = Meter::new(
+            self.d.usage.clone(),
+            config.id.as_str(),
+            Some(session_id),
+            config.file.model(),
+            RunKind::Compaction,
+        );
         match agent.step(&(), &history, &HashMap::new(), &mut |_| {}).await? {
             Step::Responded(r) => {
                 meter.bill(r.usage).await;
