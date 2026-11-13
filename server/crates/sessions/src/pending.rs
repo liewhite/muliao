@@ -12,7 +12,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use agenter::{Content, Message, Resolution, ToolCall, ToolResult};
+use agenter::{Message, Resolution, ToolCall, ToolResult};
 
 use crate::answers::{CallResult, Question, Waiting, questions_of, skipped};
 use crate::conventions::{is_stopped, unanswered_calls};
@@ -31,6 +31,11 @@ impl Waiting {
     /// 没有挂起、也没有结果的调用可以原样重新执行（按调用 id 幂等，没有别的副作用），续跑时不补「被中断」。
     fn replayable(self) -> bool {
         self == Waiting::AskAgent
+    }
+
+    /// 用户停止时不补「已停止」，仍挂着等回答；它的回答总是一段普通结果（[`CallResult::resolution`]）。
+    fn kept_open_on_stop(self) -> bool {
+        self == Waiting::AskUser
     }
 }
 
@@ -241,17 +246,17 @@ pub fn closing_on_stop(at: &Position) -> StopClosing {
         Position::Paused(p) => {
             let mut closing = StopClosing { stopped: p.replays.clone(), ..Default::default() };
             for pc in &p.pending {
-                // 只有提问停止时仍挂着等回答；其余补「已停止」
-                if pc.kind != Waiting::AskUser {
+                if !pc.kind.kept_open_on_stop() {
                     closing.stopped.push(pc.call.clone());
                     continue;
                 }
-                let Some(CallResult::AskUser(answer)) = p.answers.get(&pc.call.id) else { continue };
+                let resolution = p.answers.get(&pc.call.id).map(CallResult::resolution);
+                let Some(Resolution::Result { content, is_error }) = resolution else { continue };
                 closing.answered.push(ToolResult {
                     call_id: pc.call.id.clone(),
                     tool_name: pc.call.name.clone(),
-                    content: vec![Content::text(answer.text())],
-                    is_error: false,
+                    content,
+                    is_error,
                     metadata: None,
                 });
             }
