@@ -48,7 +48,7 @@ use crate::live::{DeltaType, Live};
 use crate::mailbox::{Mail, consume_in, consumed_by_in, give_in, queued_in};
 use crate::origins::OriginNotes;
 use crate::pending::{Paused, PendingCall, Position, deferred_results, paused_calls};
-use crate::runs::{self, Outcome, RunKind};
+use crate::runs::{self, Outcome};
 use crate::settlement::{delegated_in, settle_finished_in};
 use crate::transcript::{call_item, result_item};
 use crate::work::position_in;
@@ -242,7 +242,7 @@ async fn begin(core: &Core, session_id: &str) -> Result<Begun> {
             });
             let run_id = match runs::unfinished_in(tx, &session_id)? {
                 Some(r) => r.id,
-                None => runs::start_in(tx, &live, &session_id, RunKind::Run)?,
+                None => runs::start_in(tx, &live, &session_id)?,
             };
             let queued = queued_in(tx, &session_id)?;
             // 信箱里已有的信交给这次运行，哪怕它在交给模型之前就最终失败：失败的结清据此了结它们带来的委派，也不会为它们再唤醒

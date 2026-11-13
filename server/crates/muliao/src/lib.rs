@@ -287,7 +287,7 @@ pub async fn assemble(settings: Settings, web_dir: PathBuf) -> anyhow::Result<Ap
 
 impl App {
     /// 对外服务之前：确保全局记忆在、报出残留的工作目录、接着删上次没删完的 agent、收掉上次没收尾的后台任务并起运行中
-    /// 检查、接着跑停在半路或有信没处理的会话（必须先于对外服务）、起触发器、起资源目录的监听。
+    /// 检查、接着跑停在半路或有信没处理的会话、起触发器、起资源目录的监听。
     pub async fn start(&self) -> anyhow::Result<()> {
         self.source.ensure_global_memory().await.context("the global memory")?;
         self.agents.report_leftovers().await.context("checking leftover workspaces")?;

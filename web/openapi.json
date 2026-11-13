@@ -7154,19 +7154,11 @@
         ],
         "description": "推给前端的一条（SSE 事件名 `run`）。"
       },
-      "RunKind": {
-        "type": "string",
-        "enum": [
-          "run",
-          "compaction"
-        ]
-      },
       "RunRecord": {
         "type": "object",
         "required": [
           "id",
           "session_id",
-          "kind",
           "started_at",
           "state"
         ],
@@ -7177,9 +7169,6 @@
           },
           "session_id": {
             "type": "string"
-          },
-          "kind": {
-            "$ref": "#/components/schemas/RunKind"
           },
           "started_at": {
             "type": "string",

@@ -2030,13 +2030,10 @@ export interface components {
             segment_id: string;
             seq: number;
         };
-        /** @enum {string} */
-        RunKind: "run" | "compaction";
         RunRecord: {
             /** Format: int64 */
             id: number;
             session_id: string;
-            kind: components["schemas"]["RunKind"];
             /** Format: date-time */
             started_at: string;
             state: components["schemas"]["RunState"];

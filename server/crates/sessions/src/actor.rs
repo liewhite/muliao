@@ -26,7 +26,7 @@ use crate::halt::{Halted, StopThread, halt};
 use crate::mailbox::Mail;
 use crate::pending::Position;
 use crate::run::{Core, PartialSlot, execute, unsaved_of};
-use crate::runs::{self, Outcome, RunKind, RunRecord};
+use crate::runs::{self, Outcome, RunRecord};
 use crate::settlement::settle_failure_in;
 use crate::work::CheckBeats;
 use crate::{directory, wakeups};
@@ -129,13 +129,8 @@ impl Actors {
         actors
     }
 
-    /// 服务启动时、对外服务之前调用一次：有没结束的运行（停在半路）或有排着的信的会话各叫醒一次，按唤醒规则接着跑；停在
-    /// 半路的手动压缩记为失败（之后才开始的压缩会被误记，所以必须先于对外服务）。
+    /// 服务启动时调用一次：有没结束的运行（停在半路）或有排着的信的会话各叫醒一次，按唤醒规则接着跑。
     pub async fn resume(&self) -> Result<usize> {
-        let abandoned = self.inner.core.db.write(|tx| runs::abandon_compactions_in(tx)).await?;
-        if abandoned > 0 {
-            tracing::warn!(compactions = abandoned, "manual compactions interrupted by a restart were dropped");
-        }
         let ids = self
             .inner
             .core
@@ -456,17 +451,17 @@ async fn reopen(core: &Core, id: &str) -> Result<()> {
         .await
 }
 
-/// 手动压缩（没在跑时）：记一条压缩的运行记录，失败也记在上面。
+/// 手动压缩（没在跑时）：结果（含失败）交回发起的用户，不另记运行记录。
 async fn compact(core: &Core, id: &str) -> Result<usize> {
-    let (session_id, live) = (id.to_owned(), core.live.clone());
-    let (run_id, agent_id) = core
+    let session_id = id.to_owned();
+    let agent_id = core
         .db
-        .write(move |tx| {
-            let session = directory::get_in(tx, &session_id)?
+        .read(move |c| {
+            let session = directory::get_in(c, &session_id)?
                 .ok_or_else(|| not_found(format!("session {session_id:?} not found")))?;
             // 正在删除的 agent 的会话不再新排工作（与来信同一条规则）
-            muliao_assets::agents::active_agent_in(tx, &session.agent_id)?;
-            Ok::<_, Error>((runs::start_in(tx, &live, &session_id, RunKind::Compaction)?, session.agent_id))
+            muliao_assets::agents::active_agent_in(c, &session.agent_id)?;
+            Ok::<_, Error>(session.agent_id)
         })
         .await?;
     let result = async {
@@ -474,13 +469,6 @@ async fn compact(core: &Core, id: &str) -> Result<usize> {
         core.compactor.compact(id, &config).await
     }
     .await;
-    let error = result.as_ref().err().map(|e| e.to_string());
-    let live = core.live.clone();
-    let ended =
-        core.db.write(move |tx| runs::end_in(tx, &live, run_id, error.map_or(Outcome::Done, Outcome::Failed))).await;
-    if let Err(e) = ended {
-        tracing::error!(session_id = id, error = %e, "recording a compaction failed");
-    }
     match &result {
         Ok(0) => tracing::info!(session_id = id, "nothing to compact beyond the kept steps"),
         Ok(n) => tracing::info!(session_id = id, steps = n, "session compacted by the user"),
