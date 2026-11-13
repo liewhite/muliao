@@ -1,6 +1,7 @@
 #!/bin/sh
 # 停服务 → （可选）在服务停着时执行一条命令（如恢复库备份）→ 再启动服务。用法：deploy/offline_restart.sh ['<停着时执行的命令>']
-# 立即返回；自己脱离到后台（见 lib.sh 的 detach，服务重启不会连带杀掉），日志追加到 $MULIAO_HOME/deploy.log。
+# 立即返回；自己脱离到后台（见 lib.sh 的 detach，服务重启不会连带杀掉），日志追加到 $MULIAO_HOME/deploy.log，
+# 最后一行是 OFFLINE_RESTART OK 或 OFFLINE_RESTART FAILED: <原因>。
 #
 # 用 lib.sh 的 hold_service / release（#706）：服务入口临时指向只会等待的 hold.sh，kickstart -k 让旧进程按关停流程退出，
 # launchd 拉起的只是 hold.sh；命令跑完再把入口指回程序，hold.sh 原地 exec 过去。
@@ -23,13 +24,22 @@ if ! hold_service; then
   # hold_service 先改入口再 kickstart：停不下来时把入口指回去，免得下次 launchd 拉起的是只会等待的 hold.sh
   release
   rm -rf "$(dirname "$0")"
-  die "service did not reach hold; entry pointed back, command not run"
+  die "OFFLINE_RESTART FAILED: service did not reach hold; entry pointed back, command not run"
 fi
 if [ -n "$CMD" ]; then
   sh -c "$CMD"
-  say "command rc=$?: $CMD"
+  rc=$?
+  say "command rc=$rc: $CMD"
+else
+  rc=0
 fi
 from=$(log_size)
-release || die "release failed: service stays on hold.sh; point $ENTRY back to $APP/current/muliao by hand"
-wait_healthy "$from" || say "WARNING: not healthy after restart (see above)"
+release || die "OFFLINE_RESTART FAILED: release failed, service stays on hold.sh; point $ENTRY back to $APP/current/muliao by hand"
+if ! wait_healthy "$from"; then
+  say "OFFLINE_RESTART FAILED: not healthy after restart (see above)"
+elif [ $rc -ne 0 ]; then
+  say "OFFLINE_RESTART FAILED: command exited $rc (service is back up)"
+else
+  say "OFFLINE_RESTART OK"
+fi
 rm -rf "$(dirname "$0")"
