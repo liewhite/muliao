@@ -48,8 +48,10 @@ pub(crate) async fn halt(
     unsaved: Option<Unsaved>,
     stop_thread: StopThread,
 ) -> Result<Halted> {
-    let (run_id, mut messages) = unsaved.map_or((None, Vec::new()), |u| (Some(u.run_id), u.messages));
-    core.redaction.messages(&mut messages);
+    let mut unsaved = unsaved;
+    if let Some(u) = &mut unsaved {
+        core.redaction.messages(&mut u.messages);
+    }
     let (session_id, waker, events, live) =
         (session_id.to_owned(), core.waker.clone(), core.events.clone(), core.live.clone());
     core.db
@@ -58,10 +60,10 @@ pub(crate) async fn halt(
                 tracing::info!(session_id, "stopping a deleted session: nothing to do");
                 return Ok(Halted::Gone);
             };
-            if let (Some(run_id), false) = (run_id, messages.is_empty()) {
-                history::append_in(tx, &session_id, run_id, &messages)?;
+            if let Some(u) = unsaved.as_ref().filter(|u| !u.messages.is_empty()) {
+                history::append_in(tx, &session_id, u.run_id, &u.messages)?;
             }
-            close_history_in(tx, &session_id, run_id)?;
+            close_history_in(tx, &session_id, unsaved.as_ref().map(|u| u.run_id))?;
             let stopped_runs = runs::stop_unfinished_in(tx, &live, &session_id)?;
             // 没在跑的会话（在等后台任务、委派、唤醒）没有运行记录可改，可停止照样改了它看得见的内容（补上的结果、清掉的
             // 等待项、丢弃的信）：看着它的页面也要重拉

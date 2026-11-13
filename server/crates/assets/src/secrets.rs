@@ -14,7 +14,8 @@ use muliao_platform::vault::Vault;
 
 use crate::access::{Actor, grants_for, usable, writable};
 use crate::error::{Result, invalid, not_found};
-use crate::formats::secret::{Resolved, SecretFile, refs, render, validate_key};
+use crate::formats::mcp::McpConfig;
+use crate::formats::secret::{SecretFile, fill, refs, render, validate_key};
 use crate::kinds::StoredKind;
 use crate::source::AssetSource;
 use crate::tree::{Asset, Owner};
@@ -82,15 +83,16 @@ impl Secrets {
         Ok(info(self.source.snapshot().await?.asset(StoredKind::Secret, key)?))
     }
 
-    /// 这批模板（如 MCP 配置里的值）引用的 secret，按 user 能用的取明文，用来代入同一批模板。
-    pub async fn resolve_refs(&self, user: &Actor, templates: &[&str], shell: bool) -> Result<Resolved> {
+    /// MCP 配置里的 `${vault:KEY}` 按 user 能用的 secret 代入（不交给 agent 自己的命令）：代入好的配置与用到的明文（脱敏用）。
+    pub async fn fill_mcp(&self, user: &Actor, config: &McpConfig) -> Result<(McpConfig, BTreeMap<String, String>)> {
         let mut keys: Vec<String> = Vec::new();
-        for k in templates.iter().flat_map(|t| refs(t)) {
+        for k in config.templates().into_iter().flat_map(refs) {
             if !keys.iter().any(|x| x == k) {
                 keys.push(k.to_owned());
             }
         }
-        Ok(Resolved::new(self.resolve(user, &keys, shell).await?))
+        let values = self.resolve(user, &keys, false).await?;
+        Ok((config.map_templates(|t| fill(t, &values)), values))
     }
 
     /// 取 user 能用的 secret 的明文；任一 key 不能用或解不开即报错。shell：明文要交给 agent 自己写的命令，这时 allow_shell

@@ -335,8 +335,12 @@ impl AccessEdit {
     /// 把 apply 写下的改回 before（调用方后面的步骤失败时用，仍在同一次写资源目录的锁里）。文件不是 after（没 apply
     /// 过、已改回、apply 时发现被别处改过）时不动它。
     pub fn revert(&self) -> Result<()> {
-        if Expect::text(Some(&self.after)).check(&self.path).is_err() {
-            return Ok(());
+        match Expect::text(Some(&self.after)).check(&self.path) {
+            Ok(()) => {}
+            Err(crate::error::Error::Domain(e)) if e.kind == muliao_platform::errors::ErrorKind::Conflict => {
+                return Ok(());
+            }
+            Err(e) => return Err(e),
         }
         match &self.before {
             None => std::fs::remove_file(&self.path)?,

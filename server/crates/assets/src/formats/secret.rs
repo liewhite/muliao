@@ -61,34 +61,18 @@ pub fn refs(template: &str) -> Vec<&str> {
     ref_spans(template).into_iter().map(|(_, _, k)| k).collect()
 }
 
-/// 一批模板引用的 secret 的明文（只能由 [`crate::secrets::Secrets::resolve_refs`] 按这批模板取得），用来代入同一批模板。
-pub struct Resolved {
-    values: BTreeMap<String, String>,
-}
-
-impl Resolved {
-    pub(crate) fn new(values: BTreeMap<String, String>) -> Self {
-        Self { values }
+/// 把模板里的 `${vault:KEY}` 换成 values 里的明文；values 是按这个模板的 [`refs`] 取得的（[`crate::secrets::Secrets::fill`]），
+/// 所以引用都在其中。
+pub(crate) fn fill(template: &str, values: &BTreeMap<String, String>) -> String {
+    let mut out = String::with_capacity(template.len());
+    let mut last = 0;
+    for (start, end, key) in ref_spans(template) {
+        out.push_str(&template[last..start]);
+        out.push_str(&values[key]);
+        last = end;
     }
-
-    /// 把模板里的 `${vault:KEY}` 换成明文。
-    pub fn fill(&self, template: &str) -> String {
-        let mut out = String::with_capacity(template.len());
-        let mut last = 0;
-        for (start, end, key) in ref_spans(template) {
-            out.push_str(&template[last..start]);
-            // 取得时按同一批模板的引用全部解析过；别的模板里多出的引用原样留下
-            out.push_str(self.values.get(key).map_or(&template[start..end], String::as_str));
-            last = end;
-        }
-        out.push_str(&template[last..]);
-        out
-    }
-
-    /// key → 明文（脱敏用）。
-    pub fn into_values(self) -> BTreeMap<String, String> {
-        self.values
-    }
+    out.push_str(&template[last..]);
+    out
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -175,7 +159,7 @@ mod tests {
         let t = "a ${vault:K1} b ${vault:bad-key} ${vault:_x}${vault:";
         assert_eq!(refs(t), vec!["K1", "_x"]);
         let values = BTreeMap::from([("K1".to_owned(), "v1".to_owned()), ("_x".to_owned(), "v2".to_owned())]);
-        assert_eq!(Resolved::new(values).fill(t), "a v1 b ${vault:bad-key} v2${vault:");
+        assert_eq!(fill(t, &values), "a v1 b ${vault:bad-key} v2${vault:");
     }
 
     #[test]

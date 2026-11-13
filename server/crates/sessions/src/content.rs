@@ -11,6 +11,7 @@ use crate::answers::CallResult;
 use crate::conventions::{PartKind, PartMark, format_event, mark_parts, set_part_marks};
 use crate::error::{Result, broken};
 use crate::mailbox::{Mail, MailBody};
+use crate::origins::Origin;
 
 /// 一批信件的内容段，以及各段是什么（part 从 0 起，在这批内容里；迟到的回答不记）。
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -31,7 +32,10 @@ pub async fn content_of(files: &FileStore, workspace: &Path, mail: &[Mail]) -> R
     let mut c = Content::default();
     for m in mail {
         match &m.body {
-            MailBody::Answer { answers, .. } => {
+            MailBody::Answer { answers, from_user } => {
+                if *from_user {
+                    c.marks.push(PartMark { part: c.parts.len(), kind: PartKind::Message { origin: Origin::User } });
+                }
                 let results: Vec<CallResult> = answers.values().cloned().collect();
                 c.parts.push(RequestPart::Text { text: CallResult::late_text(&results) });
             }

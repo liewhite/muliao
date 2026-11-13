@@ -64,15 +64,13 @@ impl McpConnector {
         user: &Actor,
         cwd: Option<&Path>,
     ) -> Result<(Server, BTreeMap<String, String>), BuildError> {
-        let c = &server.config;
-        let secrets = self.secrets.resolve_refs(user, &c.templates(), false).await.map_err(|e| match e.domain() {
+        let (filled, secrets) = self.secrets.fill_mcp(user, &server.config).await.map_err(|e| match e.domain() {
             Some(d) => BuildError::Skip(format!("MCP server {:?}: {d}", server.name)),
             None => BuildError::System(Box::new(e)),
         })?;
-        let transport = match c {
+        let transport = match filled {
             McpConfig::Stdio { command, args, env } => {
-                let mut argv: Vec<String> =
-                    std::iter::once(command.to_owned()).chain(args.iter().map(|a| secrets.fill(a))).collect();
+                let mut argv: Vec<String> = std::iter::once(command).chain(args).collect();
                 let confined_as = match user {
                     Actor::Agent(id) => Some(id.clone()),
                     Actor::User => server.owner.agent().map(str::to_owned),
@@ -84,16 +82,13 @@ impl McpConnector {
                 Transport::Stdio {
                     command: argv.next().expect("argv has the command"),
                     args: argv.collect(),
-                    env: env.iter().map(|(k, v)| (k.clone(), secrets.fill(v))).collect(),
+                    env: env.into_iter().collect(),
                     cwd: cwd.map(Path::to_path_buf),
                 }
             }
-            McpConfig::Http { url, headers } => Transport::Http {
-                url: secrets.fill(url),
-                headers: headers.iter().map(|(k, v)| (k.clone(), secrets.fill(v))).collect(),
-            },
+            McpConfig::Http { url, headers } => Transport::Http { url, headers: headers.into_iter().collect() },
         };
-        Ok((Server { name: server.name.clone(), transport }, secrets.into_values()))
+        Ok((Server { name: server.name.clone(), transport }, secrets))
     }
 
     async fn connect_one(

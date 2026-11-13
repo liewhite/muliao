@@ -66,6 +66,17 @@ impl McpConfig {
         }
     }
 
+    /// 可以含 `${vault:KEY}` 的值各换成 f 给出的（代入 secret）。
+    pub fn map_templates(&self, f: impl Fn(&str) -> String) -> Self {
+        let map = |m: &BTreeMap<String, String>| m.iter().map(|(k, v)| (k.clone(), f(v))).collect();
+        match self {
+            McpConfig::Stdio { command, args, env } => {
+                McpConfig::Stdio { command: command.clone(), args: args.iter().map(|a| f(a)).collect(), env: map(env) }
+            }
+            McpConfig::Http { url, headers } => McpConfig::Http { url: f(url), headers: map(headers) },
+        }
+    }
+
     /// 可以含 `${vault:KEY}` 的值（args、env、url、headers）。
     pub fn templates(&self) -> Vec<&str> {
         match self {

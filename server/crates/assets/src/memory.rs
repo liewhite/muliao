@@ -36,17 +36,17 @@ pub struct MemoryInfo {
     pub version: String,
 }
 
-fn info(a: &Asset) -> MemoryInfo {
-    let text = a.content.memory().text.clone();
-    MemoryInfo {
+/// 界面编辑用：正文与版本出自同一次读文件（正文去掉首尾空白，同读树；版本按文件原样算，写回时据此核对）。
+fn info(a: &Asset) -> Result<MemoryInfo> {
+    let raw = crate::formats::read(&a.path).map_err(crate::error::conflict)?;
+    Ok(MemoryInfo {
         name: a.name.clone(),
         owner: a.owner.clone(),
-        // 文件此刻的版本（正文是规整过空白的，版本按文件原样算）；读不出时给空串：写回时按「被改过」拒绝
-        version: crate::formats::read(&a.path).map(|t| version_of(&t)).unwrap_or_default(),
-        content: text,
+        version: version_of(&raw),
+        content: raw.trim().to_owned(),
         updated_at: a.updated_at,
         path: a.path.clone(),
-    }
+    })
 }
 
 pub struct MemoryStore {
@@ -65,13 +65,13 @@ impl MemoryStore {
 
     /// 平台的一块记忆（全局或共享）。
     pub async fn read(&self, name: &str) -> Result<MemoryInfo> {
-        Ok(info(self.source.snapshot().await?.asset(StoredKind::Memory, name)?))
+        info(self.source.snapshot().await?.asset(StoredKind::Memory, name)?)
     }
 
     pub async fn read_private(&self, agent_id: &str) -> Result<MemoryInfo> {
         let snapshot = self.source.snapshot().await?;
         match snapshot.private_memory(agent_id) {
-            Some(a) => Ok(info(a)),
+            Some(a) => info(a),
             None => Err(not_found(format!(
                 "{} has no private memory",
                 snapshot.owner_label(&Owner::Agent(agent_id.to_owned()))

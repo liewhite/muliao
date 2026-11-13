@@ -88,7 +88,7 @@ pub(crate) struct Partial {
 pub(crate) type SharedPartial = Arc<Mutex<Partial>>;
 
 /// 一次尝试的已产生部分的登记处（actor 停止时从这里取）：开头的事务建好运行记录才登记，没登记的尝试没有要保存的。
-pub(crate) type PartialSlot = Arc<Mutex<Option<SharedPartial>>>;
+pub(crate) type PartialSlot = Arc<std::sync::OnceLock<SharedPartial>>;
 
 /// 被停止时这次运行已产生、还没保存的部分（存储形态）：记在哪次运行名下、哪些消息。
 pub(crate) struct Unsaved {
@@ -200,7 +200,7 @@ pub(crate) async fn execute(core: &Core, session_id: &str, slot: &PartialSlot) -
         finished_at: HashMap::new(),
         run: None,
     }));
-    *slot.lock().expect("partial slot lock") = Some(partial.clone());
+    slot.set(partial.clone()).unwrap_or_else(|_| unreachable!("each attempt has its own slot"));
     let opening = opening(core, &begun).await?;
     let resend = matches!(begun.at, Position::Resend { .. });
     if opening.is_none() && !resend {
@@ -814,7 +814,7 @@ enum Clear {
 
 /// 被停止时这次尝试已产生、还没保存的部分（存储形态），由停止事务保存在最前面；还没建好运行记录的尝试没有。
 pub(crate) async fn unsaved_of(slot: &PartialSlot) -> Result<Option<Unsaved>> {
-    let Some(partial) = slot.lock().expect("partial slot lock").clone() else { return Ok(None) };
+    let Some(partial) = slot.get().cloned() else { return Ok(None) };
     let (run_id, streaming, finished, finished_at, run) = {
         let mut p = partial.lock().expect("partial lock");
         (

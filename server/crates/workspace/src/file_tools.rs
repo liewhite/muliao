@@ -780,7 +780,7 @@ impl Tool<RunScope> for EditFile {
         let in_tree: Vec<(PathBuf, String, Expect)> = changed
             .iter()
             .filter(|t| deps.assets.contains(t))
-            .map(|t| (t.clone(), stored[t].clone(), stamps[t].map_or(Expect::Any, Expect::Modified)))
+            .map(|t| (t.clone(), stored[t].clone(), stamps[t].map_or(Expect::Absent, Expect::Modified)))
             .collect();
 
         // 资源目录里的先经写入口：全部校验通过才写（原子写入，记忆规整空白），回显按实际存下的

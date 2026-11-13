@@ -793,7 +793,7 @@ impl Expect {
                 path.display()
             ))),
             Expect::Version(v) => {
-                let now = crate::formats::read(path).map_err(conflict)?;
+                let now = crate::formats::read(path).map_err(std::io::Error::other)?;
                 if version_of(&now) == *v { Ok(()) } else { Err(changed()) }
             }
             Expect::Modified(at) => {

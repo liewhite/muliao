@@ -506,7 +506,7 @@ impl TriggerService {
                     let detail = format!("trigger {trigger_id} not found");
                     return Ok::<_, Error>(First::Done(Outcome::Skipped(Skip::Deleted, detail)));
                 };
-                // 停用、归档的 agent 不跑前置检查、不触发；检查结束后投信前再查一次（检查期间可能被归档）
+                // 停用、收不了信的 agent 不跑前置检查、不触发；检查期间被归档的，投信时由收信入口拒绝
                 if let Some(outcome) = skip_in(tx, &t)? {
                     return Ok(First::Done(outcome));
                 }
