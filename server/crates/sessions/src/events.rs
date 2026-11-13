@@ -9,6 +9,7 @@ use std::sync::{Arc, OnceLock};
 use muliao_platform::db::Tx;
 
 use crate::answers::Waiting;
+use crate::holds::HoldOf;
 use crate::origins::SessionOrigin;
 
 /// 一次运行结束了（完成、停在挂起的调用上、被停止）；没有可交给模型的空闲收尾不发。只带事实。
@@ -41,11 +42,11 @@ pub struct RunFailed {
     pub error: String,
 }
 
-/// 会话被停止：cleared 是被清掉的外部工作的占用者（如 job:12，它在外面的工作被放弃；委派由会话领域自己停）。
+/// 会话被停止：cleared 是被清掉的占用（如后台任务，它在外面的工作被放弃；委派由会话领域自己停）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionStopped {
     pub session_id: String,
-    pub cleared: Vec<String>,
+    pub cleared: Vec<HoldOf>,
 }
 
 /// 会话被删除：引用它的数据由各领域清理。

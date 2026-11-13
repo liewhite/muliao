@@ -25,11 +25,11 @@ use crate::answers::{AgentAnswer, CallResult};
 use crate::directory::{self, Session};
 use crate::error::{Result, broken, invalid};
 use crate::history::latest_answers_among;
-use crate::holds::hold_delegation_in;
+use crate::holds::{HoldOf, hold_in};
 use crate::inbound::{Inbound, Party, Spec, create_session_in, receive_in};
 use crate::runs::{RunRecord, latest_among};
 use crate::thread_calls::{Owed, call_in, owed_in, record_call_in};
-use crate::work::{CheckBeats, deliver_in, post_check_in, thread_source};
+use crate::work::{CheckBeats, Source, deliver_in, post_check_in};
 
 pub const THREAD_MAX: usize = 100;
 
@@ -99,7 +99,8 @@ pub(crate) fn send_in(
         Mode::Plain => Inbound::delegated(parent_id, &child.id, prompt, true, None),
         Mode::ReportBack { awaited, .. } | Mode::Ask { awaited } => {
             let suspends = matches!(mode, Mode::Ask { .. });
-            hold_delegation_in(tx, parent_id, call.id, suspends.then_some(call_id), awaited)?;
+            let of = HoldOf::Delegation { row: Some(call.id), call_id: suspends.then(|| call_id.to_owned()) };
+            hold_in(tx, parent_id, of, awaited)?;
             tracing::info!(session_id = parent_id, thread_session_id = %child.id, delegation = call.id, call_id,
                 "delegation dispatched");
             // 没有人等 thread 的回答：结局交回发起方，由它处理
@@ -156,7 +157,7 @@ pub(crate) fn hand_back_in(
             tx,
             waker,
             Some(&o.hold),
-            &thread_source(&child.id),
+            &Source::Thread(child.id.clone()),
             &event_text(name, &agent.name, ending, text),
             Some(answer),
         )?;
@@ -204,7 +205,7 @@ pub(crate) async fn check_threads(db: &Database, waker: &Waker, beats: &Arc<Mute
     db.write(move |tx| {
         let now = Utc::now();
         let reporting: Vec<(Owed, f64)> =
-            owed_in(tx, None)?.into_iter().filter_map(|o| o.delegation.check_seconds.map(|s| (o, s))).collect();
+            owed_in(tx, None, None)?.into_iter().filter_map(|o| o.delegation.check_seconds.map(|s| (o, s))).collect();
         let mut beats = beats.lock().expect("beats lock");
         beats.keep(&reporting.iter().map(|(o, _)| o.delegation.id).collect::<BTreeSet<_>>());
         // (发起会话, thread) -> 到期的委派与它的间隔：同一个发起方对同一个 thread 的几项委派同时到期，检查一次
@@ -228,7 +229,7 @@ pub(crate) async fn check_threads(db: &Database, waker: &Waker, beats: &Arc<Mute
             })?;
             let agent = agent_in(tx, &child.agent_id)?;
             let text = check_text(child, &agent, states[child_id], runs.get(child_id), now, *interval);
-            if post_check_in(tx, &waker, Some(&o.hold), &thread_source(child_id), &text)? {
+            if post_check_in(tx, &waker, Some(&o.hold), &Source::Thread(child_id.clone()), &text)? {
                 posted += 1;
             }
         }

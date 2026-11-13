@@ -8,8 +8,8 @@ use std::collections::BTreeMap;
 
 use rusqlite::{Connection, Row, params};
 
-use crate::error::{Result, broken};
-use crate::holds::{Hold, active_delegations_in};
+use crate::error::Result;
+use crate::holds::{COLUMN_COUNT, COLUMNS as HOLD_COLUMNS, Hold, from_row, hold};
 use crate::mailbox::placeholders;
 
 /// 一次开出或续写 thread 的调用；发起方有引用它的占用时就是一项委派。
@@ -83,20 +83,39 @@ pub fn delegations_among(c: &Connection, ids: &[i64]) -> Result<BTreeMap<i64, Ca
     Ok(query(c, &filter, rusqlite::params_from_iter(ids))?.into_iter().map(|r| (r.id, r)).collect())
 }
 
-/// 还没结清的委派（发起方引用它的占用还 active），按占用登记先后；给了 ids 只看这些委派。
-pub fn owed_in(c: &Connection, ids: Option<&[i64]>) -> Result<Vec<Owed>> {
-    let holds = active_delegations_in(c, ids)?;
-    let wanted: Vec<i64> = holds.iter().filter_map(|h| h.thread_call_id).collect();
-    let rows = delegations_among(c, &wanted)?;
-    holds
-        .into_iter()
-        .map(|hold| {
-            let id = hold.thread_call_id.expect("delegation holds reference their row");
-            let delegation = rows
-                .get(&id)
-                .cloned()
-                .ok_or_else(|| broken(format!("active hold {} points to a missing delegation {id}", hold.id)))?;
-            Ok(Owed { delegation, hold })
-        })
-        .collect()
+/// 还没结清的委派（发起方引用它的占用还 active），按占用登记先后；给了 ids 只看这些委派；session_id：只看这个会话发起的。
+pub fn owed_in(c: &Connection, ids: Option<&[i64]>, session_id: Option<&str>) -> Result<Vec<Owed>> {
+    let mut filter = vec!["h.status = 'active'".to_owned()];
+    let mut values: Vec<&dyn rusqlite::ToSql> = Vec::new();
+    match ids {
+        None => {}
+        Some([]) => return Ok(Vec::new()),
+        Some(ids) => {
+            filter.push(format!("t.id IN ({})", placeholders(ids.len())));
+            values.extend(ids.iter().map(|i| i as &dyn rusqlite::ToSql));
+        }
+    }
+    if let Some(s) = &session_id {
+        filter.push(format!("h.session_id = ?{}", values.len() + 1));
+        values.push(s);
+    }
+    let sql = format!(
+        "SELECT {HOLD_COLUMNS}, t.id, t.parent_session_id, t.call_id, t.thread_session_id, t.check_seconds \
+         FROM session_holds h JOIN thread_calls t ON t.id = h.thread_call_id WHERE {} ORDER BY h.id",
+        filter.join(" AND ")
+    );
+    let mut stmt = c.prepare(&sql)?;
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(values), |r| {
+            let delegation = CallRecord {
+                id: r.get(COLUMN_COUNT)?,
+                parent_id: r.get(COLUMN_COUNT + 1)?,
+                call_id: r.get(COLUMN_COUNT + 2)?,
+                thread_id: r.get(COLUMN_COUNT + 3)?,
+                check_seconds: r.get(COLUMN_COUNT + 4)?,
+            };
+            Ok((from_row(r)?, delegation))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    rows.into_iter().map(|(raw, delegation)| Ok(Owed { hold: hold(raw)?, delegation })).collect()
 }

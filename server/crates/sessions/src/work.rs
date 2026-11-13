@@ -14,7 +14,7 @@ use crate::answers::CallResult;
 use crate::directory;
 use crate::error::{Result, broken};
 use crate::history::since_last_response;
-use crate::holds::{self, Hold, HoldStatus};
+use crate::holds::{self, Hold, HoldOf, HoldStatus};
 use crate::mailbox::{NewMail, has_queued_from, post_in, queued_in};
 use crate::pending::{HandedOut, Position, position};
 
@@ -57,12 +57,12 @@ pub fn deliver_in(
     tx: &mut Tx<'_>,
     waker: &Waker,
     hold: Option<&Hold>,
-    source: &str,
+    source: &Source,
     event_text: &str,
     answer: Option<CallResult>,
 ) -> Result<Delivered> {
     let Some(hold) = hold else {
-        tracing::info!(source, "outcome for a deleted session dropped");
+        tracing::info!(source = %source.raw(), "outcome for a deleted session dropped");
         return Ok(Delivered::Gone);
     };
     let session_id = hold.session_id.as_str();
@@ -77,14 +77,14 @@ pub fn deliver_in(
         HoldStatus::Active => {}
     }
     let at = position_in(tx, session_id)?;
-    let waiting_on_it = hold.call_id.as_deref().is_some_and(|c| at.paused().is_some_and(|p| p.get(c).is_some()));
-    let delivered = match (answer, &hold.call_id) {
+    let waiting_on_it = hold.call_id().is_some_and(|c| at.paused().is_some_and(|p| p.get(c).is_some()));
+    let delivered = match (answer, hold.call_id()) {
         (Some(answer), Some(call_id)) if waiting_on_it => {
             post_in(
                 tx,
                 waker,
                 session_id,
-                NewMail::answer(BTreeMap::from([(call_id.clone(), answer)]), false, hold.awaited),
+                NewMail::answer(BTreeMap::from([(call_id.to_owned(), answer)]), false, hold.awaited),
             )?;
             Delivered::Answer
         }
@@ -99,37 +99,43 @@ pub fn deliver_in(
 
 /// 运行中检查：给这项工作的会话投一封检查信件（不推送）。这个来源已有信件排着时不投（不堆积）；占用已不是 active 或会话
 /// 已删除时也不投。返回是否投了。
-pub fn post_check_in(tx: &mut Tx<'_>, waker: &Waker, hold: Option<&Hold>, source: &str, text: &str) -> Result<bool> {
+pub fn post_check_in(tx: &mut Tx<'_>, waker: &Waker, hold: Option<&Hold>, source: &Source, text: &str) -> Result<bool> {
     let Some(hold) = hold.filter(|h| h.status == HoldStatus::Active) else { return Ok(false) };
-    if has_queued_from(tx, &hold.session_id, source)? {
+    if has_queued_from(tx, &hold.session_id, &source.raw())? {
         return Ok(false);
     }
     post_in(tx, waker, &hold.session_id, NewMail::event(source, text, true, false))?;
     Ok(true)
 }
 
-/// 外部工作在会话上的占用（交回结局与运行中检查用）：会话已删除时 None；会话还在而占用从未登记过是 bug。
-pub fn hold_of_in(c: &Connection, session_id: &str, holder: &str) -> Result<Option<Hold>> {
-    let hold = holds::get_in(c, session_id, holder)?;
+/// 后台任务或到点唤醒在会话上的占用（交回结局与运行中检查用）：会话已删除时 None；会话还在而占用从未登记过是 bug。
+pub fn hold_of_in(c: &Connection, session_id: &str, of: &HoldOf) -> Result<Option<Hold>> {
+    let hold = holds::get_in(c, session_id, of)?;
     if hold.is_none() && directory::get_in(c, session_id)?.is_some() {
-        return Err(broken(format!("session {session_id} has no hold {holder}")));
+        return Err(broken(format!("session {session_id} has no hold {of:?}")));
     }
     Ok(hold)
 }
 
-/// 后台任务在会话上的占用者，也是它投进会话的事件的来源。
-pub fn job_holder(job_id: i64) -> String {
-    format!("job:{job_id}")
+/// 事件信件的来源：交给模型时套在事件外面，界面据此显示（[`EventSource`]）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Source {
+    /// 后台任务
+    Job(i64),
+    /// thread（会话 id）
+    Thread(String),
+    /// 到点唤醒
+    Wake,
 }
 
-/// 占用者是后台任务时的任务号（[`job_holder`] 的逆运算）。
-pub fn job_id_of_holder(holder: &str) -> Option<i64> {
-    holder.strip_prefix("job:").filter(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))?.parse().ok()
-}
-
-/// thread 交回的事件的来源。
-pub fn thread_source(child_id: &str) -> String {
-    format!("thread:{child_id}")
+impl Source {
+    pub fn raw(&self) -> String {
+        match self {
+            Source::Job(id) => format!("job:{id}"),
+            Source::Thread(id) => format!("thread:{id}"),
+            Source::Wake => crate::wakeups::WAKE_ME.to_owned(),
+        }
+    }
 }
 
 /// 事件来源解析成的种类（界面用，不自己解析字符串）。
@@ -154,7 +160,8 @@ pub fn parse_source(raw: &str) -> EventSource {
     if let Some(id) = raw.strip_prefix("thread:").filter(|s| !s.is_empty()) {
         return EventSource::Thread { raw: raw.to_owned(), session_id: id.to_owned() };
     }
-    if let Some(job_id) = job_id_of_holder(raw) {
+    let job_id = raw.strip_prefix("job:").filter(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()));
+    if let Some(job_id) = job_id.and_then(|s| s.parse().ok()) {
         return EventSource::Job { raw: raw.to_owned(), job_id };
     }
     EventSource::Other { raw: raw.to_owned() }
@@ -171,30 +178,31 @@ impl SessionWork {
         Self { waker }
     }
 
-    /// 登记一项进行中的工作：会话据此知道工作还没做完。awaited：用户是否在等它的结局。
-    pub fn hold_in(&self, tx: &mut Tx<'_>, session_id: &str, holder: &str, awaited: bool) -> Result<()> {
-        holds::hold_in(tx, session_id, holder, awaited)?;
+    /// 登记一项进行中的后台任务：会话据此知道工作还没做完。awaited：用户是否在等它的结局。
+    pub fn hold_in(&self, tx: &mut Tx<'_>, session_id: &str, job_id: i64, awaited: bool) -> Result<()> {
+        holds::hold_in(tx, session_id, HoldOf::Job { job_id }, awaited)?;
         Ok(())
     }
 
     /// 这项工作没开始就放弃了：清掉占用，不交回结局。只在发起它的那次运行里调用（停止排在运行退出之后、删除拒绝忙会话），
     /// 所以占用一定还 active。
-    pub fn abandoned_in(&self, tx: &mut Tx<'_>, session_id: &str, holder: &str) -> Result<()> {
-        let hold = hold_of_in(tx, session_id, holder)?
-            .ok_or_else(|| broken(format!("session {session_id} was deleted while its run was starting {holder}")))?;
+    pub fn abandoned_in(&self, tx: &mut Tx<'_>, session_id: &str, job_id: i64) -> Result<()> {
+        let hold = hold_of_in(tx, session_id, &HoldOf::Job { job_id })?.ok_or_else(|| {
+            broken(format!("session {session_id} was deleted while its run was starting job {job_id}"))
+        })?;
         holds::abandon_in(tx, &hold)
     }
 
-    /// 这项工作结束了：往会话的信箱投一封事件信件（来源是占用者），同时释放占用。
-    pub fn ended_in(&self, tx: &mut Tx<'_>, session_id: &str, holder: &str, text: &str) -> Result<Delivered> {
-        let hold = hold_of_in(tx, session_id, holder)?;
-        deliver_in(tx, &self.waker, hold.as_ref(), holder, text, None)
+    /// 后台任务结束了：往会话的信箱投一封事件信件，同时释放占用。
+    pub fn ended_in(&self, tx: &mut Tx<'_>, session_id: &str, job_id: i64, text: &str) -> Result<Delivered> {
+        let hold = hold_of_in(tx, session_id, &HoldOf::Job { job_id })?;
+        deliver_in(tx, &self.waker, hold.as_ref(), &Source::Job(job_id), text, None)
     }
 
-    /// 这项工作还在进行：给会话投一封检查信件。
-    pub fn checked_in(&self, tx: &mut Tx<'_>, session_id: &str, holder: &str, text: &str) -> Result<bool> {
-        let hold = hold_of_in(tx, session_id, holder)?;
-        post_check_in(tx, &self.waker, hold.as_ref(), holder, text)
+    /// 后台任务还在进行：给会话投一封检查信件。
+    pub fn checked_in(&self, tx: &mut Tx<'_>, session_id: &str, job_id: i64, text: &str) -> Result<bool> {
+        let hold = hold_of_in(tx, session_id, &HoldOf::Job { job_id })?;
+        post_check_in(tx, &self.waker, hold.as_ref(), &Source::Job(job_id), text)
     }
 }
 

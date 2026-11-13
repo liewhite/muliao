@@ -28,7 +28,7 @@ fn owed_by(c: &Connection, mail: &[Mail]) -> Result<Vec<Owed>> {
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
-    owed_in(c, Some(&ids))
+    owed_in(c, Some(&ids), None)
 }
 
 /// 会话有委派来、还没结清的工作（排着的或已交给模型的委派信件，发起方的占用还 active）：回答交给谁据此定。

@@ -121,7 +121,7 @@ impl SessionService {
                 let items =
                     ids.into_iter().zip(items).map(|(message_id, item)| SavedItem { message_id, item }).collect();
                 let run = runs::latest_in(c, &id)?.filter(|r| r.unfinished() || r.failure().is_some());
-                let waits = waits_of_in(c, &status.waiting)?;
+                let waits = waits_of_in(c, &id, &status.waiting)?;
                 Ok::<_, Error>(SessionView {
                     items,
                     compactions,

@@ -202,7 +202,13 @@ impl World {
     async fn waiting(&self, session_id: &str) {
         self.idle(session_id).await;
         let sid = session_id.to_owned();
-        self.db.write(move |tx| muliao_sessions::holds::hold_in(tx, &sid, "job:1", false).map(drop)).await.unwrap();
+        self.db
+            .write(move |tx| {
+                muliao_sessions::holds::hold_in(tx, &sid, muliao_sessions::holds::HoldOf::Job { job_id: 1 }, false)
+                    .map(drop)
+            })
+            .await
+            .unwrap();
     }
 
     async fn notifications(&self) -> Vec<(String, Option<String>)> {

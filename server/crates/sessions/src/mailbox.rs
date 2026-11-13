@@ -16,6 +16,7 @@ use crate::actor::Waker;
 use crate::answers::CallResult;
 use crate::error::{Result, broken, not_found};
 use crate::origins::Origin;
+use crate::work::Source;
 use muliao_platform::db::Tx;
 
 /// 信件的种类与它自己的内容。
@@ -131,13 +132,8 @@ impl NewMail {
     }
 
     /// 事件（后台任务、交回的结果、到点唤醒）；check_in：运行中检查。
-    pub fn event(source: impl Into<String>, content: impl Into<String>, check_in: bool, awaited: bool) -> Self {
-        let source = source.into();
-        assert!(
-            !source.is_empty() && source.chars().count() <= SOURCE_MAX && !source.contains('"'),
-            "event source must be 1-{SOURCE_MAX} characters without quotes, got {source:?}"
-        );
-        NewMail { body: MailBody::Event { source, content: content.into(), check_in }, awaited }
+    pub fn event(source: &Source, content: impl Into<String>, check_in: bool, awaited: bool) -> Self {
+        NewMail { body: MailBody::Event { source: source.raw(), content: content.into(), check_in }, awaited }
     }
 
     /// 对挂起调用的回答。from_user：用户的回答（否则是交回的结局）。
@@ -146,7 +142,6 @@ impl NewMail {
     }
 }
 
-const SOURCE_MAX: usize = 100;
 const COLUMNS: &str = "id, session_id, kind, source, origin, content, check_in, attachments, answers, awaited, \
      delegation_id, state, taken_by, created_at";
 

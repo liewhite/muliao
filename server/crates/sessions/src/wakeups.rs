@@ -12,17 +12,11 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::actor::Waker;
 use crate::error::Result;
-use crate::holds::{self, abandon_in, active_holders_of_in};
-use crate::mailbox::placeholders;
-use crate::work::{deliver_in, hold_of_in};
+use crate::holds::{self, COLUMN_COUNT, COLUMNS, HoldOf, abandon_in, from_row};
+use crate::work::{Source, deliver_in};
 
 /// 工具名，也是唤醒信件的事件来源
 pub const WAKE_ME: &str = "wake_me";
-
-/// 约唤醒的那次调用在会话上的占用者：按调用 id 确定，续跑重新执行同一次调用时不重复约。
-pub fn wake_holder(session_id: &str, call_id: &str) -> String {
-    format!("wake:{session_id}:{call_id}")
-}
 
 pub struct Scheduled {
     pub due_at: DateTime<Utc>,
@@ -32,23 +26,37 @@ pub struct Scheduled {
 
 /// 取消会话还在等的唤醒（至多一个），返回它原定的时刻。
 pub fn cancel_in(c: &Connection, session_id: &str) -> Result<Option<DateTime<Utc>>> {
-    let active = active_holders_of_in(c, session_id)?;
-    if active.is_empty() {
-        return Ok(None);
-    }
-    let sql = format!("SELECT holder, due_at FROM wakeups WHERE holder IN ({})", placeholders(active.len()));
-    let rows: Vec<(String, DateTime<Utc>)> = {
-        let mut stmt = c.prepare(&sql)?;
-        stmt.query_map(rusqlite::params_from_iter(&active), |r| Ok((r.get(0)?, r.get(1)?)))?
-            .collect::<rusqlite::Result<_>>()?
-    };
     let mut cancelled = None;
-    for (holder, due_at) in rows {
-        let hold = holds::get_in(c, session_id, &holder)?.expect("listed as an active holder");
+    for (hold, due_at) in waiting_in(c, "h.session_id = ?1", [session_id])? {
         abandon_in(c, &hold)?;
         cancelled = Some(due_at);
     }
     Ok(cancelled)
+}
+
+/// 占用还 active 的唤醒与它约的时刻（按约的时刻）；filter 是 SQL 条件（表别名 h 是占用、w 是唤醒）。
+fn waiting_in(
+    c: &Connection,
+    filter: &str,
+    params: impl rusqlite::Params,
+) -> Result<Vec<(holds::Hold, DateTime<Utc>)>> {
+    waiting_rows(c, filter, params, |r| r.get(COLUMN_COUNT))
+}
+
+/// 同 [`waiting_in`]，每行另取 extra（从第 [`COLUMN_COUNT`] 列起是 w.due_at、w.note、w.created_at）。
+fn waiting_rows<T>(
+    c: &Connection,
+    filter: &str,
+    params: impl rusqlite::Params,
+    extra: impl Fn(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
+) -> Result<Vec<(holds::Hold, T)>> {
+    let sql = format!(
+        "SELECT {COLUMNS}, w.due_at, w.note, w.created_at FROM session_holds h JOIN wakeups w ON w.holder = h.holder \
+         WHERE h.status = 'active' AND {filter} ORDER BY w.due_at"
+    );
+    let mut stmt = c.prepare(&sql)?;
+    let rows = stmt.query_map(params, |r| Ok((from_row(r)?, extra(r)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    rows.into_iter().map(|(raw, x)| Ok((holds::hold(raw)?, x))).collect()
 }
 
 /// 约一次唤醒，取代会话还在等的那个。awaited：用户是否在等约它的那次运行的回答（唤醒的信件随之推送）。同一次调用重放时
@@ -61,19 +69,28 @@ pub fn schedule_in(
     note: &str,
     awaited: bool,
 ) -> Result<Scheduled> {
-    let holder = wake_holder(session_id, call_id);
+    let of = HoldOf::Wake { call_id: call_id.to_owned() };
+    let holder = of.holder(session_id);
     let existing: Option<DateTime<Utc>> =
         c.query_row("SELECT due_at FROM wakeups WHERE holder = ?1", [&holder], |r| r.get(0)).optional()?;
     if let Some(due_at) = existing {
         return Ok(Scheduled { due_at, replaced: None });
     }
     let replaced = cancel_in(c, session_id)?;
-    holds::hold_in(c, session_id, &holder, awaited)?;
+    holds::hold_in(c, session_id, of, awaited)?;
     c.execute(
         "INSERT INTO wakeups (holder, session_id, due_at, note, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
         params![holder, session_id, due_at, note, Utc::now()],
     )?;
     Ok(Scheduled { due_at, replaced })
+}
+
+/// 会话还在等的唤醒（至多一个）：约的时刻与说明，会话页的等待项用。
+pub(crate) fn pending_of_in(c: &Connection, session_id: &str) -> Result<Vec<(holds::Hold, DateTime<Utc>, String)>> {
+    Ok(waiting_rows(c, "h.session_id = ?1", [session_id], |r| Ok((r.get(COLUMN_COUNT)?, r.get(COLUMN_COUNT + 1)?)))?
+        .into_iter()
+        .map(|(h, (due, note))| (h, due, note))
+        .collect())
 }
 
 /// 给模型看的本地时刻（带时区缩写）。
@@ -86,24 +103,21 @@ pub(crate) async fn deliver_due(db: &Database, waker: &Waker, tz: Tz) -> Result<
     let waker = waker.clone();
     db.write(move |tx: &mut Tx<'_>| {
         let now = Utc::now();
-        type Due = (String, String, DateTime<Utc>, String, DateTime<Utc>);
-        let due: Vec<Due> = {
-            let mut stmt = tx.prepare(
-                "SELECT w.holder, w.session_id, w.due_at, w.note, w.created_at FROM wakeups w \
-                 JOIN session_holds h ON h.holder = w.holder AND h.status = 'active' \
-                 WHERE w.due_at <= ?1 ORDER BY w.due_at",
-            )?;
-            stmt.query_map([now], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
-                .collect::<rusqlite::Result<_>>()?
-        };
-        for (holder, session_id, due_at, note, created_at) in &due {
+        let due = waiting_rows(tx, "w.due_at <= ?1", [now], |r| {
+            Ok((
+                r.get::<_, DateTime<Utc>>(COLUMN_COUNT)?,
+                r.get::<_, String>(COLUMN_COUNT + 1)?,
+                r.get(COLUMN_COUNT + 2)?,
+            ))
+        })?;
+        for (hold, (due_at, note, created_at)) in &due {
+            let created_at: &DateTime<Utc> = created_at;
             let text = format!(
                 "Wake-up you scheduled with {WAKE_ME} at {} is due ({}). Your note: {note}",
                 local_time(*created_at, tz),
                 local_time(*due_at, tz)
             );
-            let hold = hold_of_in(tx, session_id, holder)?;
-            deliver_in(tx, &waker, hold.as_ref(), WAKE_ME, &text, None)?;
+            deliver_in(tx, &waker, Some(hold), &Source::Wake, &text, None)?;
         }
         Ok(due.len())
     })

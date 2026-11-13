@@ -16,15 +16,15 @@ use crate::actor::should_run;
 use crate::answers::Question;
 use crate::approvals::requested_among;
 use crate::directory::{self, keyed_among};
-use crate::error::{Result, broken};
+use crate::error::Result;
 use crate::history::since_last_response_among;
-use crate::holds::{Hold, active_among, called_among};
-use crate::mailbox::{placeholders, queued_among};
+use crate::holds::{Hold, HoldOf, active_among, called_among};
+use crate::mailbox::queued_among;
 use crate::origins::Sender;
 use crate::pending::{HandedOut, OpenAsks, open_asks_of, position};
 use crate::runs::{latest_among, unfinished_among};
-use crate::thread_calls::delegations_among;
-use crate::work::job_id_of_holder;
+use crate::thread_calls::owed_in;
+use crate::wakeups::pending_of_in;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -154,31 +154,32 @@ pub enum Wait {
     Approval { call_id: String, tool_name: String },
 }
 
-/// 会话在等的东西逐项展开：占用按登记先后，然后是提问、等批准的调用。认不出的占用者是缺陷，直接报错。
-pub fn waits_of_in(c: &Connection, waiting: &Waiting) -> Result<Vec<Wait>> {
-    let delegations = delegations_among(c, &waiting.holds.iter().filter_map(|h| h.thread_call_id).collect::<Vec<_>>())?;
-    let holders: Vec<String> = waiting.holds.iter().filter_map(|h| h.holder.clone()).collect();
-    let wakeups = wakeups_among(c, &holders)?;
-    let mut waits = Vec::new();
-    for h in &waiting.holds {
-        let wait = if let Some(job_id) = h.holder.as_deref().and_then(job_id_of_holder) {
-            Wait::Job { job_id, since: h.created_at }
-        } else if let Some(d) = h.thread_call_id.and_then(|id| delegations.get(&id)) {
-            Wait::Delegation {
-                thread_session_id: d.thread_id.clone(),
-                check_seconds: d.check_seconds,
-                since: h.created_at,
-            }
-        } else if let Some((due_at, note)) = h.holder.as_ref().and_then(|x| wakeups.get(x)) {
-            Wait::Wake { due_at: *due_at, note: note.clone(), since: h.created_at }
-        } else {
-            return Err(broken(format!(
-                "active hold {} ({:?}) of session {} is of no known kind",
-                h.id, h.holder, h.session_id
-            )));
+/// 会话在等的东西逐项展开：占用按登记先后，然后是提问、等批准的调用。
+pub fn waits_of_in(c: &Connection, session_id: &str, waiting: &Waiting) -> Result<Vec<Wait>> {
+    // (占用 id, 等待项)：委派与唤醒的详情各自和占用联查，后台任务的占用本身就够
+    let mut held: Vec<(i64, Wait)> = waiting
+        .holds
+        .iter()
+        .filter_map(|h| match h.of {
+            HoldOf::Job { job_id } => Some((h.id, Wait::Job { job_id, since: h.created_at })),
+            HoldOf::Wake { .. } | HoldOf::Delegation { .. } => None,
+        })
+        .collect();
+    held.extend(owed_in(c, None, Some(session_id))?.into_iter().map(|o| {
+        let wait = Wait::Delegation {
+            thread_session_id: o.delegation.thread_id,
+            check_seconds: o.delegation.check_seconds,
+            since: o.hold.created_at,
         };
-        waits.push(wait);
-    }
+        (o.hold.id, wait)
+    }));
+    held.extend(
+        pending_of_in(c, session_id)?
+            .into_iter()
+            .map(|(h, due_at, note)| (h.id, Wait::Wake { due_at, note, since: h.created_at })),
+    );
+    held.sort_by_key(|(id, _)| *id);
+    let mut waits: Vec<Wait> = held.into_iter().map(|(_, w)| w).collect();
     for (call_id, questions) in &waiting.asks.answerable {
         waits.push(Wait::Ask {
             call_id: call_id.clone(),
@@ -189,15 +190,4 @@ pub fn waits_of_in(c: &Connection, waiting: &Waiting) -> Result<Vec<Wait>> {
         waits.push(Wait::Approval { call_id: call_id.clone(), tool_name: tool.clone() });
     }
     Ok(waits)
-}
-
-/// 这些占用者里是到点唤醒的那些约的时刻与说明。
-fn wakeups_among(c: &Connection, holders: &[String]) -> Result<BTreeMap<String, (DateTime<Utc>, String)>> {
-    if holders.is_empty() {
-        return Ok(BTreeMap::new());
-    }
-    let sql = format!("SELECT holder, due_at, note FROM wakeups WHERE holder IN ({})", placeholders(holders.len()));
-    let mut stmt = c.prepare(&sql)?;
-    let rows = stmt.query_map(rusqlite::params_from_iter(holders), |r| Ok((r.get(0)?, (r.get(1)?, r.get(2)?))))?;
-    Ok(rows.collect::<rusqlite::Result<_>>()?)
 }

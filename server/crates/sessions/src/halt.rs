@@ -21,7 +21,7 @@ use crate::directory;
 use crate::error::{Result, broken};
 use crate::events::SessionStopped;
 use crate::history::{self, since_last_response};
-use crate::holds::clear_in;
+use crate::holds::{HoldOf, clear_in};
 use crate::mailbox::consume_in;
 use crate::pending::closing_on_stop;
 use crate::run::Core;
@@ -71,16 +71,22 @@ pub(crate) async fn halt(
             let cleared = clear_in(tx, &session_id)?;
             let answer = history::latest_answer(tx, &session_id)?;
             let (settled, discarded) = settle_stopped_in(tx, &waker, &session, &answer)?;
-            let delegations =
-                delegations_among(tx, &cleared.iter().filter_map(|h| h.thread_call_id).collect::<Vec<_>>())?;
+            let rows: Vec<i64> = cleared
+                .iter()
+                .filter_map(|h| match h.of {
+                    HoldOf::Delegation { row, .. } => row,
+                    _ => None,
+                })
+                .collect();
+            let delegations = delegations_among(tx, &rows)?;
             let threads: Vec<String> =
                 delegations.values().map(|d| d.thread_id.clone()).collect::<BTreeSet<_>>().into_iter().collect();
             for thread in threads.clone() {
                 let stop = stop_thread.clone();
                 tx.on_commit(move || stop(thread));
             }
-            let holders: Vec<String> = cleared.iter().filter_map(|h| h.holder.clone()).collect();
-            events.session_stopped(tx, &SessionStopped { session_id: session_id.clone(), cleared: holders })?;
+            let cleared_of: Vec<HoldOf> = cleared.iter().map(|h| h.of.clone()).collect();
+            events.session_stopped(tx, &SessionStopped { session_id: session_id.clone(), cleared: cleared_of })?;
             tracing::info!(session_id, stopped_runs = ?stopped_runs, discarded_mail = ?discarded,
                 cleared_holds = ?cleared.iter().map(|h| h.id).collect::<Vec<_>>(), settled_delegations = ?settled,
                 stopping_threads = ?threads, "session halted");

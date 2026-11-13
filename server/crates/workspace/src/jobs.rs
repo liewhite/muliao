@@ -23,7 +23,8 @@ use chrono::{DateTime, Utc};
 use muliao_platform::db::{Database, Tx};
 use muliao_platform::shell::{DRAIN, LEFT_RUNNING_NOTE, Spawned, kill_group};
 use muliao_sessions::events::SessionStopped;
-use muliao_sessions::work::{CheckBeats, SessionWork, job_holder, job_id_of_holder};
+use muliao_sessions::holds::HoldOf;
+use muliao_sessions::work::{CheckBeats, SessionWork};
 use rusqlite::{Connection, Row, params};
 use tokio::sync::watch;
 
@@ -343,7 +344,7 @@ impl JobRunner {
                 let log_path = format!("{JOBS_DIR}/{id}.log");
                 tx.execute("UPDATE jobs SET log_path = ?1 WHERE id = ?2", params![log_path, id])?;
                 // 同一事务里在会话上登记占用（会话据此知道工作还没做完；用户是否在等结局记在占用上）
-                work.hold_in(tx, &sid, &job_holder(id), awaited)?;
+                work.hold_in(tx, &sid, id, awaited)?;
                 Ok(JobStarted { id, log_path })
             })
             .await;
@@ -482,7 +483,14 @@ impl JobRunner {
     /// 会话被用户停止（订阅会话领域的事件，在停止的事务里）：提交之后结束被清掉的占用对应的后台任务（同 job_kill），结局
     /// 照常由照看者记下（killed）；会话的占用已经清掉，结局不再投信。
     pub fn on_stopped(self: &Arc<Self>, tx: &mut Tx<'_>, event: &SessionStopped) {
-        let jobs: Vec<i64> = event.cleared.iter().filter_map(|h| job_id_of_holder(h)).collect();
+        let jobs: Vec<i64> = event
+            .cleared
+            .iter()
+            .filter_map(|h| match h {
+                HoldOf::Job { job_id } => Some(*job_id),
+                _ => None,
+            })
+            .collect();
         if jobs.is_empty() {
             return;
         }
@@ -554,7 +562,7 @@ impl JobRunner {
                 for id in ids {
                     let Some(job) = job_in(tx, id)?.filter(|j| j.status == JobStatus::Running) else { continue };
                     let text = check_text(&job, Utc::now(), &tails[&id]);
-                    if work.checked_in(tx, &job.session_id, &job_holder(id), &text)? {
+                    if work.checked_in(tx, &job.session_id, id, &text)? {
                         sent += 1;
                     }
                     checked.push(id);
@@ -653,7 +661,7 @@ fn record_end_in(tx: &mut Tx<'_>, work: &SessionWork, job: &Job, text: &str) -> 
         "UPDATE jobs SET status = ?1, exit_code = ?2, finished_at = ?3 WHERE id = ?4",
         params![job.status.as_str(), job.exit_code, job.finished_at, job.id],
     )?;
-    work.ended_in(tx, &job.session_id, &job_holder(job.id), text)?;
+    work.ended_in(tx, &job.session_id, job.id, text)?;
     Ok(())
 }
 
