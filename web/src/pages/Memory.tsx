@@ -35,7 +35,7 @@ function saveMemory(m: Memory, content: string): Promise<Memory> {
 }
 
 function MemoryDraft({ latest, hint }: { latest: Memory; hint: string }) {
-  // 版本在草稿里：改过之后不再跟服务端，交回的就是开始编辑时的版本；期间被别处改过就 409（assets.check_version）
+  // 版本在草稿里：改过之后不再跟服务端，交回的就是开始编辑时的版本；期间被别处改过就 409（资源写入口按 Expect::Version 核对）
   const doc = useDraft(latest)
   const action = useAction()
   const { content } = doc.draft

@@ -134,7 +134,7 @@ function SkillDraft({ latest }: { latest: Skill }) {
   const confirm = useConfirm()
   const { name, owner } = latest
   const agents = useAgents()
-  // 版本在草稿里：改过之后不再跟服务端，交回的就是开始编辑时的版本；期间被别处改过就 409（assets.check_version）
+  // 版本在草稿里：改过之后不再跟服务端，交回的就是开始编辑时的版本；期间被别处改过就 409（资源写入口按 Expect::Version 核对）
   const doc = useDraft({ description: latest.description, body: latest.body, version: latest.version })
   const action = useAction()
 

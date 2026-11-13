@@ -26,13 +26,10 @@ use crate::error::Result;
 use crate::formats::agent_file::{AGENT_FILE, AgentFile, Thinking};
 use crate::kinds::StoredKind;
 use crate::rules::{GLOBAL_MEMORY, ToolTable};
-use crate::tree::{Owner, Problem, Snapshot, fingerprint, load_tree};
+use crate::tree::{Expect, Owner, Problem, Snapshot, fingerprint, load_tree};
 
 /// (模型, 思考档位) 在当前配置下能不能运行；不能时的原因（运行端口的模型注册表给）。
 pub type ModelCheck = Arc<dyn Fn(&str, Thinking) -> std::result::Result<(), String> + Send + Sync>;
-
-/// 写入口里调用方自己的核对（打开编辑时的版本、读过没有）：在锁里、紧挨着写之前对每个要写的路径调用，不过就返回错误。
-pub type WriteGuard<'a> = &'a (dyn Fn(&Path) -> Result<()> + Sync);
 
 /// 写入口写成的一份文件。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -165,24 +162,18 @@ impl AssetSource {
         (self.check_model)(data.model(), data.thinking()).map_err(crate::error::invalid)
     }
 
-    /// 把资源目录里的这些文件写成 texts：改写资源文件的唯一入口。在锁里按此刻的树逐份校验（不合格是
-    /// [`crate::error::AssetRejected`]），再交给 guard 做调用方自己的核对（打开编辑时的版本、读过没有；不过就返回错误），
+    /// 把资源目录里的这些文件写成给出的文本：改写资源文件的唯一入口。在锁里按此刻的树逐份校验（不合格是
+    /// [`crate::error::AssetRejected`]），再核对每份此刻合不合调用方的预期（[`Expect`]：打开编辑时的版本、读到时的样子），
     /// 全部通过才逐个原子写入；有一份不过就一份都不写。返回每份实际存下的。
-    pub async fn write(
-        &self,
-        texts: &[(PathBuf, String)],
-        guard: Option<WriteGuard<'_>>,
-    ) -> Result<Vec<(PathBuf, Written)>> {
+    pub async fn write(&self, texts: &[(PathBuf, String, Expect)]) -> Result<Vec<(PathBuf, Written)>> {
         let w = self.writing().await?;
         let check = |f: &AgentFile| (self.check_model)(f.model(), f.thinking());
         let mut stored = Vec::with_capacity(texts.len());
-        for (path, text) in texts {
+        for (path, text, _) in texts {
             stored.push((path, asset_files::vet(&w.snapshot, path, text, self.memory_max_chars, &check)?));
         }
-        if let Some(guard) = guard {
-            for (path, _) in &stored {
-                guard(path)?;
-            }
+        for (path, _, expect) in texts {
+            expect.check(path)?;
         }
         let mut written = Vec::with_capacity(stored.len());
         for (path, text) in stored {

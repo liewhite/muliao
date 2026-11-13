@@ -2,7 +2,7 @@
 //! 用的（自己的与分发给它的）、已启用的。把配置连接成工具是运行端口的事：界面新增时的连接验证由调用方交进来，这里不连接
 //! 任何 server、不解析 secret。
 
-use std::path::Path;
+use crate::tree::Expect;
 use std::sync::Arc;
 
 use crate::access::{Actor, grants_for, usable};
@@ -65,15 +65,7 @@ impl McpRegistry {
             Some(probe) => probe(&server).await?,
             None => Vec::new(),
         };
-        let new = |p: &Path| {
-            if p.exists() {
-                return Err(conflict(format!(
-                    "MCP server {name:?} already exists; names are unique, choose another name"
-                )));
-            }
-            Ok(())
-        };
-        self.source.write(&[(path, render(&server.config, true))], Some(&new)).await?;
+        self.source.write(&[(path, render(&server.config, true), Expect::Absent)]).await?;
         tracing::info!(owner = ?owner, mcp = name, tools = tools.len(), "mcp server added");
         Ok((server, tools))
     }
@@ -81,19 +73,12 @@ impl McpRegistry {
     pub async fn set_enabled(&self, name: &str, enabled: bool) -> Result<McpServer> {
         let server = self.get(name).await?;
         let path = self.source.snapshot().await?.asset(StoredKind::Mcp, name)?.path.clone();
-        // 只改启用状态：期间配置被别处改过、删掉的不盖掉
-        let unchanged = |p: &Path| {
-            let same = p.is_file()
-                && std::fs::read_to_string(p)
-                    .ok()
-                    .and_then(|t| parse(&t).ok())
-                    .is_some_and(|f| f.config == server.config);
-            if !same {
-                return Err(conflict(format!("MCP server {name:?} was changed elsewhere meanwhile; reload and retry")));
-            }
-            Ok(())
-        };
-        self.source.write(&[(path, render(&server.config, enabled))], Some(&unchanged)).await?;
+        // 只改启用状态：此刻的文件就是读到 server 时的样子，期间被别处改过、删掉的不盖掉
+        let now = crate::formats::read(&path).map_err(conflict)?;
+        if parse(&now).ok().is_none_or(|f| f.config != server.config) {
+            return Err(conflict(format!("MCP server {name:?} was changed elsewhere meanwhile; reload and retry")));
+        }
+        self.source.write(&[(path, render(&server.config, enabled), Expect::text(Some(&now)))]).await?;
         Ok(McpServer { enabled, ..server })
     }
 }

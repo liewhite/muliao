@@ -9,10 +9,9 @@ use chrono::{DateTime, Utc};
 
 use crate::access::{Actor, grants_for, usable};
 use crate::error::{Result, not_found};
-use crate::formats::memory::text_of;
 use crate::kinds::StoredKind;
 use crate::source::AssetSource;
-use crate::tree::{Asset, Owner, check_version, version_of};
+use crate::tree::{Asset, Expect, Owner, version_of};
 
 /// 一次运行放进指令的一块记忆。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,7 +41,8 @@ fn info(a: &Asset) -> MemoryInfo {
     MemoryInfo {
         name: a.name.clone(),
         owner: a.owner.clone(),
-        version: version_of(&text),
+        // 文件此刻的版本（正文是规整过空白的，版本按文件原样算）；读不出时给空串：写回时按「被改过」拒绝
+        version: crate::formats::read(&a.path).map(|t| version_of(&t)).unwrap_or_default(),
         content: text,
         updated_at: a.updated_at,
         path: a.path.clone(),
@@ -103,7 +103,7 @@ impl MemoryStore {
             Some(a) => a.path.clone(),
             None => snapshot.path_of(StoredKind::Memory, name, &Owner::Platform)?,
         };
-        self.write(&path, content, version, &format!("memory {name:?}")).await?;
+        self.write(&path, content, version).await?;
         self.read(name).await
     }
 
@@ -111,18 +111,12 @@ impl MemoryStore {
     pub async fn put_private(&self, agent_id: &str, content: &str, version: Option<&str>) -> Result<MemoryInfo> {
         let snapshot = self.source.snapshot().await?;
         let path = snapshot.private_memory_path(agent_id)?;
-        let what = format!("the private memory of {}", snapshot.owner_label(&Owner::Agent(agent_id.to_owned())));
-        self.write(&path, content, version, &what).await?;
+        self.write(&path, content, version).await?;
         self.read_private(agent_id).await
     }
 
-    async fn write(&self, path: &Path, content: &str, version: Option<&str>, what: &str) -> Result<()> {
-        // 此刻文件里的（写入口在锁里、紧挨着写之前调用）：期间被删、被抢先建、被改过都对不上
-        let unchanged = |p: &Path| {
-            let current = if p.is_file() { Some(text_of(p).map_err(crate::error::conflict)?) } else { None };
-            check_version(current.as_deref(), version, what)
-        };
-        self.source.write(&[(path.to_path_buf(), content.to_owned())], Some(&unchanged)).await?;
+    async fn write(&self, path: &Path, content: &str, version: Option<&str>) -> Result<()> {
+        self.source.write(&[(path.to_path_buf(), content.to_owned(), Expect::version(version))]).await?;
         Ok(())
     }
 }

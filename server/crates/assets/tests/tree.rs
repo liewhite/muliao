@@ -138,7 +138,7 @@ async fn write_entry_vets_like_the_reader() {
     let write = |path: std::path::PathBuf, text: &str| {
         let source = w.source.clone();
         let text = text.to_owned();
-        async move { source.write(&[(path, text)], None).await }
+        async move { source.write(&[(path, text, muliao_assets::tree::Expect::Any)]).await }
     };
     // 记忆规整空白
     let out = write(root.join("alice/memory.md"), "a  \n\n\n\nb\n\n").await.unwrap();
@@ -173,10 +173,18 @@ async fn write_entry_vets_like_the_reader() {
     write(root.join("platform/access.toml"), "[agents.alice]\nallow = [\"use:skill:s\"]\n").await.unwrap();
     // 隐藏文件不校验
     write(root.join("alice/.cache"), "x").await.unwrap();
-    // guard 不过就一份都不写
-    let guard = |_: &std::path::Path| Err(muliao_platform::errors::DomainError::conflict("no").into());
-    let r = w.source.write(&[(root.join("alice/memory.md"), "changed".into())], Some(&guard)).await;
-    assert!(r.is_err());
+    // 有一份不合预期就一份都不写
+    use muliao_assets::tree::Expect;
+    let r = w
+        .source
+        .write(&[
+            (root.join("alice/memory.md"), "changed".into(), Expect::Any),
+            (root.join("alice/skills/s/SKILL.md"), "---\ndescription: d\n---\n".into(), Expect::Absent),
+        ])
+        .await;
+    assert!(r.unwrap_err().to_string().contains("already exists"));
+    let stale = Expect::Version(muliao_assets::tree::version_of("old"));
+    assert!(w.source.write(&[(root.join("alice/memory.md"), "changed".into(), stale)]).await.is_err());
     assert_eq!(std::fs::read_to_string(root.join("alice/memory.md")).unwrap(), "a\n\nb\n");
 }
 

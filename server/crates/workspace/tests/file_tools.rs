@@ -417,7 +417,7 @@ async fn write_file_replaces_an_asset_file_only_after_reading_it() {
     std::thread::sleep(std::time::Duration::from_millis(20));
     std::fs::write(&memory, "别处改的\n").unwrap();
     let (out, _) = w.call_in(&scope, "write_file", json!({"path": memory, "content": "再改\n"}), None).await;
-    assert!(out.retry().contains("was changed after you read it"));
+    assert!(out.retry().contains("was changed elsewhere after you opened or read it"));
     // 格式不对的资源文件被写入口拒绝，说明是谁的、看哪一节
     let bad = w.asset_dir("me").join("skills/x/SKILL.md");
     let out = w.call("write_file", json!({"path": bad, "content": "no frontmatter"})).await;

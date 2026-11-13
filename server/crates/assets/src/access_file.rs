@@ -29,7 +29,7 @@ use crate::naming::{nfc, validate_slug};
 use crate::rules::{
     ADMIN, AgentRules, BASE, Role, Roles, Rules, ToolTable, fixed_rules, fnmatch, kind_of, matches_no_tool,
 };
-use crate::tree::Snapshot;
+use crate::tree::{Expect, Snapshot};
 
 pub const ACCESS_FILE: &str = "access.toml";
 
@@ -324,19 +324,10 @@ pub struct AccessEdit {
     after: String,
 }
 
-fn current(path: &Path) -> Result<Option<String>> {
-    if !path.is_file() {
-        return Ok(None);
-    }
-    Ok(Some(std::fs::read(path).map(|b| String::from_utf8_lossy(&b).into_owned())?))
-}
-
 impl AccessEdit {
-    /// 原子写入。文件已不是 plan 时读到的内容（期间被 shell 等改过）时 Conflict，不盖掉那次改动。
+    /// 原子写入。文件已不是 plan 时的内容（期间被 shell 等改过）时 Conflict，不盖掉那次改动。
     pub fn apply(&self) -> Result<()> {
-        if current(&self.path)? != self.before {
-            return Err(conflict(format!("{} was changed meanwhile; retry", self.path.display())));
-        }
+        Expect::text(self.before.as_deref()).check(&self.path)?;
         muliao_platform::fs::write_atomic(&self.path, self.after.as_bytes())?;
         Ok(())
     }
@@ -344,7 +335,7 @@ impl AccessEdit {
     /// 把 apply 写下的改回 before（调用方后面的步骤失败时用，仍在同一次写资源目录的锁里）。文件不是 after（没 apply
     /// 过、已改回、apply 时发现被别处改过）时不动它。
     pub fn revert(&self) -> Result<()> {
-        if current(&self.path)?.as_deref() != Some(self.after.as_str()) {
+        if Expect::text(Some(&self.after)).check(&self.path).is_err() {
             return Ok(());
         }
         match &self.before {

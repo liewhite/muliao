@@ -13,6 +13,7 @@ use std::time::SystemTime;
 
 use agenter::{Content, File, FileSource, Tool, ToolCtx, ToolError, ToolOutput};
 use muliao_assets::source::AssetSource;
+use muliao_assets::tree::Expect;
 use muliao_files::{FileStore, FilesError, INLINE_IMAGE_TYPES};
 use muliao_platform::errors::DomainError;
 use muliao_platform::fs::{read_text, real};
@@ -111,25 +112,20 @@ fn remember(scope: &RunScope, target: &Path, at: Option<SystemTime>) {
     scope.reads.lock().expect("reads lock").insert(identity.into_path_buf(), at);
 }
 
-/// write_file 整体覆盖资源目录里已有的文件之前：这次运行读过它、之后没被改过；否则拒绝，免得盖掉别处刚做的修改（共享
-/// 记忆、access.toml 可能有几处同时在改）。
-fn check_fresh(scope: &RunScope, target: &Path) -> Result<(), DomainError> {
+/// write_file 整体覆盖资源目录里的文件：已有的要这次运行读过、之后没被改过（写入口核对），免得盖掉别处刚做的修改（共享
+/// 记忆、access.toml 可能有几处同时在改）；没读过就拒绝。
+fn expect_for_write(scope: &RunScope, target: &Path) -> Result<Expect, DomainError> {
+    if !target.is_file() {
+        return Ok(Expect::Absent);
+    }
     let seen = real(target).ok().and_then(|r| scope.reads.lock().expect("reads lock").get(r.as_path()).copied());
-    let Some(seen) = seen else {
-        return Err(DomainError::invalid(format!(
+    seen.map(Expect::Modified).ok_or_else(|| {
+        DomainError::invalid(format!(
             "{} is an existing AI asset file and write_file replaces it whole: read it with read_file first (in this \
              run), then write; or change just the part you mean with edit_file. Nothing was written.",
             target.display()
-        )));
-    };
-    if modified(target) != Some(seen) {
-        return Err(DomainError::invalid(format!(
-            "{} was changed after you read it (by someone else, or a command): read it again and redo your change on \
-             the current content, or use edit_file. Nothing was written.",
-            target.display()
-        )));
-    }
-    Ok(())
+        ))
+    })
 }
 
 // ---- read_file ----
@@ -480,15 +476,8 @@ impl Tool<RunScope> for WriteFile {
         let target = reach(&confinement(deps, &scope.agent_id).await?, &scope.workspace, &a.path, Access::Write)?;
         let existed = target.is_file();
         let content = if deps.assets.contains(&target) {
-            // 写入口在锁里、紧挨着写之前调用：校验期间别处新建或改了的也拦得住
-            let fresh = |path: &Path| -> muliao_assets::error::Result<()> {
-                if path.is_file() {
-                    check_fresh(scope, path)?;
-                }
-                Ok(())
-            };
-            let mut written =
-                deps.assets.write(&[(target.clone(), a.content)], Some(&fresh)).await.map_err(asset_error)?;
+            let expect = expect_for_write(scope, &target)?;
+            let mut written = deps.assets.write(&[(target.clone(), a.content, expect)]).await.map_err(asset_error)?;
             let (_, done) = written.pop().expect("one file written");
             remember(scope, &target, Some(done.modified.into()));
             done.text
@@ -787,24 +776,16 @@ impl Tool<RunScope> for EditFile {
             .map(|(t, c)| (t.clone(), if crlf.contains(t) { c.replace('\n', "\r\n") } else { c.clone() }))
             .collect();
         let changed: Vec<PathBuf> = order.iter().filter(|t| after.contains_key(*t)).cloned().collect();
-        let in_tree: Vec<(PathBuf, String)> =
-            changed.iter().filter(|t| deps.assets.contains(t)).map(|t| (t.clone(), stored[t].clone())).collect();
+        // 读 before 之后别处改了就整次不写（写入口在锁里核对）
+        let in_tree: Vec<(PathBuf, String, Expect)> = changed
+            .iter()
+            .filter(|t| deps.assets.contains(t))
+            .map(|t| (t.clone(), stored[t].clone(), stamps[t].map_or(Expect::Any, Expect::Modified)))
+            .collect();
 
         // 资源目录里的先经写入口：全部校验通过才写（原子写入，记忆规整空白），回显按实际存下的
         if !in_tree.is_empty() {
-            let unchanged = |target: &Path| -> muliao_assets::error::Result<()> {
-                // 写入口在锁里、紧挨着写之前调用：读 before 之后别处改了就整次不写
-                if !target.is_file() || stamps.get(target).is_none_or(|at| modified(target) != *at) {
-                    return Err(DomainError::invalid(format!(
-                        "{} changed while this edit was being checked (someone else wrote it); nothing was written: \
-                         redo the edit on the current content",
-                        target.display()
-                    ))
-                    .into());
-                }
-                Ok(())
-            };
-            let written = deps.assets.write(&in_tree, Some(&unchanged)).await.map_err(|e| match e {
+            let written = deps.assets.write(&in_tree).await.map_err(|e| match e {
                 muliao_assets::error::Error::Io(e) => {
                     io_error(e, " Asset files of this edit may be partly written; nothing else was written.")
                 }
@@ -815,7 +796,7 @@ impl Tool<RunScope> for EditFile {
                 remember(scope, &target, Some(done.modified.into()));
             }
         }
-        let mut written: Vec<PathBuf> = in_tree.iter().map(|(t, _)| t.clone()).collect();
+        let mut written: Vec<PathBuf> = in_tree.iter().map(|(t, _, _)| t.clone()).collect();
         for target in &changed {
             if written.contains(target) {
                 continue;

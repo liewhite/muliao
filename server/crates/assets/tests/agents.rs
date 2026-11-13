@@ -206,7 +206,7 @@ async fn interrupted_deletion_resumes() {
     .unwrap();
     // 正在删除的：不在列表里，资源快照不让往它目录里写
     assert!(w.service.list().await.unwrap().is_empty());
-    let r = w.source.write(&[(w.root().join("alice/memory.md"), "x".into())], None).await;
+    let r = w.source.write(&[(w.root().join("alice/memory.md"), "x".into(), muliao_assets::tree::Expect::Any)]).await;
     assert!(r.unwrap_err().to_string().contains("being deleted"));
     let life = AgentLifecycle::new(w.source.clone(), w.workspaces(), vec![], vec![]);
     assert!(life.delete(&a, &Actor::User).await.unwrap_err().to_string().contains("already being deleted"));

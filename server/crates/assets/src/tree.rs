@@ -23,6 +23,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
@@ -739,23 +740,67 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<(PathBuf, i128, u64)>) {
 
 // ---- 平台自己写的辅助 ----
 
-/// 界面编辑的内容的版本（摘要）：打开编辑时随内容拿到，整体改写时交回（[`check_version`]）。
+/// 一份资源文本的版本（摘要，换行统一成 `\n` 之后算）：打开编辑时随内容拿到，整体改写时交回（[`Expect::Version`]）。
 pub fn version_of(text: &str) -> String {
-    let digest = Sha256::digest(text.as_bytes());
+    let digest = Sha256::digest(crate::formats::lf(text).as_bytes());
     digest.iter().take(8).map(|b| format!("{b:02x}")).collect()
 }
 
-/// 整体改写之前，在写资源目录的锁里按此刻的内容 current（None：还不存在，要新建）调用：version 是打开编辑时的版本（新建
-/// 为 None）。对不上就是期间被别处改过、删掉或抢先建了：Conflict，不盖掉别人的改动。
-pub fn check_version(current: Option<&str>, version: Option<&str>, what: &str) -> Result<()> {
-    match (current, version) {
-        (None, None) => Ok(()),
-        (None, Some(_)) => Err(conflict(format!("{what} was deleted after you opened it"))),
-        (Some(_), None) => Err(conflict(format!("{what} already exists; open it to edit"))),
-        (Some(c), Some(v)) if version_of(c) != v => {
-            Err(conflict(format!("{what} was changed elsewhere after you opened it; reload it and redo your edit")))
+/// 写一个资源文件之前对它此刻状态的预期（打开编辑、读到它时看到的）：对不上就是期间被别处改过、删掉或抢先建了，Conflict，
+/// 不盖掉别人的改动。写入口（[`crate::source::AssetSource::write`]）在锁里、紧挨着写之前核对，各调用方只说预期什么。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Expect {
+    /// 不管此刻是什么
+    Any,
+    /// 还不存在（新建）
+    Absent,
+    /// 内容是这个版本（[`version_of`]）
+    Version(String),
+    /// 修改时间是这个（读到它的那一刻）
+    Modified(SystemTime),
+}
+
+impl Expect {
+    /// 打开编辑时的版本，新建为 None。
+    pub fn version(version: Option<&str>) -> Self {
+        version.map_or(Expect::Absent, |v| Expect::Version(v.to_owned()))
+    }
+
+    /// 读到的内容，没有文件为 None。
+    pub fn text(text: Option<&str>) -> Self {
+        text.map_or(Expect::Absent, |t| Expect::Version(version_of(t)))
+    }
+
+    /// 此刻的 path 合不合预期，不合是 Conflict（说明是哪种不合、怎么办）。
+    pub fn check(&self, path: &Path) -> Result<()> {
+        let exists = std::fs::symlink_metadata(path).is_ok();
+        let changed = || {
+            conflict(format!(
+                "{} was changed elsewhere after you opened or read it; reload it and redo your change on the current \
+                 content. Nothing was written.",
+                path.display()
+            ))
+        };
+        match self {
+            Expect::Any => Ok(()),
+            Expect::Absent if !exists => Ok(()),
+            Expect::Absent => Err(conflict(format!(
+                "{} already exists: open or read it first, then change it. Nothing was written.",
+                path.display()
+            ))),
+            _ if !exists => Err(conflict(format!(
+                "{} was deleted after you opened or read it. Nothing was written.",
+                path.display()
+            ))),
+            Expect::Version(v) => {
+                let now = crate::formats::read(path).map_err(conflict)?;
+                if version_of(&now) == *v { Ok(()) } else { Err(changed()) }
+            }
+            Expect::Modified(at) => {
+                let now = std::fs::metadata(path).and_then(|m| m.modified())?;
+                if now == *at { Ok(()) } else { Err(changed()) }
+            }
         }
-        _ => Ok(()),
     }
 }
 

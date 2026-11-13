@@ -10,11 +10,11 @@ use muliao_platform::fs::RealPath;
 use sha2::{Digest, Sha256};
 
 use crate::access::{Actor, grants_for, usable};
-use crate::error::{Result, conflict, invalid, not_found};
+use crate::error::{Result, invalid, not_found};
 use crate::formats::skill::{SKILL_FILE, body_of, compose};
 use crate::kinds::StoredKind;
 use crate::source::AssetSource;
-use crate::tree::{Asset, Owner, check_version, version_of};
+use crate::tree::{Asset, Expect, Owner, version_of};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillMeta {
@@ -165,13 +165,7 @@ impl SkillStore {
             None => (snapshot.path_of(StoredKind::Skill, name, owner)?.join(SKILL_FILE), None),
         };
         let text = compose(current.as_deref(), name, description, body).map_err(invalid)?;
-        let what = format!("skill {name:?}");
-        // 此刻文件里的（写入口在锁里、紧挨着写之前调用）：期间被删、被抢先建、被改过都对不上
-        let unchanged = |p: &Path| {
-            let now = if p.is_file() { Some(crate::formats::read(p).map_err(conflict)?) } else { None };
-            check_version(now.as_deref(), version, &what)
-        };
-        self.source.write(&[(md, text)], Some(&unchanged)).await?;
+        self.source.write(&[(md, text, Expect::version(version))]).await?;
         Ok(meta(self.source.snapshot().await?.asset(StoredKind::Skill, name)?))
     }
 }

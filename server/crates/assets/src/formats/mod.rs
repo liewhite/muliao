@@ -42,11 +42,19 @@ pub fn modified(path: &Path) -> std::io::Result<DateTime<Utc>> {
 /// （读树记成问题）。
 pub(crate) fn read(path: &Path) -> Result<String, String> {
     muliao_platform::fs::read_text(path)
-        .map(|t| if t.contains('\r') { t.replace("\r\n", "\n").replace('\r', "\n") } else { t })
+        .map(|t| match lf(&t) {
+            std::borrow::Cow::Borrowed(_) => t,
+            std::borrow::Cow::Owned(o) => o,
+        })
         .map_err(|e| match e.kind() {
             std::io::ErrorKind::InvalidData => e.to_string(),
             _ => format!("cannot read {}: {e}", path.display()),
         })
+}
+
+/// 换行统一成 `\n`（[`read`] 读出的样子）。
+pub(crate) fn lf(text: &str) -> std::borrow::Cow<'_, str> {
+    if text.contains('\r') { text.replace("\r\n", "\n").replace('\r', "\n").into() } else { text.into() }
 }
 
 /// Python 的 str.splitlines：这些字符都算换行（\r\n 算一个）。
