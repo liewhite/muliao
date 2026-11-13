@@ -22,21 +22,21 @@ export interface Loaded<T> extends LoadState<T> {
 }
 
 /**
- * 哪些事件要重新拉取。默认（anyChange）：连上了（之前可能丢了事件），或任何一类数据变了。按更细的事件刷新的页面自己给
+ * 哪些事件要重新拉取。默认（anyChange）：连上了（之前可能丢了事件），或任何一类数据变了。按更细的事件刷新的页面自己给函数
  * （会话页：整份历史几 MB，只按这个会话的事件；通知页：只在新通知时，留住这次的未读标记）；不随服务端数据变化、
- * 或重拉代价大的（可选模型要实时问 provider、文件预览、代码高亮）必须给 never 本身（Loader.live 按它认，不要另写 () => false）。
+ * 或重拉代价大的（可选模型要实时问 provider、文件预览、代码高亮）给 never：它不是函数，不听事件，操作之后也不重拉。
  */
-export type RefetchOn = (e: PageEvent) => boolean
+export const never = 'never'
 
-export const anyChange: RefetchOn = (e) => e.type === 'connected' || e.type === 'changed'
+export type RefetchOn = ((e: PageEvent) => boolean) | typeof never
 
-export const never: RefetchOn = () => false
+export const anyChange = (e: PageEvent): boolean => e.type === 'connected' || e.type === 'changed'
 
 // 收到 changed 后等这么久再拉：运行中的 agent 每步都在提交，一阵密集的 changed 合并成一次；别的事件（连上了、页面自己
 // 按的细事件）不等
 export const REFETCH_DELAY_MS = 300
 
-// 有人在看、随服务端数据变化的 Loader：用户的操作成功后立即一起重新拉取（refreshShown）
+// 有人在看、随服务端数据变化（不是 never）的 Loader：用户的操作成功后立即一起重新拉取（refreshShown）
 const shown = new Set<Loader<unknown>>()
 
 /**
@@ -44,7 +44,7 @@ const shown = new Set<Loader<unknown>>()
  * 不靠 SSE 的 changed 送到（连接半开时可能要等几十秒）。每个请求都有时限（api.REQUEST_TIMEOUT_MS），不会一直等。
  */
 export async function refreshShown(): Promise<void> {
-  await Promise.all([...shown].filter((l) => l.live()).map((l) => l.reload()))
+  await Promise.all([...shown].map((l) => l.reload()))
 }
 
 /**
@@ -93,19 +93,17 @@ export class Loader<T> {
     this.subscribers.forEach((s) => s())
   }
 
-  /** 随服务端数据变化（不是 never）：操作之后要一起重新拉取 */
-  live(): boolean {
-    return this.refetchOn !== never
-  }
-
   /** 第一个订阅者到来时开始听事件并拉取（之前拉到过的先照常显示），最后一个走了就退订 */
   subscribe = (onChange: () => void): (() => void) => {
     this.subscribers.add(onChange)
     if (this.subscribers.size === 1) {
-      this.unlisten = listenServerEvents((e) => {
-        if (this.refetchOn(e)) (e.type === 'changed' ? this.refetchSoon.run : this.refetchNow)()
-      })
-      shown.add(this as Loader<unknown>)
+      const refetchOn = this.refetchOn
+      if (refetchOn !== never) {
+        this.unlisten = listenServerEvents((e) => {
+          if (refetchOn(e)) (e.type === 'changed' ? this.refetchSoon.run : this.refetchNow)()
+        })
+        shown.add(this as Loader<unknown>)
+      }
       void this.reload()
     }
     return () => {

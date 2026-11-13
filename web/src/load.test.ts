@@ -82,7 +82,6 @@ describe('Loader', () => {
     emit({ type: 'connected' })
     await refetched()
     expect(count('/api/features')).toBe(1)
-    expect(loader.live()).toBe(false)
     stop()
   })
 
