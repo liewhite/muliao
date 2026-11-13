@@ -5,7 +5,7 @@
 use std::collections::BTreeSet;
 
 use muliao_platform::db::Tx;
-use muliao_runtime::conventions::Attachment;
+use muliao_runtime::conventions::SharedFile;
 use rusqlite::Connection;
 
 use crate::actor::Waker;
@@ -43,7 +43,7 @@ fn settle_in(
     mail: &[Mail],
     ending: Ending,
     text: &str,
-    attachments: &[Attachment],
+    attachments: &[SharedFile],
 ) -> Result<Vec<i64>> {
     let owed = owed_by(tx, mail)?;
     if owed.is_empty() {
@@ -62,7 +62,7 @@ pub fn settle_finished_in(
     waker: &Waker,
     session: &Session,
     answer: &str,
-    attachments: &[Attachment],
+    attachments: &[SharedFile],
 ) -> Result<Vec<i64>> {
     let mail = delegated_mail_in(tx, &session.id, &[MailState::Consumed])?;
     settle_in(tx, waker, session, &mail, Ending::Finished, answer, attachments)

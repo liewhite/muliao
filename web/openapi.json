@@ -3742,7 +3742,7 @@
           "attachments": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/Attachment"
+              "$ref": "#/components/schemas/SharedFile"
             }
           }
         }
@@ -4339,6 +4339,7 @@
       },
       "Attachment": {
         "type": "object",
+        "description": "一个文件的展示形式（界面用）。",
         "required": [
           "url",
           "name",
@@ -7805,6 +7806,26 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "SharedFile": {
+        "type": "object",
+        "description": "挂给用户的一个文件（存储形态）：文件存储里的哪个文件，以及展示要用的名字与类型。地址、能否内联由它派生（[`Attachment`]）。",
+        "required": [
+          "file_id",
+          "name",
+          "media_type"
+        ],
+        "properties": {
+          "file_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "media_type": {
+            "type": "string"
           }
         }
       },

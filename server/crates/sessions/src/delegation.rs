@@ -136,7 +136,7 @@ pub(crate) fn hand_back_in(
     owed: &[Owed],
     ending: Ending,
     text: &str,
-    attachments: &[muliao_runtime::conventions::Attachment],
+    attachments: &[muliao_runtime::conventions::SharedFile],
 ) -> Result<()> {
     if owed.is_empty() {
         return Ok(());

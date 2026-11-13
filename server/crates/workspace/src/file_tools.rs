@@ -21,7 +21,7 @@ use muliao_platform::sandbox::Confinement;
 use muliao_platform::text::truncate;
 use muliao_platform::tool_views::{ToolRender, ViewBlock, diff};
 use muliao_platform::tooling::{BuiltinTool, RunScope, ToolTraits, builtin};
-use muliao_runtime::conventions::{attach, attachment_of};
+use muliao_runtime::conventions::{SharedFile, attach};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -863,7 +863,7 @@ impl Tool<RunScope> for ShareFile {
             other => ToolError::Abort(Box::new(other)),
         })?;
         tracing::info!(agent = %scope.agent_id, session_id = %scope.session_id, file_id = %meta.id, "file shared with user");
-        attach(scope, &ctx.call.id, &[attachment_of(&meta)]);
+        attach(scope, &ctx.call.id, &[SharedFile::of(&meta)]);
         Ok(agenter::tool::text(format!("shared file {} with the user; it is shown with your reply", meta.name)))
     }
 }

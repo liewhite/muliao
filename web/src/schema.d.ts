@@ -1118,7 +1118,7 @@ export interface components {
          */
         AgentAnswer: {
             text: string;
-            attachments: components["schemas"]["Attachment"][];
+            attachments: components["schemas"]["SharedFile"][];
         };
         /** @description agent 能用的资产，按种类分组，各组按名称。 */
         AgentAssetsOut: {
@@ -1260,6 +1260,7 @@ export interface components {
             allow: boolean;
         };
         Assignee: string;
+        /** @description 一个文件的展示形式（界面用）。 */
         Attachment: {
             /** @description 文件存储的地址（files::file_url）：界面直接用它显示与下载 */
             url: string;
@@ -2195,6 +2196,12 @@ export interface components {
             created_at: string;
             /** Format: date-time */
             updated_at: string;
+        };
+        /** @description 挂给用户的一个文件（存储形态）：文件存储里的哪个文件，以及展示要用的名字与类型。地址、能否内联由它派生（[`Attachment`]）。 */
+        SharedFile: {
+            file_id: string;
+            name: string;
+            media_type: string;
         };
         SitePageOut: {
             agent_id: string;

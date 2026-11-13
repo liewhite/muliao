@@ -26,7 +26,7 @@ use muliao_platform::db::{Database, migrate};
 use muliao_platform::sandbox::{Category, Confinement, Mode, Sandbox, WritablePaths};
 use muliao_platform::tooling::{Audience, RunScope, ToolTraits, builtin};
 use muliao_platform::vault::Vault;
-use muliao_runtime::conventions::{Attachment, TOOL_ATTACHMENTS, attach, tool_attachments};
+use muliao_runtime::conventions::{SharedFile, TOOL_ATTACHMENTS, attach, tool_attachments};
 use muliao_runtime::mcp::{Confine, McpConnector};
 use muliao_runtime::models::ModelRegistry;
 use muliao_runtime::toolbox::Toolbox;
@@ -46,7 +46,7 @@ const PNG: &[u8] = &[
 
 /// 一个测试工具：交回一张图片，并给结果挂上一个附件
 struct Snap {
-    attachment: Attachment,
+    attachment: SharedFile,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -179,12 +179,8 @@ base_url = "{}"
     let usage = Arc::new(UsageLog::new(db.clone(), chrono_tz::UTC));
     let vault = Arc::new(Vault::new("3QOHdQSfwdIhMog5wkCMiIBXFANh4YdV-XA9xY3RmyY=").unwrap());
     let secrets = Arc::new(Secrets::new(source.clone(), vault));
-    let attachment = Attachment {
-        url: muliao_files::file_url("f1", "report.pdf"),
-        name: "report.pdf".into(),
-        media_type: "application/pdf".into(),
-        inline: false,
-    };
+    let attachment =
+        SharedFile { file_id: "f1".into(), name: "report.pdf".into(), media_type: "application/pdf".into() };
     let toolbox = Arc::new(Toolbox::new(vec![
         builtin(Snap { attachment }, ToolTraits::read().secret_args(&["token"])),
         builtin(Hidden, ToolTraits::write().admin()),
@@ -319,7 +315,7 @@ async fn a_run_from_start_to_finish() {
     let Content::File(f) = &t.content[1] else { panic!("{t:?}") };
     let FileSource::Url(url) = &f.source else { panic!("the image is stored, not kept inline") };
     assert!(url.starts_with("/api/files/") && url.ends_with("/snap.png"), "{url}");
-    assert_eq!(tool_attachments(t)[0].name, "report.pdf");
+    assert_eq!(tool_attachments(t).unwrap()[0].name, "report.pdf");
     assert!(t.metadata.as_ref().unwrap().get(TOOL_ATTACHMENTS).is_some());
     history.push(Message::User(req));
 

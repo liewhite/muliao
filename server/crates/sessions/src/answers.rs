@@ -3,7 +3,7 @@
 //! 挂起、唤醒与交回的规则在 [`crate::pending`]。存下的形状是 `{"tool": ..., "result": ...}`。
 
 use agenter::{Approval, Content, Resolution};
-use muliao_runtime::conventions::Attachment;
+use muliao_runtime::conventions::SharedFile;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -182,7 +182,7 @@ pub const STILL_WORKING: &str = "A new message arrived before the agent you aske
 pub struct AgentAnswer {
     pub text: String,
     #[serde(default)]
-    pub attachments: Vec<Attachment>,
+    pub attachments: Vec<SharedFile>,
 }
 
 // ---- 等批准的调用 ----

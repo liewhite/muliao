@@ -249,30 +249,31 @@ fn result_text(result: &ToolResult) -> String {
 }
 
 /// 工具结果，或失败、参数被拒绝交还模型重试的结果（is_error）。事后补的结果没有结束时间。展示规则只用于工具交回的文本
-/// 结果（内容只有一段文字）。
-pub fn result_item(result: &ToolResult, renders: &Renders) -> Item {
+/// 结果（内容只有一段文字）。挂上的文件记录形状不对时报数据损坏。
+pub fn result_item(result: &ToolResult, renders: &Renders) -> Result<Item> {
     result_entry(result, renders)
 }
 
-fn result_entry<U>(result: &ToolResult, renders: &Renders) -> Item<U> {
+fn result_entry<U>(result: &ToolResult, renders: &Renders) -> Result<Item<U>> {
     let (tool_name, tool_call_id, text) = (result.tool_name.clone(), result.call_id.clone(), result_text(result));
     if result.is_error {
-        return Item::ToolError(ErrorItem { tool_name, tool_call_id, text, at: finished_at(result) });
+        return Ok(Item::ToolError(ErrorItem { tool_name, tool_call_id, text, at: finished_at(result) }));
     }
+    let attachments = tool_attachments(result).map_err(broken)?.iter().map(Attachment::from).collect();
     let made_up = made_up(result).is_some();
     let view = match (renders.get(&result.tool_name), result.content.as_slice()) {
         (Some(render), [Content::Text { text }]) if !made_up => render.result_view(&result.tool_name, text),
         _ => None,
     };
-    Item::ToolResult(ResultItem {
+    Ok(Item::ToolResult(ResultItem {
         tool_name,
         tool_call_id,
         text,
-        attachments: tool_attachments(result),
+        attachments,
         images: result_images(result),
         view,
         at: if made_up { None } else { finished_at(result) },
-    })
+    }))
 }
 
 /// 一条请求里连续的、同一发送方的用户内容（文字与附件），合成一条用户条目。sender：信件记下的发送方，没记的（迟到的
@@ -340,7 +341,7 @@ fn request_items<U>(
         match (part, kind) {
             (RequestPart::ToolResult(r), _) => {
                 own.flush_into(items, user);
-                items.push(result_entry(r, renders));
+                items.push(result_entry(r, renders)?);
             }
             (RequestPart::Text { text }, Some(PartKind::Event { source, check_in })) => {
                 own.flush_into(items, user);
@@ -684,12 +685,12 @@ mod tests {
             result("c4", "t", vec![Content::text("shot"), Content::File(file("/api/files/i/s.png"))], false);
         let r = renders();
 
-        let Item::ToolResult(ok) = result_item(&ok, &r) else { panic!() };
+        let Item::ToolResult(ok) = result_item(&ok, &r).unwrap() else { panic!() };
         assert_eq!((ok.at, ok.text.as_str()), (Some(ended), "out"));
         assert!(ok.view.is_some());
 
         assert_eq!(
-            result_item(&err, &r),
+            result_item(&err, &r).unwrap(),
             Item::ToolError(ErrorItem {
                 tool_name: "t".into(),
                 tool_call_id: "c2".into(),
@@ -698,10 +699,10 @@ mod tests {
             })
         );
 
-        let Item::ToolResult(made) = result_item(&made, &r) else { panic!() };
+        let Item::ToolResult(made) = result_item(&made, &r).unwrap() else { panic!() };
         assert_eq!((made.at, made.view), (None, None));
 
-        let Item::ToolResult(with_image) = result_item(&with_image, &r) else { panic!() };
+        let Item::ToolResult(with_image) = result_item(&with_image, &r).unwrap() else { panic!() };
         assert_eq!(with_image.view, None);
         assert_eq!(with_image.images.len(), 1);
         assert_eq!(with_image.text, "shot");

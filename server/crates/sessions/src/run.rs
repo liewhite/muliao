@@ -372,7 +372,8 @@ fn finish_in(
     let done = !crate::holds::has_active_in(tx, session_id)? && queued_in(tx, session_id)?.is_empty();
     if !end.stopped && end.waiting_on.is_empty() && done {
         let messages: Vec<Message> = saved.into_iter().map(|s| s.message).collect();
-        settle_finished_in(tx, waker, &session, &end.answer, &shared_attachments(&messages))?;
+        let shared = shared_attachments(&messages).map_err(broken)?;
+        settle_finished_in(tx, waker, &session, &end.answer, &shared)?;
     }
     // 最后发布：订阅者（推送、issue 的表态）看到的是结清之后的状态
     events.run_ended(
@@ -794,7 +795,11 @@ impl Driver<'_> {
                 }
                 let mut shown = result.clone();
                 set_finished_at(&mut shown, now);
-                live.item(&session_id, &agent, result_item(&shown, &renders));
+                match result_item(&shown, &renders) {
+                    Ok(item) => live.item(&session_id, &agent, item),
+                    // 只是实时展示：这一条不显示，保存后历史里照常报出
+                    Err(e) => tracing::error!(session_id, error = %e, "a tool result cannot be shown live"),
+                }
             }
         }
     }
