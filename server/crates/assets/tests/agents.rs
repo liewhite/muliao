@@ -58,12 +58,13 @@ async fn create_writes_files_rules_and_row() {
     std::fs::create_dir(w.root().join("Bob")).unwrap();
     assert!(again("bob", AgentRules::default(), None).await.is_err());
     // 只差大小写的名字算同一个
-    assert!(again("交易", AgentRules::default(), None).await.is_err());
+    again("alice", AgentRules::default(), None).await.unwrap();
+    assert!(again("Alice", AgentRules::default(), None).await.unwrap_err().to_string().contains("already taken"));
     let bad = AgentRules { allow: vec!["use:skill:nope".into()], ..Default::default() };
     assert!(again("carol", bad, None).await.is_err());
     assert!(again("carol", AgentRules::default(), Some("q:x")).await.is_err());
     assert!(!w.root().join("carol").exists());
-    assert_eq!(w.service.list().await.unwrap().len(), 1);
+    assert_eq!(w.service.list().await.unwrap().len(), 2);
 
     // 写库失败时撤回目录、工作目录与 access.toml
     let before = read(w.root().join("platform/access.toml"));
@@ -76,7 +77,7 @@ async fn create_writes_files_rules_and_row() {
     assert!(again("dave", rules, None).await.is_err());
     assert!(!w.root().join("dave").exists());
     assert_eq!(read(w.root().join("platform/access.toml")), before);
-    assert_eq!(std::fs::read_dir(w.workspaces()).unwrap().count(), 1);
+    assert_eq!(std::fs::read_dir(w.workspaces()).unwrap().count(), 2);
 }
 
 #[tokio::test(flavor = "multi_thread")]

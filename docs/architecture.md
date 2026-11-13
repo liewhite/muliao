@@ -20,7 +20,7 @@
 | Issue | 人与 agent 协作的一件事：状态、优先级、owner（必填、不随指派变）、指派人、上游依赖（无环）、时间线。in_progress 且上游已完成时，动态投进被指派 agent 在这个 issue 上唯一的会话 | `issues`、`issue_activities`、`issue_dependencies` 表 |
 | Trigger | 具名、持久的事件来源，把外部刺激变成信件；定时、一次性、流式多态实现，每次触发新开一个会话；不会再触发的标为已结束，留下历史 | `triggers` 表 |
 
-**资源目录（#498）**：可编辑的 AI 资源（记忆、skill、MCP、secret、agent 配置、分发规则）都是 `assets/` 下的普通文件（`platform/` 放 access.toml 与公共资源，`<agent 名>/` 放 agent.toml、memory.md 与它名下的资源），人和 agent 直接用文件工具改，下次读到就生效；没有版本，误改从备份或会话记录恢复。读走整树的不可变快照，按文件指纹（路径、修改时间、大小）缓存；平台自己写时串行读-改-写、原子 rename，toml 在原文上改（toml_edit）、保留注释。文件格式沿用 Python 版。原则：
+**资源目录（#498）**：可编辑的 AI 资源（记忆、skill、MCP、secret、agent 配置、分发规则）都是 `assets/` 下的普通文件（`platform/` 放 access.toml 与公共资源，`<agent 名>/` 放 agent.toml、memory.md 与它名下的资源），人和 agent 直接用文件工具改，下次读到就生效；没有版本，误改从备份或会话记录恢复。读走整树的不可变快照，按文件指纹（路径、修改时间、大小）缓存；平台自己写时串行读-改-写、原子 rename，toml 在原文上改（toml_edit）、保留注释。原则：
 - **文件在谁的目录下就归谁**：没有 owner 字段，转移 owner 就是挪文件。
 - **名字只认数据库**：agent 目录按目录名对上 `agents` 表里的名字（agent.toml 里没有 id）；改名只走平台（一把锁里挪目录、换 access.toml 那一节行尾注释里的名字、写库，失败回滚）。对不上任何 agent 的目录不加载并报出，不猜是不是改了名。access.toml 的 `[agents.<id>]` 按 id 记（行尾注释是名字，只给人看），改名不动规则。
 - **坏文件跳过并报出**：读不出、格式不对的不加载，记成问题，在相关 agent 每次运行开头告诉它（platform/ 的只报给 admin），全部记日志；读坏的名字仍算占用，新建同名报 Conflict。

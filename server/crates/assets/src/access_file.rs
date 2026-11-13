@@ -377,6 +377,18 @@ pub fn vet(before: Option<&str>, after: &str, tools: &ToolTable, addressable: &[
     Ok(())
 }
 
+/// 手写 access.toml 时（文件工具经写入口）：after 里新出现的 `[agents.<id>]` 节（before 没有的）中，id 不是数据库里的
+/// agent（known）的那些。抄错的 id 会让这一节的 deny 不生效（等于放宽权限），所以写入口拒绝；已有的节不查（agent 删除时
+/// 由平台去掉它那一节）。平台自己改它（[`plan`]）只写认得的 id，不经这里。
+pub fn unknown_new_agents(before: Option<&str>, after: &str, known: &BTreeSet<String>) -> Vec<String> {
+    let sections = |text: Option<&str>| -> Vec<String> {
+        let Some(Ok(data)) = text.map(|t| t.parse::<toml::Table>()) else { return Vec::new() };
+        data.get("agents").and_then(toml::Value::as_table).map(|t| t.keys().cloned().collect()).unwrap_or_default()
+    };
+    let old = sections(before);
+    sections(Some(after)).into_iter().filter(|id| !old.contains(id) && !known.contains(id)).collect()
+}
+
 /// 文件里写着的每一条规则（[roles.*] 与 [agents.*] 的 allow、deny 里的字符串），不管形式对不对；读不出时没有。
 fn rules_in(text: Option<&str>) -> Vec<String> {
     let Some(Ok(data)) = text.map(|t| t.parse::<toml::Table>()) else { return Vec::new() };

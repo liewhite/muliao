@@ -130,8 +130,10 @@ impl Distribution {
         }
         let snapshot = self.source.snapshot().await?;
         // 还没建的没有 id 与名字：节名与注释不影响校验
-        let section = agent_id.map_or_else(crate::naming::new_agent_id, str::to_owned);
-        let name = crate::naming::AgentName::stored(PREVIEW_SECTION.to_owned());
+        let (section, name) = match agent_id.and_then(|id| snapshot.names.get_key_value(id)) {
+            Some((id, name)) => (id.clone(), name.clone()),
+            None => (crate::naming::new_agent_id(), crate::naming::AgentName::stored(PREVIEW_SECTION.to_owned())),
+        };
         // plan 与下面的计算都从同一份快照出发：plan 认的角色快照里都有
         access_file::plan(&snapshot, |doc| access_file::set_agent_rules(doc, &section, &name, rules))?;
         // 还没建的 agent 没有自己的资源，只看规则

@@ -29,6 +29,7 @@ pub fn is_agent_id(value: &str) -> bool {
 /// agent 名：去首尾空白、NFC 规范化后的写法，非空、不超过 64 个字符、不含控制字符（Unicode 类别 C*）。
 ///
 /// 两个名字相等（含哈希、排序）按 [`AgentName::key`]：同一个字的不同编码（NFC / NFD）、只差大小写的，都是同一个名字。
+/// 要知道写法变了没有（如改名只改了大小写）用 [`AgentName::as_str`] 比。
 /// 名字也是资源目录里的目录名，macOS 的文件系统不分大小写与编码形式，所以唯一性按这个键算（数据库 `name_key` 列）。
 #[derive(Clone)]
 pub struct AgentName {

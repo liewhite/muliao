@@ -117,6 +117,17 @@ fn check(
                 let before = if path.is_file() { read_lossy(&path) } else { None };
                 access_file::vet(before.as_deref(), text, &snapshot.tools, &snapshot.addressable())
                     .map_err(|e| (e.to_string(), Section::RolesAndPermissions))?;
+                let known = snapshot.names.keys().cloned().collect();
+                let unknown = access_file::unknown_new_agents(before.as_deref(), text, &known);
+                if !unknown.is_empty() {
+                    return Err((
+                        format!(
+                            "[agents.<id>] sections {unknown:?} name no existing agent; the section name is the agent's \
+                             id, shown by get_agent"
+                        ),
+                        Section::RolesAndPermissions,
+                    ));
+                }
                 Ok(text.to_owned())
             }
             Owner::Agent(_) => {

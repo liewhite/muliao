@@ -43,7 +43,8 @@ pub struct Written {
 #[derive(PartialEq, Eq)]
 struct Key {
     tree: Vec<(PathBuf, i128, u64)>,
-    known: BTreeMap<String, crate::naming::AgentName>,
+    /// 各 agent 的名字按原文比（只改了大小写也重读）
+    names: BTreeMap<String, String>,
     deleting: BTreeSet<String>,
 }
 
@@ -107,15 +108,15 @@ impl AssetSource {
         let (known, deleting) = crate::agents::identities(&self.db).await?;
         let root = self.root.clone();
         let tree = tokio::task::spawn_blocking(move || fingerprint(&root)).await.expect("fingerprint panicked");
-        let key = Key { tree, known, deleting };
+        let names = known.iter().map(|(id, n)| (id.clone(), n.as_str().to_owned())).collect();
+        let key = Key { tree, names, deleting };
         if let (Some(k), Some(s)) = (&state.key, &state.snapshot)
             && *k == key
         {
             return Ok(s.clone());
         }
-        let (root, known, deleting, max, last, tools) = (
+        let (root, deleting, max, last, tools) = (
             self.root.clone(),
-            key.known.clone(),
             key.deleting.clone(),
             self.memory_max_chars,
             state.snapshot.clone(),

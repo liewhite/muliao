@@ -169,6 +169,8 @@ async fn write_entry_vets_like_the_reader() {
     assert!(write(access.clone(), &format!("[agents.{a}]\nallow = [\"use:skill:typo\"]\n")).await.is_err());
     // 节名是 id，写成名字的拒绝
     assert!(write(access.clone(), "[agents.alice]\nallow = [\"use:skill:s\"]\n").await.is_err());
+    // 新加的节 id 要是现有的 agent
+    assert!(write(access.clone(), "[agents.0123456789ab]\nallow = [\"use:skill:s\"]\n").await.is_err());
     write(access, &format!("[agents.{a}]\nallow = [\"use:skill:s\"]\n")).await.unwrap();
     // 隐藏文件不校验
     write(root.join("alice/.cache"), "x").await.unwrap();
