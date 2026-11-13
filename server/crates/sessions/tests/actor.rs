@@ -144,6 +144,28 @@ impl Tool<RunScope> for Echo {
     }
 }
 
+/// 参数 value 声明为要脱敏（像 vault_set），记下执行时拿到的值
+struct Stash(Arc<Mutex<Vec<String>>>);
+
+#[derive(Deserialize, JsonSchema)]
+struct StashArgs {
+    value: String,
+}
+
+impl Tool<RunScope> for Stash {
+    type Args = StashArgs;
+    fn name(&self) -> &str {
+        "stash"
+    }
+    fn description(&self) -> &str {
+        "Stash a secret."
+    }
+    async fn call(&self, _ctx: ToolCtx<'_, RunScope>, a: StashArgs) -> Result<ToolOutput, ToolError> {
+        self.0.lock().unwrap().push(a.value);
+        Ok(agenter::tool::text("stashed"))
+    }
+}
+
 // ---- 世界 ----
 
 struct World {
@@ -160,6 +182,7 @@ struct World {
     release: Arc<tokio::sync::Notify>,
     bus: Arc<Bus>,
     flaky_calls: Arc<Mutex<u32>>,
+    stashed: Arc<Mutex<Vec<String>>>,
 }
 
 async fn world() -> World {
@@ -206,6 +229,8 @@ async fn world() -> World {
     tools.push(builtin(Echo, ToolTraits::read()));
     let flaky_calls = Arc::new(Mutex::new(0));
     tools.push(builtin(Flaky(flaky_calls.clone()), ToolTraits::read()));
+    let stashed = Arc::new(Mutex::new(Vec::new()));
+    tools.push(builtin(Stash(stashed.clone()), ToolTraits::read().secret_args(&["value"])));
     let toolbox = Arc::new(Toolbox::new(tools));
     table.bind(toolbox.specs());
     let confine: Confine = Arc::new(|_agent: String| async { Err("no MCP in this test".into()) }.boxed());
@@ -285,6 +310,7 @@ async fn world() -> World {
         failed,
         release,
         flaky_calls,
+        stashed,
     }
 }
 
@@ -377,6 +403,24 @@ async fn a_chat_with_a_tool_call_is_saved_step_by_step() {
     let h = w.history(&s).await;
     assert_eq!(h.len(), 6);
     assert!(texts(&h[4])[0].starts_with("[Current local time:"));
+}
+
+#[tokio::test]
+async fn a_secret_argument_reaches_the_tool_but_is_saved_redacted() {
+    let w = world().await;
+    w.script.call("c1", "stash", json!({"value": "glsa_s3cr3t"}));
+    w.script.text("存好了");
+    let s = w.new_chat("存一下").await;
+    assert_eq!(w.settled(&s).await, WorkState::Idle);
+    assert_eq!(*w.stashed.lock().unwrap(), vec!["glsa_s3cr3t".to_owned()], "the tool gets the plain value");
+    let h = w.history(&s).await;
+    let Message::Assistant(r) = &h[1] else { panic!("{h:#?}") };
+    let Some(agenter::ResponsePart::ToolCall(c)) =
+        r.parts.iter().find(|p| matches!(p, agenter::ResponsePart::ToolCall(_)))
+    else {
+        panic!("{r:#?}")
+    };
+    assert_eq!(c.args, r#"{"value":"[redacted]"}"#, "the saved call is redacted");
 }
 
 #[tokio::test]

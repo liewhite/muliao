@@ -712,14 +712,15 @@ impl Driver<'_> {
 
     async fn save_with(
         &mut self,
-        mut messages: Vec<Message>,
+        messages: Vec<Message>,
         mail: Vec<i64>,
         clear: Clear,
         also: impl FnOnce(&mut Tx<'_>) -> Result<()> + Send + 'static,
     ) -> Result<Vec<i64>> {
-        self.core.redaction.messages(&mut messages);
+        // 脱敏只作用于存下的那份；这次运行内存里的历史留明文：下一步执行的就是这些调用，执行时要拿到真的参数（#770）
+        let mut stored = messages.clone();
+        self.core.redaction.messages(&mut stored);
         let (session_id, run_id, partial) = (self.session_id().to_owned(), self.begun.run_id, self.partial.clone());
-        let stored = messages.clone();
         let ids = self
             .core
             .db
