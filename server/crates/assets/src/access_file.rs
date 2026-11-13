@@ -351,14 +351,14 @@ pub fn vet(before: Option<&str>, after: &str, tools: &ToolTable, addressable: &[
     if let Access::Invalid(reasons) = parse(Some(after), &BTreeSet::new(), tools) {
         return Err(invalid(reasons.join("; ")));
     }
-    let old: HashSet<String> = rules_in(before).into_iter().collect();
+    let old: HashSet<Rule> = rules_in(before).into_iter().collect();
     let mut bad: Vec<String> = Vec::new();
-    for p in rules_in(Some(after)) {
-        if old.contains(&p) || bad.contains(&p) {
+    for r in rules_in(Some(after)) {
+        let p = r.to_string();
+        if old.contains(&r) || bad.contains(&p) {
             continue;
         }
-        // after 已整份校验过，每条都读得出
-        if Rule::parse(&p).is_ok_and(|r| r.matches_nothing(addressable)) {
+        if r.matches_nothing(addressable) {
             bad.push(p);
         }
     }
@@ -386,8 +386,8 @@ pub fn unknown_new_agents(before: Option<&str>, after: &str, known: &BTreeSet<Ag
     sections(Some(after)).into_iter().filter(|id| !old.contains(id) && !known.contains(id)).collect()
 }
 
-/// 文件里写着的每一条规则（[roles.*] 与 [agents.*] 的 allow、deny 里的字符串），不管形式对不对；读不出时没有。
-fn rules_in(text: Option<&str>) -> Vec<String> {
+/// 文件里写着的每一条读得出的规则（[roles.*] 与 [agents.*] 的 allow、deny），不管所在的节对不对；读不出时没有。
+fn rules_in(text: Option<&str>) -> Vec<Rule> {
     let Some(Ok(data)) = text.map(|t| t.parse::<toml::Table>()) else { return Vec::new() };
     let mut out = Vec::new();
     for section in ["roles", "agents"] {
@@ -395,7 +395,7 @@ fn rules_in(text: Option<&str>) -> Vec<String> {
         for entry in entries.values().filter_map(toml::Value::as_table) {
             for key in ["allow", "deny"] {
                 if let Some(list) = entry.get(key).and_then(toml::Value::as_array) {
-                    out.extend(list.iter().filter_map(|r| r.as_str().map(str::to_owned)));
+                    out.extend(list.iter().filter_map(|r| r.as_str().and_then(|s| Rule::parse(s).ok())));
                 }
             }
         }

@@ -164,9 +164,12 @@ pub fn writable<'s, C: KindContent>(
     name: &str,
     actor: &Actor,
 ) -> Result<Option<(&'s Asset, &'s C)>> {
-    let Some(a) = snapshot.existing(C::KIND, name)? else { return Ok(None) };
-    check_change(snapshot, actor, a)?;
-    Ok(C::of(&a.content).map(|c| (a, c)))
+    if snapshot.existing(C::KIND, name)?.is_none() {
+        return Ok(None);
+    }
+    let found = snapshot.typed::<C>(name)?;
+    check_change(snapshot, actor, found.0)?;
+    Ok(Some(found))
 }
 
 /// grants 能用的这一种资源与它们带类型的内容，按名称（记忆含各 agent 的私有记忆）。

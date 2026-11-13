@@ -278,8 +278,7 @@ impl Rule {
     /// 按名字指某一种的规则会拼错；不限种类的与目录规则（目录可以还没建）不查。addressable 是规则能指的全部
     /// (种类, 名字)，一项都匹配不上时为真。
     pub fn matches_nothing(&self, addressable: &[(Kind, String)]) -> bool {
-        matches!(self, Rule::Named { .. })
-            && !addressable.iter().any(|(k, n)| Action::ALL.iter().any(|a| self.matches(*a, *k, n)))
+        matches!(self, Rule::Named { kind, glob, .. } if !addressable.iter().any(|(k, n)| k == kind && fnmatch(n, glob)))
     }
 }
 
