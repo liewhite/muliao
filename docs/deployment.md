@@ -41,7 +41,7 @@ launchctl kickstart -k gui/$(id -u)/com.muliao    # 重启（升级后）
 deploy/selfcheck.sh <commit>                      # 重启后自检（在仓库里跑）
 ```
 
-为什么经过一个链接、换版本不改 plist：从服务里起的进程（agent 的命令和它脱离出去的脚本）执行 `launchctl bootstrap` 一律报「5: Input/output error」（#706 实测，#644 服务停了起不来也是它），只有 `kickstart`、`kill` 能用。所以 plist 装好就不动，换版本只换 `app/current` 再 `kickstart -k`。要让服务停着换库时（如恢复库备份）也照这个做：把入口暂时指向 `deploy/hold.sh`（launchd 拉起的只是一个在等的脚本），换好库再把入口指回程序，hold.sh 随即 exec 过去（见 `deploy/lib.sh` 的 `hold_service` / `release`）。改了 plist 本身（环境变量、ExitTimeOut）要在登录的终端里 `launchctl bootout` 再 `bootstrap` 才生效，`kickstart` 不重读。
+为什么经过一个链接、换版本不改 plist：从服务里起的进程（agent 的命令和它脱离出去的脚本）执行 `launchctl bootstrap` 一律报「5: Input/output error」（#706 实测，#644 服务停了起不来也是它），只有 `kickstart`、`kill` 能用。所以 plist 装好就不动，换版本只换 `app/current` 再 `kickstart -k`。要让服务停着换库时（如恢复库备份）也照这个做：把入口暂时指向 `deploy/hold.sh`（launchd 拉起的只是一个在等的脚本），换好库再把入口指回程序，hold.sh 随即 exec 过去（见 `deploy/lib.sh` 的 `hold_service` / `release`）。现成的入口是 `deploy/offline_restart.sh '<停着时执行的命令>'`：自己转到后台，停服务、跑命令、再放行并做健康检查，日志在 `~/.muliao/deploy.log`。改了 plist 本身（环境变量、ExitTimeOut）要在登录的终端里 `launchctl bootout` 再 `bootstrap` 才生效，`kickstart` 不重读。
 
 `deploy/selfcheck.sh` 做部署后的通用检查并逐项打印 PASS/FAIL 和依据：进程启动时间晚于安装时间（`app/current` 目录的修改时间）、已装版本（`app/current/COMMIT`）包含目标 commit、日志里本进程的启动行（`muliao is serving ... pid=<pid>`）之后没有 ERROR、端口返回 200、`launchctl` 的 runs 隔 60 秒（`RUNS_WAIT`）不增长（不增长＝没有循环重启）。任一失败退出码为 1；只报告，不处理。
 

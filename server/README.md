@@ -1,6 +1,6 @@
-# muliao（Rust 版后端，开发中）
+# muliao 后端
 
-Python 版（`src/`）的重写，见 #675。LLM 层用 agenter（liewhite/agenter）。切换上线前 Python 版照常从本仓库安装、不受影响。
+由 Python 版重写而来（#675，Python 版已随 #717 删除）。LLM 层用 agenter（liewhite/agenter）。
 
 ## 结构
 Cargo workspace，一个领域一个 crate（`crates/<领域>`，包名 `muliao-<领域>`），成员按目录收：加领域只加目录。
