@@ -48,27 +48,44 @@ pub struct AgentInfo {
     pub created_at: DateTime<Utc>,
     /// 系统默认 agent，最多一个
     pub is_default: bool,
-    /// 归档时间；非空时不能运行
-    pub archived_at: Option<DateTime<Utc>>,
+    pub state: AgentState,
+}
+
+/// agent 处在哪个阶段。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentState {
+    Active,
+    /// 已归档：不能运行，取消归档后恢复
+    Archived {
+        at: DateTime<Utc>,
+    },
     /// 正在删除（只有 [`agent_in`] 会给出这样的）
-    pub deleting: bool,
+    Deleting,
 }
 
 impl AgentInfo {
     pub fn archived(&self) -> bool {
-        self.archived_at.is_some()
+        matches!(self.state, AgentState::Archived { .. })
+    }
+
+    /// 归档时间；没归档为 None。
+    pub fn archived_at(&self) -> Option<DateTime<Utc>> {
+        match self.state {
+            AgentState::Archived { at } => Some(at),
+            _ => None,
+        }
     }
 }
 
 fn info(row: &Row<'_>) -> rusqlite::Result<AgentInfo> {
-    Ok(AgentInfo {
-        id: row.get(0)?,
-        name: row.get(1)?,
-        is_default: row.get(2)?,
-        archived_at: row.get(3)?,
-        created_at: row.get(4)?,
-        deleting: row.get::<_, Option<String>>(5)?.is_some(),
-    })
+    let archived_at: Option<DateTime<Utc>> = row.get(3)?;
+    let deleting = row.get::<_, Option<String>>(5)?.is_some();
+    let state = match (deleting, archived_at) {
+        (true, _) => AgentState::Deleting,
+        (false, Some(at)) => AgentState::Archived { at },
+        (false, None) => AgentState::Active,
+    };
+    Ok(AgentInfo { id: row.get(0)?, name: row.get(1)?, is_default: row.get(2)?, created_at: row.get(4)?, state })
 }
 
 fn one(c: &Connection, filter: &str, value: &str) -> Result<Option<AgentInfo>> {
@@ -204,7 +221,7 @@ pub(crate) fn check_name_free_in(c: &Connection, name: &str, agent_id: Option<&s
 /// 可以开始删除的 agent：存在且不在删除中（否则 NotFound / Conflict）。
 pub(crate) fn deletable_in(c: &Connection, agent_id: &str) -> Result<AgentInfo> {
     let agent = agent_in(c, agent_id)?;
-    if agent.deleting {
+    if agent.state == AgentState::Deleting {
         return Err(conflict(format!("agent {:?} is already being deleted", agent.name)));
     }
     Ok(agent)
@@ -224,6 +241,11 @@ pub(crate) fn deleting_in(c: &Connection) -> Result<Vec<(String, String)>> {
     let mut stmt = c.prepare("SELECT id, deleting_by FROM agents WHERE deleting_by IS NOT NULL ORDER BY id")?;
     let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
     Ok(rows)
+}
+
+/// 正在删除的这个 agent；不存在或没在删除时 None。
+pub(crate) fn being_deleted_in(c: &Connection, agent_id: &str) -> Result<Option<AgentInfo>> {
+    one(c, "id = ?1 AND deleting_by IS NOT NULL", agent_id)
 }
 
 /// 删除正在删除的 agent 的行（它的文件已删）；已不在时什么都不做（删除重做）。

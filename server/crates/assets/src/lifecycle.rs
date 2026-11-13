@@ -131,9 +131,10 @@ impl AgentLifecycle {
 /// 删工作目录、资源目录与 access.toml 里它的那一节，最后删这一行。行已不在时什么都不做；每一步重做时是空操作。
 async fn remove_files(db: Arc<Database>, source: Arc<AssetSource>, workspace: PathBuf, agent_id: String) -> Result<()> {
     let id = agent_id.clone();
-    let row = db.read(move |c| Ok::<_, crate::error::Error>(agents::agent_in(c, &id).ok())).await?;
-    let Some(agent) = row else { return Ok(()) };
-    assert!(agent.deleting, "agent {agent_id} reached file removal without being marked as deleting");
+    // 只删标着正在删除的：行已不在（删除重做）时什么都不做
+    if db.read(move |c| agents::being_deleted_in(c, &id)).await?.is_none() {
+        return Ok(());
+    }
     // 工作目录里可能有 venv、clone 的仓库：放到阻塞线程里删。删不干净（它留在后台的进程还在往里写）只记
     // warning：工作目录只是文件，不能让删除卡住；残留由启动检查列出（AgentService::report_leftovers）
     let path = workspace.clone();

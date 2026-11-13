@@ -228,7 +228,7 @@ async fn failed_file_removal_is_reported_and_resumed() {
     std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
     assert!(matches!(err, Err(Error::Io(_))), "{err:?}");
     let info = w.service.get(&a).await.unwrap();
-    assert!(info.deleting, "it stays marked as being deleted");
+    assert_eq!(info.state, muliao_assets::agents::AgentState::Deleting, "it stays marked as being deleted");
     assert!(w.service.list().await.unwrap().is_empty());
     life.resume_deletions().await.unwrap();
     assert!(w.service.get(&a).await.is_err());

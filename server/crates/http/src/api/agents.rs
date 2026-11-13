@@ -66,6 +66,7 @@ pub struct AgentOut {
 impl AgentOut {
     fn of(v: AgentView) -> Self {
         let AgentView { info, config, rules } = v;
+        let archived_at = info.archived_at();
         AgentOut {
             id: info.id,
             name: info.name,
@@ -80,7 +81,7 @@ impl AgentOut {
             deny: rules.deny,
             created_at: info.created_at,
             is_default: info.is_default,
-            archived_at: info.archived_at,
+            archived_at,
         }
     }
 }
