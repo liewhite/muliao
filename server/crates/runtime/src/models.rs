@@ -58,7 +58,7 @@ impl ModelRegistry {
                     protocol: cfg.protocol,
                     api_key: cfg.api_key.expose().to_owned(),
                     base_url: cfg.base_url.clone().unwrap_or_else(|| official_base_url(cfg.protocol).to_owned()),
-                    limit: Limit::new(format!("provider:{name}"), cfg.max_concurrency),
+                    limit: Limit::new(format!("provider:{name}"), cfg.max_concurrency.get()),
                 };
                 (name.clone(), provider)
             })

@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
 use chrono_tz::Tz;
@@ -132,7 +133,7 @@ pub struct ProviderConfig {
     /// 为空时用该协议的官方地址；OpenAI 兼容服务填其地址
     pub base_url: Option<String>,
     /// 同时进行的模型请求上限（这个 provider 下所有模型、所有 agent 共用；流式请求在整个流期间占一个）
-    pub max_concurrency: usize,
+    pub max_concurrency: NonZeroUsize,
 }
 
 /// 配置文件里 provider 一节的写法：协议名与各协议的设置平铺在一起，读入时解析成 [`ProviderConfig`]
@@ -146,7 +147,7 @@ struct RawProvider {
     /// 只属于 anthropic：别的协议下填它多半是误解，所以填了即报错
     prompt_cache: Option<bool>,
     #[serde(default = "default_max_concurrency")]
-    max_concurrency: usize,
+    max_concurrency: NonZeroUsize,
 }
 
 #[derive(Deserialize)]
@@ -157,8 +158,8 @@ enum ProviderKind {
     OpenAiResponses,
 }
 
-fn default_max_concurrency() -> usize {
-    4
+fn default_max_concurrency() -> NonZeroUsize {
+    const { NonZeroUsize::new(4).unwrap() }
 }
 
 impl TryFrom<RawProvider> for ProviderConfig {
@@ -448,7 +449,6 @@ impl Raw {
         }
         for (name, p) in &self.llm.providers {
             at_least(&mut e, &format!("llm.providers.{name}.api_key length"), p.api_key.0.len(), 1);
-            at_least(&mut e, &format!("llm.providers.{name}.max_concurrency"), p.max_concurrency, 1);
         }
         match split_model(&self.llm.default_model) {
             Ok((provider, _)) if !self.llm.providers.contains_key(provider) => e.push(format!(
@@ -539,6 +539,8 @@ precheck_timeout_seconds = 60
         let numeric = MINIMAL.replace("\"sk-xyz\"", "987654321");
         let err = parse(&numeric).unwrap_err().to_string();
         assert!(err.contains("must be a string") && !err.contains("987654321"), "{err}");
+        let zero = MINIMAL.replace("type = \"anthropic\"", "type = \"anthropic\"\nmax_concurrency = 0");
+        assert!(parse(&zero).unwrap_err().to_string().contains("nonzero"), "zero concurrency");
         let short = MINIMAL.replace("\"12345678\"", "\"1234\"");
         assert!(parse(&short).unwrap_err().to_string().contains("password"));
     }
