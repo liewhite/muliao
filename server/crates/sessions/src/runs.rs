@@ -38,31 +38,48 @@ impl RunKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
-#[serde(rename_all = "snake_case")]
+/// 一次运行的结局（[`end_in`] 记下）：失败的自带说明。
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
     Done,
     Stopped,
-    Failed,
+    Failed(String),
 }
 
 impl Outcome {
-    pub fn as_str(self) -> &'static str {
+    fn as_str(&self) -> &'static str {
         match self {
             Outcome::Done => "done",
             Outcome::Stopped => "stopped",
-            Outcome::Failed => "failed",
+            Outcome::Failed(_) => "failed",
         }
     }
 
-    fn parse(s: &str) -> Result<Self> {
-        match s {
-            "done" => Ok(Outcome::Done),
-            "stopped" => Ok(Outcome::Stopped),
-            "failed" => Ok(Outcome::Failed),
-            _ => Err(broken(format!("unknown run outcome {s:?}"))),
+    fn error(&self) -> Option<&str> {
+        match self {
+            Outcome::Failed(e) => Some(e),
+            _ => None,
         }
     }
+}
+
+/// 运行到了哪一步。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, utoipa::ToSchema)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum RunState {
+    /// 在跑、停在半路（重启后接着跑）或在等重试
+    Unfinished,
+    Done {
+        ended_at: DateTime<Utc>,
+    },
+    Stopped {
+        ended_at: DateTime<Utc>,
+    },
+    /// 最终失败：会话页显示错误与「重试」
+    Failed {
+        ended_at: DateTime<Utc>,
+        error: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, utoipa::ToSchema)]
@@ -71,19 +88,20 @@ pub struct RunRecord {
     pub session_id: String,
     pub kind: RunKind,
     pub started_at: DateTime<Utc>,
-    pub ended_at: Option<DateTime<Utc>>,
-    pub outcome: Option<Outcome>,
-    pub error: Option<String>,
+    pub state: RunState,
 }
 
 impl RunRecord {
-    pub fn failed(&self) -> bool {
-        self.outcome == Some(Outcome::Failed)
+    pub fn unfinished(&self) -> bool {
+        self.state == RunState::Unfinished
     }
 
-    /// 最终失败的说明。
+    /// 最终失败的说明；没失败的为 None。
     pub fn failure(&self) -> Option<&str> {
-        if self.failed() { self.error.as_deref() } else { None }
+        match &self.state {
+            RunState::Failed { error, .. } => Some(error),
+            _ => None,
+        }
     }
 }
 
@@ -96,15 +114,16 @@ fn raw(r: &Row<'_>) -> rusqlite::Result<Raw> {
 }
 
 fn record((id, session_id, kind, started_at, ended_at, outcome, error): Raw) -> Result<RunRecord> {
-    Ok(RunRecord {
-        id,
-        session_id,
-        kind: RunKind::parse(&kind)?,
-        started_at,
-        ended_at,
-        outcome: outcome.as_deref().map(Outcome::parse).transpose()?,
-        error,
-    })
+    let state = match (ended_at, outcome.as_deref(), error) {
+        (None, None, None) => RunState::Unfinished,
+        (Some(ended_at), Some("done"), None) => RunState::Done { ended_at },
+        (Some(ended_at), Some("stopped"), None) => RunState::Stopped { ended_at },
+        (Some(ended_at), Some("failed"), Some(error)) => RunState::Failed { ended_at, error },
+        (ended_at, outcome, error) => {
+            return Err(broken(format!("run {id} has ended_at {ended_at:?}, outcome {outcome:?} and error {error:?}")));
+        }
+    };
+    Ok(RunRecord { id, session_id, kind: RunKind::parse(&kind)?, started_at, state })
 }
 
 fn query(c: &Connection, filter: &str, params: impl rusqlite::Params) -> Result<Vec<RunRecord>> {
@@ -130,12 +149,12 @@ pub fn start_in(tx: &mut Tx<'_>, live: &Live, session_id: &str, kind: RunKind) -
 }
 
 /// 记下结局。
-pub fn end_in(tx: &mut Tx<'_>, live: &Live, run_id: i64, outcome: Outcome, error: Option<&str>) -> Result<()> {
+pub fn end_in(tx: &mut Tx<'_>, live: &Live, run_id: i64, outcome: Outcome) -> Result<()> {
     let session_id: Option<String> = tx
         .query_row(
             "UPDATE runs SET ended_at = ?1, outcome = ?2, error = ?3 WHERE id = ?4 AND ended_at IS NULL \
              RETURNING session_id",
-            params![Utc::now(), outcome.as_str(), error, run_id],
+            params![Utc::now(), outcome.as_str(), outcome.error(), run_id],
             |r| r.get(0),
         )
         .optional()?;
@@ -163,7 +182,7 @@ pub fn stop_unfinished_in(tx: &mut Tx<'_>, live: &Live, session_id: &str) -> Res
         .map(|r| r.id)
         .collect();
     for id in &ids {
-        end_in(tx, live, *id, Outcome::Stopped, None)?;
+        end_in(tx, live, *id, Outcome::Stopped)?;
     }
     Ok(ids)
 }

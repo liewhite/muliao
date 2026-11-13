@@ -154,8 +154,7 @@ impl World {
                 }
                 append_in(tx, &session, run, &messages)?;
                 if let Some(o) = outcome {
-                    let error = (o == Outcome::Failed).then_some("model said no\n  twice");
-                    end_in(tx, &live, run, o, error)?;
+                    end_in(tx, &live, run, o)?;
                 }
                 Ok::<_, muliao_sessions::error::Error>(())
             })
@@ -320,7 +319,13 @@ async fn day_of_work(w: &World) {
         Some(Outcome::Done),
     )
     .await;
-    w.run("s-user-0001", Some((Origin::User, "再试一次")), vec![user_text("再试一次")], Some(Outcome::Failed)).await;
+    w.run(
+        "s-user-0001",
+        Some((Origin::User, "再试一次")),
+        vec![user_text("再试一次")],
+        Some(Outcome::Failed("model said no\n  twice".into())),
+    )
+    .await;
 
     w.session("s-issue-001", A, "#7 修 bug", "issue", Some("7")).await;
     w.run(

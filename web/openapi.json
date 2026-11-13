@@ -6598,14 +6598,6 @@
           }
         }
       },
-      "Outcome": {
-        "type": "string",
-        "enum": [
-          "done",
-          "stopped",
-          "failed"
-        ]
-      },
       "OwnerIn": {
         "type": "object",
         "properties": {
@@ -7179,9 +7171,7 @@
           "session_id",
           "kind",
           "started_at",
-          "ended_at",
-          "outcome",
-          "error"
+          "state"
         ],
         "properties": {
           "id": {
@@ -7198,30 +7188,92 @@
             "type": "string",
             "format": "date-time"
           },
-          "ended_at": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "date-time"
-          },
-          "outcome": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/Outcome"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "error": {
-            "type": [
-              "string",
-              "null"
-            ]
+          "state": {
+            "$ref": "#/components/schemas/RunState"
           }
         }
+      },
+      "RunState": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "在跑、停在半路（重启后接着跑）或在等重试",
+            "required": [
+              "outcome"
+            ],
+            "properties": {
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "unfinished"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "ended_at",
+              "outcome"
+            ],
+            "properties": {
+              "ended_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "done"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "ended_at",
+              "outcome"
+            ],
+            "properties": {
+              "ended_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "stopped"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "最终失败：会话页显示错误与「重试」",
+            "required": [
+              "ended_at",
+              "error",
+              "outcome"
+            ],
+            "properties": {
+              "ended_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "error": {
+                "type": "string"
+              },
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "failed"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "运行到了哪一步。"
       },
       "SavedEvent": {
         "type": "object",

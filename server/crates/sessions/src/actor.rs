@@ -67,7 +67,7 @@ pub fn should_run(queued: &[Mail], latest: Option<&RunRecord>, at: &Position) ->
     if queued.is_empty() {
         return false;
     }
-    if let Some(run) = latest.filter(|r| r.failed())
+    if let Some(run) = latest.filter(|r| r.failure().is_some())
         && queued.iter().all(|m| m.taken_by == Some(run.id))
     {
         return false;
@@ -399,7 +399,7 @@ async fn fail(core: &Core, id: &str, error: &str) -> bool {
         .db
         .write(move |tx| {
             let Some(run) = runs::unfinished_in(tx, &session_id)? else { return Ok(false) };
-            runs::end_in(tx, &live, run.id, Outcome::Failed, Some(&message))?;
+            runs::end_in(tx, &live, run.id, Outcome::Failed(message.clone()))?;
             let session = directory::get_in(tx, &session_id)?
                 .ok_or_else(|| not_found(format!("session {session_id} not found")))?;
             settle_failure_in(tx, &waker, &session, run.id, &message)?;
@@ -429,7 +429,7 @@ async fn fail(core: &Core, id: &str, error: &str) -> bool {
         let alone = core
             .db
             .write(move |tx| match runs::unfinished_in(tx, &session_id)? {
-                Some(run) => runs::end_in(tx, &live, run.id, Outcome::Failed, Some(&message)).map(|()| true),
+                Some(run) => runs::end_in(tx, &live, run.id, Outcome::Failed(message)).map(|()| true),
                 None => Ok(false),
             })
             .await;
@@ -451,7 +451,7 @@ async fn reopen(core: &Core, id: &str) -> Result<()> {
                 return Err(conflict("the session is running"));
             }
             match runs::latest_in(tx, &id)? {
-                Some(r) if r.failed() => runs::reopen_in(tx, &live, &r),
+                Some(r) if r.failure().is_some() => runs::reopen_in(tx, &live, &r),
                 _ => Err(conflict("the latest run of this session did not fail; nothing to retry")),
             }
         })
@@ -478,13 +478,8 @@ async fn compact(core: &Core, id: &str) -> Result<usize> {
     .await;
     let error = result.as_ref().err().map(|e| e.to_string());
     let live = core.live.clone();
-    let ended = core
-        .db
-        .write(move |tx| {
-            let outcome = if error.is_some() { Outcome::Failed } else { Outcome::Done };
-            runs::end_in(tx, &live, run_id, outcome, error.as_deref())
-        })
-        .await;
+    let ended =
+        core.db.write(move |tx| runs::end_in(tx, &live, run_id, error.map_or(Outcome::Done, Outcome::Failed))).await;
     if let Err(e) = ended {
         tracing::error!(session_id = id, error = %e, "recording a compaction failed");
     }

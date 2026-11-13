@@ -1868,8 +1868,6 @@ export interface components {
         OnceStatus: {
             run_at: string;
         };
-        /** @enum {string} */
-        Outcome: "done" | "stopped" | "failed";
         OwnerIn: {
             /** @description agent 的 id；null 归平台 */
             owner?: string | null;
@@ -2040,10 +2038,28 @@ export interface components {
             kind: components["schemas"]["RunKind"];
             /** Format: date-time */
             started_at: string;
+            state: components["schemas"]["RunState"];
+        };
+        /** @description 运行到了哪一步。 */
+        RunState: {
+            /** @enum {string} */
+            outcome: "unfinished";
+        } | {
             /** Format: date-time */
-            ended_at: string | null;
-            outcome: components["schemas"]["Outcome"] | null;
-            error: string | null;
+            ended_at: string;
+            /** @enum {string} */
+            outcome: "done";
+        } | {
+            /** Format: date-time */
+            ended_at: string;
+            /** @enum {string} */
+            outcome: "stopped";
+        } | {
+            /** Format: date-time */
+            ended_at: string;
+            error: string;
+            /** @enum {string} */
+            outcome: "failed";
         };
         /**
          * @description 这个会话的历史或运行状态变了（SSE 事件名 `saved`）：运行中又保存了一步（实时事件换成新的一段），或运行记录变了

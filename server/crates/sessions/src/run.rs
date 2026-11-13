@@ -348,7 +348,7 @@ fn finish_in(
     adopted: &[Mail],
     end: Option<RunEnd>,
 ) -> Result<()> {
-    runs::end_in(tx, live, run_id, Outcome::Done, None)?;
+    runs::end_in(tx, live, run_id, Outcome::Done)?;
     let saved = history::saved_by_in(tx, session_id, run_id)?;
     let Some(end) = end.filter(|_| !saved.is_empty()) else { return Ok(()) };
     let session = directory::get_in(tx, session_id)?

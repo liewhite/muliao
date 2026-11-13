@@ -482,11 +482,12 @@ function retryText(retrying: Retrying | null): string {
 
 /** 最近一次运行还没正常结束：在跑（出过暂时性的错时显示它与下次尝试的时间），或最终失败（可重试）。手动压缩不算在内（接口不给） */
 function RunStatus({ run, retrying, onRetry }: { run: RunRecord; retrying: Retrying | null; onRetry: () => void }) {
-  if (run.outcome === 'failed') {
+  const { state } = run
+  if (state.outcome === 'failed') {
     return (
       <div className="flex flex-col gap-2 rounded-xl bg-danger-soft p-3 text-sm text-danger-soft-foreground">
-        <div>运行失败了（{formatTime(run.ended_at ?? run.started_at)}）</div>
-        <pre className={CODE_BLOCK}>{run.error}</pre>
+        <div>运行失败了（{formatTime(state.ended_at)}）</div>
+        <pre className={CODE_BLOCK}>{state.error}</pre>
         <div className="text-xs">如果是上下文过长，先点右上角「压缩」，完成后再重试。重试从失败的那一步继续。</div>
         <Button size="sm" variant="secondary" className="self-start" onPress={onRetry}>
           <RotateCcw className="size-4" />
@@ -495,7 +496,7 @@ function RunStatus({ run, retrying, onRetry }: { run: RunRecord; retrying: Retry
       </div>
     )
   }
-  if (run.ended_at !== null) return null
+  if (state.outcome !== 'unfinished') return null
   return (
     <div className="flex flex-col items-end gap-1 self-end text-xs text-muted">
       <div className="flex items-center gap-2">

@@ -254,7 +254,7 @@ pub fn check_text(
          stop_thread(thread={name:?}, agent={:?}).",
         agent.name
     );
-    let running = run.filter(|r| r.ended_at.is_none());
+    let running = run.filter(|r| r.unfinished());
     let doing = match (state, running, run.and_then(RunRecord::failure)) {
         (WorkState::Waiting, _, _) => "is waiting for work it started (background jobs, other agents), a wake-up it \
              scheduled, or answers it asked for"

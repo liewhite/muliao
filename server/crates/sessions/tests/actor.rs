@@ -38,7 +38,7 @@ use muliao_sessions::inbound::{UserMessage, UserTarget};
 use muliao_sessions::live::Live;
 use muliao_sessions::origins::OriginNotes;
 use muliao_sessions::run::Core;
-use muliao_sessions::runs::{self, Outcome};
+use muliao_sessions::runs::{self, RunState};
 use muliao_sessions::service::SessionService;
 use muliao_sessions::tools::Stopper;
 use muliao_sessions::transcript::Item;
@@ -471,7 +471,7 @@ async fn stopping_a_running_tool_saves_what_happened() {
     assert!(texts(&h[2])[0].contains(STOPPED_TOOL_RESULT));
     let s2 = s.clone();
     let run = w.db.read(move |c| runs::latest_in(c, &s2)).await.unwrap().unwrap();
-    assert_eq!(run.outcome, Some(Outcome::Stopped));
+    assert!(matches!(run.state, RunState::Stopped { .. }), "{run:?}");
     // 停止后再说话照常跑
     w.script.text("继续");
     w.say(UserTarget::Existing(s.clone()), "接着").await;
