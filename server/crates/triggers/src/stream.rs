@@ -17,6 +17,7 @@
 //! - 排队的事件只在内存里：服务重启、改配置、停用时丢失；一批开始触发后不再重试（至多一次）；命令退出时管道里没读的输出只
 //!   限时读。命令自己做断线重连、去重与游标，重要的来源另加轮询兜底（skill triggers）。
 
+use muliao_platform::ids::{AgentId, SessionId};
 use std::collections::{BTreeMap, HashMap};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
@@ -201,7 +202,7 @@ fn stream_alert(t: &Trigger, fault: &str) -> String {
 struct Spec {
     trigger_id: i64,
     name: String,
-    agent_id: String,
+    agent_id: AgentId,
     config: Value,
     generation: Option<String>,
 }
@@ -565,7 +566,7 @@ impl StreamRunner {
 
     async fn deliver_loop(&self, spec: &Spec, config: &StreamConfig, pending: &Pending) {
         // 已为哪个挡路的会话通知过用户（这份托管里每个挡路会话只通知一次）
-        let mut notified: Option<String> = None;
+        let mut notified: Option<SessionId> = None;
         let debounce = Duration::from_secs_f64(config.debounce_seconds);
         loop {
             pending.ready(debounce).await;
@@ -585,7 +586,7 @@ impl StreamRunner {
     }
 
     /// 上一次触发开出的会话还没做完时等着（事件继续排队，排满后命令阻塞）；挡路的会话在等待时通知用户一次。
-    async fn wait_previous(&self, spec: &Spec, pending: &Pending, notified: &mut Option<String>) -> Result<()> {
+    async fn wait_previous(&self, spec: &Spec, pending: &Pending, notified: &mut Option<SessionId>) -> Result<()> {
         loop {
             let (trigger_id, queued, already) = (spec.trigger_id, pending.len(), notified.clone());
             let notifications = self.notifications.clone();
@@ -599,7 +600,7 @@ impl StreamRunner {
                 })
                 .await?;
             let Some((t, session_id, busy)) = blocking else { return Ok(()) };
-            if busy == Busy::Waiting && already.as_deref() != Some(session_id.as_str()) {
+            if busy == Busy::Waiting && already.as_ref() != Some(&session_id) {
                 let sid = session_id.clone();
                 self.service
                     .db()
@@ -649,7 +650,7 @@ impl StreamRunner {
     }
 }
 
-fn waiting_notice(t: &Trigger, queued: usize, session_id: &str) -> Notify {
+fn waiting_notice(t: &Trigger, queued: usize, session_id: &SessionId) -> Notify {
     Notify {
         title: format!("流式触发器 {} 的事件在排队", t.name),
         body: format!(

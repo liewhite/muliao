@@ -7,6 +7,7 @@ use muliao_assets::access::{Actor, grants_for, write_scope};
 use muliao_assets::kinds::StoredKind;
 use muliao_assets::tree::Owner;
 use muliao_platform::errors::{Error, ErrorKind};
+use muliao_platform::ids::AgentId;
 
 fn skill(dir: &std::path::Path, name: &str, description: &str) {
     write(
@@ -19,7 +20,7 @@ fn reasons_for<'a>(snapshot: &'a muliao_assets::tree::Snapshot, needle: &str) ->
     snapshot.problems.iter().filter(|p| p.path.to_string_lossy().contains(needle)).map(|p| p.reason.as_str()).collect()
 }
 
-async fn two_agents() -> (World, String, String) {
+async fn two_agents() -> (World, AgentId, AgentId) {
     let w = world().await;
     let a = w.create("alice").await;
     let b = w.create("bob").await;
@@ -59,7 +60,7 @@ async fn conflicts_broken_files_and_platform_priority() {
     assert!(s.get(StoredKind::Memory, "big").is_some());
     assert!(reasons_for(&s, "big.md")[0].contains("over the limit"));
     // 问题报给相关的 agent；平台的只报给 admin
-    assert!(s.problems_for(&a).iter().all(|p| p.agent.as_deref() == Some(a.as_str())));
+    assert!(s.problems_for(&a).iter().all(|p| p.agent.as_ref() == Some(&a)));
     assert!(s.problems_for(&b).iter().any(|p| p.path.ends_with("skills/broken")));
     assert!(!s.problems_for(&b).iter().any(|p| p.path.ends_with("stray.txt")));
     // 私有记忆：显示名是 agent 名、规则不按名字指它

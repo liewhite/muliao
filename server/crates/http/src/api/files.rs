@@ -11,6 +11,7 @@ use chrono::{DateTime, Utc};
 use futures::TryStreamExt;
 use muliao_files::FileMeta;
 use muliao_platform::errors::DomainError;
+use muliao_platform::ids::MediaType;
 use serde::{Deserialize, Serialize};
 use tokio_util::io::StreamReader;
 use utoipa::{IntoParams, ToSchema};
@@ -30,7 +31,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
 pub struct FileOut {
     pub id: String,
     pub name: String,
-    pub media_type: String,
+    pub media_type: MediaType,
     pub size: u64,
     pub url: String,
     /// 能内联显示的图片；其余是下载链接
@@ -46,7 +47,7 @@ impl FileOut {
             media_type: f.media_type.clone(),
             size: f.size,
             url: f.url(),
-            inline: f.is_inline_image(),
+            inline: f.media_type.is_inline_image(),
             created_at: f.created_at,
         }
     }
@@ -59,13 +60,14 @@ pub struct UploadQuery {
     pub name: String,
 }
 
-/// 请求的 Content-Type（上传的文件、语音的类型）；没有是输入错误
-pub fn content_type<'h>(headers: &'h HeaderMap, what: &str) -> Result<&'h str, ApiError> {
-    headers
+/// 请求的 Content-Type（上传的文件、语音的类型）；没有或不是 type/subtype 是输入错误
+pub fn content_type(headers: &HeaderMap, what: &str) -> Result<MediaType, ApiError> {
+    let raw = headers
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .filter(|v| !v.is_empty())
-        .ok_or_else(|| ApiError::invalid(format!("Content-Type header is required: it is the type of {what}")))
+        .ok_or_else(|| ApiError::invalid(format!("Content-Type header is required: it is the type of {what}")))?;
+    Ok(MediaType::parse(raw)?)
 }
 
 /// 请求体就是文件内容，Content-Type 是它的类型（与 Matrix /media/upload 相同，不用 multipart），边读边写，超限即停。
@@ -96,11 +98,11 @@ async fn download(State(s): State<AppState>, Path((file_id, name)): Path<(String
     if name != meta.name {
         return Err(ApiError::not_found(format!("file {file_id:?} is not named {name:?}")));
     }
-    let disposition = if meta.is_inline_image() { Disposition::Inline } else { Disposition::Attachment };
+    let disposition = if meta.media_type.is_inline_image() { Disposition::Inline } else { Disposition::Attachment };
     let immutable = (header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=31536000, immutable"));
     file_response(
         &files.blob_path(&meta),
-        &meta.media_type,
+        meta.media_type.as_str(),
         Some((disposition, &meta.name)),
         untrusted_headers().chain([immutable]),
     )

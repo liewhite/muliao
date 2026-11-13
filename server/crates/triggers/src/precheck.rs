@@ -12,6 +12,7 @@
 //! （[`passed_in`]：记检查时间、清掉检查的出错、changed 记基线）；失败（[`failed`]：记检查时间）。投信、记出错与告警由
 //! [`crate::service`] 编排。
 
+use muliao_platform::ids::AgentId;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
@@ -206,7 +207,7 @@ impl PrecheckRunner {
     /// 执行检查，返回它的输出，检查本身失败时 `Err(Failed)`；是否触发由 [`decide`] 决定。起不了命令（系统出错）是外层的错。
     pub async fn run(
         &self,
-        agent_id: &str,
+        agent_id: &AgentId,
         p: &Precheck,
         payload: Option<&str>,
     ) -> Result<std::result::Result<String, Failed>> {
@@ -240,7 +241,7 @@ impl PrecheckRunner {
             ))));
         }
         // 每分钟一次的检查绝大多数是空跑，记 info 会占满日志（#413）；触发与失败另有 info / warn
-        tracing::debug!(agent = agent_id, seconds = started.elapsed().as_secs_f64(), bytes = size, "precheck done");
+        tracing::debug!(agent = %agent_id, seconds = started.elapsed().as_secs_f64(), bytes = size, "precheck done");
         Ok(Ok(result.stdout))
     }
 }

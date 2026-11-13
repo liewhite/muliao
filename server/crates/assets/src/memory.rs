@@ -2,6 +2,7 @@
 //! 记忆只是放的位置与分发不同：全局记忆（`platform/memory/global.md`，base 固定收录，不能删）、共享记忆（平台目录里别的，
 //! 由角色给 `*:memory:<名>`）、私有记忆（`<agent 名>/memory.md`，只它自己与 admin 改，规则不按名字指它）。
 
+use muliao_platform::ids::AgentId;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -14,7 +15,7 @@ use crate::tree::{Asset, Expect, Owner, Snapshot, version_of};
 use muliao_platform::errors::{Result, not_found};
 
 /// 这个 agent（grants 是它的）能用的每一块记忆，按名字。
-pub(crate) fn blocks_of(snapshot: &Snapshot, grants: &Grants, agent_id: &str) -> Vec<MemoryBlock> {
+pub(crate) fn blocks_of(snapshot: &Snapshot, grants: &Grants, agent_id: &AgentId) -> Vec<MemoryBlock> {
     usable(snapshot, StoredKind::Memory, grants)
         .into_iter()
         .map(|a| MemoryBlock {
@@ -82,7 +83,7 @@ impl MemoryStore {
         info(self.source.snapshot().await?.asset(StoredKind::Memory, name)?)
     }
 
-    pub async fn read_private(&self, agent_id: &str) -> Result<MemoryInfo> {
+    pub async fn read_private(&self, agent_id: &AgentId) -> Result<MemoryInfo> {
         let snapshot = self.source.snapshot().await?;
         match snapshot.private_memory(agent_id) {
             Some(a) => info(a),
@@ -94,7 +95,7 @@ impl MemoryStore {
     }
 
     /// 这个 agent 能用的每一块（自己的与规则分来的），按名字（界面的合并预览；运行用 [`crate::run_assets::RunAssets`] 里的）。
-    pub async fn for_agent(&self, agent_id: &str) -> Result<Vec<MemoryBlock>> {
+    pub async fn for_agent(&self, agent_id: &AgentId) -> Result<Vec<MemoryBlock>> {
         let snapshot = self.source.snapshot().await?;
         Ok(blocks_of(&snapshot, &grants_for(&snapshot, &Actor::Agent(agent_id.to_owned())), agent_id))
     }
@@ -112,7 +113,7 @@ impl MemoryStore {
     }
 
     /// 整体改写 agent 的私有记忆（没有时新建），同 put。
-    pub async fn put_private(&self, agent_id: &str, content: &str, version: Option<&str>) -> Result<MemoryInfo> {
+    pub async fn put_private(&self, agent_id: &AgentId, content: &str, version: Option<&str>) -> Result<MemoryInfo> {
         let snapshot = self.source.snapshot().await?;
         let path = snapshot.private_memory_path(agent_id)?;
         self.write(&path, content, version).await?;

@@ -1,5 +1,6 @@
 //! 收件箱与推送的测试：真库，推送服务用 wiremock 扮（发出的请求按 RFC 8291 解密核对内容）。
 
+use muliao_platform::ids::{RunId, SessionId};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -138,7 +139,7 @@ fn ended(waiting_on: Vec<Waiting>, awaited: bool, stopped: bool) -> RunEnded {
         origin: SessionOrigin::User,
         agent_id: "a1".into(),
         agent_name: "muliao".into(),
-        run_id: 1,
+        run_id: RunId::new(1),
         answer: "做完了".into(),
         stopped,
         waiting_on,
@@ -189,11 +190,11 @@ async fn inbox_unread_and_marking() {
     assert_eq!(h.notifications.list(2).await.unwrap().len(), 2);
     assert_eq!(h.notifications.unread_count().await.unwrap(), 4);
 
-    let ids: Vec<String> = ["s1", "s2", "s3", "none"].map(String::from).to_vec();
+    let ids: Vec<SessionId> = ["s1", "s2", "s3", "none"].map(SessionId::new).to_vec();
     let unread = h.notifications.unread_sessions(ids.clone()).await.unwrap();
     assert_eq!(unread.into_iter().collect::<Vec<_>>(), ["s1", "s2", "s3"]);
 
-    h.notifications.mark_session_read("s1").await.unwrap();
+    h.notifications.mark_session_read(&SessionId::new("s1")).await.unwrap();
     h.notifications.mark_issue_read(42).await.unwrap();
     let unread = h.notifications.unread_sessions(ids).await.unwrap();
     assert_eq!(unread.into_iter().collect::<Vec<_>>(), ["s2"], "reading the issue also reads its session's notice");
@@ -215,13 +216,13 @@ async fn session_events_write_and_delete_notifications() {
     let list = h.notifications.list(10).await.unwrap();
     assert_eq!(list.len(), 1, "only the answer someone waits for is pushed");
     assert_eq!((list[0].title.as_str(), list[0].body.as_str()), ("muliao · 标题", "做完了"));
-    assert_eq!(list[0].session_id.as_deref(), Some("s1"));
+    assert_eq!(list[0].session_id.as_ref().map(SessionId::as_str), Some("s1"));
 
     let failed = RunFailed {
         session_id: "s1".into(),
         agent_id: "a1".into(),
         agent_name: "muliao".into(),
-        run_id: 2,
+        run_id: RunId::new(2),
         origin: SessionOrigin::User,
         error: format!("  {}  ", "错".repeat(800)),
     };

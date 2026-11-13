@@ -1,5 +1,6 @@
 //! 删除会话的唯一规则，与删除、归档 agent 流程里会话领域的一步（docs/architecture.md 第 7、10 节）。
 
+use muliao_platform::ids::SessionId;
 use std::sync::Arc;
 
 use muliao_assets::lifecycle::{ArchiveBlocker, DeletionHook};
@@ -15,7 +16,7 @@ use muliao_platform::errors::{Result, conflict};
 /// 删除会话（删会话、删 agent 都经过这里）：一个事务。它开出的 thread 保留为独立会话（父引用置空）。任一被删会话忙时拒绝
 /// （避免运行结果无处提交、工具写进被删的目录）；交给被删会话、还没结清的委派以「被删除」交回发起方；发布 SessionDeleted。
 pub(crate) fn delete_sessions_in(tx: &mut Tx<'_>, waker: &Waker, events: &Events, doomed: &[Session]) -> Result<()> {
-    let ids: Vec<String> = doomed.iter().map(|s| s.id.clone()).collect();
+    let ids: Vec<SessionId> = doomed.iter().map(|s| s.id.clone()).collect();
     if let Some(busy) = blocking_deletion_in(tx, &ids)?.first() {
         // 错误也会交还给模型，不带 id；定位信息记在日志里
         tracing::info!(session_id = %busy, "session deletion refused: busy");
@@ -40,7 +41,7 @@ pub fn deletion_hook(waker: Waker, events: Arc<Events>) -> DeletionHook {
     Arc::new(move |tx, agent_id| {
         let sessions = directory::of_agent_in(tx, agent_id)?;
         delete_sessions_in(tx, &waker, &events, &sessions)?;
-        tracing::info!(agent = agent_id, sessions = sessions.len(), "sessions of a deleted agent removed");
+        tracing::info!(agent = %agent_id, sessions = sessions.len(), "sessions of a deleted agent removed");
         Ok(())
     })
 }

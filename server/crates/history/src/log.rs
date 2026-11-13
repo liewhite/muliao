@@ -3,6 +3,7 @@
 //! 写入方是 agent 自己（工具 history_append，只能写自己的），读取方是 agent（history_search、activity_overview）与界面。
 //! 行不能改也不能删（库里的触发器拦住，见迁移），所以没有事件，也不参与删除 agent 的清理。
 
+use muliao_platform::ids::{AgentId, Importance};
 use std::sync::Arc;
 
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
@@ -17,8 +18,6 @@ use muliao_platform::errors::{Result, invalid};
 /// trigram 分词下 FTS5 只能匹配至少 3 个字符的词，更短的词改用 LIKE
 const TRIGRAM: usize = 3;
 const MAX_TITLE: usize = 200;
-/// 重要程度：1 一般，2 重要，3 很重要
-const IMPORTANCE: std::ops::RangeInclusive<i64> = 1..=3;
 /// 检索条数：不给时的默认与上限（工具 history_search 与界面的接口共用）
 pub const DEFAULT_LIMIT: usize = 20;
 pub const MAX_LIMIT: usize = 200;
@@ -33,19 +32,19 @@ pub struct NewEntry {
     pub summary: String,
     /// 引用：#issue、会话 id、commit 等
     pub refs: Vec<String>,
-    pub importance: i64,
+    pub importance: Importance,
 }
 
 /// 库里的一件事。
 #[derive(Debug, Clone, PartialEq, Serialize, utoipa::ToSchema)]
 pub struct Record {
     pub id: i64,
-    pub agent_id: String,
+    pub agent_id: AgentId,
     pub day: NaiveDate,
     pub title: String,
     pub summary: String,
     pub refs: Vec<String>,
-    pub importance: i64,
+    pub importance: Importance,
     pub created_at: DateTime<Utc>,
 }
 
@@ -54,19 +53,26 @@ pub struct Record {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Search {
     /// None 为全部 agent
-    pub agent_ids: Option<Vec<String>>,
+    pub agent_ids: Option<Vec<AgentId>>,
     pub query: Option<String>,
     /// 含两端的日期
     pub since: Option<NaiveDate>,
     pub until: Option<NaiveDate>,
-    pub min_importance: i64,
+    pub min_importance: Importance,
     pub limit: usize,
 }
 
 impl Search {
     /// 这些 agent（None 为全部）的历史，其余条件取默认。
-    pub fn of(agent_ids: Option<Vec<String>>) -> Self {
-        Search { agent_ids, query: None, since: None, until: None, min_importance: 1, limit: DEFAULT_LIMIT }
+    pub fn of(agent_ids: Option<Vec<AgentId>>) -> Self {
+        Search {
+            agent_ids,
+            query: None,
+            since: None,
+            until: None,
+            min_importance: Importance::ROUTINE,
+            limit: DEFAULT_LIMIT,
+        }
     }
 }
 
@@ -108,7 +114,7 @@ impl History {
     }
 
     /// 给 agent 追加若干件事（一个事务，全部合法才写入）。
-    pub async fn append(&self, agent_id: &str, entries: Vec<NewEntry>) -> Result<Vec<Record>> {
+    pub async fn append(&self, agent_id: &AgentId, entries: Vec<NewEntry>) -> Result<Vec<Record>> {
         if entries.is_empty() {
             return Err(invalid("no entries to append"));
         }
@@ -163,9 +169,6 @@ fn check_entry(e: &NewEntry, today: NaiveDate) -> Result<()> {
     if e.summary.trim().is_empty() {
         return Err(invalid(format!("{at}: summary is empty")));
     }
-    if !IMPORTANCE.contains(&e.importance) {
-        return Err(invalid(format!("{at}: importance must be 1, 2 or 3, got {}", e.importance)));
-    }
     if e.day > today {
         return Err(invalid(format!("{at}: day is after today ({today}); record work that already happened")));
     }
@@ -181,9 +184,6 @@ fn match_expression(terms: &[&str]) -> String {
 pub fn search_in(c: &Connection, s: &Search) -> Result<Vec<Record>> {
     if !(1..=MAX_LIMIT).contains(&s.limit) {
         return Err(invalid(format!("limit must be between 1 and {MAX_LIMIT}, got {}", s.limit)));
-    }
-    if !IMPORTANCE.contains(&s.min_importance) {
-        return Err(invalid(format!("min_importance must be 1, 2 or 3, got {}", s.min_importance)));
     }
     if let (Some(since), Some(until)) = (s.since, s.until)
         && since > until
@@ -242,12 +242,12 @@ pub fn search_in(c: &Connection, s: &Search) -> Result<Vec<Record>> {
         .query_map(rusqlite::params_from_iter(values.iter().map(|v| v.as_ref())), |r| {
             Ok((
                 r.get::<_, i64>(0)?,
-                r.get::<_, String>(1)?,
+                r.get::<_, AgentId>(1)?,
                 r.get::<_, NaiveDate>(2)?,
                 r.get::<_, String>(3)?,
                 r.get::<_, String>(4)?,
                 r.get::<_, String>(5)?,
-                r.get::<_, i64>(6)?,
+                r.get::<_, Importance>(6)?,
                 r.get::<_, DateTime<Utc>>(7)?,
             ))
         })?

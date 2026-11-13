@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
+import { asSessionId } from './api'
 import { isOutdated, isStale, liveItems, mergeLive, needsReconnect, withoutCovered, type RunEvent } from './events'
 
-const base = { type: 'run', session_id: 's', agent: 'a', segment_id: 'r', seq: 0 } as const
+const base = { type: 'run', session_id: asSessionId('s'), agent: 'a', segment_id: 'r', seq: 0 } as const
 
 const delta = (item_type: 'assistant' | 'thinking', text: string): RunEvent => ({ ...base, event: 'delta', item_type, text })
 

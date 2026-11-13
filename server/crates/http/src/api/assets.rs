@@ -4,6 +4,7 @@
 //!
 //! 这里的写入都是用户在界面上做的；新建的资源归请求给出的 owner（缺省为平台），已有的 owner 不变。
 
+use muliao_platform::ids::AgentId;
 use std::collections::BTreeMap;
 
 use axum::extract::State;
@@ -43,12 +44,12 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(get_secret, set_secret, delete_secret))
 }
 
-pub fn owner_of(owner: Option<String>) -> Owner {
+pub fn owner_of(owner: Option<AgentId>) -> Owner {
     owner.map_or(Owner::Platform, Owner::Agent)
 }
 
-fn owner_out(owner: &Owner) -> Option<String> {
-    owner.agent().map(str::to_owned)
+fn owner_out(owner: &Owner) -> Option<AgentId> {
+    owner.agent().cloned()
 }
 
 /// 路径里的资源种类：存成文件的四种（内置工具不在这里）
@@ -70,7 +71,7 @@ impl<'de> Deserialize<'de> for Kind {
 pub struct CatalogAssetOut {
     pub name: String,
     /// agent 的 id；null 归平台（内置工具、界面上建的、迁移前的公共资产）
-    pub owner: Option<String>,
+    pub owner: Option<AgentId>,
     pub description: String,
     /// 收录它的角色（allow 放行、deny 没拦，含内置的 base、admin）
     pub roles: Vec<String>,
@@ -192,7 +193,7 @@ async fn delete_secret(State(s): State<AppState>, Path(name): Path<String>) -> A
 #[derive(Deserialize, ToSchema)]
 pub struct OwnerIn {
     /// agent 的 id；null 归平台
-    pub owner: Option<String>,
+    pub owner: Option<AgentId>,
 }
 
 /// 挪到另一个 owner 的目录下；内容与收录它的角色不变。记忆不转移（422）；内置工具归平台，不在这里（kind 不接受 tool）。
@@ -213,7 +214,7 @@ async fn transfer_asset(
 #[derive(Serialize, ToSchema)]
 pub struct MemoryOut {
     pub name: String,
-    pub owner: Option<String>,
+    pub owner: Option<AgentId>,
     pub content: String,
     pub updated_at: DateTime<Utc>,
     pub path: String,
@@ -270,14 +271,14 @@ async fn put_memory(
 pub struct SkillOut {
     pub name: String,
     pub description: String,
-    pub owner: Option<String>,
+    pub owner: Option<AgentId>,
 }
 
 #[derive(Serialize, ToSchema)]
 pub struct SkillDetail {
     pub name: String,
     pub description: String,
-    pub owner: Option<String>,
+    pub owner: Option<AgentId>,
     pub body: String,
     /// SKILL.md 的版本：保存时交回
     pub version: String,
@@ -286,7 +287,7 @@ pub struct SkillDetail {
 #[derive(Deserialize, ToSchema)]
 pub struct SkillIn {
     /// 新建时的 owner；已有的不变
-    pub owner: Option<String>,
+    pub owner: Option<AgentId>,
     pub description: String,
     pub body: String,
     /// 打开编辑时的版本（SkillDetail.version），新建为 null；期间被别处改过、删掉或抢先建了时 409
@@ -356,7 +357,7 @@ pub async fn blocking<T: Send + 'static>(
 
 #[derive(Serialize, ToSchema)]
 pub struct McpOut {
-    pub owner: Option<String>,
+    pub owner: Option<AgentId>,
     pub name: String,
     #[serde(flatten)]
     pub config: McpConfigOut,
@@ -377,7 +378,7 @@ impl McpOut {
 
 #[derive(Deserialize, ToSchema)]
 pub struct McpIn {
-    pub owner: Option<String>,
+    pub owner: Option<AgentId>,
     pub transport: McpTransport,
     #[serde(default)]
     pub command: Option<String>,
@@ -447,7 +448,7 @@ async fn probe_mcp(State(s): State<AppState>, Path(name): Path<String>) -> ApiRe
 
 #[derive(Serialize, ToSchema)]
 pub struct SecretOut {
-    pub owner: Option<String>,
+    pub owner: Option<AgentId>,
     pub name: String,
     pub description: String,
     pub allow_shell: bool,
@@ -458,7 +459,7 @@ pub struct SecretOut {
 pub struct SecretIn {
     /// 新建时的 owner；已有的不变
     #[serde(default)]
-    pub owner: Option<String>,
+    pub owner: Option<AgentId>,
     pub value: String,
     #[serde(default)]
     pub description: String,

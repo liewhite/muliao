@@ -2,6 +2,7 @@
 //! 时机只有这几个：运行正常结束且工作做完（[`settle_finished_in`]）、运行最终失败、停止、删除。一项委派结清没有只看发起方
 //! 引用它的占用是否还 active：交回结局就释放占用，所以每项委派只交回一次。
 
+use muliao_platform::ids::{MailId, RunId, SessionId};
 use std::collections::BTreeSet;
 
 use muliao_platform::db::Tx;
@@ -32,7 +33,7 @@ fn owed_by(c: &Connection, mail: &[Mail]) -> Result<Vec<Owed>> {
 }
 
 /// 会话有委派来、还没结清的工作（排着的或已交给模型的委派信件，发起方的占用还 active）：回答交给谁据此定。
-pub(crate) fn delegated_in(c: &Connection, session_id: &str) -> Result<bool> {
+pub(crate) fn delegated_in(c: &Connection, session_id: &SessionId) -> Result<bool> {
     Ok(!owed_by(c, &delegated_mail_in(c, session_id, &LIVE)?)?.is_empty())
 }
 
@@ -74,10 +75,10 @@ pub(crate) fn settle_stopped_in(
     waker: &Waker,
     session: &Session,
     answer: &str,
-) -> Result<(Vec<i64>, Vec<i64>)> {
+) -> Result<(Vec<i64>, Vec<MailId>)> {
     let mail = delegated_mail_in(tx, &session.id, &LIVE)?;
     let settled = settle_in(tx, waker, session, &mail, Ending::Stopped, answer, &[])?;
-    let queued: Vec<i64> = queued_in(tx, &session.id)?.iter().map(|m| m.id).collect();
+    let queued: Vec<MailId> = queued_in(tx, &session.id)?.iter().map(|m| m.id).collect();
     Ok((settled, discard_in(tx, &session.id, &queued)?))
 }
 
@@ -94,7 +95,7 @@ pub(crate) fn settle_failure_in(
     tx: &mut Tx<'_>,
     waker: &Waker,
     session: &Session,
-    run_id: i64,
+    run_id: RunId,
     error: &str,
 ) -> Result<Vec<i64>> {
     let queued: Vec<Mail> = delegated_mail_in(tx, &session.id, &[MailState::Queued])?

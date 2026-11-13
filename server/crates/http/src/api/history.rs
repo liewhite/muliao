@@ -3,6 +3,7 @@
 use axum::extract::State;
 use chrono::NaiveDate;
 use muliao_history::{Record, Search};
+use muliao_platform::ids::{AgentId, Importance};
 use serde::Deserialize;
 use utoipa::IntoParams;
 use utoipa_axum::router::OpenApiRouter;
@@ -25,17 +26,17 @@ pub struct HistoryQuery {
     pub since: Option<NaiveDate>,
     pub until: Option<NaiveDate>,
     /// 1–3，默认 1
-    pub min_importance: Option<i64>,
+    pub min_importance: Option<Importance>,
     /// 默认 20，最多 200
     pub limit: Option<usize>,
 }
 
 /// agent 的工作历史：没给 query 按日期倒序；给了按关键词检索（规则同工具 history_search）。since / until 含两端。
-#[utoipa::path(get, path = "/api/agents/{agent_id}/history", tag = "history", params(HistoryQuery),
+#[utoipa::path(get, path = "/api/agents/{agent_id}/history", tag = "history", params(("agent_id" = AgentId, Path, description = "agent 的编号"), HistoryQuery),
     responses((status = 200, body = Vec<Record>), (status = 404, body = ErrorOut), (status = 422, body = ErrorOut)))]
 async fn agent_history(
     State(s): State<AppState>,
-    Path(agent_id): Path<String>,
+    Path(agent_id): Path<AgentId>,
     Query(q): Query<HistoryQuery>,
 ) -> ApiResult<axum::Json<Vec<Record>>> {
     // 正在删除的 agent 按不存在处理

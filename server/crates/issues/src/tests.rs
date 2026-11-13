@@ -1,6 +1,7 @@
 //! 看板的测试：真库（agents、sessions、issues 的表），来信经会话领域真的收信入口（信进信箱，不跑 actor）；会话事件像会话
 //! 领域那样在一个事务里发布给订阅者。
 
+use muliao_platform::ids::{AgentId, RunId, SessionId};
 use std::sync::Arc;
 
 use muliao_notifications::{Notification, Notifications, Push, VapidKeys};
@@ -29,7 +30,7 @@ struct World {
     board: Board,
     notifications: Notifications,
     subscribers: Subscribers,
-    _wakes: tokio::sync::mpsc::UnboundedReceiver<String>,
+    _wakes: tokio::sync::mpsc::UnboundedReceiver<SessionId>,
 }
 
 async fn world() -> World {
@@ -75,7 +76,16 @@ async fn world() -> World {
 }
 
 fn new(owner: &str, title: &str, status: Status, assignee: Option<Assignee>) -> NewIssue {
-    NewIssue { owner: owner.into(), title: title.into(), status, assignee, ..NewIssue::default() }
+    NewIssue {
+        owner: owner.into(),
+        title: title.into(),
+        description: String::new(),
+        status,
+        priority: Priority::default(),
+        assignee,
+        depends_on: vec![],
+        key: None,
+    }
 }
 
 fn agent(id: &str) -> Option<Assignee> {
@@ -95,8 +105,8 @@ impl World {
     }
 
     /// agent 在这个 issue 上的会话
-    async fn session(&self, issue_id: i64, agent_id: &str) -> Option<String> {
-        let a = agent_id.to_owned();
+    async fn session(&self, issue_id: i64, agent_id: &str) -> Option<SessionId> {
+        let a = AgentId::new(agent_id);
         self.db.read(move |c| crate::conversation::session_in(c, issue_id, &a)).await.unwrap().map(|s| s.id)
     }
 
@@ -171,10 +181,10 @@ async fn work_for_an_agent_is_delivered_into_its_issue_session_but_never_back_in
     assert!(letters[0].ends_with(&format!("`issue_show({})`.", i.id)));
     let its = w.session(i.id, A).await.unwrap();
     // 在自己这个 issue 会话里评论：不投回
-    w.board.comment(By::agent(A, &its), i.id, "进展".into()).await.unwrap();
+    w.board.comment(by_agent(A, its.as_str()), i.id, "进展".into()).await.unwrap();
     assert_eq!(w.letters(i.id, A).await.len(), 1);
     // 在别的会话里：照常投进 issue 会话
-    w.board.comment(By::agent(A, "elsewhere"), i.id, "从别处".into()).await.unwrap();
+    w.board.comment(by_agent(A, "elsewhere"), i.id, "从别处".into()).await.unwrap();
     assert_eq!(w.letters(i.id, A).await.len(), 2);
     // 一次改几个字段只投一封，每个字段一条动态
     let patch = Patch { title: Some("新标题".into()), priority: Some(Priority::High), ..Patch::default() };
@@ -189,14 +199,14 @@ async fn work_for_an_agent_is_delivered_into_its_issue_session_but_never_back_in
     assert_eq!(w.letters(i.id, A).await.len(), 3);
     assert_eq!(kinds(&w.timeline(i.id).await), ["created", "comment", "comment", "title", "priority"]);
     let t = w.timeline(i.id).await;
-    assert_eq!(t[1].session_id.as_deref(), Some(its.as_str()), "the activity remembers where it happened");
+    assert_eq!(t[1].session_id.as_ref(), Some(&its), "the activity remembers where it happened");
 }
 
 #[tokio::test]
 async fn a_user_comment_wakes_the_owner_when_nobody_works_on_the_issue() {
     let w = world().await;
     let i = w.create(By::user(), new(B, "等着", Status::Backlog, None)).await;
-    w.board.comment(By::agent(A, "s"), i.id, "agent 说的".into()).await.unwrap();
+    w.board.comment(by_agent(A, "s"), i.id, "agent 说的".into()).await.unwrap();
     assert!(w.letters(i.id, B).await.is_empty(), "an agent's comment does not wake the owner");
     w.board.comment(By::user(), i.id, "用户说的".into()).await.unwrap();
     let letters = w.letters(i.id, B).await;
@@ -216,7 +226,7 @@ async fn dependencies_hold_back_delivery_until_the_last_upstream_finishes() {
     let created = w
         .board
         .create_many(
-            By::agent(A, "chat"),
+            by_agent(A, "chat"),
             vec![
                 step("one", vec![]),
                 step("two", vec![]),
@@ -231,15 +241,12 @@ async fn dependencies_hold_back_delivery_until_the_last_upstream_finishes() {
     let work = w.board.get(parent).await.unwrap().work;
     assert_eq!(work.waiting_on, vec![one, two]);
     assert!(!work.stalled, "waiting on dependencies is not stalled");
-    w.board.update(By::agent(A, "x"), one, Patch { status: Some(Status::Done), ..Patch::default() }).await.unwrap();
+    w.board.update(by_agent(A, "x"), one, Patch { status: Some(Status::Done), ..Patch::default() }).await.unwrap();
     assert!(w.session(parent, A).await.is_none(), "still waiting on #two");
     let pt = w.timeline(parent).await;
     assert!(matches!(&pt.last().unwrap().what, Happening::Dependency { change } if change.issue == one));
     // 取消也放行
-    w.board
-        .update(By::agent(A, "x"), two, Patch { status: Some(Status::Cancelled), ..Patch::default() })
-        .await
-        .unwrap();
+    w.board.update(by_agent(A, "x"), two, Patch { status: Some(Status::Cancelled), ..Patch::default() }).await.unwrap();
     let letters = w.letters(parent, A).await;
     assert_eq!(letters.len(), 1, "the last upstream finishing starts the parent");
     assert!(
@@ -284,12 +291,12 @@ async fn handing_to_the_user_notifies_and_the_user_approves_or_sends_back() {
     let i = w.create(By::user(), new(A, "交审", Status::InProgress, agent(A))).await;
     let its = w.session(i.id, A).await.unwrap();
     let hand = Patch { status: Some(Status::InReview), assignee: Some(Some(Assignee::User)), ..Patch::default() };
-    w.board.update(By::agent(A, &its), i.id, hand.clone()).await.unwrap();
+    w.board.update(by_agent(A, its.as_str()), i.id, hand.clone()).await.unwrap();
     let notices = w.notices().await;
     assert_eq!(notices.len(), 1);
     assert_eq!(notices[0].title, format!("#{} 指派给你：交审", i.id));
     assert_eq!(notices[0].body, "状态 in_review");
-    assert_eq!(notices[0].session_id.as_deref(), Some(its.as_str()));
+    assert_eq!(notices[0].session_id.as_ref(), Some(&its));
     assert!(w.board.get(i.id).await.unwrap().work.reviewable);
     // 打回：回到交出它的 agent，三条动态一封信
     w.consume_all().await;
@@ -306,7 +313,7 @@ async fn handing_to_the_user_notifies_and_the_user_approves_or_sends_back() {
     // 已不在用户手里：审核冲突
     let err = w.board.approve(i.id).await.unwrap_err();
     assert!(err.to_string().contains("is not assigned to you"), "{err}");
-    w.board.update(By::agent(A, &its), i.id, hand).await.unwrap();
+    w.board.update(by_agent(A, its.as_str()), i.id, hand).await.unwrap();
     let done = w.board.approve(i.id).await.unwrap();
     assert_eq!(done.status, Status::Done);
     assert!(w.board.approve(i.id).await.unwrap_err().to_string().contains("already done"));
@@ -344,7 +351,7 @@ async fn archived_agents_get_nothing_and_the_user_is_told_about_their_own_action
     w.db.write(move |tx| tx.execute("UPDATE issues SET status = 'in_progress' WHERE id = ?1", [i.id]).map(drop))
         .await
         .unwrap();
-    w.board.comment(By::agent(A, "s"), i.id, "agent 的".into()).await.unwrap();
+    w.board.comment(by_agent(A, "s"), i.id, "agent 的".into()).await.unwrap();
     assert!(w.notices().await.is_empty(), "others' activity on an archived agent is only logged");
     w.board.comment(By::user(), i.id, "用户的".into()).await.unwrap();
     let notices = w.notices().await;
@@ -364,7 +371,7 @@ async fn a_run_ending_with_the_issue_unsettled_asks_the_agent_to_settle_it() {
         origin: SessionOrigin::Issue { issue_id: i.id },
         agent_id: A.into(),
         agent_name: "alpha".into(),
-        run_id: 1,
+        run_id: RunId::new(1),
         answer: "好了".into(),
         stopped,
         waiting_on,
@@ -388,7 +395,7 @@ async fn a_run_ending_with_the_issue_unsettled_asks_the_agent_to_settle_it() {
     // 交出去了就不再问
     w.consume_all().await;
     w.board
-        .update(By::agent(A, &its), i.id, Patch { status: Some(Status::Blocked), ..Patch::default() })
+        .update(by_agent(A, its.as_str()), i.id, Patch { status: Some(Status::Blocked), ..Patch::default() })
         .await
         .unwrap();
     w.publish(run_ended, ended(false, vec![])).await;
@@ -401,14 +408,14 @@ async fn failures_deleted_sessions_and_deleted_agents_are_recorded_without_deliv
     let i = w.create(By::user(), new(A, "会失败", Status::InProgress, agent(A))).await;
     let its = w.session(i.id, A).await.unwrap();
     w.consume_all().await;
-    w.board.comment(By::agent(A, &its), i.id, "在做".into()).await.unwrap();
+    w.board.comment(by_agent(A, its.as_str()), i.id, "在做".into()).await.unwrap();
     w.publish(
         run_failed,
         RunFailed {
             session_id: its.clone(),
             agent_id: A.into(),
             agent_name: "alpha".into(),
-            run_id: 2,
+            run_id: RunId::new(2),
             origin: SessionOrigin::Issue { issue_id: i.id },
             error: format!("  {}  ", "坏".repeat(600)),
         },
@@ -423,7 +430,7 @@ async fn failures_deleted_sessions_and_deleted_agents_are_recorded_without_deliv
     assert!(w.timeline(i.id).await.iter().all(|a| a.session_id.is_none()));
     // 删除 agent：指派人、负责人置空，以系统身份记
     let hook = w.board.deletion_hook();
-    w.db.write(move |tx| hook(tx, A)).await.unwrap();
+    w.db.write(move |tx| hook(tx, &AgentId::new(A))).await.unwrap();
     let after = w.board.get(i.id).await.unwrap().issue;
     assert_eq!((after.owner, after.assignee), (None, None));
     let t = w.timeline(i.id).await;
@@ -456,7 +463,7 @@ async fn issue_show_lists_and_stop_rules() {
     let up = w.create(By::user(), new(A, "上游", Status::Done, None)).await;
     let i = w
         .create(
-            By::agent(A, "chat"),
+            by_agent(A, "chat"),
             NewIssue {
                 description: "说明\n两行".into(),
                 depends_on: vec![Upstream::Issue(up.id)],
@@ -490,16 +497,16 @@ async fn issue_show_lists_and_stop_rules() {
     let by_owner = w.board.list(Filter { owner: Some(B.into()), ..Filter::default() }).await.unwrap();
     assert!(by_owner.is_empty());
     // issue_stop 的规则（停会话本身在端到端测试里）
-    let err = w.board.stop(By::agent(A, "x"), i.id, Status::Done, None).await.unwrap_err();
+    let err = w.board.stop(by_agent(A, "x"), i.id, Status::Done, None).await.unwrap_err();
     assert!(err.to_string().contains("stopping is not finishing"), "{err}");
-    let err = w.board.stop(By::agent(A, "x"), up.id, Status::Blocked, None).await.unwrap_err();
+    let err = w.board.stop(by_agent(A, "x"), up.id, Status::Blocked, None).await.unwrap_err();
     assert!(err.to_string().contains("not assigned to an agent"), "{err}");
     let its = w.session(i.id, B).await.unwrap();
-    let err = w.board.stop(By::agent(B, &its), i.id, Status::Blocked, None).await.unwrap_err();
+    let err = w.board.stop(by_agent(B, its.as_str()), i.id, Status::Blocked, None).await.unwrap_err();
     assert!(err.to_string().contains("itself"), "{err}");
     // 指派人还没有这个会话：只改状态
     let fresh = w.create(By::user(), new(A, "没会话", Status::Blocked, agent(B))).await;
-    let s = w.board.stop(By::agent(A, "x"), fresh.id, Status::Cancelled, None).await.unwrap();
+    let s = w.board.stop(by_agent(A, "x"), fresh.id, Status::Cancelled, None).await.unwrap();
     assert!(!s.stopped);
     assert_eq!(s.issue.status, Status::Cancelled);
 }
@@ -510,7 +517,7 @@ async fn user_actions_are_grouped_by_issue_for_the_activity_overview() {
     let start = chrono::Utc::now();
     let a = w.create(By::user(), new(A, "甲", Status::Backlog, None)).await;
     let b = w.create(By::user(), new(B, "乙", Status::Backlog, None)).await;
-    w.board.comment(By::agent(A, "s"), a.id, "agent 的不算".into()).await.unwrap();
+    w.board.comment(by_agent(A, "s"), a.id, "agent 的不算".into()).await.unwrap();
     w.board.comment(By::user(), a.id, "第一句".into()).await.unwrap();
     let end = chrono::Utc::now() + chrono::Duration::seconds(1);
     let all = w.db.read(move |c| user_actions_in(c, start, end, None, chrono_tz::UTC)).await.unwrap();
@@ -518,6 +525,11 @@ async fn user_actions_are_grouped_by_issue_for_the_activity_overview() {
     assert_eq!(all[0].lines.len(), 2);
     assert!(all[0].lines[1].contains("user commented:\n  第一句"));
     let only_b =
-        w.db.read(move |c| user_actions_in(c, start, end, Some(&[B.to_owned()]), chrono_tz::UTC)).await.unwrap();
+        w.db.read(move |c| user_actions_in(c, start, end, Some(&[AgentId::new(B)]), chrono_tz::UTC)).await.unwrap();
     assert_eq!(only_b.iter().map(|u| u.issue_id).collect::<Vec<_>>(), [b.id]);
+}
+
+/// agent 在某个会话里做的（测试里编号写成字面量）
+fn by_agent(agent_id: &str, session_id: &str) -> By {
+    By::agent(&AgentId::new(agent_id), &SessionId::new(session_id))
 }

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { asSessionId } from './api'
 import type { PageEvent } from './events'
 
 // 服务端事件换成手动发：Loader 经 listenServerEvents 订阅
@@ -40,7 +41,7 @@ describe('anyChange', () => {
   it('refetches after connecting or when any data changed, whoever changed it', () => {
     expect(anyChange({ type: 'connected' })).toBe(true)
     expect(anyChange({ type: 'changed' })).toBe(true)
-    expect(anyChange({ type: 'saved', session_id: 's' })).toBe(false)
+    expect(anyChange({ type: 'saved', session_id: asSessionId('s') })).toBe(false)
   })
 })
 
@@ -90,10 +91,10 @@ describe('Loader', () => {
     const stop = loader.subscribe(() => {})
     await settle()
     emit({ type: 'changed' })
-    emit({ type: 'saved', session_id: 's2' })
+    emit({ type: 'saved', session_id: asSessionId('s2') })
     await refetched()
     expect(count('/api/issues')).toBe(1)
-    emit({ type: 'saved', session_id: 's1' })
+    emit({ type: 'saved', session_id: asSessionId('s1') })
     await refetched()
     expect(count('/api/issues')).toBe(2)
     stop()

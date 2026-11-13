@@ -1,5 +1,6 @@
 //! 会话：列表、新建、会话页、发消息（含回答提问与批准调用）、停止、手动压缩、重试最终失败的运行、标记已读、删除。
 
+use muliao_platform::ids::{AgentId, MailId, SessionId};
 use std::collections::{BTreeMap, BTreeSet};
 
 use axum::extract::State;
@@ -40,13 +41,13 @@ pub fn routes() -> OpenApiRouter<AppState> {
 
 #[derive(Serialize, ToSchema)]
 pub struct SessionOut {
-    pub id: String,
-    pub agent_id: String,
+    pub id: SessionId,
+    pub agent_id: AgentId,
     pub title: String,
     /// 会话的来源与发起方（结构化，前端不认识库里的编号格式）
     pub origin: SessionOrigin,
     /// 委派产生的子会话：父会话与 thread 名（thread 名取自 origin，方便界面直接用）
-    pub parent_session_id: Option<String>,
+    pub parent_session_id: Option<SessionId>,
     pub thread: Option<String>,
     /// 有指向它的未读通知（用户在等的回答、提问、agent 主动通知、运行失败）：未读不另存，从通知派生
     pub unread: bool,
@@ -55,7 +56,7 @@ pub struct SessionOut {
 }
 
 impl SessionOut {
-    fn of(s: Session, unread: &BTreeSet<String>) -> Self {
+    fn of(s: Session, unread: &BTreeSet<SessionId>) -> Self {
         SessionOut {
             unread: unread.contains(&s.id),
             id: s.id,
@@ -92,7 +93,7 @@ pub struct SessionListItem {
 #[derive(Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct ListQuery {
-    pub agent_id: Option<String>,
+    pub agent_id: Option<AgentId>,
     /// 只列这些来源的会话（可以重复给）
     #[serde(default)]
     #[param(value_type = Option<Vec<String>>)]
@@ -134,7 +135,7 @@ async fn list_sessions(
 
 #[derive(Deserialize, ToSchema)]
 pub struct StartIn {
-    pub agent_id: String,
+    pub agent_id: AgentId,
     pub prompt: String,
     /// 先经 POST /api/files 上传得到的 id
     #[serde(default)]
@@ -166,7 +167,7 @@ async fn start_session(
 /// 会话信箱里的一封信件（显示在历史之后：排队中的，以及最近一次停止丢弃的）。
 #[derive(Serialize, ToSchema)]
 pub struct MailOut {
-    pub id: i64,
+    pub id: MailId,
     pub content: String,
     pub attachments: Vec<FileOut>,
     pub state: MailState,
@@ -242,7 +243,7 @@ pub struct WaitOut {
 }
 
 /// WaitOut 的唯一构造入口：后台任务向工作区领域取命令与日志。
-async fn wait_outs(s: &AppState, agent_id: &str, waits: Vec<Wait>) -> ApiResult<Vec<WaitOut>> {
+async fn wait_outs(s: &AppState, agent_id: &AgentId, waits: Vec<Wait>) -> ApiResult<Vec<WaitOut>> {
     let mut out = Vec::with_capacity(waits.len());
     for wait in waits {
         let job = match &wait {
@@ -299,10 +300,11 @@ pub struct SessionDetail {
 }
 
 #[utoipa::path(get, path = "/api/sessions/{session_id}", tag = "sessions",
-    responses((status = 200, body = SessionDetail), (status = 404, body = ErrorOut)))]
+    responses((status = 200, body = SessionDetail), (status = 404, body = ErrorOut)),
+    params(("session_id" = SessionId, Path, description = "会话的编号")))]
 async fn get_session(
     State(s): State<AppState>,
-    Path(session_id): Path<String>,
+    Path(session_id): Path<SessionId>,
 ) -> ApiResult<axum::Json<SessionDetail>> {
     let view = s.services.sessions.detail(&session_id).await?;
     let agent_id = view.session.agent_id.clone();
@@ -350,10 +352,11 @@ pub struct ReplyIn {
 /// 在会话里发一条消息（续写），或只回答提问、只批准调用。返回信进的会话。
 #[utoipa::path(post, path = "/api/sessions/{session_id}/messages", tag = "sessions", request_body = ReplyIn,
     responses((status = 202, body = SessionOut), (status = 404, body = ErrorOut), (status = 409, body = ErrorOut),
-        (status = 422, body = ErrorOut)))]
+        (status = 422, body = ErrorOut)),
+    params(("session_id" = SessionId, Path, description = "会话的编号")))]
 async fn reply(
     State(s): State<AppState>,
-    Path(session_id): Path<String>,
+    Path(session_id): Path<SessionId>,
     Json(body): Json<ReplyIn>,
 ) -> ApiResult<(StatusCode, axum::Json<SessionOut>)> {
     let session = s
@@ -372,8 +375,9 @@ async fn reply(
 
 /// 停止这个会话：结束正在进行的运行（已经产生的部分照常保存）、清空信箱，连带停下它发起的异步工作。返回时已生效。
 #[utoipa::path(post, path = "/api/sessions/{session_id}/stop", tag = "sessions",
-    responses((status = 202), (status = 404, body = ErrorOut)))]
-async fn stop(State(s): State<AppState>, Path(session_id): Path<String>) -> ApiResult<StatusCode> {
+    responses((status = 202), (status = 404, body = ErrorOut)),
+    params(("session_id" = SessionId, Path, description = "会话的编号")))]
+async fn stop(State(s): State<AppState>, Path(session_id): Path<SessionId>) -> ApiResult<StatusCode> {
     s.services.sessions.stop(&session_id).await?;
     Ok(StatusCode::ACCEPTED)
 }
@@ -381,14 +385,15 @@ async fn stop(State(s): State<AppState>, Path(session_id): Path<String>) -> ApiR
 /// 手动压缩上下文：排在正在进行的运行之后，在后台做；开始与做完时会话页随 saved 事件刷新。没有可压缩的（都在保留的最近几步里）
 /// 时什么都不变；失败记在服务日志里。
 #[utoipa::path(post, path = "/api/sessions/{session_id}/compact", tag = "sessions",
-    responses((status = 202), (status = 404, body = ErrorOut)))]
-async fn compact(State(s): State<AppState>, Path(session_id): Path<String>) -> ApiResult<StatusCode> {
+    responses((status = 202), (status = 404, body = ErrorOut)),
+    params(("session_id" = SessionId, Path, description = "会话的编号")))]
+async fn compact(State(s): State<AppState>, Path(session_id): Path<SessionId>) -> ApiResult<StatusCode> {
     s.services.sessions.get(&session_id).await?;
     let sessions = s.services.sessions.clone();
     tokio::spawn(async move {
         match sessions.compact(&session_id).await {
-            Ok(steps) => tracing::info!(session_id, steps, "manual compaction done"),
-            Err(e) => tracing::error!(session_id, error = %e, "manual compaction failed"),
+            Ok(steps) => tracing::info!(%session_id, steps, "manual compaction done"),
+            Err(e) => tracing::error!(%session_id, error = %e, "manual compaction failed"),
         }
     });
     Ok(StatusCode::ACCEPTED)
@@ -396,23 +401,26 @@ async fn compact(State(s): State<AppState>, Path(session_id): Path<String>) -> A
 
 /// 重试最近一次最终失败的运行（同一次运行接着跑）。会话在跑、或最近一次运行没有失败时 409。
 #[utoipa::path(post, path = "/api/sessions/{session_id}/retry", tag = "sessions",
-    responses((status = 202), (status = 404, body = ErrorOut), (status = 409, body = ErrorOut)))]
-async fn retry(State(s): State<AppState>, Path(session_id): Path<String>) -> ApiResult<StatusCode> {
+    responses((status = 202), (status = 404, body = ErrorOut), (status = 409, body = ErrorOut)),
+    params(("session_id" = SessionId, Path, description = "会话的编号")))]
+async fn retry(State(s): State<AppState>, Path(session_id): Path<SessionId>) -> ApiResult<StatusCode> {
     s.services.sessions.retry(&session_id).await?;
     Ok(StatusCode::ACCEPTED)
 }
 
 /// 标记会话已读：会话的未读就是指向它的未读通知，由通知领域标为已读（幂等，会话不存在时什么都不做）。
-#[utoipa::path(post, path = "/api/sessions/{session_id}/read", tag = "sessions", responses((status = 204)))]
-async fn mark_session_read(State(s): State<AppState>, Path(session_id): Path<String>) -> ApiResult<StatusCode> {
+#[utoipa::path(post, path = "/api/sessions/{session_id}/read", tag = "sessions", responses((status = 204)),
+    params(("session_id" = SessionId, Path, description = "会话的编号")))]
+async fn mark_session_read(State(s): State<AppState>, Path(session_id): Path<SessionId>) -> ApiResult<StatusCode> {
     s.services.notifications.mark_session_read(&session_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 /// 删除会话（它开出的 thread 保留）；会话忙时 409。
 #[utoipa::path(delete, path = "/api/sessions/{session_id}", tag = "sessions",
-    responses((status = 204), (status = 404, body = ErrorOut), (status = 409, body = ErrorOut)))]
-async fn delete_session(State(s): State<AppState>, Path(session_id): Path<String>) -> ApiResult<StatusCode> {
+    responses((status = 204), (status = 404, body = ErrorOut), (status = 409, body = ErrorOut)),
+    params(("session_id" = SessionId, Path, description = "会话的编号")))]
+async fn delete_session(State(s): State<AppState>, Path(session_id): Path<SessionId>) -> ApiResult<StatusCode> {
     s.services.sessions.delete(&session_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

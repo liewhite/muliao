@@ -13,6 +13,7 @@
 //!   引用访问到（只能经元数据按 id 找到），同样内容再次上传时直接复用。
 //! - 代价：孤儿内容只占空间。
 
+use muliao_platform::ids::{MediaType, new_id};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -20,7 +21,6 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use muliao_platform::db::{Database, Migration};
 use muliao_platform::errors::{DomainError, Error, ErrorKind, broken};
-use muliao_platform::ids::new_id;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use rusqlite::{Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
@@ -29,10 +29,8 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 pub const MIGRATION: Migration = Migration { domain: "files", steps: &[include_str!("../migrations/001_files.sql")] };
 
 pub const FILES_PATH: &str = "/api/files";
-/// 浏览器可以直接显示、模型也普遍能看的图片类型：只有这些按 inline 返回，并作为图片交给模型。SVG 不在其中：它能带脚本
-pub const INLINE_IMAGE_TYPES: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/webp"];
 /// 与界面同源、带着登录 cookie 下载 agent 写的内容时的响应头（对话里的文件、工作目录的文件）：不让浏览器猜类型、在沙箱
-/// 里打开。只有 [`INLINE_IMAGE_TYPES`] 按 inline 返回，其余作为附件（docs/architecture.md 第 15 节）
+/// 里打开。只有能内联显示的图片（[`MediaType::is_inline_image`]）按 inline 返回，其余作为附件（docs/architecture.md 第 15 节）
 pub const UNTRUSTED_CONTENT_HEADERS: &[(&str, &str)] = &[
     ("X-Content-Type-Options", "nosniff"),
     ("Content-Security-Policy", "sandbox; default-src 'none'; img-src 'self'; style-src 'unsafe-inline'"),
@@ -47,7 +45,7 @@ const NAME_SEGMENT: &AsciiSet = &NON_ALPHANUMERIC.remove(b'-').remove(b'.').remo
 pub struct FileMeta {
     pub id: String,
     pub name: String,
-    pub media_type: String,
+    pub media_type: MediaType,
     pub size: u64,
     pub sha256: String,
     pub created_at: DateTime<Utc>,
@@ -56,10 +54,6 @@ pub struct FileMeta {
 impl FileMeta {
     pub fn url(&self) -> String {
         file_url(&self.id, &self.name)
-    }
-
-    pub fn is_inline_image(&self) -> bool {
-        INLINE_IMAGE_TYPES.contains(&self.media_type.as_str())
     }
 }
 
@@ -91,19 +85,6 @@ pub fn check_name(name: &str) -> Result<&str, DomainError> {
         )));
     }
     Ok(name)
-}
-
-/// 只存 type/subtype（小写）：参数（如 charset）不影响怎么显示和交给模型，下载一律按原始字节。
-pub fn check_media_type(media_type: &str) -> Result<String, DomainError> {
-    let essence = media_type.split(';').next().unwrap_or_default().trim();
-    let valid = match essence.split_once('/') {
-        Some((kind, subtype)) => !kind.is_empty() && !subtype.is_empty() && !essence.chars().any(char::is_whitespace),
-        None => false,
-    };
-    if !valid {
-        return Err(DomainError::invalid(format!("media type {media_type:?} must be 'type/subtype'")));
-    }
-    Ok(essence.to_lowercase())
 }
 
 /// 按给出的顺序返回元数据；任何一个不存在都报 NotFound。可以在调用方的事务里用（文件写入后不变、不删，没有先查后写的
@@ -201,9 +182,13 @@ impl FileStore {
     }
 
     /// 存一个文件：边读边写边算哈希，超过上限立即停止读取（TooLarge）。
-    pub async fn put(&self, name: &str, media_type: &str, mut body: impl AsyncRead + Unpin) -> Result<FileMeta, Error> {
+    pub async fn put(
+        &self,
+        name: &str,
+        media_type: MediaType,
+        mut body: impl AsyncRead + Unpin,
+    ) -> Result<FileMeta, Error> {
         let name = check_name(name)?.to_string();
-        let media_type = check_media_type(media_type)?;
         let tmp_dir = self.tmp_dir();
         tokio::fs::create_dir_all(&tmp_dir).await?;
         let tmp = TmpFile(tmp_dir.join(new_id()));
@@ -247,7 +232,7 @@ impl FileStore {
         Ok(meta)
     }
 
-    pub async fn put_path(&self, name: &str, media_type: &str, path: &Path) -> Result<FileMeta, Error> {
+    pub async fn put_path(&self, name: &str, media_type: MediaType, path: &Path) -> Result<FileMeta, Error> {
         let file = tokio::fs::File::open(path).await?;
         self.put(name, media_type, file).await
     }

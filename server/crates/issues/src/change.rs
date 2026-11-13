@@ -14,6 +14,7 @@ use chrono_tz::Tz;
 use muliao_assets::agents::{agent_names_in, runnable_agent_in};
 use muliao_notifications::{Notifications, Notify};
 use muliao_platform::db::Tx;
+use muliao_platform::ids::AgentId;
 use muliao_sessions::inbound::{Refusal, Refused, SenderInbox};
 use rusqlite::Connection;
 
@@ -34,7 +35,7 @@ pub(crate) enum Routing {
     ByRules,
     /// 直接投给这个 agent，不按规则判定：issue_stop 的收尾消息投给被停下的 agent，不论 issue 的新状态；运行结束后请停滞的
     /// agent 表态，它记在那个 issue 会话名下，按「自己会话里的动作不投回」会被挡掉
-    Direct(String),
+    Direct(AgentId),
     /// 只记时间线：不投递、不通知、不放行下游
     RecordOnly,
 }
@@ -42,7 +43,7 @@ pub(crate) enum Routing {
 /// 要改的字段，没给的（None）不变。assignee：`Some(None)` 取消指派；depends_on 整体替换（空列表去掉全部）。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Patch {
-    pub owner: Option<String>,
+    pub owner: Option<AgentId>,
     pub title: Option<String>,
     pub description: Option<String>,
     pub status: Option<Status>,
@@ -127,7 +128,7 @@ impl IssueChange<'_> {
     }
 
     /// 停掉了 agent 在这个 issue 上的会话。
-    pub fn stopped(&mut self, agent_id: &str) -> Result<()> {
+    pub fn stopped(&mut self, agent_id: &AgentId) -> Result<()> {
         self.record(Happening::Stopped { change: Arrival { before: (), to: agent_id.to_owned() } }).map(drop)
     }
 
@@ -171,8 +172,8 @@ impl IssueChange<'_> {
         Ok(())
     }
 
-    pub fn set_owner(&mut self, owner: &str) -> Result<()> {
-        if Some(owner) != self.issue.owner.as_deref() {
+    pub fn set_owner(&mut self, owner: &AgentId) -> Result<()> {
+        if Some(owner) != self.issue.owner.as_ref() {
             runnable_agent_in(self.c, owner)?;
             self.change_owner(Some(owner.to_owned()))?;
         }
@@ -187,7 +188,7 @@ impl IssueChange<'_> {
         Ok(())
     }
 
-    fn change_owner(&mut self, owner: Option<String>) -> Result<()> {
+    fn change_owner(&mut self, owner: Option<AgentId>) -> Result<()> {
         let before = std::mem::replace(&mut self.issue.owner, owner.clone());
         self.record(Happening::Owner { change: Change::new(before, owner) }).map(drop)
     }
@@ -304,7 +305,7 @@ impl Changes {
         issue: &Issue,
         by: &By,
         happened: &[Activity],
-        to: Option<String>,
+        to: Option<AgentId>,
     ) -> Result<()> {
         if handed_to_user(&by.actor, issue.assignee.as_ref(), happened).is_some() {
             // 点开是 issue（在那里通过或打回）；也带上它交出 issue 的那个会话
@@ -355,8 +356,8 @@ impl Changes {
 }
 
 /// 动作是不是 agent 在它自己这个 issue 会话里做的：是则返回它（这次动态不投回那里）。
-fn from_its_session_in<'b>(c: &Connection, issue_id: i64, by: &'b By) -> Result<Option<&'b str>> {
-    let (Some(agent), Some(session_id)) = (by.actor.agent(), by.session_id.as_deref()) else { return Ok(None) };
+fn from_its_session_in<'b>(c: &Connection, issue_id: i64, by: &'b By) -> Result<Option<&'b AgentId>> {
+    let (Some(agent), Some(session_id)) = (by.actor.agent(), by.session_id.as_ref()) else { return Ok(None) };
     let its = conversation::session_in(c, issue_id, agent)?;
-    Ok(its.is_some_and(|s| s.id == session_id).then_some(agent))
+    Ok(its.is_some_and(|s| &s.id == session_id).then_some(agent))
 }

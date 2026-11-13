@@ -3,6 +3,7 @@
 
 use chrono_tz::Tz;
 use muliao_assets::agents::AgentNames;
+use muliao_platform::ids::AgentId;
 
 use crate::activity::{Activity, Happening};
 use crate::graph::{Dependency, Links};
@@ -25,7 +26,7 @@ pub fn assignee_name(assignee: Option<&Assignee>, names: &AgentNames) -> String 
     }
 }
 
-fn owner_name(owner: Option<&str>, names: &AgentNames) -> String {
+fn owner_name(owner: Option<&AgentId>, names: &AgentNames) -> String {
     owner.map_or_else(|| "none".into(), |id| names.name(id))
 }
 
@@ -63,8 +64,8 @@ pub fn render_activity(a: &Activity, names: &AgentNames, tz: Tz) -> String {
         ),
         Happening::Owner { change } => format!(
             "{head} {actor} changed {kind}: {} -> {}",
-            owner_name(change.before.as_deref(), names),
-            owner_name(change.to.as_deref(), names)
+            owner_name(change.before.as_ref(), names),
+            owner_name(change.to.as_ref(), names)
         ),
         Happening::DependsOn { change } => {
             format!("{head} {actor} changed {kind}: {} -> {}", issues(&change.before), issues(&change.to))
@@ -91,7 +92,7 @@ pub fn render_issue(issue: &Issue, timeline: &[Activity], links: &Links, names: 
         format!("# Issue #{}: {}", issue.id, issue.title),
         format!(
             "owner (project): {} | status: {} | priority: {} | assignee: {} | created by: {}",
-            owner_name(issue.owner.as_deref(), names),
+            owner_name(issue.owner.as_ref(), names),
             issue.status,
             issue.priority,
             assignee_name(issue.assignee.as_ref(), names),

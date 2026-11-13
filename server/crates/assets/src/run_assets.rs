@@ -9,6 +9,7 @@ use crate::rules::Rules;
 use crate::skills::{SkillMeta, index_of};
 use crate::tree::{AgentDir, Problem, Snapshot};
 use muliao_platform::errors::Result;
+use muliao_platform::ids::AgentId;
 
 #[derive(Debug, Clone)]
 pub struct RunAssets {
@@ -25,7 +26,7 @@ pub struct RunAssets {
 
 impl RunAssets {
     /// agent 没加载（agent.toml 读坏等）时 NotFound，带上原因：要它的运行当场失败，不沿用旧值。
-    pub fn of(snapshot: &Snapshot, agent_id: &str) -> Result<Self> {
+    pub fn of(snapshot: &Snapshot, agent_id: &AgentId) -> Result<Self> {
         let agent = snapshot.loaded_agent(agent_id)?.clone();
         let grants = grants_for(snapshot, &Actor::Agent(agent_id.to_owned()));
         Ok(Self {

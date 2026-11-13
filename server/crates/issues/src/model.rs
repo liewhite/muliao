@@ -1,5 +1,6 @@
 //! issue 本身（`issues` 表的唯一读写处）与它的取值：状态、优先级、指派人、做事的人。
 
+use muliao_platform::ids::{AgentId, SessionId};
 use std::fmt;
 
 use chrono::{DateTime, Utc};
@@ -169,18 +170,18 @@ impl rusqlite::types::FromSql for Priority {
 #[serde(from = "String", into = "String")]
 pub enum Assignee {
     User,
-    Agent(String),
+    Agent(AgentId),
 }
 
 impl Assignee {
     pub fn as_str(&self) -> &str {
         match self {
             Assignee::User => USER,
-            Assignee::Agent(id) => id,
+            Assignee::Agent(id) => id.as_str(),
         }
     }
 
-    pub fn agent(&self) -> Option<&str> {
+    pub fn agent(&self) -> Option<&AgentId> {
         match self {
             Assignee::User => None,
             Assignee::Agent(id) => Some(id),
@@ -190,7 +191,7 @@ impl Assignee {
 
 impl From<String> for Assignee {
     fn from(s: String) -> Self {
-        if s == USER { Assignee::User } else { Assignee::Agent(s) }
+        if s == USER { Assignee::User } else { Assignee::Agent(AgentId::new(s)) }
     }
 }
 
@@ -209,7 +210,7 @@ impl utoipa::PartialSchema for Assignee {
 }
 impl utoipa::ToSchema for Assignee {}
 
-pub fn agent_of(assignee: Option<&Assignee>) -> Option<&str> {
+pub fn agent_of(assignee: Option<&Assignee>) -> Option<&AgentId> {
     assignee.and_then(Assignee::agent)
 }
 
@@ -223,7 +224,7 @@ const SYSTEM: &str = "system";
 pub enum Actor {
     User,
     System,
-    Agent(String),
+    Agent(AgentId),
 }
 
 impl Actor {
@@ -231,11 +232,11 @@ impl Actor {
         match self {
             Actor::User => USER,
             Actor::System => SYSTEM,
-            Actor::Agent(id) => id,
+            Actor::Agent(id) => id.as_str(),
         }
     }
 
-    pub fn agent(&self) -> Option<&str> {
+    pub fn agent(&self) -> Option<&AgentId> {
         match self {
             Actor::Agent(id) => Some(id),
             Actor::User | Actor::System => None,
@@ -248,7 +249,7 @@ impl From<String> for Actor {
         match s.as_str() {
             USER => Actor::User,
             SYSTEM => Actor::System,
-            _ => Actor::Agent(s),
+            _ => Actor::Agent(AgentId::new(s)),
         }
     }
 }
@@ -271,7 +272,7 @@ impl utoipa::ToSchema for Actor {}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct By {
     pub actor: Actor,
-    pub session_id: Option<String>,
+    pub session_id: Option<SessionId>,
 }
 
 impl By {
@@ -283,8 +284,8 @@ impl By {
         By { actor: Actor::System, session_id: None }
     }
 
-    pub fn agent(agent_id: impl Into<String>, session_id: impl Into<String>) -> Self {
-        By { actor: Actor::Agent(agent_id.into()), session_id: Some(session_id.into()) }
+    pub fn agent(agent_id: &AgentId, session_id: &SessionId) -> Self {
+        By { actor: Actor::Agent(agent_id.clone()), session_id: Some(session_id.clone()) }
     }
 }
 
@@ -297,7 +298,7 @@ pub struct Issue {
     pub status: Status,
     pub priority: Priority,
     /// 负责的项目（agent id）：创建时必填，不随指派变化，只能显式修改；只在负责的 agent 被删除后为空
-    pub owner: Option<String>,
+    pub owner: Option<AgentId>,
     /// agent id、`user`，或 null（未指派）
     pub assignee: Option<Assignee>,
     /// 创建者：agent id；用户创建的为 `user`

@@ -3,6 +3,7 @@
 //! 签名 key 由配置的 secret_key 与密码的摘要一起派生：改了密码（改配置、重启），之前签发的 cookie 全部失效，不需要服务端的
 //! 会话表。登出只删浏览器里的 cookie。算法与 cookie 格式和 Python 版相同：切换后已登录的浏览器、收藏的页面地址照样能用。
 
+use muliao_platform::ids::AgentId;
 use std::collections::VecDeque;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Mutex;
@@ -83,11 +84,11 @@ impl Auth {
 
     /// agent 页面的签名网址段（[`crate::api::sites`]）：页面在沙箱里跑、拿不到登录 cookie，凭它访问；与 cookie 同一把
     /// key，改了密码一并失效。
-    pub fn sign_site(&self, agent_id: &str, page: &str) -> String {
+    pub fn sign_site(&self, agent_id: &AgentId, page: &str) -> String {
         self.sign(&format!("site.{agent_id}/{page}"))
     }
 
-    pub fn verify_site(&self, agent_id: &str, page: &str, sig: &str) -> bool {
+    pub fn verify_site(&self, agent_id: &AgentId, page: &str, sig: &str) -> bool {
         same(sig, &self.sign_site(agent_id, page))
     }
 }
@@ -244,8 +245,8 @@ mod tests {
         // 与 Python 版（api/auth.py）同一输入算出的值：
         // Auth("0123456789abcdef0123456789abcdef", "hunter22").issue(1700000000)
         assert_eq!(token, "v1.1700000000.b5193bfa636491addd81bb3ed539cc2f81c17f8217caced64cf29addf14834fa");
-        assert!(auth.verify_site("a1", "dash", &auth.sign_site("a1", "dash")));
-        assert!(!auth.verify_site("a1", "other", &auth.sign_site("a1", "dash")));
+        assert!(auth.verify_site(&AgentId::new("a1"), "dash", &auth.sign_site(&AgentId::new("a1"), "dash")));
+        assert!(!auth.verify_site(&AgentId::new("a1"), "other", &auth.sign_site(&AgentId::new("a1"), "dash")));
         assert!(auth.check_password("hunter22") && !auth.check_password("hunter2"));
     }
 

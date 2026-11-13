@@ -7,26 +7,23 @@ export type Schemas = components['schemas']
 /** 会话来源的种类：用户在网页发起、触发器、agent 之间委派、issue 看板唤醒 */
 export type Origin = Schemas['SessionOrigin']['kind']
 
-/** agent 的 id 与名称都是字符串；品牌类型让编译器拦住「把名称当 id 传」 */
-export type AgentId = string & { readonly __brand: 'AgentId' }
+/** agent 与会话的编号：生成的接口类型里带品牌（scripts/gen-api.mjs），编译器拦住「把名称或别种编号当它传」 */
+export type AgentId = Schemas['AgentId']
+export type SessionId = Schemas['SessionId']
 
 /** 仅用于边界：路由参数、取值为 id 的下拉框 */
 export const asAgentId = (value: string) => value as AgentId
+export const asSessionId = (value: string) => value as SessionId
 
-/** 把接口类型里是 agent id 的字段换成 AgentId（可为空的保持可为空）；对联合类型逐个成员替换，保留区分字段 */
-type WithAgentId<T, K extends keyof T> = T extends unknown
-  ? Omit<T, K> & { [P in K]: null extends T[P] ? AgentId | null : AgentId }
-  : never
-
-export type Agent = WithAgentId<Schemas['AgentOut'], 'id'>
+export type Agent = Schemas['AgentOut']
 /** agent 表单的一整份值（新建时预填的缺省、编辑时打开的当前值）；修改只提交改过的字段（Schemas['AgentUpdate']） */
 export type AgentInput = Schemas['AgentDefaults']
-export type Session = WithAgentId<Schemas['SessionOut'], 'agent_id'>
+export type Session = Schemas['SessionOut']
 /** 对等批准的调用的决定：批准、拒绝、始终允许 */
 export type ApprovalChoice = NonNullable<Schemas['ReplyIn']['approvals']>[string]
 export type ScriptGrant = Schemas['ScriptGrantOut']
 // 会话列表里的一行：多一个工作状态 state（在运行 / 在等 / 空闲），不空闲的（在运行、在等）排在最前（接口排序）
-export type SessionListItem = WithAgentId<Schemas['SessionListItem'], 'agent_id'>
+export type SessionListItem = Schemas['SessionListItem']
 /** 一条通知（不叫 Notification：那是浏览器的全局对象） */
 export type AppNotification = Schemas['Notification']
 
@@ -58,10 +55,10 @@ export type RunRecord = Schemas['RunRecord']
 export type Retrying = Schemas['Retrying']
 
 /** 一个分组的用量汇总；没有参与分组的维度为 null。input_tokens 已含缓存读写，不要相加 */
-export type Usage = WithAgentId<Schemas['UsageBucket'], 'agent_id'>
+export type Usage = Schemas['UsageBucket']
 export type UsageGroup = NonNullable<NonNullable<paths['/api/usage']['get']['parameters']['query']>['group_by']>[number]
 /** agent 做过的一件事（只追加，由 agent 在每日自进化时写） */
-export type HistoryEntry = WithAgentId<Schemas['Record'], 'agent_id'>
+export type HistoryEntry = Schemas['Record']
 
 export type Question = Schemas['Question']
 export type QuestionAnswer = Schemas['QuestionAnswer']
@@ -77,35 +74,32 @@ export type ItemSource = Schemas['EventSource']
 /** 同一来源的事件归在一起用的键 */
 export const sourceKey = (s: ItemSource): string =>
   s.kind === 'job' ? `job:${s.job_id}` : s.kind === 'thread' ? `thread:${s.session_id}` : 'wake'
-export type SessionDetail = Omit<Schemas['SessionDetail'], 'session' | 'threads'> & {
-  session: Session
-  threads: Session[]
-}
+export type SessionDetail = Schemas['SessionDetail']
 export type LiveSegment = Schemas['LiveSegment']
 /** 会话在等的东西（按 kind 区分）：后台任务（job 字段带详情）、委派、到点唤醒、提问、等批准 */
 export type Wait = SessionDetail['waits'][number]
 
 export type Skill = Schemas['SkillDetail']
-export type Memory = WithAgentId<Schemas['MemoryOut'], 'owner'>
+export type Memory = Schemas['MemoryOut']
 /** 界面认识的一种触发方式（接口里 name 是字符串：触发方式由服务端登记） */
 export type TriggerKind = Schemas['TriggerKindOut'] & { name: TriggerKindName }
 export type Precheck = Schemas['Precheck']
 /** 按 kind 区分的联合：收窄 kind 后 config 与 status 就是这种方式的类型 */
-export type Trigger = WithAgentId<Schemas['TriggerOut'], 'agent_id'>
+export type Trigger = Schemas['TriggerOut']
 export type TriggerKindName = Trigger['kind']
 /** 新建触发器的请求，同样按 kind 区分：有服务端默认值的配置项可省 */
 export type TriggerCreate = Schemas['TriggerCreate']
-export type McpServer = WithAgentId<Schemas['McpOut'], 'owner'>
-export type McpInput = WithAgentId<Schemas['McpIn'], 'owner'>
+export type McpServer = Schemas['McpOut']
+export type McpInput = Schemas['McpIn']
 /** AI 资产池里的一项（内置工具、skill、MCP server、secret、记忆），带收录它的角色与这一种自己的详情（按 kind 收窄）；
  * 后端 assets 的 catalog.rs */
-export type CatalogAsset = WithAgentId<Schemas['CatalogAssetOut'], 'owner'>
+export type CatalogAsset = Schemas['CatalogAssetOut']
 export type AssetKind = CatalogAsset['kind']
 export type AssetOf<K extends AssetKind> = Extract<CatalogAsset, { kind: K }>
 /** 存成文件的资源种类（能改、能转移）：内置工具之外的四种 */
 export type StoredKind = Exclude<AssetKind, 'tool'>
 /** 角色（内置或自建）、它能用的工具与资产、带它的 agent；后端 assets 的 rules.rs、distribution.rs */
-export type Role = Omit<Schemas['RoleOut'], 'agents'> & { agents: AgentId[] }
+export type Role = Schemas['RoleOut']
 export type RoleInput = Schemas['RoleIn']
 export type ToolPermission = Schemas['ToolOut']
 export type Reach = Schemas['ReachOut']
@@ -240,28 +234,15 @@ export function call<P extends Path, M extends MethodOf<P>>(
   return send(method.toUpperCase(), url, given.query, body)
 }
 
-/** 把 AgentId 换回接口里的 string：品牌类型去掉品牌后必须就是接口推出的类型 */
-type Unbranded<T> = T extends AgentId
-  ? string
-  : T extends readonly (infer U)[]
-    ? Unbranded<U>[]
-    : T extends object
-      ? { [K in keyof T]: Unbranded<T[K]> }
-      : T
-
-/** 接口返回的 agent id 都是字符串；这里是给它们打上 AgentId 品牌的边界（字段由 WithAgentId 决定）。
- * 入参必须是 T 去掉品牌后的类型，所以 call 推出的响应类型仍然被检查，这里只收窄 agent id */
-export const branded = <T>(p: Promise<Unbranded<T>>) => p as Promise<unknown> as Promise<T>
-
 /** 前端路由：agent 页按 id（名称可改） */
 export const agentRoute = (id: AgentId) => `/agents/${id}`
 /** 会话页；通知点开的地址由后端 notifications 的 inbox::url_of 生成，与它一致 */
-export const sessionRoute = (id: string) => `/sessions/${id}`
+export const sessionRoute = (id: SessionId) => `/sessions/${id}`
 export const newSessionRoute = (agentId: AgentId) => `/new?${new URLSearchParams({ agent: agentId })}`
 /** agent 自定义页面的界面路由（页面本身在沙箱 iframe 里按接口给的签名地址打开） */
 export const sitePageRoute = (agentId: AgentId, name: string) =>
   `/pages/${encodeURIComponent(agentId)}/${encodeURIComponent(name)}`
-export type SitePage = WithAgentId<Schemas['SitePageOut'], 'agent_id'>
+export type SitePage = Schemas['SitePageOut']
 /** agent 工作目录里一个文件的内容（path 相对工作目录）：图片可直接内联，其余作为附件下载 */
 export const workspaceFileUrl = (agentId: AgentId, path: string) =>
   `/api/agents/${encodeURIComponent(agentId)}/workspace/file?${new URLSearchParams({ path })}`
@@ -275,10 +256,10 @@ export const api = {
   logout: () => call('post', '/api/auth/logout'),
   me: () => call('get', '/api/auth/me'),
 
-  agents: () => branded<Agent[]>(call('get', '/api/agents')),
+  agents: () => call('get', '/api/agents'),
   agentDefaults: () => call('get', '/api/agent-defaults'),
   /** 全部角色：内置在前（base 每个 agent 隐含），自建的按名称；各带只按它自己的规则能用的工具与资产 */
-  roles: () => branded<Role[]>(call('get', '/api/roles')),
+  roles: () => call('get', '/api/roles'),
   createRole: (name: string, body: RoleInput) => call('post', '/api/roles/{name}', { path: { name }, body }),
   /** 只改给出的字段 */
   updateRole: (name: string, body: Schemas['RoleUpdate']) => call('patch', '/api/roles/{name}', { path: { name }, body }),
@@ -291,7 +272,7 @@ export const api = {
   /** 角色规则（还没保存的也行）能用的工具与资产；name 为 null 是还没建的 */
   previewRole: (body: Schemas['RolePreviewIn']) => call('post', '/api/role-preview', { body }),
   /** 全部 AI 资源：内置工具在前，资源文件按种类、名称 */
-  assets: () => branded<CatalogAsset[]>(call('get', '/api/assets')),
+  assets: () => call('get', '/api/assets'),
   /** 删掉 skill（整个目录）/ MCP server / secret / 平台记忆的文件；全局记忆不能删，私有记忆随 agent */
   deleteAsset: (kind: StoredKind, name: string) => {
     const path = { path: { name } }
@@ -311,53 +292,47 @@ export const api = {
     call('put', '/api/assets/{kind}/{name}/owner', { path: { kind, name }, body: { owner } }),
   /** agent 的工作历史：不给 query 按日期倒序；给了按关键词检索 */
   agentHistory: (agent_id: AgentId, query?: string) =>
-    branded<HistoryEntry[]>(
-      call('get', '/api/agents/{agent_id}/history', { path: { agent_id }, query: { query, limit: 200 } }),
-    ),
+    call('get', '/api/agents/{agent_id}/history', { path: { agent_id }, query: { query, limit: 200 } }),
   /** agent 工作目录里 path（相对工作目录，空为根）这一层：目录在前，各自按名称 */
   workspace: (agent_id: AgentId, path: string) =>
     call('get', '/api/agents/{agent_id}/workspace', { path: { agent_id }, query: { path } }),
   /** 浏览中的一个文件的内容（workspaceFileUrl / skillFileUrl；响应体是文件本身，接口描述里没有 JSON 响应体） */
   fileBlob: (url: string) => send<Response>('GET', url, undefined, undefined, true).then((r) => r.blob()),
   /** 全部 agent 的自定义页面（工作目录 site/<名>/index.html），各带打开它的签名地址 */
-  pages: () => branded<SitePage[]>(call('get', '/api/pages')),
+  pages: () => call('get', '/api/pages'),
   /** 服务端配置决定的可选能力（如语音输入）与默认值（如压缩阈值） */
   features: () => call('get', '/api/features'),
   /** 服务端配置的 LLM provider 名 */
   providers: () => call('get', '/api/providers'),
   /** 向 provider 实时查询的模型名 */
   providerModels: (name: string) => call('get', '/api/providers/{name}/models', { path: { name } }),
-  agent: (agent_id: AgentId) => branded<Agent>(call('get', '/api/agents/{agent_id}', { path: { agent_id } })),
-  createAgent: (body: Schemas['AgentCreate']) => branded<Agent>(call('post', '/api/agents', { body })),
+  agent: (agent_id: AgentId) => call('get', '/api/agents/{agent_id}', { path: { agent_id } }),
+  createAgent: (body: Schemas['AgentCreate']) => call('post', '/api/agents', { body }),
   /** 只改给出的字段 */
   updateAgent: (agent_id: AgentId, body: Schemas['AgentUpdate']) =>
-    branded<Agent>(call('patch', '/api/agents/{agent_id}', { path: { agent_id }, body })),
+    call('patch', '/api/agents/{agent_id}', { path: { agent_id }, body }),
   deleteAgent: (agent_id: AgentId) => call('delete', '/api/agents/{agent_id}', { path: { agent_id } }),
   /** 设为（true）或取消（false）系统默认 agent：Web 新会话默认选中它 */
   setDefaultAgent: (agent_id: AgentId, on: boolean) =>
-    branded<Agent>(
-      on
-        ? call('put', '/api/agents/{agent_id}/default', { path: { agent_id } })
-        : call('delete', '/api/agents/{agent_id}/default', { path: { agent_id } }),
-    ),
+    on
+      ? call('put', '/api/agents/{agent_id}/default', { path: { agent_id } })
+      : call('delete', '/api/agents/{agent_id}/default', { path: { agent_id } }),
   /** 归档（true）或取消归档（false）：归档的不能对话、委派、指派，它的触发器不触发；它忙或是默认 agent 时 409 */
   setAgentArchived: (agent_id: AgentId, on: boolean) =>
-    branded<Agent>(
-      on
-        ? call('put', '/api/agents/{agent_id}/archive', { path: { agent_id } })
-        : call('delete', '/api/agents/{agent_id}/archive', { path: { agent_id } }),
-    ),
+    on
+      ? call('put', '/api/agents/{agent_id}/archive', { path: { agent_id } })
+      : call('delete', '/api/agents/{agent_id}/archive', { path: { agent_id } }),
   /** 平台的一块记忆（global 是全局记忆，其余是共享记忆） */
-  memory: (name: string) => branded<Memory>(call('get', '/api/assets/memory/{name}', { path: { name } })),
+  memory: (name: string) => call('get', '/api/assets/memory/{name}', { path: { name } }),
   /** 新建或整体改写平台的一块记忆。version 是打开时的版本（新建为 null），期间被别处改过 409 */
   saveMemory: (name: string, body: Schemas['MemoryIn']) =>
-    branded<Memory>(call('put', '/api/assets/memory/{name}', { path: { name }, body })),
+    call('put', '/api/assets/memory/{name}', { path: { name }, body }),
   /** agent 的私有记忆：按所属 agent 认，不占记忆的名字 */
   agentMemory: (agent_id: AgentId) =>
-    branded<Memory>(call('get', '/api/agents/{agent_id}/memory', { path: { agent_id } })),
+    call('get', '/api/agents/{agent_id}/memory', { path: { agent_id } }),
   /** 整体改写 agent 的私有记忆，version 同 saveMemory */
   saveAgentMemory: (agent_id: AgentId, body: Schemas['MemoryIn']) =>
-    branded<Memory>(call('put', '/api/agents/{agent_id}/memory', { path: { agent_id }, body })),
+    call('put', '/api/agents/{agent_id}/memory', { path: { agent_id }, body }),
 
   skill: (name: string) => call('get', '/api/assets/skill/{name}', { path: { name } }),
   /** 新建的归 owner；已有的整体改写正文与描述，owner 不变。version 同 saveMemory */
@@ -375,15 +350,15 @@ export const api = {
     limit?: number
     offset?: number
   }) =>
-    branded<SessionListItem[]>(call('get', '/api/sessions', { query })),
-  session: (session_id: string) =>
-    branded<SessionDetail>(call('get', '/api/sessions/{session_id}', { path: { session_id } })),
+    call('get', '/api/sessions', { query }),
+  session: (session_id: SessionId) =>
+    call('get', '/api/sessions/{session_id}', { path: { session_id } }),
   startSession: (agent_id: AgentId, prompt: string, attachments: string[]) =>
-    branded<Session>(call('post', '/api/sessions', { body: { agent_id, prompt, attachments } })),
-  reply: (session_id: string, prompt: string, attachments: string[]) =>
+    call('post', '/api/sessions', { body: { agent_id, prompt, attachments } }),
+  reply: (session_id: SessionId, prompt: string, attachments: string[]) =>
     call('post', '/api/sessions/{session_id}/messages', { path: { session_id }, body: { prompt, attachments, answers: {}, approvals: {} } }),
   /** 回答挂起的提问：作为这次 ask_user 调用的结果交回模型 */
-  answer: (session_id: string, toolCallId: string, answers: QuestionAnswer[]) =>
+  answer: (session_id: SessionId, toolCallId: string, answers: QuestionAnswer[]) =>
     call('post', '/api/sessions/{session_id}/messages', {
       path: { session_id },
       body: { prompt: '', attachments: [], answers: { [toolCallId]: answers }, approvals: {} },
@@ -392,7 +367,7 @@ export const api = {
    * 批准或拒绝一次等批准的工具调用：批准后按原参数执行，结果交回模型；拒绝时模型收到「用户拒绝」；始终允许：批准，
    * 且以后同样的调用不再问（设置页可撤销）
    */
-  approve: (session_id: string, toolCallId: string, choice: ApprovalChoice) =>
+  approve: (session_id: SessionId, toolCallId: string, choice: ApprovalChoice) =>
     call('post', '/api/sessions/{session_id}/messages', {
       path: { session_id },
       body: { prompt: '', attachments: [], answers: {}, approvals: { [toolCallId]: choice } },
@@ -409,7 +384,7 @@ export const api = {
   transcribe: (audio: Blob) =>
     send<Schemas['TranscriptOut']>('POST', '/api/transcriptions', undefined, { type: audio.type || 'audio/webm', data: audio }),
   /** 同时把指向这个会话的通知标为已读 */
-  markRead: (session_id: string) => call('post', '/api/sessions/{session_id}/read', { path: { session_id } }),
+  markRead: (session_id: SessionId) => call('post', '/api/sessions/{session_id}/read', { path: { session_id } }),
   notifications: () => call('get', '/api/notifications'),
   unreadNotifications: () => call('get', '/api/notifications/unread'),
   /** 标记到 throughId（用户看到的最新一条）为止已读，之后才到的保持未读 */
@@ -418,38 +393,36 @@ export const api = {
   markIssueNotificationsRead: (issue_id: number) =>
     call('post', '/api/notifications/issues/{issue_id}/read', { path: { issue_id } }),
   /** 停止正在进行的运行；停止前已经产生的部分照常保存 */
-  stop: (session_id: string) => call('post', '/api/sessions/{session_id}/stop', { path: { session_id } }),
+  stop: (session_id: SessionId) => call('post', '/api/sessions/{session_id}/stop', { path: { session_id } }),
   /** 压缩在后台做，开始与结束时会话页随 saved 事件刷新 */
-  compact: (session_id: string) => call('post', '/api/sessions/{session_id}/compact', { path: { session_id } }),
+  compact: (session_id: SessionId) => call('post', '/api/sessions/{session_id}/compact', { path: { session_id } }),
   /** 重试最近一次最终失败的运行（同一次运行接着跑）；会话在跑或最近一次没失败时 409 */
-  retry: (session_id: string) => call('post', '/api/sessions/{session_id}/retry', { path: { session_id } }),
-  deleteSession: (session_id: string) => call('delete', '/api/sessions/{session_id}', { path: { session_id } }),
+  retry: (session_id: SessionId) => call('post', '/api/sessions/{session_id}/retry', { path: { session_id } }),
+  deleteSession: (session_id: SessionId) => call('delete', '/api/sessions/{session_id}', { path: { session_id } }),
   /** 结束 agent 的一个后台任务（同 job_kill）；结局照常作为事件回到发起它的会话 */
-  killJob: (agent_id: string, job_id: number) =>
+  killJob: (agent_id: AgentId, job_id: number) =>
     call('post', '/api/agents/{agent_id}/jobs/{job_id}/kill', { path: { agent_id, job_id } }),
 
   /** [since, until) 之间的 token 用量，按给出的维度分组；天按服务端配置的时区划分 */
   usage: (since: Date, until: Date, group_by: UsageGroup[]) =>
-    branded<Usage[]>(
-      call('get', '/api/usage', { query: { since: since.toISOString(), until: until.toISOString(), group_by } }),
-    ),
+    call('get', '/api/usage', { query: { since: since.toISOString(), until: until.toISOString(), group_by } }),
 
   triggerKinds: () => call('get', '/api/trigger-kinds'),
   /** finished 为 true 时列已结束的（跑完的一次性触发器），它们只能查看与删除 */
-  triggers: (finished = false) => branded<Trigger[]>(call('get', '/api/triggers', { query: { finished } })),
-  createTrigger: (body: TriggerCreate & { agent_id: AgentId }) => branded<Trigger>(call('post', '/api/triggers', { body })),
+  triggers: (finished = false) => call('get', '/api/triggers', { query: { finished } }),
+  createTrigger: (body: TriggerCreate & { agent_id: AgentId }) => call('post', '/api/triggers', { body }),
   /** 只修改给出的字段；precheck 不给表示不变，给 null 表示去掉 */
   updateTrigger: (trigger_id: number, body: Schemas['TriggerPatch']) =>
-    branded<Trigger>(call('patch', '/api/triggers/{trigger_id}', { path: { trigger_id }, body })),
+    call('patch', '/api/triggers/{trigger_id}', { path: { trigger_id }, body }),
   /** session_id 为 null：前置检查判定这次不调用 agent */
   runTrigger: (trigger_id: number) => call('post', '/api/triggers/{trigger_id}/run', { path: { trigger_id } }),
   deleteTrigger: (trigger_id: number) => call('delete', '/api/triggers/{trigger_id}', { path: { trigger_id } }),
   /** 新增（启用的）MCP server；同名已存在 409 */
   addMcp: (name: string, body: McpInput) =>
-    branded<McpServer>(call('put', '/api/assets/mcp/{name}', { path: { name }, body })),
+    call('put', '/api/assets/mcp/{name}', { path: { name }, body }),
   probeMcp: (name: string) => call('post', '/api/assets/mcp/{name}/tools', { path: { name } }),
   setMcpEnabled: (name: string, enabled: boolean) =>
-    branded<McpServer>(call('put', '/api/assets/mcp/{name}/enabled', { path: { name }, body: { enabled } })),
+    call('put', '/api/assets/mcp/{name}/enabled', { path: { name }, body: { enabled } }),
 
   /** 新建的归 owner（null 为平台）；已有的改值与描述，owner 不变；allowShell 为 null：已有的保持原值，新建的允许 */
   setSecret: (owner: AgentId | null, key: string, value: string, description: string, allowShell: boolean | null) =>
@@ -459,7 +432,7 @@ export const api = {
     }),
 
   /** owner 给出时只列这个项目（agent）负责的 issue */
-  issues: (owner?: string) => call('get', '/api/issues', { query: { owner } }),
+  issues: (owner?: AgentId) => call('get', '/api/issues', { query: { owner } }),
   issue: (issue_id: number) => call('get', '/api/issues/{issue_id}', { path: { issue_id } }),
   createIssue: (body: Schemas['IssueCreate']) => call('post', '/api/issues', { body }),
   /** 只修改给出的字段；assignee 给 null 表示取消指派 */

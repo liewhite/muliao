@@ -55,7 +55,7 @@ async fn transcribe(State(s): State<AppState>, headers: HeaderMap, body: Body) -
     let Some(transcriber) = s.services.transcriber.clone() else {
         return Err(ApiError::not_found("speech transcription is not configured ([transcription] in config.toml)"));
     };
-    let media_type = content_type(&headers, "the audio")?.to_owned();
+    let media_type = content_type(&headers, "the audio")?;
     let audio = read_limited(&headers, body, transcriber.max_bytes()).await?;
     Ok(axum::Json(TranscriptOut { text: transcriber.transcribe(&audio, &media_type).await? }))
 }

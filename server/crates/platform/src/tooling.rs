@@ -11,6 +11,7 @@
 //! - 外部服务暂时不可用（连不上、超时、429、5xx）→ `ToolError::Unavailable`：整次运行按暂时性失败，稍后重试。
 //! - 其余（配置或账户问题、程序错误、系统自己的数据坏了）→ `ToolError::Abort`：整次运行失败，让人看见。
 
+use crate::ids::{AgentId, SessionId};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -36,10 +37,10 @@ pub enum Audience {
 /// 一次运行（会话的一次运行，从开始到结束或挂起）交给所有工具的上下文。每次运行新建一个，不和别的运行共用。
 #[derive(Debug)]
 pub struct RunScope {
-    pub agent_id: String,
+    pub agent_id: AgentId,
     /// agent 的工作目录（相对路径与 shell 的 cwd 以它为准）
     pub workspace: PathBuf,
-    pub session_id: String,
+    pub session_id: SessionId,
     pub audience: Audience,
     /// 这次运行里 read_file 读过（只读了一段也算）、或文件工具刚写过的文件：路径 → 当时的修改时间。write_file 整体覆盖
     /// 资源目录里已有的文件之前核对它（读过、之后没被别人改过），防止两处同时改时后写的静默盖掉先写的。只由文件工具读写
@@ -50,7 +51,7 @@ pub struct RunScope {
 }
 
 impl RunScope {
-    pub fn new(agent_id: String, workspace: PathBuf, session_id: String, audience: Audience) -> Self {
+    pub fn new(agent_id: AgentId, workspace: PathBuf, session_id: SessionId, audience: Audience) -> Self {
         Self { agent_id, workspace, session_id, audience, reads: Mutex::default(), result_metadata: Mutex::default() }
     }
 

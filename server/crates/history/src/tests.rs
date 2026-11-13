@@ -1,6 +1,7 @@
 //! 历史领域的测试：真库（agents、sessions、issues、history 的表）；会话、信件、运行、消息经会话领域的入口写，工具经
 //! agenter 的工具接口真调。
 
+use muliao_platform::ids::{AgentId, Importance, SessionId};
 use std::sync::Arc;
 
 use agenter::{
@@ -27,7 +28,7 @@ struct World {
     db: Arc<Database>,
     history: History,
     waker: Waker,
-    _wakes: tokio::sync::mpsc::UnboundedReceiver<String>,
+    _wakes: tokio::sync::mpsc::UnboundedReceiver<SessionId>,
 }
 
 async fn world() -> World {
@@ -66,7 +67,7 @@ fn entry(day: NaiveDate, title: &str, summary: &str, refs: &[&str], importance: 
         title: title.into(),
         summary: summary.into(),
         refs: refs.iter().map(|r| r.to_string()).collect(),
-        importance,
+        importance: Importance::try_from(importance).unwrap(),
     }
 }
 
@@ -140,7 +141,7 @@ impl World {
 
     /// 一次运行：投 mail（发送方 from 的消息），交给运行并保存 messages，按 outcome 结束（None 为还在跑）。
     async fn run(&self, session: &str, from: Option<(Origin, &str)>, messages: Vec<Message>, outcome: Option<Outcome>) {
-        let (session, waker) = (session.to_owned(), self.waker.clone());
+        let (session, waker) = (SessionId::new(session), self.waker.clone());
         let live = muliao_sessions::live::Live::new(std::sync::Arc::new(muliao_platform::bus::Bus::new(16)));
         let from = from.map(|(o, t)| (o, t.to_owned()));
         self.db.write(move |tx| record_run_in(tx, &waker, &live, &session, from, &messages, outcome)).await.unwrap();
@@ -169,7 +170,8 @@ async fn append_checks_every_entry_and_writes_all_or_nothing() {
     let w = world().await;
     let today = w.today();
     let ok = entry(today, " 修好了触发器 ", " 摘要 \n", &["#1"], 2);
-    let written = w.history.append(A, vec![ok.clone(), entry(today, "第二件", "s", &[], 1)]).await.unwrap();
+    let written =
+        w.history.append(&AgentId::new(A), vec![ok.clone(), entry(today, "第二件", "s", &[], 1)]).await.unwrap();
     assert_eq!(written.len(), 2);
     assert_eq!((written[0].title.as_str(), written[0].summary.as_str()), ("修好了触发器", "摘要"));
     assert_eq!(written[1].id, written[0].id + 1);
@@ -178,23 +180,22 @@ async fn append_checks_every_entry_and_writes_all_or_nothing() {
         entry(today, "  ", "s", &[], 1),
         entry(today, &"长".repeat(201), "s", &[], 1),
         entry(today, "t", " ", &[], 1),
-        entry(today, "t", "s", &[], 4),
         entry(today + Duration::days(1), "t", "s", &[], 1),
     ];
     for b in bad {
-        let e = w.history.append(A, vec![ok.clone(), b.clone()]).await.unwrap_err();
+        let e = w.history.append(&AgentId::new(A), vec![ok.clone(), b.clone()]).await.unwrap_err();
         assert_eq!(kind_of(e), ErrorKind::InvalidInput, "{b:?}");
     }
-    assert_eq!(kind_of(w.history.append(A, vec![]).await.unwrap_err()), ErrorKind::InvalidInput);
+    assert_eq!(kind_of(w.history.append(&AgentId::new(A), vec![]).await.unwrap_err()), ErrorKind::InvalidInput);
     // 200 个字符正好可以
-    w.history.append(A, vec![entry(today, &"长".repeat(200), "s", &[], 1)]).await.unwrap();
+    w.history.append(&AgentId::new(A), vec![entry(today, &"长".repeat(200), "s", &[], 1)]).await.unwrap();
     assert_eq!(w.history.search(Search::of(None)).await.unwrap().len(), 3);
 }
 
 #[tokio::test]
 async fn rows_cannot_be_changed_or_deleted() {
     let w = world().await;
-    w.history.append(A, vec![entry(w.today(), "t", "s", &[], 1)]).await.unwrap();
+    w.history.append(&AgentId::new(A), vec![entry(w.today(), "t", "s", &[], 1)]).await.unwrap();
     for sql in ["UPDATE agent_history SET title = 'x'", "DELETE FROM agent_history"] {
         let e = w.db.write(move |tx| tx.execute(sql, [])).await.unwrap_err();
         assert!(e.to_string().contains("append-only"), "{e}");
@@ -207,7 +208,7 @@ async fn search_lists_by_date_or_matches_every_word() {
     let d = |n: i64| w.today() - Duration::days(n);
     w.history
         .append(
-            A,
+            &AgentId::new(A),
             vec![
                 entry(d(3), "触发器前置检查改成脚本", "precheck 每分钟跑一次", &["#155", "工单"], 1),
                 entry(d(1), "部署 muliao", "改了 SSE", &["#200"], 3),
@@ -216,9 +217,9 @@ async fn search_lists_by_date_or_matches_every_word() {
         )
         .await
         .unwrap();
-    w.history.append(B, vec![entry(d(2), "beta 的前置检查", "无关", &[], 1)]).await.unwrap();
+    w.history.append(&AgentId::new(B), vec![entry(d(2), "beta 的前置检查", "无关", &[], 1)]).await.unwrap();
     let titles = |rs: Vec<Record>| rs.into_iter().map(|r| r.title).collect::<Vec<_>>();
-    let search = |agents: Option<&[&str]>| Search::of(agents.map(|a| a.iter().map(|x| x.to_string()).collect()));
+    let search = |agents: Option<&[&str]>| Search::of(agents.map(|a| a.iter().copied().map(AgentId::new).collect()));
 
     // 没有 query：日期倒序，同一天按写入倒序
     let all = w.history.search(search(Some(&[A]))).await.unwrap();
@@ -237,7 +238,7 @@ async fn search_lists_by_date_or_matches_every_word() {
     assert_eq!(w.history.search(Search { query: Some("前置检查".into()), ..search(None) }).await.unwrap().len(), 3);
     let ranged = Search { since: Some(d(2)), until: Some(d(1)), ..search(None) };
     assert_eq!(titles(w.history.search(ranged).await.unwrap()), ["前置检查的超时", "部署 muliao", "beta 的前置检查"]);
-    let important = Search { min_importance: 2, ..search(None) };
+    let important = Search { min_importance: Importance::try_from(2).unwrap(), ..search(None) };
     assert_eq!(w.history.search(important).await.unwrap().len(), 2);
     let limited = Search { limit: 1, ..search(None) };
     assert_eq!(titles(w.history.search(limited).await.unwrap()), ["前置检查的超时"]);
@@ -245,7 +246,6 @@ async fn search_lists_by_date_or_matches_every_word() {
     for bad in [
         Search { limit: 0, ..search(None) },
         Search { limit: 201, ..search(None) },
-        Search { min_importance: 0, ..search(None) },
         Search { since: Some(d(1)), until: Some(d(2)), ..search(None) },
         Search { query: Some("  ".into()), ..search(None) },
     ] {
@@ -267,7 +267,7 @@ async fn the_tools_append_your_own_and_search_by_agent_name() {
         .await
         .unwrap();
     assert_eq!(out, format!("appended 1 entries (ids 1-1) for {today}"));
-    w.history.append(B, vec![entry(w.today(), "b", "s", &[], 1)]).await.unwrap();
+    w.history.append(&AgentId::new(B), vec![entry(w.today(), "b", "s", &[], 1)]).await.unwrap();
 
     let found: Value = serde_json::from_str(&w.call(A, "history_search", json!({}), 20_000).await.unwrap()).unwrap();
     assert_eq!(
@@ -280,6 +280,9 @@ async fn the_tools_append_your_own_and_search_by_agent_name() {
     let found: Value =
         serde_json::from_str(&w.call(A, "history_search", json!({"agent": "beta"}), 20_000).await.unwrap()).unwrap();
     assert_eq!(found[0]["agent"], "beta");
+    // 重要程度在读入工具参数时就只能是 1-3
+    let e = w.call(A, "history_search", json!({"min_importance": 4}), 20_000).await.unwrap_err();
+    assert!(e.contains("`min_importance`"), "{e}");
     let e = w.call(A, "history_search", json!({"agent": "nobody"}), 20_000).await.unwrap_err();
     assert!(e.contains("alpha"), "{e}");
     let e = w.call(A, "history_search", json!({"limit": 500}), 20_000).await.unwrap_err();
@@ -324,7 +327,7 @@ async fn day_of_work(w: &World) {
     .await;
     w.session("s-beta-0001", B, "beta 的会话", "user", None).await;
     w.run("s-beta-0001", Some((Origin::User, "beta 你好")), vec![user_text("beta 你好")], None).await;
-    w.history.append(A, vec![entry(w.today(), "今天的事", "s", &["#7"], 2)]).await.unwrap();
+    w.history.append(&AgentId::new(A), vec![entry(w.today(), "今天的事", "s", &["#7"], 2)]).await.unwrap();
 }
 
 #[tokio::test]

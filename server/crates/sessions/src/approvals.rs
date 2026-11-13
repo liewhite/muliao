@@ -4,6 +4,7 @@
 //! 等批准的调用不按工具名认（同一个工具多数调用不用批准）：运行停下时把这些调用记下，没有结果、记过的调用就是在等批准。
 //! 「始终允许」由工具自己记（批准随 agenter 的 `Approval::always` 交回工具）。
 
+use muliao_platform::ids::SessionId;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use agenter::Resolution;
@@ -15,7 +16,7 @@ use muliao_platform::db::placeholders;
 use muliao_platform::errors::{Result, broken};
 
 /// 这些调用停下来等批准了（运行收尾的事务里），连同工具请求批准时定下的 pin。已记过的不再记。
-pub(crate) fn record_in(c: &Connection, session_id: &str, calls: &[(String, String)]) -> Result<()> {
+pub(crate) fn record_in(c: &Connection, session_id: &SessionId, calls: &[(String, String)]) -> Result<()> {
     for (call_id, pin) in calls {
         c.execute(
             "INSERT OR IGNORE INTO approval_requests (session_id, call_id, pin, created_at) VALUES (?1, ?2, ?3, ?4)",
@@ -29,7 +30,7 @@ pub(crate) fn record_in(c: &Connection, session_id: &str, calls: &[(String, Stri
 /// 执行中被打断，不能再执行一遍：返回它们的结果「被中断」，代替批准交给模型。
 pub(crate) fn take_in(
     c: &Connection,
-    session_id: &str,
+    session_id: &SessionId,
     answers: &HashMap<String, CallResult>,
 ) -> Result<HashMap<String, Resolution>> {
     let mut interrupted = HashMap::new();
@@ -63,8 +64,11 @@ pub(crate) fn take_in(
 }
 
 /// 这些会话里停下来等过批准的调用 id（不论现在有没有结果），每个会话都在结果里。
-pub(crate) fn requested_among(c: &Connection, session_ids: &[String]) -> Result<BTreeMap<String, HashSet<String>>> {
-    let mut found: BTreeMap<String, HashSet<String>> =
+pub(crate) fn requested_among(
+    c: &Connection,
+    session_ids: &[SessionId],
+) -> Result<BTreeMap<SessionId, HashSet<String>>> {
+    let mut found: BTreeMap<SessionId, HashSet<String>> =
         session_ids.iter().map(|s| (s.clone(), HashSet::new())).collect();
     if session_ids.is_empty() {
         return Ok(found);
@@ -74,7 +78,9 @@ pub(crate) fn requested_among(c: &Connection, session_ids: &[String]) -> Result<
         placeholders(session_ids.len())
     );
     let mut stmt = c.prepare(&sql)?;
-    for row in stmt.query_map(rusqlite::params_from_iter(session_ids), |r| Ok((r.get::<_, String>(0)?, r.get(1)?)))? {
+    for row in
+        stmt.query_map(rusqlite::params_from_iter(session_ids), |r| Ok((r.get::<_, SessionId>(0)?, r.get(1)?)))?
+    {
         let (s, call) = row?;
         found.entry(s).or_default().insert(call);
     }
@@ -84,7 +90,7 @@ pub(crate) fn requested_among(c: &Connection, session_ids: &[String]) -> Result<
 /// 这些等批准的调用请求批准时记下的 pin（用户提交决定时记进决定）。
 pub(crate) fn pins_in(
     c: &Connection,
-    session_id: &str,
+    session_id: &SessionId,
     call_ids: &[String],
 ) -> Result<HashMap<String, Option<String>>> {
     let mut pins = HashMap::new();

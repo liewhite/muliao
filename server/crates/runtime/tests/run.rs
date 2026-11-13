@@ -2,6 +2,7 @@
 //! MCP 连不上的跳过并告诉模型、没加载的资源文件告诉模型）走到结束：附件展开后发给模型、工具交回的图片存成引用、工具挂上的
 //! 附加数据并进结果、每次回复记用量；压缩记为压缩的用量。
 
+use muliao_platform::ids::{AgentId, MediaType, SessionId};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -133,7 +134,7 @@ struct World {
     usage: Arc<UsageLog>,
     agents: Arc<AgentService>,
     mcp: Arc<McpConnector>,
-    confined: Arc<Mutex<Vec<String>>>,
+    confined: Arc<Mutex<Vec<AgentId>>>,
 }
 
 async fn world(server: &MockServer) -> World {
@@ -174,7 +175,7 @@ base_url = "{}"
     let vault = Arc::new(Vault::new("3QOHdQSfwdIhMog5wkCMiIBXFANh4YdV-XA9xY3RmyY=").unwrap());
     let secrets = Arc::new(Secrets::new(source.clone(), vault));
     let attachment =
-        SharedFile { file_id: "f1".into(), name: "report.pdf".into(), media_type: "application/pdf".into() };
+        SharedFile { file_id: "f1".into(), name: "report.pdf".into(), media_type: MediaType::known("application/pdf") };
     let toolbox = Arc::new(Toolbox::new(vec![
         builtin(Snap { attachment }, ToolTraits::read().secret_args(&["token"])),
         builtin(Hidden, ToolTraits::write().admin()),
@@ -183,13 +184,13 @@ base_url = "{}"
     let confined = Arc::new(Mutex::new(Vec::new()));
     let seen = confined.clone();
     let home = dir.path().to_path_buf();
-    let confine: Confine = Arc::new(move |agent: String| {
+    let confine: Confine = Arc::new(move |agent: AgentId| {
         seen.lock().unwrap().push(agent.clone());
         let home = home.clone();
         async move {
             Ok(Confinement {
                 sandbox: Arc::new(FakeSandbox),
-                writable: WritablePaths::of(vec![], agent),
+                writable: WritablePaths::of(vec![], agent.to_string()),
                 home,
                 explain: Arc::new(|_: &Path| String::new()),
                 unreadable: vec![],
@@ -242,7 +243,7 @@ async fn a_run_from_start_to_finish() {
         .runtime
         .start(RunSpec {
             assets: &assets,
-            session_id: "s1",
+            session_id: &SessionId::new("s1"),
             audience: Audience::User,
             origin_note: "Started by the user.",
             summary: None,
@@ -259,7 +260,7 @@ async fn a_run_from_start_to_finish() {
     assert_eq!(*w.confined.lock().unwrap(), [me.as_str()], "the stdio server is confined as the agent using it");
 
     // 用户发来一张图片附件
-    let meta = w.files.put("photo.png", "image/png", PNG).await.unwrap();
+    let meta = w.files.put("photo.png", MediaType::parse("image/png").unwrap(), PNG).await.unwrap();
     let mut history = vec![user(
         std::iter::once(RequestPart::Text { text: "看看".into() })
             .chain(muliao_runtime::attachments::references(std::slice::from_ref(&meta)))
@@ -303,7 +304,11 @@ async fn a_run_from_start_to_finish() {
     assert!(body.contains("\"type\":\"image\""), "the image content is sent: {body}");
     assert!(!body.contains("/api/files/"), "file references never reach the model");
     assert_eq!(sent["tools"].as_array().unwrap().len(), 1);
-    assert_eq!(w.usage.session_totals("s1").await.unwrap().requests, 1, "billed right after the response");
+    assert_eq!(
+        w.usage.session_totals(&SessionId::new("s1")).await.unwrap().requests,
+        1,
+        "billed right after the response"
+    );
 
     // 执行工具：图片存成引用，附件并进结果
     let Step::Results(req) = run.step(&history, &resolved, &mut |_| {}).await.unwrap() else { panic!() };
@@ -334,7 +339,7 @@ async fn a_run_from_start_to_finish() {
     history.push(Message::Assistant(r));
     assert!(matches!(run.step(&history, &resolved, &mut |_| {}).await.unwrap(), Step::Finished));
 
-    let totals = w.usage.session_totals("s1").await.unwrap();
+    let totals = w.usage.session_totals(&SessionId::new("s1")).await.unwrap();
     assert_eq!((totals.requests, totals.input_tokens, totals.output_tokens), (2, 300, 15));
 
     // 落库前脱敏：snap 声明了 token
@@ -345,9 +350,9 @@ async fn a_run_from_start_to_finish() {
     drop(run);
 
     // 压缩：无工具的一次生成，记为压缩
-    let summary = w.runtime.summarize(&assets, "s1", "summarize", "the transcript").await.unwrap();
+    let summary = w.runtime.summarize(&assets, &SessionId::new("s1"), "summarize", "the transcript").await.unwrap();
     assert_eq!(summary, "好了");
-    assert_eq!(w.usage.session_totals("s1").await.unwrap().requests, 3);
+    assert_eq!(w.usage.session_totals(&SessionId::new("s1")).await.unwrap().requests, 3);
 }
 
 #[tokio::test]

@@ -1,6 +1,7 @@
 //! 真调一次本机配置的转写服务（花钱、要联网，默认跳过）：`cargo test -p muliao-speech --test live -- --ignored`。
 //! 录音用 macOS 的 `say` 现合成一段中文、`afconvert` 转成 wav。
 
+use muliao_platform::ids::MediaType;
 use std::process::Command;
 
 use muliao_platform::config::{DEFAULT_CONFIG_PATH, Settings, expand_home};
@@ -29,7 +30,7 @@ async fn live_transcribe() {
     let audio = std::fs::read(&wav).unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
 
-    let text = t.transcribe(&audio, "audio/wav").await.unwrap();
+    let text = t.transcribe(&audio, &MediaType::parse("audio/wav").unwrap()).await.unwrap();
     eprintln!("transcribed {} bytes: {text:?}", audio.len());
     assert!(text.contains("天气"), "{text}");
 }

@@ -3,20 +3,16 @@
 //! 路径是相对这个目录的 posix 路径（空串是目录本身），解析符号链接后必须仍在目录内，否则拒绝；指向外面的符号链接也不列出。
 //! 这只防止界面误走出去，不是安全隔离（agent 与服务同等可信，docs/architecture.md 第 15 节）。
 
+use muliao_platform::ids::{AgentId, MediaType};
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use muliao_assets::service::workspace_of;
-use muliao_files::INLINE_IMAGE_TYPES;
 use muliao_platform::errors::DomainError;
 use muliao_platform::fs::{RealPath, is_within, real, resolve_within};
 use serde::Serialize;
 
 use crate::file_tools::media_type_of;
-
-fn is_inline(media_type: &str) -> bool {
-    INLINE_IMAGE_TYPES.contains(&media_type)
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Entry {
@@ -32,7 +28,7 @@ pub struct Entry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceFile {
     pub path: PathBuf,
-    pub media_type: String,
+    pub media_type: MediaType,
 }
 
 impl WorkspaceFile {
@@ -42,7 +38,7 @@ impl WorkspaceFile {
     }
 
     pub fn inline(&self) -> bool {
-        is_inline(&self.media_type)
+        self.media_type.is_inline_image()
     }
 }
 
@@ -75,7 +71,7 @@ pub fn list_dir(root: &Path, path: &str) -> Result<Vec<Entry>, DomainError> {
         let name = child.file_name().unwrap_or_default().to_string_lossy().into_owned();
         let is_dir = st.is_dir();
         entries.push(Entry {
-            inline: !is_dir && is_inline(&media_type_of(&name)),
+            inline: !is_dir && media_type_of(&name).is_inline_image(),
             name,
             is_dir,
             size: (!is_dir).then_some(st.len()),
@@ -107,7 +103,7 @@ impl WorkspaceFiles {
         Self { workspaces_dir }
     }
 
-    fn root(&self, agent_id: &str) -> Result<PathBuf, DomainError> {
+    fn root(&self, agent_id: &AgentId) -> Result<PathBuf, DomainError> {
         let root = workspace_of(&self.workspaces_dir, agent_id);
         if !root.is_dir() {
             return Err(DomainError::not_found(format!("agent {agent_id:?} has no workspace")));
@@ -115,11 +111,11 @@ impl WorkspaceFiles {
         Ok(root)
     }
 
-    pub fn list(&self, agent_id: &str, path: &str) -> Result<Vec<Entry>, DomainError> {
+    pub fn list(&self, agent_id: &AgentId, path: &str) -> Result<Vec<Entry>, DomainError> {
         list_dir(&self.root(agent_id)?, path)
     }
 
-    pub fn file(&self, agent_id: &str, path: &str) -> Result<WorkspaceFile, DomainError> {
+    pub fn file(&self, agent_id: &AgentId, path: &str) -> Result<WorkspaceFile, DomainError> {
         file_in(&self.root(agent_id)?, path)
     }
 }
@@ -148,7 +144,7 @@ mod tests {
                 ("b.png".into(), false, Some(1), true)
             ]
         );
-        assert_eq!(file_in(&root, "a.txt").unwrap().media_type, "text/plain");
+        assert_eq!(file_in(&root, "a.txt").unwrap().media_type, MediaType::parse("text/plain").unwrap());
         assert!(file_in(&root, "../secret").is_err());
         assert!(file_in(&root, "out").is_err());
         assert_eq!(list_dir(&root, "nope").unwrap_err().message, "no such file in the directory: \"nope\"");

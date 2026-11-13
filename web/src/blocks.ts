@@ -1,6 +1,14 @@
 // 会话条目（历史与运行中的事件流共用 Item）到展示块的整理，纯函数，与渲染分开。
 
-import { sourceKey, type AskView, type Attachment, type ItemSource, type Item, type ViewBlock } from './api'
+import {
+  sourceKey,
+  type AskView,
+  type Attachment,
+  type ItemSource,
+  type Item,
+  type SessionId,
+  type ViewBlock,
+} from './api'
 
 export interface ToolView {
   name: string
@@ -229,7 +237,7 @@ export function stepThreads(steps: Step[]): string[] {
  * 没有被任何调用条目引用的 thread（后端按调用 id 给调用条目挂 thread，结果条目不带）。引用来自完整历史（被压缩的
  * 部分也算）与正在进行的这一段；经 SSE 刚收到、还没重新拉取的调用暂时不带。
  */
-export function unlinkedThreads<T extends { id: string }>(items: Item[], threads: T[]): T[] {
+export function unlinkedThreads<T extends { id: SessionId }>(items: Item[], threads: T[]): T[] {
   const linked = new Set(items.flatMap((i) => (i.type === 'tool_call' ? i.threads : [])))
   return threads.filter((t) => !linked.has(t.id))
 }

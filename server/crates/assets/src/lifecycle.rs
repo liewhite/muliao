@@ -11,6 +11,7 @@
 //! 归档（[`AgentLifecycle::set_archived`]）是可以来回切换的停用：只在它空闲（各领域登记的 [`ArchiveBlocker`] 都说不挡）、
 //! 且不是默认 agent 时可做；之后给它派新工作的入口都拒绝（[`crate::agents::runnable_agent_in`]），数据都留着。
 
+use muliao_platform::ids::AgentId;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -25,10 +26,10 @@ use crate::tree::{Owner, Snapshot, move_to, remove};
 use muliao_platform::errors::{Result, conflict};
 
 /// 删除 agent 时一个领域的清理：在标记它的事务里删掉或改掉自己引用它的数据；返回错误整个回滚（如它的会话忙）。
-pub type DeletionHook = Arc<dyn Fn(&mut Tx<'_>, &str) -> Result<()> + Send + Sync>;
+pub type DeletionHook = Arc<dyn Fn(&mut Tx<'_>, &AgentId) -> Result<()> + Send + Sync>;
 
 /// 归档会打断的工作还在进行（一个领域的只读查询，如它的会话忙）。
-pub type ArchiveBlocker = Arc<dyn Fn(&Connection, &str) -> Result<bool> + Send + Sync>;
+pub type ArchiveBlocker = Arc<dyn Fn(&Connection, &AgentId) -> Result<bool> + Send + Sync>;
 
 pub struct AgentLifecycle {
     db: Arc<Database>,
@@ -52,7 +53,7 @@ impl AgentLifecycle {
 
     /// 发起删除并删完文件。标记之后删文件失败（或调用方中途被取消）时 agent 已不在列表里，停在正在删除，服务下次启动时
     /// 接着删。
-    pub async fn delete(&self, agent_id: &str, actor: &Actor) -> Result<()> {
+    pub async fn delete(&self, agent_id: &AgentId, actor: &Actor) -> Result<()> {
         let id = agent_id.to_owned();
         let agent = self.db.read(move |c| agents::deletable_in(c, &id)).await?;
         // 删除最后要改 access.toml：同样的改动现在就算一遍，不合法时先拒绝，不让 agent 停在正在删除、删文件一直失败
@@ -67,7 +68,7 @@ impl AgentLifecycle {
                 Ok::<_, muliao_platform::errors::Error>(())
             })
             .await?;
-        tracing::info!(agent = agent_id, actor = actor.as_str(), "agent deletion started");
+        tracing::info!(agent = %agent_id, actor = actor.as_str(), "agent deletion started");
         let workspace = crate::service::workspace_of(&self.workspaces_dir, agent_id);
         remove_files(self.db.clone(), self.source.clone(), workspace, agent_id.to_owned()).await
     }
@@ -85,7 +86,7 @@ impl AgentLifecycle {
 
     /// 归档（或取消归档）；已是目标状态时不做任何事。归档要求它不是系统默认 agent、且空闲（忙时 Conflict）。检查与标记
     /// 在同一个事务里。
-    pub async fn set_archived(&self, agent_id: &str, archived: bool) -> Result<AgentInfo> {
+    pub async fn set_archived(&self, agent_id: &AgentId, archived: bool) -> Result<AgentInfo> {
         let (id, blockers) = (agent_id.to_owned(), self.blockers.clone());
         let (before, after) = self
             .db
@@ -112,14 +113,19 @@ impl AgentLifecycle {
             })
             .await?;
         if before.archived() != archived {
-            tracing::info!(agent = agent_id, archived, "agent archive state changed");
+            tracing::info!(agent = %agent_id, archived, "agent archive state changed");
         }
         Ok(after)
     }
 }
 
 /// 删工作目录、资源目录与 access.toml 里它的那一节，最后删这一行。行已不在时什么都不做；每一步重做时是空操作。
-async fn remove_files(db: Arc<Database>, source: Arc<AssetSource>, workspace: PathBuf, agent_id: String) -> Result<()> {
+async fn remove_files(
+    db: Arc<Database>,
+    source: Arc<AssetSource>,
+    workspace: PathBuf,
+    agent_id: AgentId,
+) -> Result<()> {
     let id = agent_id.clone();
     // 只删标着正在删除的：行已不在（删除重做）时什么都不做
     if db.read(move |c| agents::being_deleted_in(c, &id)).await?.is_none() {
@@ -146,7 +152,7 @@ async fn remove_files(db: Arc<Database>, source: Arc<AssetSource>, workspace: Pa
 /// 删掉 agent 的资源目录与 access.toml 里它的那一节；它名下分发出去的资源（base 收录，或别的 agent 的规则收录）先挪到
 /// 平台目录，私有记忆不分发、随目录删掉。目录没加载成功（agent.toml 坏了等）时它名下没有加载出的资源可挪，照样按数据库
 /// 里的名字删目录、按 id 删那一节，不留下占着这个名字的残留。
-fn retire_assets(snapshot: &Snapshot, agent_id: &str) -> Result<()> {
+fn retire_assets(snapshot: &Snapshot, agent_id: &AgentId) -> Result<()> {
     let directory = snapshot.own_dir(agent_id).expect("an agent being deleted is still in the database");
     if !snapshot.agents.contains_key(agent_id) && directory.exists() {
         // 没加载出的资源无从判断别人用不用，随目录删掉：记下路径，事后好从备份里找
@@ -168,7 +174,7 @@ fn retire_assets(snapshot: &Snapshot, agent_id: &str) -> Result<()> {
 }
 
 /// 去掉 access.toml 里这个 agent 那一节的改动（还没写）。
-fn retire_plan(snapshot: &Snapshot, agent_id: &str) -> Result<AccessEdit> {
+fn retire_plan(snapshot: &Snapshot, agent_id: &AgentId) -> Result<AccessEdit> {
     access_file::plan(snapshot, |doc| {
         access_file::remove_agent(doc, agent_id);
         Ok(())

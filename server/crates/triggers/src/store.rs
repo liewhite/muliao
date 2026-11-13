@@ -5,6 +5,7 @@
 
 use chrono::{DateTime, Utc};
 use muliao_platform::db::Tx;
+use muliao_platform::ids::{AgentId, SessionId};
 use rusqlite::types::Type;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::Serialize;
@@ -20,7 +21,7 @@ use muliao_platform::errors::{Error, Result};
 pub struct Trigger {
     pub id: i64,
     pub name: String,
-    pub agent_id: String,
+    pub agent_id: AgentId,
     pub prompt: String,
     pub kind: String,
     /// 这种方式的配置（经它的 configure 规范化）
@@ -30,7 +31,7 @@ pub struct Trigger {
     pub enabled: bool,
     pub last_fired_at: Option<DateTime<Utc>>,
     /// 上一次触发开出的会话（可能已删除）
-    pub last_session_id: Option<String>,
+    pub last_session_id: Option<SessionId>,
     pub precheck: Option<Precheck>,
     pub last_checked_at: Option<DateTime<Utc>>,
     /// 被自动停用的原因（重新启用时清除）
@@ -148,7 +149,7 @@ pub fn list_in(c: &Connection, listing: &Listing) -> Result<Vec<Trigger>> {
 /// 新建的一行（id、created_at 由库给出）。
 pub struct NewTrigger {
     pub name: String,
-    pub agent_id: String,
+    pub agent_id: AgentId,
     pub prompt: String,
     pub kind: String,
     pub config: Value,

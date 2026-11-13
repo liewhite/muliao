@@ -2,6 +2,7 @@
 //! （sandbox-exec）里：server 只能写使用者的可写路径；配置里的 `${vault:KEY}` 按使用者能用的 secret 代入；连接失败的信息里
 //! secret 明文被换掉。
 
+use muliao_platform::ids::AgentId;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -104,12 +105,12 @@ async fn stdio_server_runs_in_the_users_write_sandbox() {
     let home = std::env::home_dir().unwrap();
     let sandbox = sandbox_for(&home).unwrap();
     let ws = workspace.clone();
-    let confine: Confine = Arc::new(move |agent: String| {
+    let confine: Confine = Arc::new(move |agent: AgentId| {
         let (sandbox, home, ws) = (sandbox.clone(), home.clone(), ws.clone());
         async move {
             Ok(Confinement {
                 sandbox,
-                writable: WritablePaths::of(vec![(true, ws)], agent),
+                writable: WritablePaths::of(vec![(true, ws)], agent.to_string()),
                 home,
                 explain: Arc::new(|_: &Path| String::new()),
                 unreadable: vec![],

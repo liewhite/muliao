@@ -9,6 +9,7 @@
 //! MCP 的 stdio server 不走这里：它不是 bash，secret 按使用者解析、沙箱按使用者或 owner 取，组合根把 [`confine`] 交给
 //! 运行端口。
 
+use muliao_platform::ids::AgentId;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -93,7 +94,7 @@ impl AgentCommands {
     }
 
     /// agent 的工作目录（与起命令的 cwd 同源；不起命令的读路径，如后台任务的日志，也按它）。
-    pub fn workspace(&self, agent_id: &str) -> PathBuf {
+    pub fn workspace(&self, agent_id: &AgentId) -> PathBuf {
         workspace_of(&self.workspaces_dir, agent_id)
     }
 
@@ -101,7 +102,7 @@ impl AgentCommands {
     /// 或不能交给这条命令时报领域错误，什么都还没起。
     pub async fn prepare(
         &self,
-        agent_id: &str,
+        agent_id: &AgentId,
         secret_keys: &[String],
         shell: bool,
     ) -> muliao_platform::errors::Result<AgentShell> {
@@ -112,7 +113,7 @@ impl AgentCommands {
 
 /// 运行端口起 MCP stdio server 时用的沙箱（按 agent 现在的授权现算）。
 pub fn confine(confiner: Arc<Confiner>) -> muliao_runtime::mcp::Confine {
-    Arc::new(move |agent: String| {
+    Arc::new(move |agent: AgentId| {
         let confiner = confiner.clone();
         async move { confiner.of(&agent).await }.boxed()
     })

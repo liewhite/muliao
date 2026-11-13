@@ -1,5 +1,6 @@
 //! agent 的标识与各种名字的规则：agent id、指代用户的 [`USER`]、agent 名、slug，以及资源目录里平台的目录名。
 
+use muliao_platform::ids::AgentId;
 use unicode_normalization::UnicodeNormalization;
 use unicode_properties::{GeneralCategoryGroup, UnicodeGeneralCategory};
 
@@ -8,8 +9,8 @@ use muliao_platform::errors::DomainError;
 /// agent id：12 位小写十六进制，短到模型能可靠复制，用作主键、目录名与工具参数
 const ID_LENGTH: usize = 12;
 
-pub fn new_agent_id() -> String {
-    uuid::Uuid::new_v4().simple().to_string()[..ID_LENGTH].to_owned()
+pub fn new_agent_id() -> AgentId {
+    AgentId::new(&uuid::Uuid::new_v4().simple().to_string()[..ID_LENGTH])
 }
 
 /// 全系统指代用户的那个值：做事的人（issue 时间线等）、issue 的指派人等处与 agent id 并列出现。不是 12 位十六进制，
@@ -170,8 +171,8 @@ mod tests {
     #[test]
     fn names() {
         let id = new_agent_id();
-        assert_eq!(id.len(), 12);
-        assert!(id.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        assert_eq!(id.as_str().len(), 12);
+        assert!(id.as_str().chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
         assert_eq!(AgentName::new("  交易 ").unwrap().as_str(), "交易");
         assert!(AgentName::new("user").is_err());
         assert!(AgentName::new("Platform").is_err());
@@ -183,7 +184,7 @@ mod tests {
         let nfd = AgentName::parse("Cafe\u{301}").unwrap();
         assert_eq!(nfd.as_str(), "Caf\u{e9}");
         assert_eq!(nfd, AgentName::parse("caf\u{e9}").unwrap());
-        assert!(is_agent_id(&id) && !is_agent_id("muliao") && !is_agent_id("143CD08D29B0"));
+        assert!(is_agent_id(id.as_str()) && !is_agent_id("muliao") && !is_agent_id("143CD08D29B0"));
         assert!(validate_slug("skill", "a-b_9").is_ok());
         assert!(validate_slug("skill", "-a").is_err());
         assert!(validate_slug("skill", "A").is_err());

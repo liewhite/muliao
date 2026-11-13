@@ -1108,8 +1108,7 @@ export interface components {
             created_at: string;
             /** @description 做这件事的人：agent id；用户为 `user`，系统自己的清理为 `system` */
             actor: components["schemas"]["Actor"];
-            /** @description 这件事发生在哪个会话；用户在界面上的操作、系统的清理、会话已删除时为 null */
-            session_id: string | null;
+            session_id: components["schemas"]["SessionId"] | null;
         };
         Actor: string;
         /**
@@ -1163,8 +1162,12 @@ export interface components {
             /** @description 分组名；null 为不分组 */
             group: string | null;
         };
+        /** @description agent 的编号（agents 表的 id，也是它资源目录、工作目录的名字） */
+        AgentId: string & {
+            readonly __brand: 'AgentId';
+        };
         AgentOut: {
-            id: string;
+            id: components["schemas"]["AgentId"];
             name: string;
             config: components["schemas"]["AgentConfigOut"] | null;
             roles: string[];
@@ -1181,8 +1184,7 @@ export interface components {
             archived_at: string | null;
         };
         AgentPreviewIn: {
-            /** @description 已有的 agent（它自己的资产总能用）；null 为还没建的 */
-            agent_id?: string | null;
+            agent_id?: components["schemas"]["AgentId"] | null;
             roles: string[];
             allow: string[];
             deny: string[];
@@ -1213,7 +1215,7 @@ export interface components {
         Arrival: {
             /** @default null */
             from: unknown;
-            to: string;
+            to: components["schemas"]["AgentId"];
         };
         /** @description 一次提问交给模型的结果（也是界面展示已回答提问的来源）。 */
         AskResult: {
@@ -1246,8 +1248,7 @@ export interface components {
         };
         AssetOut: {
             name: string;
-            /** @description null 归平台 */
-            owner: string | null;
+            owner: components["schemas"]["AgentId"] | null;
             description: string;
             source: components["schemas"]["AssetSourceOut"];
             /** @description 它能改（write） */
@@ -1265,7 +1266,7 @@ export interface components {
             /** @description 文件存储的地址（files::file_url）：界面直接用它显示与下载 */
             url: string;
             name: string;
-            media_type: string;
+            media_type: components["schemas"]["MediaType"];
             /** @description 能内联显示的图片；其余是下载链接 */
             inline: boolean;
         };
@@ -1282,7 +1283,7 @@ export interface components {
             /** @description 调用参数原文 */
             text: string;
             /** @description 开出或续写的 thread（子会话 id），由会话接口按调用 id 填（[`annotate_threads`]） */
-            threads: string[];
+            threads: components["schemas"]["SessionId"][];
             wait: components["schemas"]["CallWait"] | null;
             /** @description 参数按工具自己的展示规则画成的展示块；None 显示原文（工具没定规则、参数不合它的类型） */
             view: components["schemas"]["ViewBlock"][] | null;
@@ -1318,8 +1319,7 @@ export interface components {
         /** @description 资源池里的一项，在规则里写作 `<action>:<kind>:<name>`；按 kind 区分的详情。 */
         CatalogAssetOut: components["schemas"]["CatalogDetail"] & {
             name: string;
-            /** @description agent 的 id；null 归平台（内置工具、界面上建的、迁移前的公共资产） */
-            owner: string | null;
+            owner: components["schemas"]["AgentId"] | null;
             description: string;
             /** @description 收录它的角色（allow 放行、deny 没拦，含内置的 base、admin） */
             roles: string[];
@@ -1356,6 +1356,11 @@ export interface components {
         } | {
             /** @enum {string} */
             kind: "memory";
+        };
+        /** @description 属性从什么改成什么（存为 `{"from": ..., "to": ...}`）。 */
+        Change_Option_AgentId: {
+            from: null | string;
+            to: null | string;
         };
         /** @description 属性从什么改成什么（存为 `{"from": ..., "to": ...}`）。 */
         Change_Option_String: {
@@ -1480,7 +1485,7 @@ export interface components {
             /** @enum {string} */
             kind: "job";
         } | {
-            session_id: string;
+            session_id: components["schemas"]["SessionId"];
             /** @enum {string} */
             kind: "thread";
         } | {
@@ -1503,7 +1508,7 @@ export interface components {
         FileOut: {
             id: string;
             name: string;
-            media_type: string;
+            media_type: components["schemas"]["MediaType"];
             /** Format: int64 */
             size: number;
             url: string;
@@ -1517,8 +1522,7 @@ export interface components {
         FiredOut: {
             /** @description 是否投出了信（前置检查判定这次不触发时为 false） */
             fired: boolean;
-            /** @description 这次新开的会话；没触发时为 null */
-            session_id: string | null;
+            session_id: components["schemas"]["SessionId"] | null;
         };
         /** @description 时间线上发生的一件事。 */
         Happening: {
@@ -1548,7 +1552,7 @@ export interface components {
             /** @enum {string} */
             kind: "assignee";
         } | {
-            change: components["schemas"]["Change_Option_String"];
+            change: components["schemas"]["Change_Option_AgentId"];
             /** @enum {string} */
             kind: "owner";
         } | {
@@ -1581,6 +1585,11 @@ export interface components {
             /** @description 服务端当前前端构建的版本；没有前端构建时为 null */
             ui_version: string | null;
         };
+        /**
+         * Format: int64
+         * @description 重要程度：1 日常、2 值得注意、3 重大。
+         */
+        Importance: number;
         /** @description 人与 agent 协作的一件事（读模型，也是 HTTP 返回的形状）。 */
         Issue: {
             /** Format: int64 */
@@ -1589,8 +1598,7 @@ export interface components {
             description: string;
             status: components["schemas"]["Status"];
             priority: components["schemas"]["Priority"];
-            /** @description 负责的项目（agent id）：创建时必填，不随指派变化，只能显式修改；只在负责的 agent 被删除后为空 */
-            owner: string | null;
+            owner: components["schemas"]["AgentId"] | null;
             assignee: components["schemas"]["Assignee"] | null;
             /** @description 创建者：agent id；用户创建的为 `user` */
             creator: components["schemas"]["Actor"];
@@ -1602,7 +1610,7 @@ export interface components {
         IssueCreate: {
             title: string;
             /** @description 负责的项目（agent id），必填 */
-            owner: string;
+            owner: components["schemas"]["AgentId"];
             description?: string;
             status?: components["schemas"]["Status"];
             priority?: components["schemas"]["Priority"];
@@ -1617,7 +1625,7 @@ export interface components {
         };
         /** @description 只修改给出的字段。assignee 给出 null 表示取消指派，不出现表示不变。 */
         IssuePatch: {
-            owner?: string | null;
+            owner?: components["schemas"]["AgentId"] | null;
             title?: string | null;
             description?: string | null;
             status?: components["schemas"]["Status"] | null;
@@ -1631,7 +1639,7 @@ export interface components {
         IssueWork: {
             /** @description 每个 agent 在这个 issue 上的会话：agent id -> 会话 id */
             sessions: {
-                [key: string]: string;
+                [key: string]: components["schemas"]["SessionId"];
             };
             assignee_state: components["schemas"]["WorkState"] | null;
             /** @description in_progress、指派给 agent，它的 issue 会话却空闲或不存在：该有人做却没人在做 */
@@ -1743,6 +1751,11 @@ export interface components {
         LoginIn: {
             password: string;
         };
+        /**
+         * Format: int64
+         * @description 一封信件的编号（mail 表的行号）
+         */
+        MailId: number;
         MailKindOut: {
             /** @enum {string} */
             kind: "message";
@@ -1763,8 +1776,7 @@ export interface components {
         };
         /** @description 会话信箱里的一封信件（显示在历史之后：排队中的，以及最近一次停止丢弃的）。 */
         MailOut: components["schemas"]["MailKindOut"] & {
-            /** Format: int64 */
-            id: number;
+            id: components["schemas"]["MailId"];
             content: string;
             attachments: components["schemas"]["FileOut"][];
             state: components["schemas"]["MailState"];
@@ -1782,7 +1794,7 @@ export interface components {
         };
         McpAssetOut: {
             name: string;
-            owner: string | null;
+            owner: components["schemas"]["AgentId"] | null;
             description: string;
             source: components["schemas"]["AssetSourceOut"];
             editable: boolean;
@@ -1804,7 +1816,7 @@ export interface components {
             enabled: boolean;
         };
         McpIn: {
-            owner?: string | null;
+            owner?: components["schemas"]["AgentId"] | null;
             transport: components["schemas"]["McpTransport"];
             command?: string | null;
             args?: string[];
@@ -1819,13 +1831,15 @@ export interface components {
             probe?: boolean;
         };
         McpOut: components["schemas"]["McpConfigOut"] & {
-            owner: string | null;
+            owner: components["schemas"]["AgentId"] | null;
             name: string;
             /** @description 新增时连接验证列出的工具（不验证时为空） */
             tools: string[];
         };
         /** @enum {string} */
         McpTransport: "stdio" | "http";
+        /** @description 媒体类型：只存 `type/subtype`（小写）。参数（如 charset）不影响怎么显示和交给模型，下载一律按原始字节。 */
+        MediaType: string;
         MemoryIn: {
             content: string;
             /** @description 打开编辑时的版本（MemoryOut.version），新建为 null；期间被别处改过、删掉或抢先建了时 409 */
@@ -1833,7 +1847,7 @@ export interface components {
         };
         MemoryOut: {
             name: string;
-            owner: string | null;
+            owner: components["schemas"]["AgentId"] | null;
             content: string;
             /** Format: date-time */
             updated_at: string;
@@ -1849,7 +1863,7 @@ export interface components {
             id: number;
             title: string;
             body: string;
-            session_id: string | null;
+            session_id: components["schemas"]["SessionId"] | null;
             /** Format: int64 */
             issue_id: number | null;
             /** @description 点开打开的页面（推送与通知页共用）；系统通知为 None */
@@ -1862,7 +1876,7 @@ export interface components {
         NotificationEvent: {
             /** Format: int64 */
             notification_id: number;
-            session_id: string | null;
+            session_id: components["schemas"]["SessionId"] | null;
         };
         OnceConfig: {
             at: string;
@@ -1871,8 +1885,7 @@ export interface components {
             run_at: string;
         };
         OwnerIn: {
-            /** @description agent 的 id；null 归平台 */
-            owner?: string | null;
+            owner?: components["schemas"]["AgentId"] | null;
         };
         /** @description 一个前置检查（存在触发器上，也是工具与接口的参数）。 */
         Precheck: {
@@ -1926,14 +1939,13 @@ export interface components {
         Record: {
             /** Format: int64 */
             id: number;
-            agent_id: string;
+            agent_id: components["schemas"]["AgentId"];
             /** Format: date */
             day: string;
             title: string;
             summary: string;
             refs: string[];
-            /** Format: int64 */
-            importance: number;
+            importance: components["schemas"]["Importance"];
             /** Format: date-time */
             created_at: string;
         };
@@ -1999,7 +2011,7 @@ export interface components {
             /** @description 只按这个角色的规则（固定的与可编辑的）能用的 */
             reach: components["schemas"]["ReachOut"];
             /** @description 带这个角色的 agent 的 id（含归档的）；base 是全部 agent */
-            agents: string[];
+            agents: components["schemas"]["AgentId"][];
         };
         RolePreviewIn: {
             /** @description 已有的角色（内置的加上固定规则）；null 为还没建的 */
@@ -2026,15 +2038,19 @@ export interface components {
         };
         /** @description 推给前端的一条（SSE 事件名 `run`）。 */
         RunEventEnvelope: components["schemas"]["RunEvent"] & {
-            session_id: string;
+            session_id: components["schemas"]["SessionId"];
             agent: string;
             segment_id: string;
             seq: number;
         };
+        /**
+         * Format: int64
+         * @description 一次运行的编号（runs 表的行号）
+         */
+        RunId: number;
         RunRecord: {
-            /** Format: int64 */
-            id: number;
-            session_id: string;
+            id: components["schemas"]["RunId"];
+            session_id: components["schemas"]["SessionId"];
             /** Format: date-time */
             started_at: string;
             state: components["schemas"]["RunState"];
@@ -2065,7 +2081,7 @@ export interface components {
          *     （运行或压缩开始、结束、失败、停止、重试）。会话页只按它重新拉取：整份会话可能有几 MB，不随全局的 changed 拉。
          */
         SavedEvent: {
-            session_id: string;
+            session_id: components["schemas"]["SessionId"];
         };
         /** @description 历史里的一条：来源消息的数据库 id（用于定位压缩点）与条目。 */
         SavedItem: {
@@ -2084,13 +2100,13 @@ export interface components {
         ScriptGrantOut: {
             /** Format: int64 */
             id: number;
-            agent_id: string;
+            agent_id: components["schemas"]["AgentId"];
             skill: string;
             script: string;
             args: string[];
             secrets: string[];
             /** @description 用户点「始终允许」的那次调用所在的会话（可能已删除） */
-            session_id: string;
+            session_id: components["schemas"]["SessionId"];
             /** Format: date-time */
             created_at: string;
             /**
@@ -2102,15 +2118,14 @@ export interface components {
             last_used_at: string | null;
         };
         SecretIn: {
-            /** @description 新建时的 owner；已有的不变 */
-            owner?: string | null;
+            owner?: components["schemas"]["AgentId"] | null;
             value: string;
             description?: string;
             /** @description null：已有的保持原值，新建的允许 */
             allow_shell?: boolean | null;
         };
         SecretOut: {
-            owner: string | null;
+            owner: components["schemas"]["AgentId"] | null;
             name: string;
             description: string;
             allow_shell: boolean;
@@ -2155,6 +2170,10 @@ export interface components {
             /** @description 这个会话名下全部运行的累计用量；一次运行的用量在每次模型回复后记上 */
             usage: components["schemas"]["UsageTotals"];
         };
+        /** @description 会话的编号 */
+        SessionId: string & {
+            readonly __brand: 'SessionId';
+        };
         /** @description 会话列表里的一行：多一个只在列表里算的工作状态（会话页看 SessionDetail.state）。 */
         SessionListItem: components["schemas"]["SessionOut"] & {
             state: components["schemas"]["WorkState"];
@@ -2182,13 +2201,12 @@ export interface components {
             kind: "issue";
         };
         SessionOut: {
-            id: string;
-            agent_id: string;
+            id: components["schemas"]["SessionId"];
+            agent_id: components["schemas"]["AgentId"];
             title: string;
             /** @description 会话的来源与发起方（结构化，前端不认识库里的编号格式） */
             origin: components["schemas"]["SessionOrigin"];
-            /** @description 委派产生的子会话：父会话与 thread 名（thread 名取自 origin，方便界面直接用） */
-            parent_session_id: string | null;
+            parent_session_id: components["schemas"]["SessionId"] | null;
             thread: string | null;
             /** @description 有指向它的未读通知（用户在等的回答、提问、agent 主动通知、运行失败）：未读不另存，从通知派生 */
             unread: boolean;
@@ -2201,10 +2219,10 @@ export interface components {
         SharedFile: {
             file_id: string;
             name: string;
-            media_type: string;
+            media_type: components["schemas"]["MediaType"];
         };
         SitePageOut: {
-            agent_id: string;
+            agent_id: components["schemas"]["AgentId"];
             /** @description 页面目录名（site/<name>/） */
             name: string;
             /** @description index.html 的 <title>，没有就是 name */
@@ -2220,14 +2238,13 @@ export interface components {
         SkillDetail: {
             name: string;
             description: string;
-            owner: string | null;
+            owner: components["schemas"]["AgentId"] | null;
             body: string;
             /** @description SKILL.md 的版本：保存时交回 */
             version: string;
         };
         SkillIn: {
-            /** @description 新建时的 owner；已有的不变 */
-            owner?: string | null;
+            owner?: components["schemas"]["AgentId"] | null;
             description: string;
             body: string;
             /** @description 打开编辑时的版本（SkillDetail.version），新建为 null；期间被别处改过、删掉或抢先建了时 409 */
@@ -2236,7 +2253,7 @@ export interface components {
         SkillOut: {
             name: string;
             description: string;
-            owner: string | null;
+            owner: components["schemas"]["AgentId"] | null;
         };
         /** @description 连续跳过（界面与模型看的部分）。 */
         SkippedFires: {
@@ -2254,7 +2271,7 @@ export interface components {
             previous_state: components["schemas"]["Busy"];
         };
         StartIn: {
-            agent_id: string;
+            agent_id: components["schemas"]["AgentId"];
             prompt: string;
             /** @description 先经 POST /api/files 上传得到的 id */
             attachments?: string[];
@@ -2300,7 +2317,7 @@ export interface components {
         /** @description 新建触发器：kind 与 config 按方式区分（有默认值的配置项可以不填），config 原样交给触发方式校验、补默认值。 */
         TriggerCreate: components["schemas"]["KindInDoc"] & {
             name: string;
-            agent_id: string;
+            agent_id: components["schemas"]["AgentId"];
             prompt: string;
             precheck?: components["schemas"]["Precheck"] | null;
         };
@@ -2319,7 +2336,7 @@ export interface components {
             /** Format: int64 */
             id: number;
             name: string;
-            agent_id: string;
+            agent_id: components["schemas"]["AgentId"];
             prompt: string;
             enabled: boolean;
             precheck: components["schemas"]["Precheck"] | null;
@@ -2327,8 +2344,7 @@ export interface components {
             last_checked_at: string | null;
             /** Format: date-time */
             last_fired_at: string | null;
-            /** @description 上一次触发开出的、还在的会话 */
-            last_session_id: string | null;
+            last_session_id: components["schemas"]["SessionId"] | null;
             /** @description 被自动停用的原因（重新启用时清除） */
             disabled_reason: string | null;
             /** @description 脚本出错：前置检查失败、流式命令反复退出 */
@@ -2355,7 +2371,7 @@ export interface components {
         };
         /** @description 一个分组的汇总。没有选中的维度为 None（例如只按模型分组时 agent_id 与 day 都是 None）。 */
         UsageBucket: components["schemas"]["UsageTotals"] & {
-            agent_id: string | null;
+            agent_id: components["schemas"]["AgentId"] | null;
             model: string | null;
             /**
              * Format: date
@@ -2428,7 +2444,7 @@ export interface components {
             /** @enum {string} */
             kind: "job";
         } | {
-            thread_session_id: string;
+            thread_session_id: components["schemas"]["SessionId"];
             /** Format: double */
             check_seconds: number | null;
             /** Format: date-time */
@@ -2851,7 +2867,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                agent_id: string;
+                /** @description agent 的编号 */
+                agent_id: components["schemas"]["AgentId"];
             };
             cookie?: never;
         };
@@ -2880,7 +2897,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                agent_id: string;
+                /** @description agent 的编号 */
+                agent_id: components["schemas"]["AgentId"];
             };
             cookie?: never;
         };
@@ -2915,7 +2933,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                agent_id: string;
+                /** @description agent 的编号 */
+                agent_id: components["schemas"]["AgentId"];
             };
             cookie?: never;
         };
@@ -2964,7 +2983,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                agent_id: string;
+                /** @description agent 的编号 */
+                agent_id: components["schemas"]["AgentId"];
             };
             cookie?: never;
         };
@@ -2993,7 +3013,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                agent_id: string;
+                /** @description agent 的编号 */
+                agent_id: components["schemas"]["AgentId"];
             };
             cookie?: never;
         };
@@ -3030,7 +3051,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                agent_id: string;
+                /** @description agent 的编号 */
+                agent_id: components["schemas"]["AgentId"];
             };
             cookie?: never;
         };
@@ -3059,7 +3081,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                agent_id: string;
+                /** @description agent 的编号 */
+                agent_id: components["schemas"]["AgentId"];
             };
             cookie?: never;
         };
@@ -3096,7 +3119,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                agent_id: string;
+                /** @description agent 的编号 */
+                agent_id: components["schemas"]["AgentId"];
             };
             cookie?: never;
         };
@@ -3125,7 +3149,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                agent_id: string;
+                /** @description agent 的编号 */
+                agent_id: components["schemas"]["AgentId"];
             };
             cookie?: never;
         };
@@ -3154,7 +3179,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                agent_id: string;
+                /** @description agent 的编号 */
+                agent_id: components["schemas"]["AgentId"];
             };
             cookie?: never;
         };
@@ -3895,7 +3921,7 @@ export interface operations {
     list_sessions: {
         parameters: {
             query?: {
-                agent_id?: string;
+                agent_id?: components["schemas"]["AgentId"];
                 /** @description 只列这些来源的会话（可以重复给） */
                 origin?: string[];
                 /** @description 只列这个触发器发起的会话（不能再给 origin） */
@@ -3982,7 +4008,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                session_id: string;
+                /** @description 会话的编号 */
+                session_id: components["schemas"]["SessionId"];
             };
             cookie?: never;
         };
@@ -4011,7 +4038,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                session_id: string;
+                /** @description 会话的编号 */
+                session_id: components["schemas"]["SessionId"];
             };
             cookie?: never;
         };
@@ -4046,7 +4074,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                session_id: string;
+                /** @description 会话的编号 */
+                session_id: components["schemas"]["SessionId"];
             };
             cookie?: never;
         };
@@ -4095,7 +4124,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                session_id: string;
+                /** @description 会话的编号 */
+                session_id: components["schemas"]["SessionId"];
             };
             cookie?: never;
         };
@@ -4122,7 +4152,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                session_id: string;
+                /** @description 会话的编号 */
+                session_id: components["schemas"]["SessionId"];
             };
             cookie?: never;
         };
@@ -4149,7 +4180,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                session_id: string;
+                /** @description 会话的编号 */
+                session_id: components["schemas"]["SessionId"];
             };
             cookie?: never;
         };
@@ -4184,7 +4216,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                session_id: string;
+                /** @description 会话的编号 */
+                session_id: components["schemas"]["SessionId"];
             };
             cookie?: never;
         };
@@ -4278,7 +4311,8 @@ export interface operations {
             };
             header?: never;
             path: {
-                agent_id: string;
+                /** @description agent 的编号 */
+                agent_id: components["schemas"]["AgentId"];
             };
             cookie?: never;
         };
@@ -4318,7 +4352,8 @@ export interface operations {
             };
             header?: never;
             path: {
-                agent_id: string;
+                /** @description agent 的编号 */
+                agent_id: components["schemas"]["AgentId"];
             };
             cookie?: never;
         };
@@ -4400,7 +4435,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                agent_id: string;
+                /** @description agent 的编号 */
+                agent_id: components["schemas"]["AgentId"];
                 job_id: number;
             };
             cookie?: never;
@@ -4439,7 +4475,7 @@ export interface operations {
                 /** @description agent id 或 `user` */
                 assignee?: string;
                 /** @description 负责项目的 agent id */
-                owner?: string;
+                owner?: components["schemas"]["AgentId"];
             };
             header?: never;
             path?: never;
@@ -5170,13 +5206,14 @@ export interface operations {
                 since?: string;
                 until?: string;
                 /** @description 1–3，默认 1 */
-                min_importance?: number;
+                min_importance?: components["schemas"]["Importance"];
                 /** @description 默认 20，最多 200 */
                 limit?: number;
             };
             header?: never;
             path: {
-                agent_id: string;
+                /** @description agent 的编号 */
+                agent_id: components["schemas"]["AgentId"];
             };
             cookie?: never;
         };

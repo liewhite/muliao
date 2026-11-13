@@ -14,6 +14,7 @@
 //! - 任务对 agent 可见（工作目录本来就是 agent 级的，job_status / job_kill 按 agent 检查归属），事件归发起它的会话。日志
 //!   大小不设上限。
 
+use muliao_platform::ids::{AgentId, SessionId};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -138,8 +139,8 @@ impl JobState {
 #[derive(Debug, Clone)]
 struct Job {
     id: i64,
-    session_id: String,
-    agent_id: String,
+    session_id: SessionId,
+    agent_id: AgentId,
     command: String,
     state: JobState,
     pid: Option<i32>,
@@ -181,8 +182,8 @@ fn job_in(c: &Connection, job_id: i64) -> Result<Option<Job>> {
 }
 
 /// 这个 agent 的任务（别的 agent 的按不存在报）。
-fn own_in(c: &Connection, job_id: i64, agent_id: &str) -> Result<Job> {
-    job_in(c, job_id)?.filter(|j| j.agent_id == agent_id).ok_or_else(|| not_found(format!("job {job_id} not found")))
+fn own_in(c: &Connection, job_id: i64, agent_id: &AgentId) -> Result<Job> {
+    job_in(c, job_id)?.filter(|j| &j.agent_id == agent_id).ok_or_else(|| not_found(format!("job {job_id} not found")))
 }
 
 /// 起来了的后台任务。
@@ -327,8 +328,8 @@ impl JobRunner {
     #[allow(clippy::too_many_arguments)]
     pub async fn start(
         self: &Arc<Self>,
-        session_id: &str,
-        agent_id: &str,
+        session_id: &SessionId,
+        agent_id: &AgentId,
         command: &str,
         secrets: &[String],
         shell: bool,
@@ -349,8 +350,8 @@ impl JobRunner {
     async fn launch(
         self: Arc<Self>,
         agent_shell: AgentShell,
-        session_id: String,
-        agent_id: String,
+        session_id: SessionId,
+        agent_id: AgentId,
         command: String,
         awaited: bool,
         check_seconds: f64,
@@ -400,7 +401,7 @@ impl JobRunner {
             this.running.lock().expect("running lock").remove(&id);
             let _ = done_tx.send(true);
         });
-        tracing::info!(job_id = started.id, session_id, pid = pgid, "background job started");
+        tracing::info!(job_id = %started.id, %session_id, pid = pgid, "background job started");
         Ok(started)
     }
 
@@ -506,7 +507,7 @@ impl JobRunner {
     }
 
     /// 结束这个 agent 的一个运行中的任务；结果（killed）随后作为事件到达。
-    pub async fn kill(&self, job_id: i64, agent_id: &str) -> Result<()> {
+    pub async fn kill(&self, job_id: i64, agent_id: &AgentId) -> Result<()> {
         let agent = agent_id.to_owned();
         let job = self.db.read(move |c| own_in(c, job_id, &agent)).await?;
         if !job.state.running() {
@@ -541,12 +542,12 @@ impl JobRunner {
             let stopped: Vec<i64> =
                 jobs.into_iter().filter(|id| running.get(id).is_some_and(|h| h.end(Ending::Killed))).collect();
             if !stopped.is_empty() {
-                tracing::info!(session_id, job_ids = ?stopped, "background jobs stopped with their session");
+                tracing::info!(%session_id, job_ids = ?stopped, "background jobs stopped with their session");
             }
         });
     }
 
-    pub async fn info(&self, job_id: i64, agent_id: &str) -> Result<JobInfo> {
+    pub async fn info(&self, job_id: i64, agent_id: &AgentId) -> Result<JobInfo> {
         let agent = agent_id.to_owned();
         let job = self.db.read(move |c| own_in(c, job_id, &agent)).await?;
         let path = self.log_file(&job);

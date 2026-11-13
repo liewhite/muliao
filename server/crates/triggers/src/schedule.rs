@@ -14,6 +14,7 @@ use croner::Cron;
 use croner::parser::{CronParser, Seconds};
 use muliao_notifications::{Notifications, Notify};
 use muliao_platform::db::Tx;
+use muliao_platform::ids::SessionId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -46,7 +47,7 @@ pub struct SkippedFires {
 struct SkipStreak {
     #[serde(flatten)]
     shown: SkippedFires,
-    session_id: String,
+    session_id: SessionId,
     notified: bool,
 }
 
@@ -104,7 +105,7 @@ impl Schedule {
         t.state_as()
     }
 
-    fn waiting_notice(t: &Trigger, count: u32, session_id: &str) -> Notify {
+    fn waiting_notice(t: &Trigger, count: u32, session_id: &SessionId) -> Notify {
         Notify {
             title: format!("定时触发器 {} 在跳过", t.name),
             body: format!(

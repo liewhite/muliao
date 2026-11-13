@@ -2,6 +2,7 @@
 
 mod common;
 
+use muliao_platform::ids::AgentId;
 use std::sync::Arc;
 
 use agenter::{Content, ToolCall, ToolCtx, ToolError};
@@ -21,9 +22,9 @@ struct Kit {
 }
 
 impl Kit {
-    async fn call(&self, me: &str, name: &str, args: &str) -> Result<String, ToolError> {
+    async fn call(&self, me: &AgentId, name: &str, args: &str) -> Result<String, ToolError> {
         let tool = self.tools.iter().find(|t| t.name() == name).unwrap();
-        let scope = RunScope::new(me.into(), "/w".into(), "s".into(), Audience::User);
+        let scope = RunScope::new(me.clone(), "/w".into(), "s".into(), Audience::User);
         let call = ToolCall { id: "c".into(), name: name.into(), args: args.into(), meta: None };
         let out = tool.tool.call(ToolCtx { deps: &scope, call: &call, retries: 0, approval: None }, args).await?;
         match out.as_slice() {
@@ -76,7 +77,7 @@ async fn list_get_create_and_delete_agents_by_name() {
     assert_eq!(listed[0]["group"], Value::Null, "ungrouped agents come first");
     assert_eq!(listed[0]["agents"][0]["name"], "me");
     assert_eq!(listed[1]["group"], "ops");
-    assert!(!listed.to_string().contains(&me), "the model never sees ids");
+    assert!(!listed.to_string().contains(me.as_str()), "the model never sees ids");
 
     let detail: Value = serde_json::from_str(&k.call(&me, "get_agent", r#"{"agent":"me"}"#).await.unwrap()).unwrap();
     assert_eq!(detail["model"], "p:default");

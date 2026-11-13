@@ -12,6 +12,7 @@
 //!
 //! 文件 IO 都很小（本机几百个小文件），除了读整棵树放到阻塞线程池，其余直接在 async 函数里做。
 
+use muliao_platform::ids::AgentId;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -44,8 +45,8 @@ pub struct Written {
 struct Key {
     tree: Vec<(PathBuf, i128, u64)>,
     /// 各 agent 的名字按原文比（只改了大小写也重读）
-    names: BTreeMap<String, String>,
-    deleting: BTreeSet<String>,
+    names: BTreeMap<AgentId, String>,
+    deleting: BTreeSet<AgentId>,
 }
 
 #[derive(Default)]

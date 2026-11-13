@@ -5,6 +5,7 @@
 //! 历史里重复显示（after_message_id）。事件带这一段的 segment_id 与递增的 seq，前端据此把快照与之后的 SSE 事件合并、发现缺口。
 //! 生命周期只由运行管：开始时拿一个守卫（[`Live::begin`]），丢掉它就结束；[`Live::step`] 换段。
 
+use muliao_platform::ids::SessionId;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -38,7 +39,7 @@ pub enum RunEvent {
 /// 推给前端的一条（SSE 事件名 `run`）。
 #[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
 pub struct RunEventEnvelope {
-    pub session_id: String,
+    pub session_id: SessionId,
     pub agent: String,
     pub segment_id: String,
     pub seq: usize,
@@ -58,7 +59,7 @@ pub struct LiveSegment {
 /// （运行或压缩开始、结束、失败、停止、重试）。会话页只按它重新拉取：整份会话可能有几 MB，不随全局的 changed 拉。
 #[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
 pub struct SavedEvent {
-    pub session_id: String,
+    pub session_id: SessionId,
 }
 
 /// 运行出了暂时性的错、在等下一次尝试（只在内存里，重启后从上一步续跑、不再有它）：会话页显示错误与下次尝试的时间。
@@ -78,10 +79,10 @@ struct State {
 #[derive(Clone)]
 pub struct Live {
     bus: Arc<Bus>,
-    states: Arc<Mutex<HashMap<String, State>>>,
+    states: Arc<Mutex<HashMap<SessionId, State>>>,
 }
 
-fn publish_saved(bus: &Bus, session_id: &str) {
+fn publish_saved(bus: &Bus, session_id: &SessionId) {
     let saved = SavedEvent { session_id: session_id.to_owned() };
     bus.publish(ServerEvent { kind: "saved", data: serde_json::to_value(saved).expect("saved events serialize") });
 }
@@ -93,7 +94,7 @@ fn new_segment(after: Option<i64>) -> LiveSegment {
 /// 一次运行的实时展示：拿着它期间这个会话有正在展示的一段，丢掉（运行返回、被停止时丢掉、panic）就结束。
 pub(crate) struct LiveRun {
     live: Live,
-    session_id: String,
+    session_id: SessionId,
 }
 
 impl Drop for LiveRun {
@@ -106,7 +107,7 @@ impl Drop for LiveRun {
 /// 尝试进行中仍显示上次的错误。
 pub(crate) struct Attempts {
     live: Live,
-    session_id: String,
+    session_id: SessionId,
 }
 
 impl Attempts {
@@ -133,7 +134,7 @@ impl Live {
     }
 
     /// 改一个会话的状态；改完两样都没有就去掉记录。
-    fn update<R>(&self, session_id: &str, f: impl FnOnce(&mut State) -> R) -> R {
+    fn update<R>(&self, session_id: &SessionId, f: impl FnOnce(&mut State) -> R) -> R {
         let mut all = self.states.lock().expect("live lock");
         let state = all.entry(session_id.to_owned()).or_default();
         let r = f(state);
@@ -144,43 +145,43 @@ impl Live {
     }
 
     /// 一次运行（连同重试）开始。
-    pub(crate) fn attempts(&self, session_id: &str) -> Attempts {
+    pub(crate) fn attempts(&self, session_id: &SessionId) -> Attempts {
         Attempts { live: self.clone(), session_id: session_id.to_owned() }
     }
 
-    pub(crate) fn retry_state(&self, session_id: &str) -> Option<Retrying> {
+    pub(crate) fn retry_state(&self, session_id: &SessionId) -> Option<Retrying> {
         self.states.lock().expect("live lock").get(session_id).and_then(|s| s.retrying.clone())
     }
 
     /// 一次运行开始实时展示。同一会话同时只有一次运行（actor 保证）。
-    pub(crate) fn begin(&self, session_id: &str, after_message_id: Option<i64>) -> LiveRun {
+    pub(crate) fn begin(&self, session_id: &SessionId, after_message_id: Option<i64>) -> LiveRun {
         self.update(session_id, |s| s.segment = Some(new_segment(after_message_id)));
         LiveRun { live: self.clone(), session_id: session_id.to_owned() }
     }
 
     /// 一次请求已经保存（事务已提交）：之后的事件属于新的一段。
-    pub(crate) fn step(&self, session_id: &str, after_message_id: i64) {
+    pub(crate) fn step(&self, session_id: &SessionId, after_message_id: i64) {
         self.update(session_id, |s| s.segment = Some(new_segment(Some(after_message_id))));
         publish_saved(&self.bus, session_id);
     }
 
     /// 这个事务改了会话的运行记录：提交后发 `saved`。
-    pub(crate) fn saved_on_commit(&self, tx: &mut Tx<'_>, session_id: &str) {
+    pub(crate) fn saved_on_commit(&self, tx: &mut Tx<'_>, session_id: &SessionId) {
         let (bus, session_id) = (self.bus.clone(), session_id.to_owned());
         tx.on_commit(move || publish_saved(&bus, &session_id));
     }
 
-    pub(crate) fn item(&self, session_id: &str, agent: &str, item: Item) {
+    pub(crate) fn item(&self, session_id: &SessionId, agent: &str, item: Item) {
         self.publish(session_id, agent, RunEvent::Item { item: Box::new(item.preview(PREVIEW_CHARS)) });
     }
 
-    pub(crate) fn delta(&self, session_id: &str, agent: &str, item_type: DeltaType, text: &str) {
+    pub(crate) fn delta(&self, session_id: &SessionId, agent: &str, item_type: DeltaType, text: &str) {
         if !text.is_empty() {
             self.publish(session_id, agent, RunEvent::Delta { item_type, text: text.to_owned() });
         }
     }
 
-    fn publish(&self, session_id: &str, agent: &str, event: RunEvent) {
+    fn publish(&self, session_id: &SessionId, agent: &str, event: RunEvent) {
         let envelope = {
             let mut all = self.states.lock().expect("live lock");
             // 运行结束后才到的事件（不会有：事件都在运行里发出）不展示
@@ -199,7 +200,7 @@ impl Live {
             .publish(ServerEvent { kind: "run", data: serde_json::to_value(envelope).expect("run events serialize") });
     }
 
-    pub(crate) fn snapshot(&self, session_id: &str) -> Option<LiveSegment> {
+    pub(crate) fn snapshot(&self, session_id: &SessionId) -> Option<LiveSegment> {
         self.states.lock().expect("live lock").get(session_id).and_then(|s| s.segment.clone())
     }
 }

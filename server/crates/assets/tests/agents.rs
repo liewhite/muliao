@@ -39,7 +39,7 @@ async fn create_writes_files_rules_and_row() {
     assert_eq!(config.file.thinking(), Thinking::High);
     assert_eq!(view.rules.allow, vec!["use:tool:create_agent".to_owned()]);
     assert!(w.root().join("交易/memory.md").is_file());
-    assert!(w.workspaces().join(&info.id).is_dir());
+    assert!(w.workspaces().join(info.id.as_str()).is_dir());
     assert!(read(w.root().join("platform/access.toml")).contains(&format!("[agents.{}] # 交易\n", info.id)));
 
     // 名字被占（库里、目录只差大小写）、规则写错、模型不能用：什么都不写
@@ -168,7 +168,7 @@ async fn delete_cleans_up_and_keeps_shared_assets() {
         &access(&root),
         &format!("[agents.{a}]\nallow = [\"use:tool:read_file\"]\n[agents.{b}]\nallow = [\"use:skill:used\"]\n"),
     );
-    std::fs::write(w.workspaces().join(&a).join("f"), "x").unwrap();
+    std::fs::write(w.workspaces().join(a.as_str()).join("f"), "x").unwrap();
 
     // 一个领域的清理报错：整个回滚，agent 照常可用
     let refuse: DeletionHook = Arc::new(|_tx, _id| Err(muliao_platform::errors::DomainError::conflict("busy").into()));
@@ -189,11 +189,11 @@ async fn delete_cleans_up_and_keeps_shared_assets() {
     assert_eq!(*calls.lock().unwrap(), vec![a.clone()]);
     assert!(w.service.get(&a).await.is_err(), "the row is gone");
     assert!(!root.join("alice").exists());
-    assert!(!w.workspaces().join(&a).exists());
+    assert!(!w.workspaces().join(a.as_str()).exists());
     let s = w.source.snapshot().await.unwrap();
     assert_eq!(s.get(StoredKind::Skill, "used").unwrap().owner, Owner::Platform);
     assert!(s.get(StoredKind::Skill, "mine").is_none());
-    assert!(!read(access(&root)).contains(&a));
+    assert!(!read(access(&root)).contains(a.as_str()));
     assert!(s.problems.is_empty(), "{:?}", s.problems);
 }
 

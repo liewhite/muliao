@@ -11,6 +11,7 @@ use muliao_assets::formats::mcp::McpTransport;
 use muliao_assets::kinds::StoredKind;
 use muliao_assets::rules::{AgentRules, Rules, ToolSpec};
 use muliao_assets::service::{AgentPatch, AgentSpec, AgentView};
+use muliao_platform::ids::AgentId;
 use muliao_platform::tooling::ToolAccess;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -49,7 +50,7 @@ pub struct AgentConfigOut {
 
 #[derive(Serialize, ToSchema)]
 pub struct AgentOut {
-    pub id: String,
+    pub id: AgentId,
     pub name: String,
     /// null：它的目录没加载（agent.toml 坏了等，见资源问题），不能运行，修好文件或删掉它
     pub config: Option<AgentConfigOut>,
@@ -87,7 +88,7 @@ impl AgentOut {
 }
 
 /// 操作之后的 agent：只取它的 id，配置与分发规则重新从快照读。
-async fn out(s: &AppState, agent_id: &str) -> ApiResult<AgentOut> {
+async fn out(s: &AppState, agent_id: &AgentId) -> ApiResult<AgentOut> {
     Ok(AgentOut::of(s.services.agents.view(agent_id).await?))
 }
 
@@ -168,7 +169,7 @@ impl ReachOut {
 #[derive(Deserialize, ToSchema)]
 pub struct AgentPreviewIn {
     /// 已有的 agent（它自己的资产总能用）；null 为还没建的
-    pub agent_id: Option<String>,
+    pub agent_id: Option<AgentId>,
     pub roles: Vec<String>,
     pub allow: Vec<String>,
     pub deny: Vec<String>,
@@ -180,7 +181,7 @@ pub struct AgentPreviewIn {
     responses((status = 200, body = ReachOut), (status = 422, body = ErrorOut)))]
 async fn preview_agent(State(s): State<AppState>, Json(body): Json<AgentPreviewIn>) -> ApiResult<axum::Json<ReachOut>> {
     let rules = AgentRules { roles: body.roles, allow: body.allow, deny: body.deny };
-    let reach = s.services.distribution.preview_agent(body.agent_id.as_deref(), &rules).await?;
+    let reach = s.services.distribution.preview_agent(body.agent_id.as_ref(), &rules).await?;
     Ok(axum::Json(ReachOut::of(reach)))
 }
 
@@ -200,7 +201,7 @@ pub struct RoleOut {
     /// 只按这个角色的规则（固定的与可编辑的）能用的
     pub reach: ReachOut,
     /// 带这个角色的 agent 的 id（含归档的）；base 是全部 agent
-    pub agents: Vec<String>,
+    pub agents: Vec<AgentId>,
 }
 
 impl RoleOut {
@@ -341,8 +342,9 @@ async fn create_agent(
 
 /// 正在删除的按不存在处理。
 #[utoipa::path(get, path = "/api/agents/{agent_id}", tag = "agents",
-    responses((status = 200, body = AgentOut), (status = 404, body = ErrorOut)))]
-async fn get_agent(State(s): State<AppState>, Path(agent_id): Path<String>) -> ApiResult<axum::Json<AgentOut>> {
+    responses((status = 200, body = AgentOut), (status = 404, body = ErrorOut)),
+    params(("agent_id" = AgentId, Path, description = "agent 的编号")))]
+async fn get_agent(State(s): State<AppState>, Path(agent_id): Path<AgentId>) -> ApiResult<axum::Json<AgentOut>> {
     Ok(axum::Json(out(&s, &agent_id).await?))
 }
 
@@ -370,10 +372,11 @@ pub struct AgentUpdate {
 
 #[utoipa::path(patch, path = "/api/agents/{agent_id}", tag = "agents", request_body = AgentUpdate,
     responses((status = 200, body = AgentOut), (status = 404, body = ErrorOut), (status = 409, body = ErrorOut),
-        (status = 422, body = ErrorOut)))]
+        (status = 422, body = ErrorOut)),
+    params(("agent_id" = AgentId, Path, description = "agent 的编号")))]
 async fn update_agent(
     State(s): State<AppState>,
-    Path(agent_id): Path<String>,
+    Path(agent_id): Path<AgentId>,
     Json(body): Json<AgentUpdate>,
 ) -> ApiResult<axum::Json<AgentOut>> {
     let patch = AgentPatch {
@@ -394,8 +397,9 @@ async fn update_agent(
 
 /// 删除 agent：它的会话、触发器、指派等各领域的数据一起清理，资源文件里别人还在用的转给平台。
 #[utoipa::path(delete, path = "/api/agents/{agent_id}", tag = "agents",
-    responses((status = 204), (status = 404, body = ErrorOut), (status = 409, body = ErrorOut)))]
-async fn delete_agent(State(s): State<AppState>, Path(agent_id): Path<String>) -> ApiResult<StatusCode> {
+    responses((status = 204), (status = 404, body = ErrorOut), (status = 409, body = ErrorOut)),
+    params(("agent_id" = AgentId, Path, description = "agent 的编号")))]
+async fn delete_agent(State(s): State<AppState>, Path(agent_id): Path<AgentId>) -> ApiResult<StatusCode> {
     s.services.lifecycle.delete(&agent_id, &Actor::User).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -418,7 +422,7 @@ impl AssetSourceOut {
 pub struct AssetOut {
     pub name: String,
     /// null 归平台
-    pub owner: Option<String>,
+    pub owner: Option<AgentId>,
     pub description: String,
     pub source: AssetSourceOut,
     /// 它能改（write）
@@ -428,7 +432,7 @@ pub struct AssetOut {
 #[derive(Serialize, ToSchema)]
 pub struct McpAssetOut {
     pub name: String,
-    pub owner: Option<String>,
+    pub owner: Option<AgentId>,
     pub description: String,
     pub source: AssetSourceOut,
     pub editable: bool,
@@ -450,7 +454,7 @@ pub struct AgentAssetsOut {
 fn asset_out(u: UsedAsset) -> AssetOut {
     AssetOut {
         name: u.name,
-        owner: u.owner.agent().map(str::to_owned),
+        owner: u.owner.agent().cloned(),
         description: u.description,
         source: AssetSourceOut::of(u.source),
         editable: u.editable,
@@ -459,10 +463,11 @@ fn asset_out(u: UsedAsset) -> AssetOut {
 
 /// agent 能用的记忆、skill、secret、MCP server 与各自的来源（不含 secret 的值），加上记忆合并后放进指令的样子。
 #[utoipa::path(get, path = "/api/agents/{agent_id}/assets", tag = "agents",
-    responses((status = 200, body = AgentAssetsOut), (status = 404, body = ErrorOut)))]
+    responses((status = 200, body = AgentAssetsOut), (status = 404, body = ErrorOut)),
+    params(("agent_id" = AgentId, Path, description = "agent 的编号")))]
 async fn agent_assets(
     State(s): State<AppState>,
-    Path(agent_id): Path<String>,
+    Path(agent_id): Path<AgentId>,
 ) -> ApiResult<axum::Json<AgentAssetsOut>> {
     let used = s.services.distribution.assets(&agent_id).await?;
     let memory = &s.services.memory;
@@ -494,18 +499,23 @@ async fn agent_assets(
 
 /// 设为系统默认 agent（取代原来的默认）。
 #[utoipa::path(put, path = "/api/agents/{agent_id}/default", tag = "agents",
-    responses((status = 200, body = AgentOut), (status = 404, body = ErrorOut), (status = 409, body = ErrorOut)))]
-async fn set_default_agent(State(s): State<AppState>, Path(agent_id): Path<String>) -> ApiResult<axum::Json<AgentOut>> {
+    responses((status = 200, body = AgentOut), (status = 404, body = ErrorOut), (status = 409, body = ErrorOut)),
+    params(("agent_id" = AgentId, Path, description = "agent 的编号")))]
+async fn set_default_agent(
+    State(s): State<AppState>,
+    Path(agent_id): Path<AgentId>,
+) -> ApiResult<axum::Json<AgentOut>> {
     let a = s.services.agents.set_default(&agent_id, true).await?;
     Ok(axum::Json(out(&s, &a.id).await?))
 }
 
 /// 取消它的系统默认身份；它不是默认时不做任何事。
 #[utoipa::path(delete, path = "/api/agents/{agent_id}/default", tag = "agents",
-    responses((status = 200, body = AgentOut), (status = 404, body = ErrorOut)))]
+    responses((status = 200, body = AgentOut), (status = 404, body = ErrorOut)),
+    params(("agent_id" = AgentId, Path, description = "agent 的编号")))]
 async fn unset_default_agent(
     State(s): State<AppState>,
-    Path(agent_id): Path<String>,
+    Path(agent_id): Path<AgentId>,
 ) -> ApiResult<axum::Json<AgentOut>> {
     let a = s.services.agents.set_default(&agent_id, false).await?;
     Ok(axum::Json(out(&s, &a.id).await?))
@@ -513,26 +523,29 @@ async fn unset_default_agent(
 
 /// 归档：不能再对话、委派、指派，它的触发器不触发；它忙或是默认 agent 时 409。
 #[utoipa::path(put, path = "/api/agents/{agent_id}/archive", tag = "agents",
-    responses((status = 200, body = AgentOut), (status = 404, body = ErrorOut), (status = 409, body = ErrorOut)))]
-async fn archive_agent(State(s): State<AppState>, Path(agent_id): Path<String>) -> ApiResult<axum::Json<AgentOut>> {
+    responses((status = 200, body = AgentOut), (status = 404, body = ErrorOut), (status = 409, body = ErrorOut)),
+    params(("agent_id" = AgentId, Path, description = "agent 的编号")))]
+async fn archive_agent(State(s): State<AppState>, Path(agent_id): Path<AgentId>) -> ApiResult<axum::Json<AgentOut>> {
     let a = s.services.lifecycle.set_archived(&agent_id, true).await?;
     Ok(axum::Json(out(&s, &a.id).await?))
 }
 
 /// 取消归档；没归档时不做任何事。
 #[utoipa::path(delete, path = "/api/agents/{agent_id}/archive", tag = "agents",
-    responses((status = 200, body = AgentOut), (status = 404, body = ErrorOut)))]
-async fn unarchive_agent(State(s): State<AppState>, Path(agent_id): Path<String>) -> ApiResult<axum::Json<AgentOut>> {
+    responses((status = 200, body = AgentOut), (status = 404, body = ErrorOut)),
+    params(("agent_id" = AgentId, Path, description = "agent 的编号")))]
+async fn unarchive_agent(State(s): State<AppState>, Path(agent_id): Path<AgentId>) -> ApiResult<axum::Json<AgentOut>> {
     let a = s.services.lifecycle.set_archived(&agent_id, false).await?;
     Ok(axum::Json(out(&s, &a.id).await?))
 }
 
 /// agent 的私有记忆（正在删除的按不存在处理）。
 #[utoipa::path(get, path = "/api/agents/{agent_id}/memory", tag = "agents",
-    responses((status = 200, body = MemoryOut), (status = 404, body = ErrorOut)))]
+    responses((status = 200, body = MemoryOut), (status = 404, body = ErrorOut)),
+    params(("agent_id" = AgentId, Path, description = "agent 的编号")))]
 async fn get_private_memory(
     State(s): State<AppState>,
-    Path(agent_id): Path<String>,
+    Path(agent_id): Path<AgentId>,
 ) -> ApiResult<axum::Json<MemoryOut>> {
     s.services.agents.get_active(&agent_id).await?;
     let m = &s.services.memory;
@@ -542,10 +555,11 @@ async fn get_private_memory(
 /// 整体改写 agent 的私有记忆（没有时新建）。只有它自己用；规则不按名字指它。
 #[utoipa::path(put, path = "/api/agents/{agent_id}/memory", tag = "agents", request_body = MemoryIn,
     responses((status = 200, body = MemoryOut), (status = 404, body = ErrorOut), (status = 409, body = ErrorOut),
-        (status = 422, body = ErrorOut)))]
+        (status = 422, body = ErrorOut)),
+    params(("agent_id" = AgentId, Path, description = "agent 的编号")))]
 async fn put_private_memory(
     State(s): State<AppState>,
-    Path(agent_id): Path<String>,
+    Path(agent_id): Path<AgentId>,
     Json(body): Json<MemoryIn>,
 ) -> ApiResult<axum::Json<MemoryOut>> {
     let m = &s.services.memory;

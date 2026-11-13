@@ -10,6 +10,7 @@
 //! - 普通 delegate_task（[`send_in`]）不交回结局：只往 thread 投一封用户在等的信。
 //! - 运行中检查（[`check_threads`]）：report_back 的委派按 heartbeat_seconds 给发起方投检查信件；ask_agent 不设超时。
 
+use muliao_platform::ids::{AgentId, SessionId};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
@@ -46,7 +47,7 @@ pub(crate) fn thread_name(child: &Session) -> &str {
 }
 
 /// 取已有 thread 或新建。
-pub(crate) fn open_in(c: &Connection, parent_id: &str, agent_id: &str, thread: &str) -> Result<Session> {
+pub(crate) fn open_in(c: &Connection, parent_id: &SessionId, agent_id: &AgentId, thread: &str) -> Result<Session> {
     let thread = validate_thread(thread)?;
     if let Some(existing) = directory::thread_in(c, parent_id, agent_id, &thread)? {
         return Ok(existing);
@@ -73,8 +74,8 @@ pub(crate) enum Mode {
 pub(crate) fn send_in(
     tx: &mut Tx<'_>,
     waker: &Waker,
-    parent_id: &str,
-    agent_id: &str,
+    parent_id: &SessionId,
+    agent_id: &AgentId,
     thread: &str,
     prompt: &str,
     call_id: &str,
@@ -95,7 +96,7 @@ pub(crate) fn send_in(
         Mode::ReportBack { awaited, .. } | Mode::Ask { awaited } => {
             let suspends = matches!(mode, Mode::Ask { .. });
             hold_delegation_in(tx, parent_id, call.id, suspends.then(|| call_id.to_owned()), awaited)?;
-            tracing::info!(session_id = parent_id, thread_session_id = %child.id, delegation = call.id, call_id,
+            tracing::info!(session_id = %parent_id, thread_session_id = %child.id, delegation = %call.id, call_id,
                 "delegation dispatched");
             // 没有人等 thread 的回答：结局交回发起方，由它处理
             Inbound::delegated(parent_id, &child.id, prompt, false, Some(call.id))
@@ -167,9 +168,9 @@ pub(crate) fn hand_back_in(
 /// 父会话开出的一个 thread（list_threads 看到的）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ThreadView {
-    pub session_id: String,
+    pub session_id: SessionId,
     pub thread: String,
-    pub agent_id: String,
+    pub agent_id: AgentId,
     pub state: WorkState,
     /// 最近一次运行最终失败时的说明
     pub failure: Option<String>,
@@ -177,9 +178,9 @@ pub struct ThreadView {
     pub answer: String,
 }
 
-pub(crate) fn threads_in(c: &Connection, parent_id: &str) -> Result<Vec<ThreadView>> {
+pub(crate) fn threads_in(c: &Connection, parent_id: &SessionId) -> Result<Vec<ThreadView>> {
     let children = directory::threads_of(c, parent_id)?;
-    let ids: Vec<String> = children.iter().map(|s| s.id.clone()).collect();
+    let ids: Vec<SessionId> = children.iter().map(|s| s.id.clone()).collect();
     let states = work_states_in(c, &ids)?;
     let runs = latest_among(c, &ids)?;
     let mut answers = latest_answers_among(c, &ids)?;
@@ -206,7 +207,7 @@ pub(crate) async fn check_threads(db: &Database, waker: &Waker, beats: &Arc<Mute
         let mut beats = beats.lock().expect("beats lock");
         beats.keep(&reporting.iter().map(|(o, _)| o.delegation.id).collect::<BTreeSet<_>>());
         // (发起会话, thread) -> 到期的委派与它的间隔：同一个发起方对同一个 thread 的几项委派同时到期，检查一次
-        let mut due: BTreeMap<(String, String), (Owed, f64)> = BTreeMap::new();
+        let mut due: BTreeMap<(SessionId, SessionId), (Owed, f64)> = BTreeMap::new();
         for (o, interval) in reporting {
             if !beats.due(&o.delegation.id, o.hold.created_at, interval, now) {
                 continue;
@@ -215,7 +216,8 @@ pub(crate) async fn check_threads(db: &Database, waker: &Waker, beats: &Arc<Mute
             due.entry((o.delegation.parent_id.clone(), o.delegation.thread_id.clone())).or_insert((o, interval));
         }
         drop(beats);
-        let child_ids: Vec<String> = due.keys().map(|(_, c)| c.clone()).collect::<BTreeSet<_>>().into_iter().collect();
+        let child_ids: Vec<SessionId> =
+            due.keys().map(|(_, c)| c.clone()).collect::<BTreeSet<_>>().into_iter().collect();
         let states = work_states_in(tx, &child_ids)?;
         let runs = latest_among(tx, &child_ids)?;
         let children = directory::among_in(tx, &child_ids)?;

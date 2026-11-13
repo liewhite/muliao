@@ -4,6 +4,7 @@
 //! - [`deliver_in`]：交回结局并释放占用，和一封信件同一个事务；占用已被停止清掉、或会话已删除时不投。唯一出口。
 //! - [`post_check_in`]：运行中检查投信（不推送），这个来源已有信在排着、或占用不再 active 时不投。
 
+use muliao_platform::ids::SessionId;
 use std::collections::BTreeMap;
 
 use muliao_platform::db::Tx;
@@ -13,7 +14,7 @@ use crate::actor::Waker;
 use crate::answers::CallResult;
 use crate::directory;
 use crate::history::since_last_response;
-use crate::holds::{self, Hold, HoldStatus, Outside};
+use crate::holds::{self, Hold, HoldStatus};
 use crate::mailbox::{NewMail, has_queued_from, post_in, queued_in};
 use crate::pending::{HandedOut, Position, position};
 use muliao_platform::errors::{Result, broken};
@@ -29,7 +30,7 @@ pub fn check_interval(heartbeat_seconds: Option<f64>) -> Result<f64, String> {
 }
 
 /// 会话现在停在哪（规则在 [`position`]）。没出结果的调用只可能在最后一条回复里，不加载整段上下文。
-pub(crate) fn position_in(c: &Connection, session_id: &str) -> Result<Position> {
+pub(crate) fn position_in(c: &Connection, session_id: &SessionId) -> Result<Position> {
     let ids = [session_id.to_owned()];
     let handed = HandedOut {
         delegated: holds::called_among(c, &ids)?.remove(session_id).unwrap_or_default(),
@@ -65,10 +66,10 @@ pub(crate) fn deliver_in(
         tracing::info!(source = %source.raw(), "outcome for a deleted session dropped");
         return Ok(Delivered::Gone);
     };
-    let session_id = hold.session_id.as_str();
+    let session_id = &hold.session_id;
     match holds::release_in(tx, hold)? {
         HoldStatus::Cleared => {
-            tracing::info!(session_id, hold_id = hold.id, "outcome for a stopped session dropped");
+            tracing::info!(%session_id, hold_id = %hold.id, "outcome for a stopped session dropped");
             return Ok(Delivered::Dropped);
         }
         HoldStatus::Released => {
@@ -93,7 +94,7 @@ pub(crate) fn deliver_in(
             Delivered::Event
         }
     };
-    tracing::info!(session_id, hold_id = hold.id, delivered_as = ?delivered, "outcome delivered");
+    tracing::info!(%session_id, hold_id = %hold.id, delivered_as = ?delivered, "outcome delivered");
     Ok(delivered)
 }
 
@@ -114,11 +115,11 @@ pub(crate) fn post_check_in(
     Ok(true)
 }
 
-/// 后台任务或到点唤醒在会话上的占用（交回结局与运行中检查用）：会话已删除时 None；会话还在而占用从未登记过是 bug。
-pub(crate) fn hold_of_in(c: &Connection, session_id: &str, of: &Outside) -> Result<Option<Hold>> {
-    let hold = holds::get_in(c, session_id, of)?;
+/// 后台任务的占用（交回结局与运行中检查用）：会话已删除时 None（占用随会话删掉）；会话还在而占用从未登记过是 bug。
+fn job_hold_in(c: &Connection, session_id: &SessionId, job_id: i64) -> Result<Option<Hold>> {
+    let hold = holds::job_in(c, job_id)?;
     if hold.is_none() && directory::get_in(c, session_id)?.is_some() {
-        return Err(broken(format!("session {session_id} has no hold {of:?}")));
+        return Err(broken(format!("session {session_id} has no hold for job {job_id}")));
     }
     Ok(hold)
 }
@@ -130,7 +131,7 @@ pub enum EventSource {
     /// 后台任务
     Job { job_id: i64 },
     /// thread 交回的结果或运行中检查
-    Thread { session_id: String },
+    Thread { session_id: SessionId },
     /// 到点唤醒
     Wake,
 }
@@ -151,7 +152,7 @@ impl EventSource {
             return Some(EventSource::Wake);
         }
         if let Some(id) = raw.strip_prefix("thread:").filter(|s| !s.is_empty()) {
-            return Some(EventSource::Thread { session_id: id.to_owned() });
+            return Some(EventSource::Thread { session_id: SessionId::new(id) });
         }
         let digits = raw.strip_prefix("job:").filter(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))?;
         Some(EventSource::Job { job_id: digits.parse().ok()? })
@@ -170,20 +171,20 @@ impl SessionWork {
     }
 
     /// 登记一项进行中的后台任务：会话据此知道工作还没做完。awaited：用户是否在等它的结局。
-    pub fn hold_in(&self, tx: &mut Tx<'_>, session_id: &str, job_id: i64, awaited: bool) -> Result<()> {
-        holds::hold_in(tx, session_id, Outside::Job { job_id }, awaited)?;
+    pub fn hold_in(&self, tx: &mut Tx<'_>, session_id: &SessionId, job_id: i64, awaited: bool) -> Result<()> {
+        holds::hold_job_in(tx, session_id, job_id, awaited)?;
         Ok(())
     }
 
     /// 后台任务结束了：往会话的信箱投一封事件信件，同时释放占用。
-    pub fn ended_in(&self, tx: &mut Tx<'_>, session_id: &str, job_id: i64, text: &str) -> Result<Delivered> {
-        let hold = hold_of_in(tx, session_id, &Outside::Job { job_id })?;
+    pub fn ended_in(&self, tx: &mut Tx<'_>, session_id: &SessionId, job_id: i64, text: &str) -> Result<Delivered> {
+        let hold = job_hold_in(tx, session_id, job_id)?;
         deliver_in(tx, &self.waker, hold.as_ref(), &EventSource::Job { job_id }, text, None)
     }
 
     /// 后台任务还在进行：给会话投一封检查信件。
-    pub fn checked_in(&self, tx: &mut Tx<'_>, session_id: &str, job_id: i64, text: &str) -> Result<bool> {
-        let hold = hold_of_in(tx, session_id, &Outside::Job { job_id })?;
+    pub fn checked_in(&self, tx: &mut Tx<'_>, session_id: &SessionId, job_id: i64, text: &str) -> Result<bool> {
+        let hold = job_hold_in(tx, session_id, job_id)?;
         post_check_in(tx, &self.waker, hold.as_ref(), &EventSource::Job { job_id }, text)
     }
 }

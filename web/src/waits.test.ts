@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { Wait } from './api'
+import { asSessionId, type Wait } from './api'
 import { waitDetail } from './waits'
 
 const now = Date.parse('2026-10-29T12:00:00Z')
@@ -13,12 +13,12 @@ describe('waitDetail', () => {
   })
 
   it('shows how long an ask_agent has been waiting', () => {
-    const w: Wait = { kind: 'delegation', thread_session_id: 't', check_seconds: null, since: ago(30), job: null }
+    const w: Wait = { kind: 'delegation', thread_session_id: asSessionId('t'), check_seconds: null, since: ago(30), job: null }
     expect(waitDetail(w, now)).toBe('ask_agent · 已等 30s')
   })
 
   it('shows the heartbeat of a report_back delegation', () => {
-    const w: Wait = { kind: 'delegation', thread_session_id: 't', check_seconds: 300, since: ago(5), job: null }
+    const w: Wait = { kind: 'delegation', thread_session_id: asSessionId('t'), check_seconds: 300, since: ago(5), job: null }
     expect(waitDetail(w, now)).toBe('report_back · 每 5m00s 检查 · 已等 5s')
   })
 

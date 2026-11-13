@@ -6,6 +6,7 @@
 //! 授权存在 script_grants 表（不放资源目录：agent 能写自己的资源目录）。用户在设置页查看、撤销；点「始终允许」不会顺带放行
 //! 别的会话里已经在等的同一调用（那些各自等用户的决定）。
 
+use muliao_platform::ids::{AgentId, SessionId};
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -23,7 +24,7 @@ pub const GRANTED_NOTE: &str = "(Run without asking: the user always allows this
 /// 一次 skill_run 调用里决定「是不是同一个调用」的部分。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScriptCall {
-    pub agent_id: String,
+    pub agent_id: AgentId,
     pub skill: String,
     /// 相对 skill 目录的脚本路径（解析后的）
     pub script: String,
@@ -36,7 +37,7 @@ pub struct ScriptCall {
 
 impl ScriptCall {
     pub fn new(
-        agent_id: &str,
+        agent_id: &AgentId,
         skill: &str,
         script: &str,
         args: &[String],
@@ -75,12 +76,12 @@ impl ScriptCall {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct GrantInfo {
     pub id: i64,
-    pub agent_id: String,
+    pub agent_id: AgentId,
     pub skill: String,
     pub script: String,
     pub args: Vec<String>,
     pub secrets: Vec<String>,
-    pub session_id: String,
+    pub session_id: SessionId,
     pub created_at: DateTime<Utc>,
     pub hits: i64,
     pub last_used_at: Option<DateTime<Utc>>,
@@ -127,7 +128,7 @@ impl ScriptGrants {
     }
 
     /// 用户对这次调用点了「始终允许」。已有同一调用的始终允许时不再添一条。
-    pub async fn grant(&self, call: ScriptCall, session_id: &str, call_id: &str) -> Result<()> {
+    pub async fn grant(&self, call: ScriptCall, session_id: &SessionId, call_id: &str) -> Result<()> {
         let (session_id, call_id) = (session_id.to_owned(), call_id.to_owned());
         self.db
             .write(move |tx| {
@@ -214,11 +215,19 @@ mod tests {
 
     #[test]
     fn keys_identify_the_call() {
-        let call = ScriptCall::new("a1", "s", "run.sh", &["x y".into(), "中".into()], &["K".into(), "K".into()], "fp");
+        let call = ScriptCall::new(
+            &AgentId::new("a1"),
+            "s",
+            "run.sh",
+            &["x y".into(), "中".into()],
+            &["K".into(), "K".into()],
+            "fp",
+        );
         assert_eq!(call.secrets, ["K"]);
         // printf '%s' '["a1","s","run.sh",["x y","中"],["K"],"fp"]' | shasum -a 256
         assert_eq!(call.key(), "dbcf5f88e65c2292e887ffbb2461069ae21546f1d9e4778482b514d436be17d1");
-        let other = ScriptCall::new("a1", "s", "run.sh", &["x".into(), "y 中".into()], &["K".into()], "fp");
+        let other =
+            ScriptCall::new(&AgentId::new("a1"), "s", "run.sh", &["x".into(), "y 中".into()], &["K".into()], "fp");
         assert_ne!(call.key(), other.key());
     }
 }

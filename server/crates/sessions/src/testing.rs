@@ -5,6 +5,7 @@ use agenter::{Message, Request, RequestPart};
 use chrono::Utc;
 use muliao_platform::db::Tx;
 use muliao_platform::errors::Result;
+use muliao_platform::ids::{MailId, SessionId};
 
 use crate::actor::Waker;
 use crate::conventions::{PartKind, PartMark, attach_run_context, mark_parts};
@@ -32,7 +33,7 @@ pub fn record_run_in(
     tx: &mut Tx<'_>,
     waker: &Waker,
     live: &Live,
-    session_id: &str,
+    session_id: &SessionId,
     from: Option<(Origin, String)>,
     messages: &[Message],
     outcome: Option<Outcome>,
@@ -56,7 +57,7 @@ pub fn record_run_in(
 }
 
 /// 让会话空闲：丢掉排着的信。
-pub fn discard_queued_in(tx: &mut Tx<'_>, session_id: &str) -> Result<()> {
-    let ids: Vec<i64> = queued_in(tx, session_id)?.into_iter().map(|m| m.id).collect();
+pub fn discard_queued_in(tx: &mut Tx<'_>, session_id: &SessionId) -> Result<()> {
+    let ids: Vec<MailId> = queued_in(tx, session_id)?.into_iter().map(|m| m.id).collect();
     discard_in(tx, session_id, &ids).map(drop)
 }

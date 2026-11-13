@@ -13,11 +13,12 @@
 //! 附件同时复制进 agent 工作目录的 `uploads/<id>/<名称>`（[`copy_to_workspace`]），供文件工具与 shell 处理。那是派生副本，
 //! agent 可以随意修改；不可变的原件只在文件存储里。
 
+use muliao_platform::ids::MediaType;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use agenter::{Content, File, FileSource, Message, Request, RequestPart, ToolResult};
-use muliao_files::{FileMeta, FileStore, INLINE_IMAGE_TYPES, parse_file_url};
+use muliao_files::{FileMeta, FileStore, parse_file_url};
 use muliao_platform::errors::Error;
 
 use crate::images;
@@ -28,7 +29,7 @@ pub const UPLOADS_DIR: &str = "uploads";
 pub fn references(files: &[FileMeta]) -> Vec<RequestPart> {
     files
         .iter()
-        .map(|f| RequestPart::File(File { media_type: f.media_type.clone(), source: FileSource::Url(f.url()) }))
+        .map(|f| RequestPart::File(File { media_type: f.media_type.to_string(), source: FileSource::Url(f.url()) }))
         .collect()
 }
 
@@ -136,7 +137,7 @@ pub async fn for_model(store: &FileStore, history: &[Message]) -> Result<Vec<Mes
                 RequestPart::File(f) if ref_id(f).is_some() => {
                     let meta = &metas[&ref_id(f).expect("checked")];
                     parts.push(RequestPart::Text { text: describe(meta) });
-                    if meta.is_inline_image() {
+                    if meta.media_type.is_inline_image() {
                         parts.extend(image_content(store, meta).await?.into_iter().map(|c| match c {
                             Content::Text { text } => RequestPart::Text { text },
                             Content::File(f) => RequestPart::File(f),
@@ -166,8 +167,8 @@ pub async fn for_model(store: &FileStore, history: &[Message]) -> Result<Vec<Mes
 }
 
 /// 文件存储里图片的扩展名（同 Python mimetypes.guess_extension）
-fn extension(media_type: &str) -> &'static str {
-    match media_type {
+fn extension(media_type: &MediaType) -> &'static str {
+    match media_type.as_str() {
         "image/png" => ".png",
         "image/jpeg" => ".jpg",
         "image/gif" => ".gif",
@@ -181,12 +182,10 @@ fn extension(media_type: &str) -> &'static str {
 pub async fn store_tool_images(store: &FileStore, result: &mut ToolResult) -> Result<(), Error> {
     for c in &mut result.content {
         let Content::File(File { media_type, source: FileSource::Data(data) }) = c else { continue };
-        if !INLINE_IMAGE_TYPES.contains(&media_type.as_str()) {
-            continue;
-        }
-        let name = format!("{}{}", result.tool_name, extension(media_type));
-        let meta = store.put(&name, media_type, data.as_slice()).await?;
-        *c = Content::File(File { media_type: meta.media_type.clone(), source: FileSource::Url(meta.url()) });
+        let Some(parsed) = MediaType::parse(media_type).ok().filter(MediaType::is_inline_image) else { continue };
+        let name = format!("{}{}", result.tool_name, extension(&parsed));
+        let meta = store.put(&name, parsed, data.as_slice()).await?;
+        *c = Content::File(File { media_type: meta.media_type.to_string(), source: FileSource::Url(meta.url()) });
     }
     Ok(())
 }

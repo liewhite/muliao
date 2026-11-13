@@ -6,6 +6,7 @@
 //! 猜谁发的；时间线里的用户消息条目按交出信件时记在请求上的发送方认（没记的算会话的发起方）。时间线的条目与会话页同一份
 //! 投影（[`to_items`]），只要文字，不用工具的展示规则。
 
+use muliao_platform::ids::{AgentId, RunId, SessionId};
 use std::collections::BTreeSet;
 
 use chrono::{DateTime, Utc};
@@ -24,7 +25,7 @@ use muliao_platform::errors::{Result, invalid, not_found};
 /// 一次最终失败的运行：开始的时刻与错误说明。
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunFailure {
-    pub run_id: i64,
+    pub run_id: RunId,
     pub at: DateTime<Utc>,
     pub error: String,
 }
@@ -47,7 +48,7 @@ pub struct DaySession {
 /// 用户在界面上说的一段话：发的消息（content），或对提问的回答（每题一行）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct UserWords {
-    pub session_id: String,
+    pub session_id: SessionId,
     pub at: DateTime<Utc>,
     pub text: String,
     /// 随消息发送的文件数
@@ -67,15 +68,15 @@ pub fn between_in(
     c: &Connection,
     start: DateTime<Utc>,
     end: DateTime<Utc>,
-    agent_ids: Option<&[String]>,
+    agent_ids: Option<&[AgentId]>,
 ) -> Result<Activity> {
     let spans = spans_between_in(c, start, end)?;
     let arrivals = first_arrivals_between_in(c, start, end)?;
-    let active: BTreeSet<String> = spans.keys().chain(arrivals.keys()).cloned().collect();
+    let active: BTreeSet<SessionId> = spans.keys().chain(arrivals.keys()).cloned().collect();
     let rows = among_in(c, &active.into_iter().collect::<Vec<_>>())?;
     let sessions: Vec<Session> =
         rows.into_values().filter(|s| agent_ids.is_none_or(|ids| ids.contains(&s.agent_id))).collect();
-    let ids: Vec<String> = sessions.iter().map(|s| s.id.clone()).collect();
+    let ids: Vec<SessionId> = sessions.iter().map(|s| s.id.clone()).collect();
     let states = work_states_in(c, &ids)?;
     let mut runs = started_between_in(c, start, end)?;
     let words = sent_by_in(c, &ids, Origin::User, Some(start), Some(end))?;

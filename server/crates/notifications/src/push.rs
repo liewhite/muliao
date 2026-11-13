@@ -9,6 +9,7 @@
 //! Service Worker 按会话替换通知，锁屏上就停在前一条。罕见、点开会话即看到全部，不为它加队列。最终失败（被拒、重试放弃）
 //! 只记 error 日志，由错误监控看见（Python 版是任务页上的失败任务）。
 
+use muliao_platform::ids::SessionId;
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -33,7 +34,7 @@ struct Payload<'a> {
     body: String,
     /// 点开打开的页面；系统通知点开看通知页
     url: &'a str,
-    session_id: Option<&'a str>,
+    session_id: Option<&'a SessionId>,
     /// 有它时 Service Worker 给通知加「通过」「打回」按钮
     issue_id: Option<i64>,
     /// 发出那一刻的未读通知数，用作应用角标
@@ -45,7 +46,7 @@ fn payload(m: &PushMessage) -> Vec<u8> {
         title: truncate(&m.title, TITLE_MAX_CHARS),
         body: truncate(&m.body, BODY_MAX_CHARS),
         url: m.url.as_deref().unwrap_or("/notifications"),
-        session_id: m.session_id.as_deref(),
+        session_id: m.session_id.as_ref(),
         issue_id: m.issue_id,
         badge: m.unread,
     };

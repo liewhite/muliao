@@ -1,5 +1,5 @@
 import { describe, expectTypeOf, it } from 'vitest'
-import { FILES_PATH, api, branded, call, type Agent, type Memory, type Schemas } from './api'
+import { FILES_PATH, api, type Agent, type AgentId, type Memory, type Schemas, type SessionId } from './api'
 import type { paths } from './schema'
 
 describe('api calls are typed from the OpenAPI paths', () => {
@@ -10,9 +10,11 @@ describe('api calls are typed from the OpenAPI paths', () => {
     expectTypeOf(api.agents).returns.resolves.toEqualTypeOf<Agent[]>()
   })
 
-  it('only brands agent ids: a response of another shape cannot be branded as agents', () => {
-    // @ts-expect-error 触发器列表不是 agent 列表
-    void (() => branded<Agent[]>(call('get', '/api/triggers')))
+  it('brands the ids from the generated types: one kind of id cannot stand for another or for a plain string', () => {
+    expectTypeOf<Agent['id']>().toEqualTypeOf<AgentId>()
+    expectTypeOf<Schemas['SessionOut']['agent_id']>().toEqualTypeOf<AgentId>()
+    expectTypeOf<SessionId>().not.toExtend<AgentId>()
+    expectTypeOf<string>().not.toExtend<SessionId>()
   })
 
   it('FILES_PATH is a path the backend serves', () => {

@@ -2,6 +2,7 @@
 //! 回复）。覆盖：一次普通对话、工具调用与每步保存、ask_user 挂起与回答、停止正在执行的工具、重启后被打断的一步补「被中断」、
 //! ask_agent 委派与交回、最终失败与手动重试、删除忙会话被拒。
 
+use muliao_platform::ids::{AgentId, SessionId};
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -171,8 +172,8 @@ struct World {
     _server: MockServer,
     service: SessionService,
     _actors: Actors,
-    me: String,
-    other: String,
+    me: AgentId,
+    other: AgentId,
     ended: Arc<Mutex<Vec<RunEnded>>>,
     failed: Arc<Mutex<Vec<RunFailed>>>,
     release: Arc<tokio::sync::Notify>,
@@ -225,7 +226,7 @@ async fn world() -> World {
     let toolbox = Arc::new(Toolbox::new(tools));
     binder.bind(toolbox.specs());
     let confine: Confine =
-        Arc::new(|_agent: String| async { Err(muliao_platform::errors::broken("no MCP in this test")) }.boxed());
+        Arc::new(|_agent: AgentId| async { Err(muliao_platform::errors::broken("no MCP in this test")) }.boxed());
     let mcp = Arc::new(McpConnector::new(secrets, confine));
     let runtime = Arc::new(Runtime::new(RuntimeDeps {
         models,
@@ -306,7 +307,7 @@ async fn world() -> World {
 use futures::FutureExt;
 
 impl World {
-    async fn say(&self, session: UserTarget, text: &str) -> String {
+    async fn say(&self, session: UserTarget, text: &str) -> SessionId {
         let m = UserMessage {
             content: text.into(),
             session,
@@ -317,17 +318,17 @@ impl World {
         self.service.receive(m).await.unwrap().id
     }
 
-    async fn new_chat(&self, text: &str) -> String {
+    async fn new_chat(&self, text: &str) -> SessionId {
         self.say(UserTarget::NewChat { agent_id: self.me.clone() }, text).await
     }
 
-    async fn state(&self, id: &str) -> WorkState {
-        let id = id.to_owned();
+    async fn state(&self, id: &SessionId) -> WorkState {
+        let id = id.clone();
         self.db.read(move |c| work_state_in(c, &id)).await.unwrap()
     }
 
     /// 等到会话不再 running。
-    async fn settled(&self, id: &str) -> WorkState {
+    async fn settled(&self, id: &SessionId) -> WorkState {
         for _ in 0..400 {
             let s = self.state(id).await;
             if s != WorkState::Running {
@@ -338,8 +339,8 @@ impl World {
         panic!("session {id} is still running");
     }
 
-    async fn history(&self, id: &str) -> Vec<Message> {
-        let id = id.to_owned();
+    async fn history(&self, id: &SessionId) -> Vec<Message> {
+        let id = id.clone();
         self.db
             .read(move |c| history::transcript_in(c, &id, None))
             .await
@@ -548,10 +549,10 @@ async fn stopping_a_waiting_session_tells_its_page() {
 }
 
 /// 订阅到现在为止这个会话的 `saved` 有几个（等到 200ms 内没有新事件）
-async fn saved_events(events: &mut muliao_platform::bus::Subscription, session: &str) -> usize {
+async fn saved_events(events: &mut muliao_platform::bus::Subscription, session: &SessionId) -> usize {
     let mut saved = 0;
     while let Ok(Ok(e)) = tokio::time::timeout(std::time::Duration::from_millis(200), events.next()).await {
-        if e.kind == "saved" && e.data["session_id"] == session {
+        if e.kind == "saved" && e.data["session_id"] == session.as_str() {
             saved += 1;
         }
     }

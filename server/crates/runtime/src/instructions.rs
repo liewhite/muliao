@@ -5,6 +5,7 @@
 //! （最早是「当前时间」），整段历史每次运行都要重新写入缓存（写缓存比普通输入还贵）。运行上下文由会话领域放进这次运行新增
 //! 的第一条请求，随消息入库、之后原样重放，旧消息保持字节不变。
 
+use muliao_platform::ids::AgentId;
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
@@ -55,7 +56,7 @@ pub fn with_notices(run_context: &str, notices: &[String]) -> String {
 
 /// 指令的输入：只能是会话级、agent 级的稳定内容。
 pub struct InstructionParts<'a> {
-    pub agent_id: &'a str,
+    pub agent_id: &'a AgentId,
     pub agent_name: &'a str,
     pub agent_description: &'a str,
     pub workspace: &'a Path,
@@ -224,7 +225,7 @@ mod tests {
         let ws = PathBuf::from("/w/id1");
         let dir = PathBuf::from("/a/me");
         let text = build_instructions(&InstructionParts {
-            agent_id: "id1",
+            agent_id: &AgentId::new("id1"),
             agent_name: "me",
             agent_description: "does things",
             workspace: &ws,

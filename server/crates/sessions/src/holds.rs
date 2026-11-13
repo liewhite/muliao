@@ -1,5 +1,5 @@
 //! 占用（`session_holds` 的唯一读写处）：别的工作替一个会话在外面做的一项异步工作，三种（[`HoldOf`]）：后台任务、到点唤醒、
-//! 委派。后台任务与到点唤醒按占用者（`job:<id>`、`wake:<会话>:<调用>`，库里的唯一键）认，委派的占用引用委派行。
+//! 委派。后台任务的占用记着任务编号（库里唯一），到点唤醒的行（`wakeups`）引用它的占用，委派的占用引用委派行。
 //!
 //! - 有 active 占用：工作还没做完，交给它的委派不结清。委派的占用还 active 就是这项委派还没结清（唯一的判断）。
 //! - 带 call_id 的委派占用：这次挂起调用（ask_agent）已经交出去了，不论状态都算，是永久事实。
@@ -12,6 +12,7 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use muliao_platform::db::placeholders;
 use muliao_platform::errors::{Result, broken};
+use muliao_platform::ids::{HoldId, SessionId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HoldStatus {
@@ -46,8 +47,8 @@ impl HoldStatus {
 pub enum HoldOf {
     /// 后台任务（run_shell background）
     Job { job_id: i64 },
-    /// 到点唤醒：约它的那次 wake_me 调用
-    Wake { call_id: String },
+    /// 到点唤醒（wake_me）：约的时刻与说明在引用它的 `wakeups` 行
+    Wake,
     /// 委派：row 是委派行（thread 删除后置空）；call_id：结局作为这次挂起调用的结果交回（ask_agent），并发等待的为 None
     Delegation { row: Option<i64>, call_id: Option<String> },
 }
@@ -56,42 +57,16 @@ impl HoldOf {
     fn kind(&self) -> &'static str {
         match self {
             HoldOf::Job { .. } => "job",
-            HoldOf::Wake { .. } => "wake",
+            HoldOf::Wake => "wake",
             HoldOf::Delegation { .. } => "delegation",
-        }
-    }
-}
-
-/// 按占用者认的两种（后台任务、到点唤醒）：登记与查找用；委派的占用引用委派行，另由 [`hold_delegation_in`] 登记。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Outside {
-    Job { job_id: i64 },
-    Wake { call_id: String },
-}
-
-impl Outside {
-    /// 库里的占用者（唯一键）。
-    pub(crate) fn holder(&self, session_id: &str) -> String {
-        match self {
-            Outside::Job { job_id } => format!("job:{job_id}"),
-            Outside::Wake { call_id } => format!("wake:{session_id}:{call_id}"),
-        }
-    }
-}
-
-impl From<Outside> for HoldOf {
-    fn from(o: Outside) -> Self {
-        match o {
-            Outside::Job { job_id } => HoldOf::Job { job_id },
-            Outside::Wake { call_id } => HoldOf::Wake { call_id },
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Hold {
-    pub id: i64,
-    pub session_id: String,
+    pub id: HoldId,
+    pub session_id: SessionId,
     pub of: HoldOf,
     /// 用户在等这项工作的结局：交回的信件随它推送
     pub awaited: bool,
@@ -104,32 +79,27 @@ impl Hold {
     pub(crate) fn call_id(&self) -> Option<&str> {
         match &self.of {
             HoldOf::Delegation { call_id, .. } => call_id.as_deref(),
-            _ => None,
+            HoldOf::Job { .. } | HoldOf::Wake => None,
         }
     }
 }
 
-const COLUMNS: &str = "id, session_id, kind, holder, thread_call_id, call_id, awaited, status, created_at";
+const COLUMNS: &str = "id, session_id, kind, job_id, thread_call_id, call_id, awaited, status, created_at";
 
-type Raw = (i64, String, String, Option<String>, Option<i64>, Option<String>, bool, String, DateTime<Utc>);
+type Raw = (HoldId, SessionId, String, Option<i64>, Option<i64>, Option<String>, bool, String, DateTime<Utc>);
 
 fn from_row(r: &Row<'_>) -> rusqlite::Result<Raw> {
     Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?))
 }
 
 /// 读库时解析一次：种类与它的列对不上是数据坏了。
-fn hold((id, session_id, kind, holder, row, call_id, awaited, status, created_at): Raw) -> Result<Hold> {
-    let of = match (kind.as_str(), holder, call_id) {
-        ("job", Some(holder), None) => {
-            holder.strip_prefix("job:").and_then(|n| n.parse().ok()).map(|job_id| HoldOf::Job { job_id })
-        }
-        ("wake", Some(holder), None) => holder
-            .strip_prefix(&format!("wake:{session_id}:"))
-            .map(|call_id| HoldOf::Wake { call_id: call_id.to_owned() }),
-        ("delegation", None, call_id) => Some(HoldOf::Delegation { row, call_id }),
-        _ => None,
+fn hold((id, session_id, kind, job_id, row, call_id, awaited, status, created_at): Raw) -> Result<Hold> {
+    let of = match (kind.as_str(), job_id, call_id) {
+        ("job", Some(job_id), None) => HoldOf::Job { job_id },
+        ("wake", None, None) => HoldOf::Wake,
+        ("delegation", None, call_id) => HoldOf::Delegation { row, call_id },
+        _ => return Err(broken(format!("hold {id} of kind {kind:?} does not match its columns"))),
     };
-    let of = of.ok_or_else(|| broken(format!("hold {id} of kind {kind:?} does not match its columns")))?;
     Ok(Hold { id, session_id, of, awaited, status: HoldStatus::parse(&status)?, created_at })
 }
 
@@ -139,64 +109,59 @@ fn query(c: &Connection, filter: &str, params: impl rusqlite::Params) -> Result<
     rows.into_iter().map(hold).collect()
 }
 
-/// 登记一项后台任务或到点唤醒的占用（各自的 id 每次新生成，不会重复登记）。
-pub(crate) fn hold_in(c: &Connection, session_id: &str, outside: Outside, awaited: bool) -> Result<Hold> {
-    let holder = outside.holder(session_id);
-    insert(c, session_id, Some(&holder), outside.into(), awaited)
+/// 登记一项后台任务的占用（任务编号每次新生成，不会重复登记）。
+pub(crate) fn hold_job_in(c: &Connection, session_id: &SessionId, job_id: i64, awaited: bool) -> Result<Hold> {
+    insert(c, session_id, HoldOf::Job { job_id }, awaited)
+}
+
+/// 登记一次到点唤醒的占用；约的时刻与说明由 `wakeups` 记在引用它的行里。
+pub(crate) fn hold_wake_in(c: &Connection, session_id: &SessionId, awaited: bool) -> Result<Hold> {
+    insert(c, session_id, HoldOf::Wake, awaited)
 }
 
 /// 发起方登记一项委派的占用，引用委派行（row）。call_id：结局作为这次挂起调用的结果交回（ask_agent）；并发等待的为 None。
 pub(crate) fn hold_delegation_in(
     c: &Connection,
-    session_id: &str,
+    session_id: &SessionId,
     row: i64,
     call_id: Option<String>,
     awaited: bool,
 ) -> Result<Hold> {
-    insert(c, session_id, None, HoldOf::Delegation { row: Some(row), call_id }, awaited)
+    insert(c, session_id, HoldOf::Delegation { row: Some(row), call_id }, awaited)
 }
 
-/// holder：后台任务与到点唤醒的占用者（委派没有）；委派行与挂起调用从 of 展开。
-fn insert(c: &Connection, session_id: &str, holder: Option<&str>, of: HoldOf, awaited: bool) -> Result<Hold> {
-    let (row, call_id) = match &of {
-        HoldOf::Delegation { row, call_id } => (*row, call_id.as_deref()),
-        HoldOf::Job { .. } | HoldOf::Wake { .. } => (None, None),
+fn insert(c: &Connection, session_id: &SessionId, of: HoldOf, awaited: bool) -> Result<Hold> {
+    let (job_id, row, call_id) = match &of {
+        HoldOf::Job { job_id } => (Some(*job_id), None, None),
+        HoldOf::Wake => (None, None, None),
+        HoldOf::Delegation { row, call_id } => (None, *row, call_id.as_deref()),
     };
     let now = Utc::now();
     c.execute(
-        "INSERT INTO session_holds (session_id, kind, holder, thread_call_id, call_id, awaited, status, created_at) \
+        "INSERT INTO session_holds (session_id, kind, job_id, thread_call_id, call_id, awaited, status, created_at) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'active', ?7)",
-        params![session_id, of.kind(), holder, row, call_id, awaited, now],
+        params![session_id, of.kind(), job_id, row, call_id, awaited, now],
     )?;
-    let id = c.last_insert_rowid();
-    Ok(Hold { id, session_id: session_id.to_owned(), of, awaited, status: HoldStatus::Active, created_at: now })
+    let id = HoldId::new(c.last_insert_rowid());
+    Ok(Hold { id, session_id: session_id.clone(), of, awaited, status: HoldStatus::Active, created_at: now })
 }
 
-/// 后台任务或到点唤醒在会话上的占用。
-pub(crate) fn get_in(c: &Connection, session_id: &str, outside: &Outside) -> Result<Option<Hold>> {
-    let holder = outside.holder(session_id);
-    Ok(query(c, "session_id = ?1 AND holder = ?2", params![session_id, holder])?.pop())
+/// 后台任务的占用。
+pub(crate) fn job_in(c: &Connection, job_id: i64) -> Result<Option<Hold>> {
+    Ok(query(c, "job_id = ?1", [job_id])?.pop())
 }
 
-/// 还 active 的到点唤醒占用与它的占用者（`wakeups` 按它认），按登记先后；session_id：只看这个会话的。
-pub(crate) fn active_wakes_in(c: &Connection, session_id: Option<&str>) -> Result<Vec<(Hold, String)>> {
-    let holds = active_of(c, "wake", session_id)?;
-    Ok(holds
-        .into_iter()
-        .filter_map(|h| {
-            let HoldOf::Wake { call_id } = &h.of else { return None };
-            let holder = Outside::Wake { call_id: call_id.clone() }.holder(&h.session_id);
-            Some((h, holder))
-        })
-        .collect())
+/// 还 active 的到点唤醒占用，按登记先后；session_id：只看这个会话的。
+pub(crate) fn active_wakes_in(c: &Connection, session_id: Option<&SessionId>) -> Result<Vec<Hold>> {
+    active_of(c, "wake", session_id)
 }
 
 /// 还 active 的委派占用（委派还没结清），按登记先后；session_id：只看这个会话发起的。
-pub(crate) fn active_delegations_in(c: &Connection, session_id: Option<&str>) -> Result<Vec<Hold>> {
+pub(crate) fn active_delegations_in(c: &Connection, session_id: Option<&SessionId>) -> Result<Vec<Hold>> {
     active_of(c, "delegation", session_id)
 }
 
-fn active_of(c: &Connection, kind: &str, session_id: Option<&str>) -> Result<Vec<Hold>> {
+fn active_of(c: &Connection, kind: &str, session_id: Option<&SessionId>) -> Result<Vec<Hold>> {
     match session_id {
         Some(s) => query(c, "status = 'active' AND kind = ?1 AND session_id = ?2 ORDER BY id", params![kind, s]),
         None => query(c, "status = 'active' AND kind = ?1 ORDER BY id", [kind]),
@@ -204,7 +169,7 @@ fn active_of(c: &Connection, kind: &str, session_id: Option<&str>) -> Result<Vec
 }
 
 /// 把还 active 的占用改成 status（按库里的现状，不按调用方手里的副本）。返回改之前的状态。
-fn end_active(c: &Connection, hold_id: i64, status: HoldStatus) -> Result<HoldStatus> {
+fn end_active(c: &Connection, hold_id: HoldId, status: HoldStatus) -> Result<HoldStatus> {
     let n = c.execute(
         "UPDATE session_holds SET status = ?1, ended_at = ?2 WHERE id = ?3 AND status = 'active'",
         params![status.as_str(), Utc::now(), hold_id],
@@ -230,7 +195,7 @@ pub(crate) fn abandon_in(c: &Connection, hold: &Hold) -> Result<()> {
 }
 
 /// 会话被停止：全部 active 占用记为 cleared，返回它们。
-pub(crate) fn clear_in(c: &Connection, session_id: &str) -> Result<Vec<Hold>> {
+pub(crate) fn clear_in(c: &Connection, session_id: &SessionId) -> Result<Vec<Hold>> {
     let holds = query(c, "session_id = ?1 AND status = 'active' ORDER BY id", [session_id])?;
     for h in &holds {
         end_active(c, h.id, HoldStatus::Cleared)?;
@@ -238,7 +203,7 @@ pub(crate) fn clear_in(c: &Connection, session_id: &str) -> Result<Vec<Hold>> {
     Ok(holds)
 }
 
-pub(crate) fn has_active_in(c: &Connection, session_id: &str) -> Result<bool> {
+pub(crate) fn has_active_in(c: &Connection, session_id: &SessionId) -> Result<bool> {
     Ok(c.query_row(
         "SELECT 1 FROM session_holds WHERE session_id = ?1 AND status = 'active' LIMIT 1",
         [session_id],
@@ -249,8 +214,8 @@ pub(crate) fn has_active_in(c: &Connection, session_id: &str) -> Result<bool> {
 }
 
 /// 其中每个会话的 active 占用，按登记先后（一次查询）；没有的会话不在结果里。
-pub(crate) fn active_among(c: &Connection, session_ids: &[String]) -> Result<BTreeMap<String, Vec<Hold>>> {
-    let mut held: BTreeMap<String, Vec<Hold>> = BTreeMap::new();
+pub(crate) fn active_among(c: &Connection, session_ids: &[SessionId]) -> Result<BTreeMap<SessionId, Vec<Hold>>> {
+    let mut held: BTreeMap<SessionId, Vec<Hold>> = BTreeMap::new();
     if session_ids.is_empty() {
         return Ok(held);
     }
@@ -262,8 +227,8 @@ pub(crate) fn active_among(c: &Connection, session_ids: &[String]) -> Result<BTr
 }
 
 /// 这些会话里已经交出去的挂起调用 id（带 call_id 的占用，不论状态），每个会话都在结果里。
-pub(crate) fn called_among(c: &Connection, session_ids: &[String]) -> Result<BTreeMap<String, HashSet<String>>> {
-    let mut found: BTreeMap<String, HashSet<String>> =
+pub(crate) fn called_among(c: &Connection, session_ids: &[SessionId]) -> Result<BTreeMap<SessionId, HashSet<String>>> {
+    let mut found: BTreeMap<SessionId, HashSet<String>> =
         session_ids.iter().map(|s| (s.clone(), HashSet::new())).collect();
     if session_ids.is_empty() {
         return Ok(found);
@@ -273,7 +238,8 @@ pub(crate) fn called_among(c: &Connection, session_ids: &[String]) -> Result<BTr
         placeholders(session_ids.len())
     );
     let mut stmt = c.prepare(&sql)?;
-    let rows = stmt.query_map(rusqlite::params_from_iter(session_ids), |r| Ok((r.get::<_, String>(0)?, r.get(1)?)))?;
+    let rows =
+        stmt.query_map(rusqlite::params_from_iter(session_ids), |r| Ok((r.get::<_, SessionId>(0)?, r.get(1)?)))?;
     for row in rows {
         let (s, call) = row?;
         found.entry(s).or_default().insert(call);

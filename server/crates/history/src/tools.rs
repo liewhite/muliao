@@ -7,6 +7,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use chrono_tz::Tz;
 use muliao_assets::agents::{AgentNames, agent_names_in, named_in};
 use muliao_issues::{UserActions, user_actions_in};
+use muliao_platform::ids::{AgentId, Importance, SessionId};
 use muliao_platform::text::truncate;
 use muliao_platform::time::parse_local;
 use muliao_platform::tooling::{BuiltinTool, RunScope, ToolTraits, builtin};
@@ -38,9 +39,9 @@ pub fn tools(history: History, max_chars: usize) -> Vec<BuiltinTool> {
 }
 
 /// 工具参数 agent：不给是自己，`all` 是全部（None），否则按名字找。
-async fn agent_ids_of(history: &History, me: &str, agent: Option<String>) -> Result<Option<Vec<String>>> {
+async fn agent_ids_of(history: &History, me: &AgentId, agent: Option<String>) -> Result<Option<Vec<AgentId>>> {
     match agent.as_deref() {
-        None => Ok(Some(vec![me.to_owned()])),
+        None => Ok(Some(vec![me.clone()])),
         Some(ALL_AGENTS) => Ok(None),
         Some(name) => {
             let name = name.to_owned();
@@ -70,11 +71,12 @@ pub struct HistoryItem {
     refs: Vec<String>,
     /// 1 routine, 2 notable, 3 major (decision, incident, milestone).
     #[serde(default = "routine")]
-    importance: i64,
+    #[schemars(with = "i64", range(min = 1, max = 3))]
+    importance: Importance,
 }
 
-fn routine() -> i64 {
-    1
+fn routine() -> Importance {
+    Importance::ROUTINE
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -140,7 +142,8 @@ pub struct SearchArgs {
     agent: Option<String>,
     /// Only entries at least this important (1-3).
     #[serde(default = "routine")]
-    min_importance: i64,
+    #[schemars(with = "i64", range(min = 1, max = 3))]
+    min_importance: Importance,
     /// Maximum number of entries (1-200).
     #[serde(default = "default_limit")]
     limit: usize,
@@ -160,7 +163,7 @@ struct Found {
     title: String,
     summary: String,
     refs: Vec<String>,
-    importance: i64,
+    importance: Importance,
 }
 
 pub struct HistorySearch(History);
@@ -234,7 +237,7 @@ fn place(session: &Session) -> String {
         SessionOrigin::Trigger { trigger_id: n } | SessionOrigin::Issue { issue_id: n } => format!("{origin} #{n}"),
         SessionOrigin::User => origin.to_owned(),
         SessionOrigin::Delegation { thread } => {
-            let parent = session.parent_session_id.as_deref().unwrap_or("(deleted)");
+            let parent = session.parent_session_id.as_ref().map_or("(deleted)", SessionId::as_str);
             format!("{origin} thread {thread:?} of {}", chars(parent, 8))
         }
     }
@@ -289,7 +292,7 @@ fn overview_lines(d: &Day, who: &str, day: NaiveDate, tz: Tz) -> Vec<String> {
         .chain(d.records.iter().map(|r| r.agent_id.as_str()))
         .collect();
     let many = agents.len() > 1;
-    let agent_of = |id: &str| if many { format!("{} ", d.names.name(id)) } else { String::new() };
+    let agent_of = |id: &AgentId| if many { format!("{} ", d.names.name(id)) } else { String::new() };
     let sessions = &d.activity.sessions;
     let mut origins: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
     for s in sessions {
@@ -310,7 +313,7 @@ fn overview_lines(d: &Day, who: &str, day: NaiveDate, tz: Tz) -> Vec<String> {
         out.push(format!(
             "- {}{} [{}] {:?}: {}, {span}, {} runs{failed}",
             agent_of(&s.session.agent_id),
-            chars(&s.session.id, 8),
+            chars(s.session.id.as_str(), 8),
             place(&s.session),
             chars(&s.session.title, 80),
             s.state.as_str(),
@@ -329,7 +332,7 @@ fn overview_lines(d: &Day, who: &str, day: NaiveDate, tz: Tz) -> Vec<String> {
             "- {} {}{} [{}] {:?}{files}:",
             hm(w.at, tz),
             agent_of(&s.session.agent_id),
-            chars(&w.session_id, 8),
+            chars(w.session_id.as_str(), 8),
             place(&s.session),
             chars(&s.session.title, 40)
         ));
@@ -360,7 +363,7 @@ fn overview_lines(d: &Day, who: &str, day: NaiveDate, tz: Tz) -> Vec<String> {
             "- {} {}{} run {}: {}",
             hm(f.at, tz),
             agent_of(&s.session.agent_id),
-            chars(&s.session.id, 8),
+            chars(s.session.id.as_str(), 8),
             f.run_id,
             chars(&error, 300)
         ));

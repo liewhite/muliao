@@ -10,6 +10,7 @@
 //!
 //! 任何改动提交后通知激活机制（[`TriggerService::watch`]），它们按最新的行重新对账。
 
+use muliao_platform::ids::{AgentId, SessionId};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -85,7 +86,7 @@ impl Busy {
 /// 上一次触发开出的会话还没做完时：它的 id 与在干什么。从没触发过、会话已删除、idle 时 None。不是 idle 就还有没做完的事：
 /// 在运行或排着运行，或在等后台任务、委派、到点唤醒、用户回答——等着的结果回来会自动接着做，再开一个会重叠（#627）。
 /// 定时据此跳过，流式据此让事件排队。
-pub(crate) fn busy_previous_in(c: &Connection, t: &Trigger) -> Result<Option<(String, Busy)>> {
+pub(crate) fn busy_previous_in(c: &Connection, t: &Trigger) -> Result<Option<(SessionId, Busy)>> {
     let Some(session_id) = t.last_session_id.clone() else { return Ok(None) };
     let state = states_of_in(c, std::slice::from_ref(&session_id))?.remove(&session_id);
     Ok(match state {
@@ -98,7 +99,7 @@ pub(crate) fn busy_previous_in(c: &Connection, t: &Trigger) -> Result<Option<(St
 /// 一次触发投出去的信：新开的会话。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Fired {
-    pub session_id: String,
+    pub session_id: SessionId,
 }
 
 /// 触发器自己的原因让这次没触发。
@@ -126,7 +127,7 @@ enum First {
     Done(Outcome),
     /// previous：changed 检查上一次的输出（基线）
     Check {
-        agent_id: String,
+        agent_id: AgentId,
         precheck: Precheck,
         previous: Option<String>,
     },
@@ -148,14 +149,14 @@ pub struct TriggerView {
     /// 这种方式给出的运行状态；存下的状态坏了时是读不出的原因（一行坏数据不连累整个列表）
     pub status: std::result::Result<Value, String>,
     /// 上一次触发开出的会话，已删除时 None（`trigger.last_session_id` 是记下的原值）
-    pub live_session_id: Option<String>,
+    pub live_session_id: Option<SessionId>,
 }
 
 /// 新建一个触发器。
 #[derive(Debug, Clone)]
 pub struct NewSpec {
     pub name: String,
-    pub agent_id: String,
+    pub agent_id: AgentId,
     pub kind: String,
     pub prompt: String,
     pub config: Value,
@@ -268,7 +269,7 @@ impl TriggerService {
         self.0
             .db
             .read(move |c| {
-                let ids: Vec<String> = triggers.iter().filter_map(|t| t.last_session_id.clone()).collect();
+                let ids: Vec<SessionId> = triggers.iter().filter_map(|t| t.last_session_id.clone()).collect();
                 let states = states_of_in(c, &ids)?;
                 triggers
                     .into_iter()
@@ -296,7 +297,7 @@ impl TriggerService {
 
     /// 前置检查与流式命令都是 agent 自己写的命令：建或改时就确认这些 secret 能交给它的命令（含 allow_shell），配置错误在第一
     /// 现场报出。与运行时起命令是同一步（`AgentCommands::prepare`），核对与实际不会分叉。
-    async fn check_secrets(&self, agent_id: &str, keys: &[String]) -> Result<()> {
+    async fn check_secrets(&self, agent_id: &AgentId, keys: &[String]) -> Result<()> {
         self.0.commands.prepare(agent_id, keys, true).await?;
         Ok(())
     }
@@ -443,7 +444,7 @@ impl TriggerService {
     /// 删除 agent 的流程：删掉它的全部触发器（含已结束的），提交后通知激活机制（杀掉它的流式命令）。
     pub fn deletion_hook(&self) -> DeletionHook {
         let this = self.clone();
-        Arc::new(move |tx: &mut Tx<'_>, agent_id: &str| {
+        Arc::new(move |tx: &mut Tx<'_>, agent_id: &AgentId| {
             tx.execute("DELETE FROM triggers WHERE agent_id = ?1", [agent_id])?;
             let this = this.clone();
             tx.on_commit(move || this.changed());
@@ -604,7 +605,7 @@ impl TriggerService {
         };
         (t.last_fired_at, t.last_session_id) = (Some(now), Some(session_id.clone()));
         save_in(tx, t)?;
-        tracing::info!(trigger = %t.name, kind = %t.kind, session_id, "trigger fired");
+        tracing::info!(trigger = %t.name, kind = %t.kind, %session_id, "trigger fired");
         Ok(Outcome::Fired(Fired { session_id }))
     }
 }

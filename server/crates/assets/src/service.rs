@@ -6,6 +6,7 @@
 //! 取消：文件是同步写的，中间没有 await；写表的事务一旦发出就在写线程上做完。所以调用方在写表时被取消，文件与行都已
 //! 落下（一致）；只有「写表失败、调用方又恰好被取消」时撤回不会执行，留下一个 id 不认识的目录，读树时报出（罕见、可见）。
 
+use muliao_platform::ids::AgentId;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -75,7 +76,7 @@ impl AgentService {
         &self.default_model
     }
 
-    pub fn workspace(&self, agent_id: &str) -> PathBuf {
+    pub fn workspace(&self, agent_id: &AgentId) -> PathBuf {
         workspace_of(&self.workspaces_dir, agent_id)
     }
 
@@ -125,7 +126,7 @@ impl AgentService {
 
     /// 只修改给出的字段：配置改 agent.toml（保留人手写的注释），规则改 access.toml，改名先挪目录（access.toml 里
     /// 那一节按 id，只换行尾注释里的名字），最后在同一把锁里写数据库（名字只认数据库）。agent 自己改描述、模型、思考档位是直接改它的 agent.toml。
-    pub async fn update(&self, agent_id: &str, patch: AgentPatch) -> Result<AgentInfo> {
+    pub async fn update(&self, agent_id: &AgentId, patch: AgentPatch) -> Result<AgentInfo> {
         let w = self.source.writing().await?;
         let id = agent_id.to_owned();
         let row = self.db.read(move |c| agents::active_agent_in(c, &id)).await?;
@@ -176,19 +177,19 @@ impl AgentService {
     }
 
     /// 设为（或取消）系统默认 agent；设为默认时清掉旧的，始终最多一个。归档的不能设为默认。
-    pub async fn set_default(&self, agent_id: &str, is_default: bool) -> Result<AgentInfo> {
+    pub async fn set_default(&self, agent_id: &AgentId, is_default: bool) -> Result<AgentInfo> {
         let id = agent_id.to_owned();
         self.db.write(move |tx| agents::set_default_in(tx, &id, is_default)).await
     }
 
     /// 还可用的 agent（正在删除的按不存在处理）。
-    pub async fn get_active(&self, agent_id: &str) -> Result<AgentInfo> {
+    pub async fn get_active(&self, agent_id: &AgentId) -> Result<AgentInfo> {
         let id = agent_id.to_owned();
         self.db.read(move |c| agents::active_agent_in(c, &id)).await
     }
 
     /// agent（包括正在删除的）。
-    pub async fn get(&self, agent_id: &str) -> Result<AgentInfo> {
+    pub async fn get(&self, agent_id: &AgentId) -> Result<AgentInfo> {
         let id = agent_id.to_owned();
         self.db.read(move |c| agents::agent_in(c, &id)).await
     }
@@ -208,7 +209,7 @@ impl AgentService {
     }
 
     /// 还可用的 agent 加上它的配置与分发规则。
-    pub async fn view(&self, agent_id: &str) -> Result<AgentView> {
+    pub async fn view(&self, agent_id: &AgentId) -> Result<AgentView> {
         let snapshot = self.source.snapshot().await?;
         Ok(view_of(&snapshot, self.get_active(agent_id).await?))
     }
@@ -226,8 +227,8 @@ impl AgentService {
 }
 
 /// agent 的工作目录：`<workspaces_dir>/<id>`。
-pub fn workspace_of(workspaces_dir: &Path, agent_id: &str) -> PathBuf {
-    workspaces_dir.join(agent_id)
+pub fn workspace_of(workspaces_dir: &Path, agent_id: &AgentId) -> PathBuf {
+    workspaces_dir.join(agent_id.as_str())
 }
 
 fn write_agent_file(directory: &Path, file: &AgentFile) -> Result<()> {

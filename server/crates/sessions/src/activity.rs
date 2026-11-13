@@ -6,6 +6,7 @@
 //! - 删除会不会打断工作（[`blocking_deletion_in`]）：挂起的提问没有人在外面做事，不挡删除。
 //! - 等待项（[`waits_of_in`]）：waiting 的原因逐项展开，会话页列出。
 
+use muliao_platform::ids::{AgentId, HoldId, SessionId};
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
@@ -66,8 +67,8 @@ pub struct Status {
     pub waiting: Waiting,
 }
 
-pub(crate) fn statuses_in(c: &Connection, session_ids: &[String]) -> Result<BTreeMap<String, Status>> {
-    let unfinished: BTreeSet<String> = unfinished_among(c, session_ids)?.into_iter().collect();
+pub(crate) fn statuses_in(c: &Connection, session_ids: &[SessionId]) -> Result<BTreeMap<SessionId, Status>> {
+    let unfinished: BTreeSet<SessionId> = unfinished_among(c, session_ids)?.into_iter().collect();
     let mut queued = queued_among(c, session_ids)?;
     let mut tails = since_last_response_among(c, session_ids)?;
     let mut called = called_among(c, session_ids)?;
@@ -96,34 +97,34 @@ pub(crate) fn statuses_in(c: &Connection, session_ids: &[String]) -> Result<BTre
 }
 
 /// 一批会话的工作状态。
-pub(crate) fn work_states_in(c: &Connection, session_ids: &[String]) -> Result<BTreeMap<String, WorkState>> {
+pub(crate) fn work_states_in(c: &Connection, session_ids: &[SessionId]) -> Result<BTreeMap<SessionId, WorkState>> {
     Ok(statuses_in(c, session_ids)?.into_iter().map(|(k, s)| (k, s.state)).collect())
 }
 
-pub fn work_state_in(c: &Connection, session_id: &str) -> Result<WorkState> {
-    Ok(work_states_in(c, &[session_id.to_owned()])?[session_id])
+pub fn work_state_in(c: &Connection, session_id: &SessionId) -> Result<WorkState> {
+    Ok(work_states_in(c, std::slice::from_ref(session_id))?[session_id])
 }
 
 /// 一批（可能已删除的）会话里还在的那些的工作状态，按 id；已删除的不在结果里。
-pub fn states_of_in(c: &Connection, session_ids: &[String]) -> Result<BTreeMap<String, WorkState>> {
-    let existing: Vec<String> = directory::among_in(c, session_ids)?.into_keys().collect();
+pub fn states_of_in(c: &Connection, session_ids: &[SessionId]) -> Result<BTreeMap<SessionId, WorkState>> {
+    let existing: Vec<SessionId> = directory::among_in(c, session_ids)?.into_keys().collect();
     work_states_in(c, &existing)
 }
 
 /// 按发送方定位的会话的工作状态（key：发送方与 agent id）；还没有这样的会话时为 None。
 pub fn keyed_states_in(
     c: &Connection,
-    keys: &[(Sender, String)],
-) -> Result<BTreeMap<(Sender, String), Option<WorkState>>> {
+    keys: &[(Sender, AgentId)],
+) -> Result<BTreeMap<(Sender, AgentId), Option<WorkState>>> {
     let senders: Vec<Sender> = keys.iter().map(|(s, _)| *s).collect::<BTreeSet<_>>().into_iter().collect();
     let found = keyed_among(c, &senders, None)?;
-    let ids: Vec<String> = found.values().map(|s| s.id.clone()).collect();
+    let ids: Vec<SessionId> = found.values().map(|s| s.id.clone()).collect();
     let states = work_states_in(c, &ids)?;
     Ok(keys.iter().map(|k| (k.clone(), found.get(k).map(|s| states[&s.id]))).collect())
 }
 
 /// 其中忙、因而不能删除的会话：有没结束的运行或要处理的信，或有人替它在外面做事。挂起的提问不挡删除。
-pub(crate) fn blocking_deletion_in(c: &Connection, session_ids: &[String]) -> Result<Vec<String>> {
+pub(crate) fn blocking_deletion_in(c: &Connection, session_ids: &[SessionId]) -> Result<Vec<SessionId>> {
     Ok(statuses_in(c, session_ids)?
         .into_iter()
         .filter(|(_, s)| s.state == WorkState::Running || !s.waiting.holds.is_empty())
@@ -132,8 +133,8 @@ pub(crate) fn blocking_deletion_in(c: &Connection, session_ids: &[String]) -> Re
 }
 
 /// 归档前的检查：它的会话里有忙的（与删除 agent 时的判断同一条规则）。
-pub(crate) fn blocks_agent_in(c: &Connection, agent_id: &str) -> Result<bool> {
-    let ids: Vec<String> = directory::of_agent_in(c, agent_id)?.into_iter().map(|s| s.id).collect();
+pub(crate) fn blocks_agent_in(c: &Connection, agent_id: &AgentId) -> Result<bool> {
+    let ids: Vec<SessionId> = directory::of_agent_in(c, agent_id)?.into_iter().map(|s| s.id).collect();
     Ok(!blocking_deletion_in(c, &ids)?.is_empty())
 }
 
@@ -144,7 +145,7 @@ pub enum Wait {
     /// 后台任务（run_shell background）
     Job { job_id: i64, since: DateTime<Utc> },
     /// 委派出去的工作（ask_agent，或 delegate_task 带 report_back）
-    Delegation { thread_session_id: String, check_seconds: Option<f64>, since: DateTime<Utc> },
+    Delegation { thread_session_id: SessionId, check_seconds: Option<f64>, since: DateTime<Utc> },
     /// 自己约的到点唤醒
     Wake { due_at: DateTime<Utc>, note: String, since: DateTime<Utc> },
     /// 用户回答提问
@@ -154,14 +155,14 @@ pub enum Wait {
 }
 
 /// 会话在等的东西逐项展开：占用按登记先后，然后是提问、等批准的调用。
-pub(crate) fn waits_of_in(c: &Connection, session_id: &str, waiting: &Waiting) -> Result<Vec<Wait>> {
+pub(crate) fn waits_of_in(c: &Connection, session_id: &SessionId, waiting: &Waiting) -> Result<Vec<Wait>> {
     // (占用 id, 等待项)：委派与唤醒的详情各自和占用联查，后台任务的占用本身就够
-    let mut held: Vec<(i64, Wait)> = waiting
+    let mut held: Vec<(HoldId, Wait)> = waiting
         .holds
         .iter()
         .filter_map(|h| match h.of {
             HoldOf::Job { job_id } => Some((h.id, Wait::Job { job_id, since: h.created_at })),
-            HoldOf::Wake { .. } | HoldOf::Delegation { .. } => None,
+            HoldOf::Wake | HoldOf::Delegation { .. } => None,
         })
         .collect();
     held.extend(owed_in(c, None, Some(session_id))?.into_iter().map(|o| {

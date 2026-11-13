@@ -1,5 +1,6 @@
 //! 百炼转写的离线测试：用 wiremock 扮演百炼。真调一次见 tests/live.rs（默认跳过）。
 
+use muliao_platform::ids::MediaType;
 use std::sync::Arc;
 
 use muliao_platform::config::TranscriptionConfig;
@@ -38,7 +39,10 @@ async fn sends_the_audio_inline_with_its_format_and_returns_trimmed_text() {
         .mount(&server)
         .await;
     let t = transcriber(&server.uri(), "language_hints = [\"zh\", \"en\"]\n[vocabulary]\nmuliao = 5");
-    assert_eq!(t.transcribe(&[1, 2, 3], "audio/webm;codecs=opus").await.unwrap(), "你好 muliao");
+    assert_eq!(
+        t.transcribe(&[1, 2, 3], &MediaType::parse("audio/webm;codecs=opus").unwrap()).await.unwrap(),
+        "你好 muliao"
+    );
 }
 
 #[tokio::test]
@@ -53,7 +57,10 @@ async fn optional_parameters_are_left_out_when_not_configured() {
         .mount(&server)
         .await;
     // 听不到人说话：空字符串，不是错误
-    assert_eq!(transcriber(&server.uri(), "").transcribe(b"x", "audio/mp4").await.unwrap(), "");
+    assert_eq!(
+        transcriber(&server.uri(), "").transcribe(b"x", &MediaType::parse("audio/mp4").unwrap()).await.unwrap(),
+        ""
+    );
 }
 
 #[tokio::test]
@@ -62,7 +69,7 @@ async fn bad_input_is_rejected_without_calling_the_service() {
     Mock::given(method("POST")).respond_with(ResponseTemplate::new(200)).expect(0).mount(&server).await;
     let t = transcriber(&server.uri(), "");
     for (audio, media) in [(&b"x"[..], "video/webm"), (&b""[..], "audio/webm")] {
-        let err = t.transcribe(audio, media).await.unwrap_err();
+        let err = t.transcribe(audio, &MediaType::parse(media).unwrap()).await.unwrap_err();
         assert!(matches!(err, Error::Domain(ref e) if e.kind == ErrorKind::InvalidInput), "{err}");
     }
 }
@@ -79,12 +86,16 @@ async fn upstream_failures_carry_the_reason() {
     for (resp, want) in cases {
         let server = MockServer::start().await;
         Mock::given(method("POST")).respond_with(resp).mount(&server).await;
-        let err = transcriber(&server.uri(), "").transcribe(b"x", "audio/ogg").await.unwrap_err();
+        let err =
+            transcriber(&server.uri(), "").transcribe(b"x", &MediaType::parse("audio/ogg").unwrap()).await.unwrap_err();
         let Error::Upstream { message: reason, .. } = err else { panic!("{err}") };
         assert!(reason.starts_with("transcription failed (asr): "), "{reason}");
         assert!(reason.contains(want), "{reason}");
     }
     let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-    let err = transcriber(&format!("http://127.0.0.1:{port}"), "").transcribe(b"x", "audio/ogg").await.unwrap_err();
+    let err = transcriber(&format!("http://127.0.0.1:{port}"), "")
+        .transcribe(b"x", &MediaType::parse("audio/ogg").unwrap())
+        .await
+        .unwrap_err();
     assert!(matches!(err, Error::Upstream { .. }), "{err}");
 }

@@ -1,6 +1,7 @@
 //! issue 的纯规则（docs/architecture.md 第 21 节）：动态投给谁、一次改动带出什么（通知用户、放行下游）、什么算停滞、哪些
 //! 操作此刻做不了（返回拒绝原因）。依赖图在 [`crate::graph`]，给模型看的文本在 [`crate::render`]。
 
+use muliao_platform::ids::AgentId;
 use muliao_sessions::activity::WorkState;
 
 use crate::activity::{Activity, Happening};
@@ -39,7 +40,7 @@ pub struct Snapshot {
     pub status: Status,
     pub assignee: Option<Assignee>,
     /// 负责项目的 agent id；负责的 agent 被删除后为 None
-    pub owner: Option<String>,
+    pub owner: Option<AgentId>,
     /// 还没完成的上游；非空时这个 issue 在等上游，还轮不到它
     pub waiting_on: Vec<i64>,
 }
@@ -58,7 +59,7 @@ pub fn cannot_review(status: Status, assignee: Option<&Assignee>) -> Option<Stri
 }
 
 /// 用户一键开工（指派给 owner 并进入 in_progress）时指派给谁；不能开工时是原因。只开工还在 backlog、有负责项目的 agent 的。
-pub fn start_assignee(status: Status, owner: Option<&str>) -> Result<&str, String> {
+pub fn start_assignee(status: Status, owner: Option<&AgentId>) -> Result<&AgentId, String> {
     let owner = owner.ok_or("has no owner: assign it to an agent yourself")?;
     if status != Status::Backlog {
         return Err(format!("is already {status}, not in the backlog"));
@@ -87,7 +88,7 @@ pub fn from_outside(actor: &Actor, happened: &[Activity]) -> bool {
 
 /// 这次是 agent 把 issue 交给了用户（建时就指派给用户，或把指派人改成用户）：返回这个 agent（以它的名义通知用户），否则
 /// None。用户、系统自己改的不通知。
-pub fn handed_to_user<'a>(actor: &'a Actor, assignee: Option<&Assignee>, happened: &[Activity]) -> Option<&'a str> {
+pub fn handed_to_user<'a>(actor: &'a Actor, assignee: Option<&Assignee>, happened: &[Activity]) -> Option<&'a AgentId> {
     let agent = actor.agent()?;
     happened
         .iter()
@@ -111,13 +112,13 @@ pub fn finishing(happened: &[Activity]) -> Option<Recorded> {
 
 /// 把当前指派给用户的 issue 交给用户的 agent（用户打回时指派回给它）：最近一条指派动态的 actor（它把指派人改成了用户）；
 /// 从未改过指派人时是创建者（创建时就指派给了用户）。这次交接是用户自己或系统做的时为 None。
-pub fn handed_by<'a>(creator: &'a Actor, timeline: &'a [Activity]) -> Option<&'a str> {
+pub fn handed_by<'a>(creator: &'a Actor, timeline: &'a [Activity]) -> Option<&'a AgentId> {
     let last = timeline.iter().rev().find(|a| matches!(a.what, Happening::Assignee { .. }));
     last.map_or(creator, |a| &a.actor).agent()
 }
 
 /// 该由被指派的 agent 接手时就是它：in_progress、指派给 agent、不在等上游。
-fn assignee_recipient(issue: &Snapshot) -> Option<&str> {
+fn assignee_recipient(issue: &Snapshot) -> Option<&AgentId> {
     let agent = agent_of(issue.assignee.as_ref())?;
     (issue.status == Status::InProgress && issue.waiting_on.is_empty()).then_some(agent)
 }
@@ -131,7 +132,7 @@ fn assignee_recipient(issue: &Snapshot) -> Option<&str> {
 ///
 /// from_its_session 是在自己这个 issue 会话里动手的 agent：它自己的动作不投回它正在做事的会话，避免自激循环。它在别的会话
 /// （如普通对话）里给自己建、派、转 in_progress，照常投进 issue 会话——issue 只在那里做。
-pub fn recipient(issue: &Snapshot, from_outside: bool, from_its_session: Option<&str>) -> Option<String> {
+pub fn recipient(issue: &Snapshot, from_outside: bool, from_its_session: Option<&AgentId>) -> Option<AgentId> {
     if let Some(agent) = assignee_recipient(issue) {
         return (Some(agent) != from_its_session).then(|| agent.to_owned());
     }
@@ -147,7 +148,7 @@ pub fn stalled(issue: &Snapshot, assignee_state: Option<WorkState>) -> bool {
 /// agent 在它这个 issue 会话里的一次运行结束后，要不要请它表态：issue 指派给它且因此停滞——它停下来时既没做完、会话也
 /// 没在等什么。强制表态（用户定）：每次这样停下都问，直到它把状态改离 in_progress，或让会话等着；只写评论不算表态。不重跑
 /// 原任务，每次只投一封要它改状态的信。
-pub fn ask_to_settle(issue: &Snapshot, agent: &str, state: Option<WorkState>) -> bool {
+pub fn ask_to_settle(issue: &Snapshot, agent: &AgentId, state: Option<WorkState>) -> bool {
     agent_of(issue.assignee.as_ref()) == Some(agent) && stalled(issue, state)
 }
 
@@ -172,19 +173,22 @@ mod tests {
     #[test]
     fn recipient_follows_status_assignee_dependencies_and_origin() {
         let work = snap(Status::InProgress, agent("a"), vec![]);
-        assert_eq!(recipient(&work, false, None).as_deref(), Some("a"));
+        assert_eq!(recipient(&work, false, None).as_ref().map(AgentId::as_str), Some("a"));
         // 自己 issue 会话里的动作不投回
-        assert_eq!(recipient(&work, false, Some("a")), None);
-        assert_eq!(recipient(&work, false, Some("b")).as_deref(), Some("a"));
+        assert_eq!(recipient(&work, false, Some(&AgentId::new("a"))), None);
+        assert_eq!(recipient(&work, false, Some(&AgentId::new("b"))).as_ref().map(AgentId::as_str), Some("a"));
         // 有接手的 agent 时，用户评论也只投给它
-        assert_eq!(recipient(&work, true, None).as_deref(), Some("a"));
+        assert_eq!(recipient(&work, true, None).as_ref().map(AgentId::as_str), Some("a"));
         // 在等上游：不投；用户的评论唤起 owner
         let waiting = snap(Status::InProgress, agent("a"), vec![3]);
         assert_eq!(recipient(&waiting, false, None), None);
-        assert_eq!(recipient(&waiting, true, None).as_deref(), Some("own"));
+        assert_eq!(recipient(&waiting, true, None).as_ref().map(AgentId::as_str), Some("own"));
         for status in [Status::Backlog, Status::InReview, Status::Blocked, Status::Done, Status::Cancelled] {
             assert_eq!(recipient(&snap(status, agent("a"), vec![]), false, None), None);
-            assert_eq!(recipient(&snap(status, agent("a"), vec![]), true, None).as_deref(), Some("own"));
+            assert_eq!(
+                recipient(&snap(status, agent("a"), vec![]), true, None).as_ref().map(AgentId::as_str),
+                Some("own")
+            );
         }
         assert_eq!(recipient(&snap(Status::InProgress, Some(Assignee::User), vec![]), false, None), None);
     }
@@ -198,8 +202,8 @@ mod tests {
         assert!(!stalled(&work, Some(WorkState::Running)));
         assert!(!stalled(&snap(Status::InProgress, agent("a"), vec![2]), None));
         assert!(!stalled(&snap(Status::Blocked, agent("a"), vec![]), None));
-        assert!(ask_to_settle(&work, "a", Some(WorkState::Idle)));
-        assert!(!ask_to_settle(&work, "b", Some(WorkState::Idle)));
+        assert!(ask_to_settle(&work, &AgentId::new("a"), Some(WorkState::Idle)));
+        assert!(!ask_to_settle(&work, &AgentId::new("b"), Some(WorkState::Idle)));
     }
 
     #[test]
@@ -207,9 +211,9 @@ mod tests {
         assert!(cannot_review(Status::InReview, Some(&Assignee::User)).is_none());
         assert!(cannot_review(Status::Done, Some(&Assignee::User)).is_some());
         assert!(cannot_review(Status::InReview, None).is_some());
-        assert_eq!(start_assignee(Status::Backlog, Some("a")), Ok("a"));
+        assert_eq!(start_assignee(Status::Backlog, Some(&AgentId::new("a"))).map(AgentId::as_str), Ok("a"));
         assert!(start_assignee(Status::Backlog, None).is_err());
-        assert!(start_assignee(Status::Blocked, Some("a")).is_err());
+        assert!(start_assignee(Status::Blocked, Some(&AgentId::new("a"))).is_err());
         assert!(cannot_stop_into(Status::Done, true).is_some());
         assert!(cannot_stop_into(Status::InProgress, false).is_some());
         assert!(cannot_stop_into(Status::InProgress, true).is_none());
@@ -223,10 +227,10 @@ mod tests {
     fn what_a_change_brings() {
         let a = Actor::Agent("a".into());
         let handed = [act(a.clone(), Happening::Assignee { change: Change::new(None, Some(Assignee::User)) })];
-        assert_eq!(handed_to_user(&a, Some(&Assignee::User), &handed), Some("a"));
+        assert_eq!(handed_to_user(&a, Some(&Assignee::User), &handed).map(AgentId::as_str), Some("a"));
         assert_eq!(handed_to_user(&Actor::User, Some(&Assignee::User), &handed), None);
         let created = [act(a.clone(), Happening::Created)];
-        assert_eq!(handed_to_user(&a, Some(&Assignee::User), &created), Some("a"));
+        assert_eq!(handed_to_user(&a, Some(&Assignee::User), &created).map(AgentId::as_str), Some("a"));
         assert_eq!(handed_to_user(&a, agent("b").as_ref(), &created), None);
         let done =
             [act(a.clone(), Happening::Status { change: Change::new(Status::InProgress.into(), Status::Done.into()) })];
@@ -239,8 +243,8 @@ mod tests {
         assert!(!from_outside(&a, &comment));
         // 交给用户的是最近一条指派动态的 actor；没有就是创建者
         let creator = Actor::Agent("c".into());
-        assert_eq!(handed_by(&creator, &[]), Some("c"));
-        assert_eq!(handed_by(&creator, &handed), Some("a"));
+        assert_eq!(handed_by(&creator, &[]).map(AgentId::as_str), Some("c"));
+        assert_eq!(handed_by(&creator, &handed).map(AgentId::as_str), Some("a"));
         let by_user = [act(Actor::User, Happening::Assignee { change: Change::new(None, Some(Assignee::User)) })];
         assert_eq!(handed_by(&creator, &by_user), None);
     }

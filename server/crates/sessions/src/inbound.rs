@@ -8,12 +8,12 @@
 //! - 新建会话只有 [`create_session_in`] 一处实现（来信与 thread 都经过它）。会话只为能运行的 agent 新建、继续（在本事务里
 //!   检查 agent 没在删除、没归档）。
 
+use muliao_platform::ids::{AgentId, SessionId, new_id};
 use std::collections::BTreeMap;
 
 use muliao_assets::agents::{Availability, agent_in, availability_in, runnable_agent_in};
 use muliao_files::{FileMeta, load_metas};
 use muliao_platform::db::Tx;
-use muliao_platform::ids::new_id;
 use rusqlite::Connection;
 
 use crate::actor::Waker;
@@ -34,7 +34,7 @@ const TITLE_LENGTH: usize = 200;
 pub(crate) enum Party {
     User,
     /// 委派来的信：发送方是父会话
-    Parent(String),
+    Parent(SessionId),
     Sender(Sender),
 }
 
@@ -52,9 +52,9 @@ impl Party {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SenderTarget {
     /// 新建一个顶层会话，标题由发送方给出（触发器）
-    New { agent_id: String, title: String },
+    New { agent_id: AgentId, title: String },
     /// 按发送方定位：这个发送方给这个 agent 的最新一个会话，没有就以 title 新建（issue：每个 issue 与 agent 对应唯一一个会话）
-    Keyed { agent_id: String, title: String },
+    Keyed { agent_id: AgentId, title: String },
 }
 
 /// 别的领域（触发器、issue）的来信：只有文字，没有人在等（处理它的运行不推送）。
@@ -68,10 +68,10 @@ pub struct SenderMail {
 /// 用户在界面上发的消息要投到的会话。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UserTarget {
-    Existing(String),
+    Existing(SessionId),
     /// 新建会话：标题由这条消息推导（文字的第一行，只发了文件时用文件名）
     NewChat {
-        agent_id: String,
+        agent_id: AgentId,
     },
 }
 
@@ -115,7 +115,7 @@ impl Refused {
 /// 投进去了：信进的会话。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Accepted {
-    pub session_id: String,
+    pub session_id: SessionId,
 }
 
 /// 一封来信的内部形式。
@@ -133,9 +133,9 @@ pub(crate) struct Inbound {
 }
 
 pub(crate) enum Target {
-    Existing(String),
-    New { agent_id: String, title: Option<String> },
-    Keyed { agent_id: String, title: String },
+    Existing(SessionId),
+    New { agent_id: AgentId, title: Option<String> },
+    Keyed { agent_id: AgentId, title: String },
 }
 
 impl Inbound {
@@ -173,8 +173,8 @@ impl Inbound {
 
     /// 委派来的信：发送方是父会话。awaited：用户是否在等 thread 的回答（普通 delegate_task 是，要交回结局的不是）。
     pub(crate) fn delegated(
-        parent_id: &str,
-        thread_id: &str,
+        parent_id: &SessionId,
+        thread_id: &SessionId,
         content: &str,
         awaited: bool,
         delegation: Option<i64>,
@@ -223,18 +223,23 @@ fn may_continue(session: &Session, from: &Party) -> bool {
 pub(crate) enum Opener<'a> {
     User,
     Sender(Sender),
-    Thread { parent: &'a str, name: &'a str },
+    Thread { parent: &'a SessionId, name: &'a str },
 }
 
 /// 新建会话的唯一实现（来信与开 thread 都经过这里）：只为能运行的 agent 建。
-pub(crate) fn create_session_in(c: &Connection, opener: Opener<'_>, agent_id: &str, title: &str) -> Result<Session> {
+pub(crate) fn create_session_in(
+    c: &Connection,
+    opener: Opener<'_>,
+    agent_id: &AgentId,
+    title: &str,
+) -> Result<Session> {
     runnable_agent_in(c, agent_id)?;
     let (origin, parent_session_id) = match opener {
         Opener::User => (SessionOrigin::User, None),
         Opener::Sender(s) => (SessionOrigin::from(s), None),
         Opener::Thread { parent, name } => (SessionOrigin::Delegation { thread: name.to_owned() }, Some(parent)),
     };
-    let id = new_id();
+    let id = SessionId::new(new_id());
     directory::add_in(
         c,
         NewSession { id: &id, agent_id, title: &shorten(title, TITLE_LENGTH), origin, parent_session_id },
@@ -243,7 +248,7 @@ pub(crate) fn create_session_in(c: &Connection, opener: Opener<'_>, agent_id: &s
 
 /// 新来信能不能交给这个 agent（不能时是原因）。「agent 能不能收信」只在这里回答：发送方要在投信前判断（如触发器不为
 /// 收不了信的 agent 跑前置检查）也用它（[`SenderInbox::refusal_in`]）。
-fn agent_refusal_in(c: &Connection, agent_id: &str) -> Result<Option<Refused>> {
+fn agent_refusal_in(c: &Connection, agent_id: &AgentId) -> Result<Option<Refused>> {
     Ok(match availability_in(c, agent_id)? {
         Availability::Runnable => None,
         Availability::Archived => {
@@ -316,7 +321,7 @@ pub(crate) fn check_in(c: &Connection, inbound: &Inbound) -> Result<std::result:
 /// 用户提交的回答与批准决定：每个都对应还在等的提问、等批准的调用。返回回答信件里存的结果。
 fn resolve_answers(
     c: &Connection,
-    session_id: &str,
+    session_id: &SessionId,
     answers: &BTreeMap<String, Vec<QuestionAnswer>>,
     approvals: &BTreeMap<String, Choice>,
 ) -> Result<BTreeMap<String, CallResult>> {
@@ -408,7 +413,7 @@ impl SenderInbox {
     }
 
     /// 这个 agent 现在收不收得了新来信（只读）：发送方在投信前要先知道时用，投信本身仍以 [`Self::receive_in`] 的结果为准。
-    pub fn refusal_in(c: &Connection, agent_id: &str) -> Result<Option<Refused>> {
+    pub fn refusal_in(c: &Connection, agent_id: &AgentId) -> Result<Option<Refused>> {
         agent_refusal_in(c, agent_id)
     }
 

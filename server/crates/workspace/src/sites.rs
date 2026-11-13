@@ -7,6 +7,7 @@
 //! 路径规则同工作目录浏览（[`crate::browse`]）：解析符号链接后必须仍在页面目录内，只防误走出去，不是安全隔离。页面内容是
 //! agent 写的，HTTP 层按不可信内容托管（签名地址、CSP sandbox、不同源）。
 
+use muliao_platform::ids::AgentId;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -78,7 +79,7 @@ impl Sites {
     }
 
     /// site 目录（已解析符号链接）；没有或不在工作目录内为 None。
-    fn site(&self, agent_id: &str) -> Option<RealPath> {
+    fn site(&self, agent_id: &AgentId) -> Option<RealPath> {
         let root = real(workspace_of(&self.workspaces_dir, agent_id)).ok()?;
         let site = real(root.as_path().join(SITE_DIR)).ok()?;
         (is_within(&root, &site) && site.as_path().is_dir()).then_some(site)
@@ -86,7 +87,7 @@ impl Sites {
 
     /// agent 的全部页面，按名称排序：site 下每个含 index.html 的子目录。没有 site 目录就是没有页面；与工作目录浏览一样，
     /// 读不了（stat、读标题时出错，如正被删除）的不列出。阻塞 IO。
-    pub fn pages(&self, agent_id: &str) -> Vec<SitePage> {
+    pub fn pages(&self, agent_id: &AgentId) -> Vec<SitePage> {
         let Some(site) = self.site(agent_id) else { return Vec::new() };
         let Ok(dirs) = std::fs::read_dir(site.as_path()) else { return Vec::new() };
         let mut pages: Vec<SitePage> = dirs
@@ -111,7 +112,7 @@ impl Sites {
 
     /// 页面目录里的一个文件；path 为空或以 / 结尾时取那一层的 index.html（不带 / 的目录不补：页面里的相对路径会解析到
     /// 上一级）。阻塞 IO。
-    pub fn file(&self, agent_id: &str, page: &str, path: &str) -> Result<WorkspaceFile, DomainError> {
+    pub fn file(&self, agent_id: &AgentId, page: &str, path: &str) -> Result<WorkspaceFile, DomainError> {
         let found = self.site(agent_id).and_then(|site| page_of(&site, page));
         let Some((page_dir, _)) = found else {
             return Err(DomainError::not_found(format!("agent {agent_id:?} has no page {page:?}")));
@@ -145,14 +146,21 @@ mod tests {
         std::fs::write(dir.path().join("outside"), "x").unwrap();
         std::os::unix::fs::symlink(dir.path().join("outside"), page.join("leak")).unwrap();
         let sites = Sites::new(dir.path().to_path_buf());
-        let pages: Vec<(String, String)> = sites.pages("a1").into_iter().map(|p| (p.name, p.title)).collect();
+        let pages: Vec<(String, String)> =
+            sites.pages(&AgentId::new("a1")).into_iter().map(|p| (p.name, p.title)).collect();
         assert_eq!(pages, [("dash".into(), "Gas & fees".into()), ("plain".into(), "plain".into())]);
-        assert_eq!(sites.file("a1", "dash", "").unwrap().media_type, "text/html");
-        assert_eq!(sites.file("a1", "dash", "data.json").unwrap().media_type, "application/json");
-        assert!(sites.file("a1", "dash", "sub/").unwrap().path.ends_with("sub/index.html"));
-        assert!(sites.file("a1", "dash", "leak").is_err());
-        assert!(sites.file("a1", "dash", "../../x").is_err());
-        assert_eq!(sites.file("a1", "nope", "").unwrap_err().message, r#"agent "a1" has no page "nope""#);
-        assert!(sites.pages("other").is_empty());
+        assert_eq!(sites.file(&AgentId::new("a1"), "dash", "").unwrap().media_type.as_str(), "text/html");
+        assert_eq!(
+            sites.file(&AgentId::new("a1"), "dash", "data.json").unwrap().media_type.as_str(),
+            "application/json"
+        );
+        assert!(sites.file(&AgentId::new("a1"), "dash", "sub/").unwrap().path.ends_with("sub/index.html"));
+        assert!(sites.file(&AgentId::new("a1"), "dash", "leak").is_err());
+        assert!(sites.file(&AgentId::new("a1"), "dash", "../../x").is_err());
+        assert_eq!(
+            sites.file(&AgentId::new("a1"), "nope", "").unwrap_err().message,
+            r#"agent "a1" has no page "nope""#
+        );
+        assert!(sites.pages(&AgentId::new("other")).is_empty());
     }
 }

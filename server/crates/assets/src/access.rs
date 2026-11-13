@@ -5,6 +5,7 @@
 //! 由此派生的也都在这里：一份配置能用哪些（[`reach_of`]）、资源分发出去了没有与收录它的角色（[`Sharing`]），以及写沙箱
 //! 的领域输入（[`write_scope`]，#499）：「能不能改某项资源」只由 Grants 换算成资源树里的可写路径。
 
+use muliao_platform::ids::AgentId;
 use std::path::{Path, PathBuf};
 
 use muliao_platform::fs::{is_within, real};
@@ -20,7 +21,7 @@ use muliao_platform::errors::{Result, forbidden};
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Actor {
     User,
-    Agent(String),
+    Agent(AgentId),
 }
 
 impl Actor {
@@ -28,7 +29,7 @@ impl Actor {
     pub fn as_str(&self) -> &str {
         match self {
             Actor::User => crate::naming::USER,
-            Actor::Agent(id) => id,
+            Actor::Agent(id) => id.as_str(),
         }
     }
 }
@@ -37,7 +38,7 @@ impl Actor {
 /// 只按规则判断的一个角色或还没建的 agent，以及用户（规则放行一切）。能不能做与是谁放行的是同一个判断（[`Grants::source`]）。
 #[derive(Debug, Clone)]
 pub struct Grants {
-    agent_id: Option<String>,
+    agent_id: Option<AgentId>,
     /// 规则的各个来源的 allow：(角色名, allow)，自己的 allow 为 None
     allows: Vec<(Option<String>, Vec<String>)>,
     /// 全部来源的并集（deny 作用于每个来源的 allow）
@@ -46,7 +47,7 @@ pub struct Grants {
 
 impl Grants {
     /// sources：规则的各个来源（[`AgentRules::sources`] 的形状）。
-    pub fn new(agent_id: Option<String>, sources: Vec<(Option<String>, Rules)>) -> Self {
+    pub fn new(agent_id: Option<AgentId>, sources: Vec<(Option<String>, Rules)>) -> Self {
         let rules = Rules::union(sources.iter().map(|(_, r)| r));
         Self { agent_id, allows: sources.into_iter().map(|(n, r)| (n, r.allow)).collect(), rules }
     }
@@ -71,7 +72,7 @@ impl Grants {
             .map(|(n, _)| n)
             .collect();
         Source {
-            own: self.agent_id.as_deref().is_some_and(|id| asset.owner.is(id)),
+            own: self.agent_id.as_ref().is_some_and(|id| asset.owner.is(id)),
             roles: granting.iter().filter_map(|n| (*n).clone()).collect(),
             allow: granting.iter().any(|n| n.is_none()),
         }
@@ -117,7 +118,7 @@ pub struct Sharing {
     roles: Vec<(String, Rules)>,
     base: Rules,
     /// 每个加载了的 agent 的最终规则
-    agents: Vec<(String, Rules)>,
+    agents: Vec<(AgentId, Rules)>,
 }
 
 impl Sharing {
@@ -232,7 +233,7 @@ impl WriteScope {
 
 /// agent 现在能写哪里（[`WriteScope`]），只由它的 Grants 换算：「能写别人的某项资源」与 [`check_change`] 是同一个判断，
 /// `write:*` 换成整棵树（它还要写 access.toml、新建资源的位置与任何人的目录）。
-pub fn write_scope(snapshot: &Snapshot, agent_id: &str) -> WriteScope {
+pub fn write_scope(snapshot: &Snapshot, agent_id: &AgentId) -> WriteScope {
     let grants = grants_for(snapshot, &Actor::Agent(agent_id.to_owned()));
     let own = snapshot.own_dir(agent_id);
     let others: Vec<&Asset> = snapshot.all().filter(|a| !a.owner.is(agent_id)).collect();
@@ -300,6 +301,6 @@ pub fn reach_of(snapshot: &Snapshot, grants: &Grants) -> Reach {
 }
 
 /// 带这个角色的 agent 的 id（base 每个 agent 都有）。
-pub fn holders_of(snapshot: &Snapshot, role: &Role) -> Vec<String> {
+pub fn holders_of(snapshot: &Snapshot, role: &Role) -> Vec<AgentId> {
     snapshot.agents.keys().filter(|a| role.held_by(&snapshot.rules_of(a).roles)).cloned().collect()
 }

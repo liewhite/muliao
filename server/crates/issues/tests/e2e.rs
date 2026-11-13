@@ -2,6 +2,7 @@
 //! 顺序交回排好的回复）。覆盖：运行结束时 issue 没表态就请它表态、它在自己的 issue 会话里交给用户；issue_stop 停掉正在跑
 //! 的会话并把收尾消息投进去。
 
+use muliao_platform::ids::{AgentId, SessionId};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -15,7 +16,7 @@ use muliao_assets::service::{AgentService, AgentSpec};
 use muliao_assets::source::AssetSource;
 use muliao_files::FileStore;
 use muliao_issues::activity::Happening;
-use muliao_issues::{Assignee, Board, By, NewIssue, Status};
+use muliao_issues::{Assignee, Board, By, NewIssue, Priority, Status};
 use muliao_notifications::{Notifications, Push, VapidKeys};
 use muliao_platform::bus::Bus;
 use muliao_platform::config::Settings;
@@ -122,8 +123,8 @@ struct World {
     _server: MockServer,
     board: Board,
     _actors: Actors,
-    me: String,
-    other: String,
+    me: AgentId,
+    other: AgentId,
     notifications: Notifications,
 }
 
@@ -177,7 +178,7 @@ async fn world() -> World {
     let toolbox = Arc::new(Toolbox::new(tools));
     binder.bind(toolbox.specs());
     let confine: Confine =
-        Arc::new(|_agent: String| async { Err(muliao_platform::errors::broken("no MCP in this test")) }.boxed());
+        Arc::new(|_agent: AgentId| async { Err(muliao_platform::errors::broken("no MCP in this test")) }.boxed());
     let mcp = Arc::new(McpConnector::new(secrets, confine));
     let runtime = Arc::new(Runtime::new(RuntimeDeps {
         models,
@@ -222,7 +223,7 @@ async fn world() -> World {
 }
 
 impl World {
-    async fn session(&self, issue_id: i64) -> String {
+    async fn session(&self, issue_id: i64) -> SessionId {
         for _ in 0..200 {
             if let Some(s) = self.board.get(issue_id).await.unwrap().work.sessions.get(&self.me) {
                 return s.clone();
@@ -232,13 +233,13 @@ impl World {
         panic!("no issue session for #{issue_id}");
     }
 
-    async fn state(&self, id: &str) -> WorkState {
-        let id = id.to_owned();
+    async fn state(&self, id: &SessionId) -> WorkState {
+        let id = id.clone();
         self.db.read(move |c| work_state_in(c, &id)).await.unwrap()
     }
 
     /// 等到排好的回复都用完、会话不再 running
-    async fn settled(&self, id: &str) {
+    async fn settled(&self, id: &SessionId) {
         for _ in 0..400 {
             if self.script.left() == 0 && self.state(id).await != WorkState::Running {
                 return;
@@ -259,7 +260,10 @@ fn work_for_me(w: &World, title: &str) -> NewIssue {
         title: title.into(),
         status: Status::InProgress,
         assignee: Some(Assignee::Agent(w.me.clone())),
-        ..NewIssue::default()
+        description: String::new(),
+        priority: Priority::default(),
+        depends_on: vec![],
+        key: None,
     }
 }
 
@@ -286,7 +290,7 @@ async fn an_agent_that_stops_without_settling_is_asked_until_it_hands_the_issue_
     assert_eq!((issue.status, issue.assignee), (Status::InReview, Some(Assignee::User)));
     let notices = w.notifications.list(10).await.unwrap();
     assert_eq!(notices.len(), 1);
-    assert_eq!(notices[0].session_id.as_deref(), Some(s.as_str()), "the notice points at the issue session");
+    assert_eq!(notices[0].session_id.as_ref(), Some(&s), "the notice points at the issue session");
 }
 
 #[tokio::test]
@@ -308,7 +312,12 @@ async fn issue_stop_stops_the_running_session_and_delivers_the_message_there() {
     w.script.text("停了");
     let stopping = w
         .board
-        .stop(By::agent(&w.other, "elsewhere"), i.id, Status::InProgress, Some("先停下，等用户".into()))
+        .stop(
+            By::agent(&w.other, &SessionId::new("elsewhere")),
+            i.id,
+            Status::InProgress,
+            Some("先停下，等用户".into()),
+        )
         .await
         .unwrap();
     assert!(stopping.stopped);

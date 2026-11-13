@@ -7,6 +7,7 @@
 //! - 连接、调用失败的信息先把代入的 secret 明文换成 `[secret:KEY]`（同 run_shell 的脱敏）。
 //! - 运行中调用工具失败只是这次调用失败交还模型（agenter）；连接随这次运行的工具一起丢掉时断开，stdio 的整个进程组被杀。
 
+use muliao_platform::ids::AgentId;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -27,7 +28,7 @@ use muliao_platform::shell::redact;
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// 一个 agent 的命令在什么限制下跑（agent id → 它的写沙箱）。由工作区领域拼装，组合根注入。
-pub type Confine = Arc<dyn Fn(String) -> BoxFuture<'static, Result<Confinement, Error>> + Send + Sync>;
+pub type Confine = Arc<dyn Fn(AgentId) -> BoxFuture<'static, Result<Confinement, Error>> + Send + Sync>;
 
 /// 一次运行连上的 server，和没连上的那些要告诉模型的话。
 pub struct Reachable {
@@ -70,7 +71,7 @@ impl McpConnector {
                 let mut argv: Vec<String> = std::iter::once(command).chain(args).collect();
                 let confined_as = match user {
                     Actor::Agent(id) => Some(id.clone()),
-                    Actor::User => server.owner.agent().map(str::to_owned),
+                    Actor::User => server.owner.agent().cloned(),
                 };
                 if let Some(agent) = confined_as {
                     argv = (self.confine)(agent).await.map_err(BuildError::System)?.wrap(&argv);
@@ -103,7 +104,7 @@ impl McpConnector {
     /// 系统出错（读不了资源目录、拼不出写沙箱）让这次运行失败。
     pub async fn connect_for(
         &self,
-        agent_id: &str,
+        agent_id: &AgentId,
         servers: &[McpServer],
         workspace: &Path,
     ) -> Result<Reachable, Error> {
@@ -142,7 +143,7 @@ impl McpConnector {
 }
 
 /// 这次运行跳过一个 server：记日志，返回告诉模型的话。reason 已脱敏。
-pub(crate) fn skip(agent: &str, server: &str, reason: &str) -> String {
-    tracing::warn!(agent, mcp = server, error = reason, "mcp server unavailable");
+pub(crate) fn skip(agent: &AgentId, server: &str, reason: &str) -> String {
+    tracing::warn!(%agent, mcp = server, error = reason, "mcp server unavailable");
     format!("An MCP server is unavailable this run, so its tools are missing: {reason}")
 }

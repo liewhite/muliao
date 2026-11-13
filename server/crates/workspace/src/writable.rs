@@ -10,6 +10,7 @@
 //! 读只拦一处（#539）：平台的私有文件（配置、备份、推送私钥）只有 admin 能读，命令由沙箱拒绝、文件工具由 [`reach`] 拒绝，
 //! 补的说明同样走 `Confinement::explain`。防误操作（把密钥打进会话记录），不防故意。
 
+use muliao_platform::ids::AgentId;
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -65,7 +66,7 @@ pub struct Confiner {
     /// 平台的私有文件（配置的 private_files）：只有 admin 能读写
     private: Vec<PathBuf>,
     /// 每个 agent 一个：它的路径同一时间只有一处在认（卡住的只卡它自己）
-    resolving: Mutex<HashMap<String, Arc<Resolving>>>,
+    resolving: Mutex<HashMap<AgentId, Arc<Resolving>>>,
 }
 
 impl Confiner {
@@ -79,11 +80,11 @@ impl Confiner {
         Self { sandbox, workspaces_dir, distribution, home, private, resolving: Mutex::default() }
     }
 
-    fn resolving(&self, agent_id: &str) -> Arc<Resolving> {
+    fn resolving(&self, agent_id: &AgentId) -> Arc<Resolving> {
         self.resolving.lock().expect("resolving lock").entry(agent_id.to_owned()).or_default().clone()
     }
 
-    pub async fn of(&self, agent_id: &str) -> muliao_platform::errors::Result<Confinement> {
+    pub async fn of(&self, agent_id: &AgentId) -> muliao_platform::errors::Result<Confinement> {
         let scope = Arc::new(self.distribution.write_scope(agent_id).await?);
         let private = if scope.admin { Vec::new() } else { self.private.clone() };
         // 规则的形式已在读入时校验：绝对路径或 ~/ 开头
@@ -99,7 +100,7 @@ impl Confiner {
         // 平台的私有文件排在最后：任何授权都放不开
         rules.extend(private.iter().map(|p| (false, p.clone())));
         // 换成真实路径要读文件系统，限时（见 [`Resolving`]）
-        let owner = agent_id.to_owned();
+        let owner = agent_id.to_string();
         let (writable, unreadable) = self
             .resolving(agent_id)
             .run(RESOLVE_LIMIT, move |resolve| {
@@ -110,7 +111,7 @@ impl Confiner {
             })
             .await
             .map_err(|stuck| {
-                tracing::warn!(agent = agent_id, path = ?stuck, "resolving a writable path is stuck");
+                tracing::warn!(agent = %agent_id, path = ?stuck, "resolving a writable path is stuck");
                 DomainError::new(ErrorKind::Conflict, stuck_message(&stuck))
             })?;
         let private_forms = unreadable.clone();

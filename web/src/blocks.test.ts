@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { sourceKey, type AskView, type Item, type ItemSource } from './api'
+import { asSessionId, sourceKey, type AskView, type Item, type ItemSource } from './api'
 import { foldCheckIns, groupSteps, stepAttachments, stepThreads, summarizeSteps, toBlocks, unlinkedThreads, type Step } from './blocks'
 
 type Of<T extends Item['type']> = Extract<Item, { type: T }>
@@ -58,7 +58,7 @@ describe('groupSteps', () => {
 
   // #299：thread 与文件显示在组下方，之后的调用不能折进它上面的组
   it('starts a new group after the steps whose threads or files are shown below the group', () => {
-    const delegate = (id: string, thread: string): Item => ({ ...call(id), threads: [thread] })
+    const delegate = (id: string, thread: string): Item => ({ ...call(id), threads: [asSessionId(thread)] })
     const report = { url: '/api/files/2/r.md', name: 'r.md', media_type: 'text/markdown', inline: false }
     const views = groupSteps(
       toBlocks([
@@ -232,11 +232,11 @@ describe('stepThreads', () => {
   it('collects the threads opened by delegation calls in a group, once each, in order', () => {
     const views = groupSteps(
       toBlocks([
-        { ...call('a', '{}'), threads: ['t1'] },
+        { ...call('a', '{}'), threads: [asSessionId('t1')] },
         result('a', 'delegated'),
-        { ...call('b', '{}'), threads: ['t2'] },
+        { ...call('b', '{}'), threads: [asSessionId('t2')] },
         result('b', 'answer'),
-        { ...call('c', '{}'), threads: ['t1'] },
+        { ...call('c', '{}'), threads: [asSessionId('t1')] },
         result('c', 'again'),
       ]),
     )
@@ -244,7 +244,7 @@ describe('stepThreads', () => {
   })
 
   it('includes the thread of a call still waiting for its answer, and keeps it once the result arrives', () => {
-    const opened = { ...call('a'), threads: ['t1'] }
+    const opened = { ...call('a'), threads: [asSessionId('t1')] }
     for (const items of [[opened], [opened, result('a', 'stopped')]]) {
       const views = groupSteps(toBlocks(items))
       expect(views[0].kind === 'process' && stepThreads(views[0].steps)).toEqual(['t1'])
@@ -254,14 +254,14 @@ describe('stepThreads', () => {
 
 describe('unlinkedThreads', () => {
   it('lists only threads no item points at', () => {
-    const items = [{ ...call('a', '{}'), threads: ['t1'] }]
-    expect(unlinkedThreads(items, [{ id: 't1' }, { id: 't2' }])).toEqual([{ id: 't2' }])
+    const items = [{ ...call('a', '{}'), threads: [asSessionId('t1')] }]
+    expect(unlinkedThreads(items, [{ id: asSessionId('t1') }, { id: asSessionId('t2') }])).toEqual([{ id: 't2' }])
   })
 })
 
 const JOB_1 = { kind: 'job', job_id: 1 } as const
 const src = (raw: string): ItemSource =>
-  raw.startsWith('job:') ? { kind: 'job', job_id: Number(raw.slice(4)) } : { kind: 'thread', session_id: raw.slice(7) }
+  raw.startsWith('job:') ? { kind: 'job', job_id: Number(raw.slice(4)) } : { kind: 'thread', session_id: asSessionId(raw.slice(7)) }
 
 describe('session events', () => {
   it('become their own block with the source, not part of a user bubble', () => {

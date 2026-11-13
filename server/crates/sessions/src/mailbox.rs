@@ -7,6 +7,7 @@
 //!   保存时（这时同时记为已处理）。
 //! - 用户停止会话、运行最终失败时没交给模型的信件记为被丢弃（[`discard_in`]），留着记录。
 
+use muliao_platform::ids::{MailId, RunId, SessionId};
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
@@ -108,13 +109,13 @@ impl MailState {
 /// 信箱里的一封信。
 #[derive(Debug, Clone, PartialEq)]
 pub struct Mail {
-    pub id: i64,
-    pub session_id: String,
+    pub id: MailId,
+    pub session_id: SessionId,
     pub body: MailBody,
     /// 用户在等它的回答
     pub awaited: bool,
     pub state: MailState,
-    pub taken_by: Option<i64>,
+    pub taken_by: Option<RunId>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -142,8 +143,8 @@ const COLUMNS: &str = "id, session_id, kind, source, origin, content, check_in, 
 
 /// 一行的原样：文本列在 [`RawMail::parse`] 里解析（解析不了是数据坏了，不是 SQL 错误）。
 struct RawMail {
-    id: i64,
-    session_id: String,
+    id: MailId,
+    session_id: SessionId,
     kind: String,
     source: Option<String>,
     origin: Option<String>,
@@ -154,7 +155,7 @@ struct RawMail {
     awaited: bool,
     delegation_id: Option<i64>,
     state: String,
-    taken_by: Option<i64>,
+    taken_by: Option<RunId>,
     created_at: DateTime<Utc>,
 }
 
@@ -221,7 +222,7 @@ fn query(c: &Connection, filter: &str, params: impl rusqlite::Params) -> Result<
 }
 
 /// 在调用方事务里往会话信箱投一封信，提交后叫醒会话 actor。
-pub(crate) fn post_in(tx: &mut Tx<'_>, waker: &Waker, session_id: &str, mail: NewMail) -> Result<i64> {
+pub(crate) fn post_in(tx: &mut Tx<'_>, waker: &Waker, session_id: &SessionId, mail: NewMail) -> Result<MailId> {
     if directory::get_in(tx, session_id)?.is_none() {
         return Err(not_found(format!("session {session_id:?} not found")));
     }
@@ -248,26 +249,26 @@ pub(crate) fn post_in(tx: &mut Tx<'_>, waker: &Waker, session_id: &str, mail: Ne
             Utc::now(),
         ],
     )?;
-    let id = tx.last_insert_rowid();
-    tracing::info!(session_id, mail_id = id, kind = body.kind(), source = source.as_deref(), "mail posted");
+    let id = MailId::new(tx.last_insert_rowid());
+    tracing::info!(%session_id, mail_id = %id, kind = body.kind(), source = source.as_deref(), "mail posted");
     waker.wake_on_commit(tx, session_id);
     Ok(id)
 }
 
 /// 会话里还在排队的信件，按到达顺序。
-pub fn queued_in(c: &Connection, session_id: &str) -> Result<Vec<Mail>> {
+pub fn queued_in(c: &Connection, session_id: &SessionId) -> Result<Vec<Mail>> {
     query(c, "session_id = ?1 AND state = 'queued'", [session_id])
 }
 
 /// 有排着的信的会话（服务启动时各叫醒一次）。
-pub(crate) fn sessions_with_queued_in(c: &Connection) -> Result<Vec<String>> {
+pub(crate) fn sessions_with_queued_in(c: &Connection) -> Result<Vec<SessionId>> {
     let mut stmt = c.prepare("SELECT DISTINCT session_id FROM mail WHERE state = 'queued'")?;
     Ok(stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)
 }
 
 /// 这些会话里还在排队的信件，各自按到达顺序（一次查询）；每个会话都在结果里。
-pub(crate) fn queued_among(c: &Connection, session_ids: &[String]) -> Result<BTreeMap<String, Vec<Mail>>> {
-    let mut out: BTreeMap<String, Vec<Mail>> = session_ids.iter().map(|s| (s.clone(), Vec::new())).collect();
+pub(crate) fn queued_among(c: &Connection, session_ids: &[SessionId]) -> Result<BTreeMap<SessionId, Vec<Mail>>> {
+    let mut out: BTreeMap<SessionId, Vec<Mail>> = session_ids.iter().map(|s| (s.clone(), Vec::new())).collect();
     if session_ids.is_empty() {
         return Ok(out);
     }
@@ -282,7 +283,7 @@ pub(crate) fn queued_among(c: &Connection, session_ids: &[String]) -> Result<BTr
 }
 
 /// 这些排着的信件交给这次运行（运行开头取走时）。已经不在排队的不动。
-pub(crate) fn give_in(c: &Connection, ids: &[i64], run_id: i64) -> Result<()> {
+pub(crate) fn give_in(c: &Connection, ids: &[MailId], run_id: RunId) -> Result<()> {
     for id in ids {
         c.execute("UPDATE mail SET taken_by = ?1 WHERE id = ?2 AND state = 'queued'", params![run_id, id])?;
     }
@@ -290,7 +291,7 @@ pub(crate) fn give_in(c: &Connection, ids: &[i64], run_id: i64) -> Result<()> {
 }
 
 /// 交给模型的那一步保存时记下处理掉的信件。同一会话只有一个 actor，取走的信不可能被别人处理掉。
-pub(crate) fn consume_in(c: &Connection, ids: &[i64], run_id: i64) -> Result<()> {
+pub(crate) fn consume_in(c: &Connection, ids: &[MailId], run_id: RunId) -> Result<()> {
     for id in ids {
         let n = c.execute(
             "UPDATE mail SET state = 'consumed', taken_by = ?1 WHERE id = ?2 AND state = 'queued'",
@@ -304,23 +305,23 @@ pub(crate) fn consume_in(c: &Connection, ids: &[i64], run_id: i64) -> Result<()>
 }
 
 /// 这些还没交给模型的信件记为被丢弃。返回丢弃的信件 id。
-pub(crate) fn discard_in(c: &Connection, session_id: &str, ids: &[i64]) -> Result<Vec<i64>> {
+pub(crate) fn discard_in(c: &Connection, session_id: &SessionId, ids: &[MailId]) -> Result<Vec<MailId>> {
     for id in ids {
         c.execute("UPDATE mail SET state = 'discarded' WHERE id = ?1", [id])?;
     }
     if !ids.is_empty() {
-        tracing::info!(session_id, discarded = ?ids, "mailbox cleared");
+        tracing::info!(%session_id, discarded = ?ids, "mailbox cleared");
     }
     Ok(ids.to_vec())
 }
 
 /// 这次运行处理掉的信件（交给了它、已交给模型）。
-pub(crate) fn consumed_by_in(c: &Connection, session_id: &str, run_id: i64) -> Result<Vec<Mail>> {
+pub(crate) fn consumed_by_in(c: &Connection, session_id: &SessionId, run_id: RunId) -> Result<Vec<Mail>> {
     query(c, "session_id = ?1 AND taken_by = ?2 AND state = 'consumed'", params![session_id, run_id])
 }
 
 /// 会话里这些状态的委派来的信件，按到达顺序。
-pub(crate) fn delegated_mail_in(c: &Connection, session_id: &str, states: &[MailState]) -> Result<Vec<Mail>> {
+pub(crate) fn delegated_mail_in(c: &Connection, session_id: &SessionId, states: &[MailState]) -> Result<Vec<Mail>> {
     let states: Vec<String> = states.iter().map(|s| format!("'{}'", s.as_str())).collect();
     query(
         c,
@@ -330,20 +331,20 @@ pub(crate) fn delegated_mail_in(c: &Connection, session_id: &str, states: &[Mail
 }
 
 /// 界面上显示在历史之后的信件：排队中的，以及最近一次停止丢弃的（之后再有信件交给模型就不再显示）。
-pub(crate) fn visible_in(c: &Connection, session_id: &str) -> Result<Vec<Mail>> {
-    let last_consumed: Option<i64> =
+pub(crate) fn visible_in(c: &Connection, session_id: &SessionId) -> Result<Vec<Mail>> {
+    let last_consumed: Option<MailId> =
         c.query_row("SELECT max(id) FROM mail WHERE session_id = ?1 AND state = 'consumed'", [session_id], |r| {
             r.get(0)
         })?;
     query(
         c,
         "session_id = ?1 AND (state = 'queued' OR (state = 'discarded' AND id > ?2))",
-        params![session_id, last_consumed.unwrap_or(0)],
+        params![session_id, last_consumed.map_or(0, MailId::get)],
     )
 }
 
 /// 这个发送方是否已有信件在排队（运行中检查据此不堆积）。
-pub(crate) fn has_queued_from(c: &Connection, session_id: &str, source: &str) -> Result<bool> {
+pub(crate) fn has_queued_from(c: &Connection, session_id: &SessionId, source: &str) -> Result<bool> {
     Ok(c.query_row(
         "SELECT EXISTS (SELECT 1 FROM mail WHERE session_id = ?1 AND source = ?2 AND state = 'queued')",
         params![session_id, source],
@@ -355,7 +356,7 @@ pub(crate) fn has_queued_from(c: &Connection, session_id: &str, source: &str) ->
 /// 什么」。
 pub(crate) fn sent_by_in(
     c: &Connection,
-    session_ids: &[String],
+    session_ids: &[SessionId],
     origin: Origin,
     start: Option<DateTime<Utc>>,
     end: Option<DateTime<Utc>>,
@@ -384,7 +385,7 @@ pub(crate) fn first_arrivals_between_in(
     c: &Connection,
     start: DateTime<Utc>,
     end: DateTime<Utc>,
-) -> Result<BTreeMap<String, DateTime<Utc>>> {
+) -> Result<BTreeMap<SessionId, DateTime<Utc>>> {
     let mut stmt = c.prepare(
         "SELECT session_id, min(created_at) FROM mail WHERE created_at >= ?1 AND created_at < ?2 GROUP BY session_id",
     )?;

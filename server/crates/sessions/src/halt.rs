@@ -10,6 +10,7 @@
 //!    跑完的结局因占用已清掉而不投（罕见、只多花一段 token，不为它持久化停止任务）。
 //! 6. 发布 SessionStopped：工作区领域在提交后结束被清掉的后台任务。
 
+use muliao_platform::ids::{RunId, SessionId};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -39,12 +40,12 @@ pub enum Halted {
 }
 
 /// 停下一个 thread（提交后调用；由 actor 系统给）。
-pub(crate) type StopThread = Arc<dyn Fn(String) + Send + Sync>;
+pub(crate) type StopThread = Arc<dyn Fn(SessionId) + Send + Sync>;
 
 /// 停止事务。unsaved：运行中被停止时这次运行已产生、还没保存的部分（运行编号与消息），存在最前面。
 pub(crate) async fn halt(
     core: &Core,
-    session_id: &str,
+    session_id: &SessionId,
     unsaved: Option<Unsaved>,
     stop_thread: StopThread,
 ) -> Result<Halted> {
@@ -57,7 +58,7 @@ pub(crate) async fn halt(
     core.db
         .write(move |tx| {
             let Some(session) = directory::get_in(tx, &session_id)? else {
-                tracing::info!(session_id, "stopping a deleted session: nothing to do");
+                tracing::info!(%session_id, "stopping a deleted session: nothing to do");
                 return Ok(Halted::Gone);
             };
             if let Some(u) = unsaved.as_ref().filter(|u| !u.messages.is_empty()) {
@@ -79,7 +80,7 @@ pub(crate) async fn halt(
                 })
                 .collect();
             let delegations = delegations_among(tx, &rows)?;
-            let threads: Vec<String> =
+            let threads: Vec<SessionId> =
                 delegations.values().map(|d| d.thread_id.clone()).collect::<BTreeSet<_>>().into_iter().collect();
             for thread in threads.clone() {
                 let stop = stop_thread.clone();
@@ -87,7 +88,7 @@ pub(crate) async fn halt(
             }
             let cleared_of: Vec<HoldOf> = cleared.iter().map(|h| h.of.clone()).collect();
             events.session_stopped(tx, &SessionStopped { session_id: session_id.clone(), cleared: cleared_of })?;
-            tracing::info!(session_id, stopped_runs = ?stopped_runs, discarded_mail = ?discarded,
+            tracing::info!(%session_id, stopped_runs = ?stopped_runs, discarded_mail = ?discarded,
                 cleared_holds = ?cleared.iter().map(|h| h.id).collect::<Vec<_>>(), settled_delegations = ?settled,
                 stopping_threads = ?threads, "session halted");
             Ok(Halted::Stopped)
@@ -96,7 +97,7 @@ pub(crate) async fn halt(
 }
 
 /// 让会话历史停在不会被续跑的地方：哪些调用补「已停止」、哪些写上已提交的回答按会话停在哪定，用上的回答信件随之记为已处理。
-fn close_history_in(tx: &mut Tx<'_>, session_id: &str, run_id: Option<i64>) -> Result<()> {
+fn close_history_in(tx: &mut Tx<'_>, session_id: &SessionId, run_id: Option<RunId>) -> Result<()> {
     let tail = since_last_response(tx, session_id)?;
     let closing = closing_on_stop(&position_in(tx, session_id)?);
     let mut results: Vec<_> = closing.stopped.iter().map(|c| made_up_result(c, MadeUp::Stopped)).collect();

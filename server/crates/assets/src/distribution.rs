@@ -1,6 +1,7 @@
 //! 分发的门面（[`Distribution`]）：角色的增删改与查看，agent 的规则与它最终能用的（reach），配置的预览。角色定义与各
 //! agent 的规则都在 access.toml（写与预览都经 [`access_file::plan`]）；能用 / 能改的规则在 [`crate::access`]。
 
+use muliao_platform::ids::AgentId;
 use std::sync::Arc;
 
 use crate::access::{Actor, Grants, Reach, Source, WriteScope, grants_for, holders_of, reach_of, write_scope};
@@ -25,7 +26,7 @@ pub struct RoleView {
     pub role: Role,
     pub reach: Reach,
     /// 带这个角色的 agent 的 id（base 是全部）
-    pub holders: Vec<String>,
+    pub holders: Vec<AgentId>,
 }
 
 /// agent 能用的一项资源。
@@ -68,7 +69,7 @@ impl Distribution {
         Self { source }
     }
 
-    async fn check_agent(&self, agent_id: &str) -> Result<()> {
+    async fn check_agent(&self, agent_id: &AgentId) -> Result<()> {
         let id = agent_id.to_owned();
         self.source.db().read(move |c| crate::agents::active_agent_in(c, &id)).await.map(|_| ())
     }
@@ -76,12 +77,12 @@ impl Distribution {
     // ---- agent 的规则 ----
 
     /// agent 现在能写哪里（写沙箱用）：资源树按归属，加 `write:path` 授权。
-    pub async fn write_scope(&self, agent_id: &str) -> Result<WriteScope> {
+    pub async fn write_scope(&self, agent_id: &AgentId) -> Result<WriteScope> {
         Ok(write_scope(&*self.source.snapshot().await?, agent_id))
     }
 
     /// agent 最终能用的内置工具与资源：get_agent 与界面同一套计算。
-    pub async fn reach(&self, agent_id: &str) -> Result<Reach> {
+    pub async fn reach(&self, agent_id: &AgentId) -> Result<Reach> {
         let snapshot = self.source.snapshot().await?;
         Ok(reach_of(&snapshot, &grants_for(&snapshot, &Actor::Agent(agent_id.to_owned()))))
     }
@@ -93,7 +94,7 @@ impl Distribution {
 
     /// agent 能用的 skill、MCP server、secret、记忆（按种类、名称），每项带来源与能不能改：界面的 agent 详情。与运行时
     /// 同一套判断（能用就是有来源放行）。
-    pub async fn assets(&self, agent_id: &str) -> Result<Vec<UsedAsset>> {
+    pub async fn assets(&self, agent_id: &AgentId) -> Result<Vec<UsedAsset>> {
         self.check_agent(agent_id).await?;
         let snapshot = self.source.snapshot().await?;
         let grants = grants_for(&snapshot, &Actor::Agent(agent_id.to_owned()));
@@ -119,7 +120,7 @@ impl Distribution {
     }
 
     /// agent（None 为还没建的）按还没保存的规则能用的内置工具与资源（界面预览），与写入时同样校验（只 plan、不写）。
-    pub async fn preview_agent(&self, agent_id: Option<&str>, rules: &AgentRules) -> Result<Reach> {
+    pub async fn preview_agent(&self, agent_id: Option<&AgentId>, rules: &AgentRules) -> Result<Reach> {
         if let Some(id) = agent_id {
             self.check_agent(id).await?;
         }
@@ -132,7 +133,7 @@ impl Distribution {
         // plan 与下面的计算都从同一份快照出发：plan 认的角色快照里都有
         access_file::plan(&snapshot, |doc| access_file::set_agent_rules(doc, &section, &name, rules))?;
         // 还没建的 agent 没有自己的资源，只看规则
-        let grants = Grants::new(agent_id.map(str::to_owned), rules.sources(&snapshot.roles));
+        let grants = Grants::new(agent_id.cloned(), rules.sources(&snapshot.roles));
         Ok(reach_of(&snapshot, &grants))
     }
 

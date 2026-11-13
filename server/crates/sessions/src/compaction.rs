@@ -10,6 +10,7 @@
 //! - 使用：发给模型的上下文 = 最新摘要（放进 instructions）+ 切点之后的原始消息（[`crate::history::load_context`]）。
 //!   原始消息不删除。
 
+use muliao_platform::ids::SessionId;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -112,11 +113,11 @@ pub enum Verdict {
 /// 该不该压缩，唯一规则。只认最近一次压缩之后的回复报告的 token 数（[`context_tokens`]）。压缩后的第一次回复就超阈值，
 /// 说明保留窗口本身就超了，再压也压不下去（Hopeless）：这次运行不再压缩，上下文继续变大直到超出模型的上限时运行失败
 /// 可见，重试时重新判断（用最终正确性换掉「保留窗口也要切」的复杂度）。
-fn verdict(threshold: u64, session_id: &str, history: &[Message], stale_responses: Option<usize>) -> Verdict {
+fn verdict(threshold: u64, session_id: &SessionId, history: &[Message], stale_responses: Option<usize>) -> Verdict {
     let Some(tokens) = context_tokens(history, stale_responses) else { return Verdict::NotDue };
     if tokens == 0 {
         // 部分 OpenAI 兼容服务流式时不返回 usage：无法判断上下文大小，自动压缩对该模型失效
-        tracing::warn!(session_id, "model reported no input token usage, automatic compaction cannot trigger");
+        tracing::warn!(%session_id, "model reported no input token usage, automatic compaction cannot trigger");
         return Verdict::NotDue;
     }
     if tokens <= threshold {
@@ -126,7 +127,7 @@ fn verdict(threshold: u64, session_id: &str, history: &[Message], stale_response
         && measured_responses(history).len() == stale + 1
     {
         tracing::warn!(
-            session_id,
+            %session_id,
             tokens,
             threshold,
             "context still over the compaction threshold right after compacting; not compacting again this run"
@@ -147,13 +148,18 @@ pub struct Compactor {
 
 impl Compactor {
     /// 该不该压缩（规则见 [`verdict`]），按这个压缩器的阈值。
-    pub(crate) fn verdict(&self, session_id: &str, history: &[Message], stale_responses: Option<usize>) -> Verdict {
+    pub(crate) fn verdict(
+        &self,
+        session_id: &SessionId,
+        history: &[Message],
+        stale_responses: Option<usize>,
+    ) -> Verdict {
         verdict(self.threshold_tokens, session_id, history, stale_responses)
     }
 
     /// 用这份资源（运行中压缩时是运行开头取的那份）里的模型压缩到保留窗口之外没有可压缩的为止（每一批一次模型调用）。
     /// 返回压缩的步数；为 0 表示没有可压缩的。模型调用失败时之前批次写下的压缩仍在（每批各自提交）。
-    pub(crate) async fn compact(&self, session_id: &str, assets: &RunAssets) -> Result<usize> {
+    pub(crate) async fn compact(&self, session_id: &SessionId, assets: &RunAssets) -> Result<usize> {
         let mut compacted = 0;
         loop {
             let sid = session_id.to_owned();
@@ -176,7 +182,7 @@ impl Compactor {
             let sid = session_id.to_owned();
             self.db.write(move |tx| add_compaction_in(tx, &sid, through, &summary)).await?;
             compacted += chosen.len();
-            tracing::info!(session_id, steps = chosen.len(), through_message_id = through, more, "session compacted");
+            tracing::info!(%session_id, steps = chosen.len(), through_message_id = through, more, "session compacted");
             if !more {
                 break;
             }
@@ -193,7 +199,7 @@ mod tests {
     use super::*;
 
     fn stored(id: i64, message: Message) -> Stored {
-        Stored { id, message, created_at: Utc::now(), run_id: 1 }
+        Stored { id, message, created_at: Utc::now(), run_id: muliao_platform::ids::RunId::new(1) }
     }
 
     fn user(text: &str) -> Message {
@@ -297,16 +303,16 @@ mod tests {
         let say = |tokens| response(vec![ResponsePart::Text { text: "hi".into(), meta: None }], tokens);
         let h = [user("a"), say(500)];
         assert_eq!(context_tokens(&h, None), Some(500));
-        assert_eq!(verdict(1000, "s", &h, None), Verdict::NotDue);
-        assert_eq!(verdict(100, "s", &h, None), Verdict::Due);
-        assert_eq!(verdict(100, "s", &[user("a"), say(0)], None), Verdict::NotDue);
+        assert_eq!(verdict(1000, &SessionId::new("s"), &h, None), Verdict::NotDue);
+        assert_eq!(verdict(100, &SessionId::new("s"), &h, None), Verdict::Due);
+        assert_eq!(verdict(100, &SessionId::new("s"), &[user("a"), say(0)], None), Verdict::NotDue);
         // 压缩之后还没有新回复：不判断
         assert_eq!(context_tokens(&h, Some(1)), None);
-        assert_eq!(verdict(100, "s", &h, Some(1)), Verdict::NotDue);
+        assert_eq!(verdict(100, &SessionId::new("s"), &h, Some(1)), Verdict::NotDue);
         // 压缩之后的第一条回复仍超阈值
         let h = [user("a"), say(500), say(500)];
-        assert_eq!(verdict(100, "s", &h, Some(1)), Verdict::Hopeless);
+        assert_eq!(verdict(100, &SessionId::new("s"), &h, Some(1)), Verdict::Hopeless);
         let h = [user("a"), say(500), say(500), say(500)];
-        assert_eq!(verdict(100, "s", &h, Some(1)), Verdict::Due);
+        assert_eq!(verdict(100, &SessionId::new("s"), &h, Some(1)), Verdict::Due);
     }
 }

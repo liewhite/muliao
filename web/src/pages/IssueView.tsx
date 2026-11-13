@@ -10,6 +10,7 @@ import {
   sessionRoute,
   type Agent,
   type IssueDetail,
+  type SessionId,
 } from '../api'
 import { useReturnState, useRouteParam } from '../nav'
 import {
@@ -50,7 +51,7 @@ function actorName(agents: Agent[] | undefined, actor: string) {
 }
 
 /** 这条动态发生在哪个会话（agent 动手时所在的会话）：点开看过程；用户的操作、会话已删除时没有 */
-function SourceSession({ sessionId }: { sessionId: string | null }) {
+function SourceSession({ sessionId }: { sessionId: SessionId | null }) {
   const from = useReturnState()
   if (sessionId === null) return null
   return (
@@ -268,7 +269,7 @@ function Issue({ detail }: { detail: IssueDetail }) {
           label="负责项目（owner）"
           value={issue.owner}
           placeholder="无负责项目"
-          onChange={(v) => patch({ owner: v })}
+          onChange={(v) => patch({ owner: v === null ? null : asAgentId(v) })}
           isDisabled={change.busy}
         />
         <SelectInput

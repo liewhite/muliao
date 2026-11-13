@@ -2,6 +2,7 @@
 //! （create_agent、delete_agent，管理类），保存 secret（vault_set）。改 agent 配置、角色与分发规则是改资源目录里的文件，
 //! 不经工具。给模型看的是名称和描述，不出现 id。
 
+use muliao_platform::ids::AgentId;
 use std::sync::Arc;
 
 use agenter::{Tool, ToolCtx, ToolError, ToolOutput};
@@ -118,7 +119,7 @@ impl RoleDetail {
 pub struct AgentDetail {
     name: String,
     /// access.toml 里它那一节的节名（`[agents.<id>]`）
-    id: String,
+    id: AgentId,
     description: String,
     group: Option<String>,
     /// 已归档：不能对话、委派、指派，它的触发器不触发；用户在界面上取消

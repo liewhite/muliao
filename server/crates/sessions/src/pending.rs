@@ -10,6 +10,7 @@
 //! - 什么时候继续（[`Paused::ready`]）：用户发了新消息（跳过还没回答的），或挂起的调用都有了回答；事件留在信箱里等它们
 //!   一起交给模型。
 
+use muliao_platform::ids::MailId;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use agenter::{Message, Resolution, ToolCall, ToolResult};
@@ -93,7 +94,7 @@ pub struct Paused {
     /// 信箱里对它们的回答
     pub answers: HashMap<String, CallResult>,
     /// 带着这些回答的信件：信件 id 与它回答的调用
-    pub answer_mail: Vec<(i64, Vec<String>)>,
+    pub answer_mail: Vec<(MailId, Vec<String>)>,
     /// 现在能不能继续
     pub ready: bool,
     /// 同一条回复里没出结果、不挂起、能原样重新执行的调用（还没交出去的 ask_agent）：继续时执行，停止时补「已停止」
@@ -167,7 +168,7 @@ pub(crate) fn position(history: &[Message], handed: &HandedOut, queued: &[Mail])
         None
     } else {
         let ids: HashSet<&str> = pending.iter().map(|p| p.call.id.as_str()).collect();
-        let answer_mail: Vec<(i64, &BTreeMap<String, CallResult>)> =
+        let answer_mail: Vec<(MailId, &BTreeMap<String, CallResult>)> =
             queued.iter().filter_map(|m| on_time_answers(m, &ids).map(|a| (m.id, a))).collect();
         let answers: HashMap<String, CallResult> =
             answer_mail.iter().flat_map(|(_, a)| a.iter().map(|(k, v)| (k.clone(), v.clone()))).collect();
@@ -231,7 +232,7 @@ pub(crate) fn deferred_results(
 pub struct StopClosing {
     pub stopped: Vec<ToolCall>,
     pub answered: Vec<ToolResult>,
-    pub used: Vec<i64>,
+    pub used: Vec<MailId>,
 }
 
 pub(crate) fn closing_on_stop(at: &Position) -> StopClosing {
@@ -382,7 +383,7 @@ mod tests {
 
     fn mail(id: i64, body: MailBody) -> Mail {
         Mail {
-            id,
+            id: MailId::new(id),
             session_id: "s".into(),
             body,
             awaited: false,

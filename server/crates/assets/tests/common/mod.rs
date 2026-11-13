@@ -1,6 +1,7 @@
 //! 测试用的装配：临时目录里的数据库与资源目录树。
 #![allow(dead_code)]
 
+use muliao_platform::ids::AgentId;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -27,7 +28,7 @@ impl World {
         self.dir.path().join("workspaces")
     }
 
-    pub async fn create(&self, name: &str) -> String {
+    pub async fn create(&self, name: &str) -> AgentId {
         self.service
             .create(
                 AgentSpec { name: name.into(), description: format!("{name} 的描述"), ..Default::default() },

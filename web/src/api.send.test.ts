@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { api } from './api'
+import { api, asSessionId } from './api'
 
 function respond(status: number, body: string, headers: Record<string, string> = {}) {
   vi.stubGlobal('fetch', vi.fn(async () => new Response(status === 204 ? null : body, { status, headers })))
@@ -19,7 +19,7 @@ describe('send decodes responses by HTTP status and type', () => {
 
   it('returns nothing for a 202 without a body', async () => {
     respond(202, '')
-    await expect(api.stop('s1')).resolves.toBeUndefined()
+    await expect(api.stop(asSessionId('s1'))).resolves.toBeUndefined()
   })
 
   it('decodes a JSON body', async () => {
@@ -43,6 +43,6 @@ describe('send decodes responses by HTTP status and type', () => {
 
   it('fails when a response without a declared body has one', async () => {
     respond(202, '<html>proxy page</html>', { 'Content-Type': 'text/html' })
-    await expect(api.stop('s1')).rejects.toThrow(/unexpected non-JSON body/)
+    await expect(api.stop(asSessionId('s1'))).rejects.toThrow(/unexpected non-JSON body/)
   })
 })

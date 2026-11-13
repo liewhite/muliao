@@ -4,6 +4,7 @@ use agenter::{Tool, ToolCtx, ToolError, ToolOutput};
 use chrono::{DateTime, Utc};
 use muliao_assets::agents::{AgentNames, agent_names_in, named_in};
 use muliao_assets::naming::USER;
+use muliao_platform::ids::AgentId;
 use muliao_platform::tool_views::{ToolRender, View, ViewBlock, fields};
 use muliao_platform::tooling::{BuiltinTool, RunScope, ToolTraits, builtin};
 use muliao_sessions::activity::WorkState;
@@ -34,7 +35,7 @@ fn by(ctx: &ToolCtx<'_, RunScope>) -> By {
 }
 
 /// 按名称找 agent 的 id（找不到时把可用的名称交还模型）。
-async fn agent_id(board: &Board, name: String) -> Result<String> {
+async fn agent_id(board: &Board, name: String) -> Result<AgentId> {
     Ok(board.db().read(move |c| named_in(c, &name)).await?.id)
 }
 

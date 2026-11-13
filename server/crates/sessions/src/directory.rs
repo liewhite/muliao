@@ -1,6 +1,7 @@
 //! 会话目录（`sessions` 表的唯一读写处）：新建一行、按属性查会话（按发送方定位、按 agent、thread、列表）。会话的规则
 //! （来源、续写）在 [`crate::origins`] 与 [`crate::inbound`]，这里只是查询与写入。
 
+use muliao_platform::ids::{AgentId, SessionId};
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
@@ -15,20 +16,29 @@ use muliao_platform::errors::Result;
 /// 一个会话（读模型）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct Session {
-    pub id: String,
-    pub agent_id: String,
+    pub id: SessionId,
+    pub agent_id: AgentId,
     pub title: String,
     pub origin: SessionOrigin,
     /// 委派开出的 thread 的父会话（删除后为空）
-    pub parent_session_id: Option<String>,
+    pub parent_session_id: Option<SessionId>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
 const COLUMNS: &str = "id, agent_id, title, origin, origin_ref, parent_session_id, thread, created_at, updated_at";
 
-type Raw =
-    (String, String, String, String, Option<String>, Option<String>, Option<String>, DateTime<Utc>, DateTime<Utc>);
+type Raw = (
+    SessionId,
+    AgentId,
+    String,
+    String,
+    Option<String>,
+    Option<SessionId>,
+    Option<String>,
+    DateTime<Utc>,
+    DateTime<Utc>,
+);
 
 fn raw(r: &Row<'_>) -> rusqlite::Result<Raw> {
     Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?))
@@ -54,11 +64,11 @@ pub(crate) fn query(c: &Connection, filter: &str, params: impl rusqlite::Params)
 
 /// 新会话的描述（规则由唯一的入口 [`crate::inbound`] 检查）。
 pub(crate) struct NewSession<'a> {
-    pub id: &'a str,
-    pub agent_id: &'a str,
+    pub id: &'a SessionId,
+    pub agent_id: &'a AgentId,
     pub title: &'a str,
     pub origin: SessionOrigin,
-    pub parent_session_id: Option<&'a str>,
+    pub parent_session_id: Option<&'a SessionId>,
 }
 
 pub(crate) fn add_in(c: &Connection, s: NewSession<'_>) -> Result<Session> {
@@ -72,12 +82,12 @@ pub(crate) fn add_in(c: &Connection, s: NewSession<'_>) -> Result<Session> {
     Ok(get_in(c, s.id)?.expect("the session was just written"))
 }
 
-pub fn get_in(c: &Connection, session_id: &str) -> Result<Option<Session>> {
+pub fn get_in(c: &Connection, session_id: &SessionId) -> Result<Option<Session>> {
     Ok(query(c, "id = ?1", [session_id])?.pop())
 }
 
 /// 正在运行的会话（运行的开头、结束、失败时取）。忙的会话不会被删除（[`crate::deletion`]），所以不在是 bug，报 Broken。
-pub(crate) fn running_in(c: &Connection, session_id: &str) -> Result<Session> {
+pub(crate) fn running_in(c: &Connection, session_id: &SessionId) -> Result<Session> {
     get_in(c, session_id)?.ok_or_else(|| {
         muliao_platform::errors::broken(format!(
             "session {session_id} vanished while it had work: busy sessions are not deleted"
@@ -86,13 +96,13 @@ pub(crate) fn running_in(c: &Connection, session_id: &str) -> Result<Session> {
 }
 
 /// 续写或运行做完时更新会话的最近时间（列表按它排序）。
-pub(crate) fn touch_in(c: &Connection, session_id: &str) -> Result<()> {
+pub(crate) fn touch_in(c: &Connection, session_id: &SessionId) -> Result<()> {
     c.execute("UPDATE sessions SET updated_at = ?1 WHERE id = ?2", params![Utc::now(), session_id])?;
     Ok(())
 }
 
 /// 这些会话（已删除的不在结果里），一次查询。
-pub(crate) fn among_in(c: &Connection, session_ids: &[String]) -> Result<BTreeMap<String, Session>> {
+pub(crate) fn among_in(c: &Connection, session_ids: &[SessionId]) -> Result<BTreeMap<SessionId, Session>> {
     if session_ids.is_empty() {
         return Ok(BTreeMap::new());
     }
@@ -106,7 +116,7 @@ pub(crate) fn with_prefix_in(c: &Connection, prefix: &str, limit: usize) -> Resu
 }
 
 /// agent 的全部会话。
-pub(crate) fn of_agent_in(c: &Connection, agent_id: &str) -> Result<Vec<Session>> {
+pub(crate) fn of_agent_in(c: &Connection, agent_id: &AgentId) -> Result<Vec<Session>> {
     query(c, "agent_id = ?1", [agent_id])
 }
 
@@ -115,8 +125,8 @@ pub(crate) fn of_agent_in(c: &Connection, agent_id: &str) -> Result<Vec<Session>
 pub fn keyed_among(
     c: &Connection,
     senders: &[Sender],
-    agent_id: Option<&str>,
-) -> Result<BTreeMap<(Sender, String), Session>> {
+    agent_id: Option<&AgentId>,
+) -> Result<BTreeMap<(Sender, AgentId), Session>> {
     let mut found = BTreeMap::new();
     if senders.is_empty() {
         return Ok(found);
@@ -130,7 +140,7 @@ pub fn keyed_among(
     }
     let mut filter = format!("({})", conditions.join(" OR "));
     if let Some(a) = agent_id {
-        values.push(a.to_owned());
+        values.push(a.to_string());
         filter.push_str(&format!(" AND agent_id = ?{}", values.len()));
     }
     filter.push_str(" ORDER BY created_at, id");
@@ -143,25 +153,30 @@ pub fn keyed_among(
 }
 
 /// 父会话开出的 thread，按创建顺序。
-pub(crate) fn threads_of(c: &Connection, parent_id: &str) -> Result<Vec<Session>> {
+pub(crate) fn threads_of(c: &Connection, parent_id: &SessionId) -> Result<Vec<Session>> {
     query(c, "parent_session_id = ?1 ORDER BY created_at, id", [parent_id])
 }
 
 /// thread 由（父会话, agent, 名字）确定。
-pub(crate) fn thread_in(c: &Connection, parent_id: &str, agent_id: &str, thread: &str) -> Result<Option<Session>> {
+pub(crate) fn thread_in(
+    c: &Connection,
+    parent_id: &SessionId,
+    agent_id: &AgentId,
+    thread: &str,
+) -> Result<Option<Session>> {
     Ok(query(c, "parent_session_id = ?1 AND agent_id = ?2 AND thread = ?3", params![parent_id, agent_id, thread])?
         .pop())
 }
 
 /// 父会话里叫这个名字的 thread（每个 agent 至多一个），按创建顺序。
-pub(crate) fn threads_named_in(c: &Connection, parent_id: &str, thread: &str) -> Result<Vec<Session>> {
+pub(crate) fn threads_named_in(c: &Connection, parent_id: &SessionId, thread: &str) -> Result<Vec<Session>> {
     query(c, "parent_session_id = ?1 AND thread = ?2 ORDER BY created_at, id", params![parent_id, thread])
 }
 
 /// 会话列表的筛选：按 agent、来源、发送方身份、关键字；都不给就是全部会话。
 #[derive(Debug, Clone, Default)]
 pub struct Listing {
-    pub agent_id: Option<String>,
+    pub agent_id: Option<AgentId>,
     pub origins: Option<Vec<Origin>>,
     pub sender: Option<Sender>,
     /// 标题或任一条消息的可搜索文字含有它（不区分 ASCII 大小写）
@@ -173,7 +188,7 @@ impl Listing {
         let mut conditions = vec!["1".to_owned()];
         let mut values: Vec<String> = Vec::new();
         if let Some(a) = &self.agent_id {
-            values.push(a.clone());
+            values.push(a.to_string());
             conditions.push("agent_id = ?".into());
         }
         if let Some(origins) = &self.origins {
@@ -198,7 +213,7 @@ impl Listing {
 }
 
 /// 符合筛选的全部会话 id。
-pub(crate) fn listed_ids_in(c: &Connection, listing: &Listing) -> Result<Vec<String>> {
+pub(crate) fn listed_ids_in(c: &Connection, listing: &Listing) -> Result<Vec<SessionId>> {
     let (filter, values) = listing.filter();
     let mut stmt = c.prepare(&format!("SELECT id FROM sessions WHERE {filter}"))?;
     Ok(stmt.query_map(rusqlite::params_from_iter(&values), |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)
@@ -208,7 +223,7 @@ pub(crate) fn listed_ids_in(c: &Connection, listing: &Listing) -> Result<Vec<Str
 pub(crate) fn listed_page_in(
     c: &Connection,
     listing: &Listing,
-    first: &[String],
+    first: &[SessionId],
     limit: usize,
     offset: usize,
 ) -> Result<Vec<Session>> {
@@ -216,13 +231,13 @@ pub(crate) fn listed_page_in(
     // 常数不能做排序项（SQLite 把整数当成第几列），没有置顶的就只按更新时间
     let pinned =
         if first.is_empty() { String::new() } else { format!("(id IN ({})) DESC, ", placeholders(first.len())) };
-    values.extend(first.iter().cloned());
+    values.extend(first.iter().map(SessionId::to_string));
     let sql = format!("{filter} ORDER BY {pinned}updated_at DESC LIMIT {limit} OFFSET {offset}");
     query(c, &sql, rusqlite::params_from_iter(&values))
 }
 
 /// 删掉这些会话（规则在 [`crate::deletion`]）。它们开出的 thread 保留（父引用置空），其余行随之级联删除。
-pub(crate) fn delete_in(c: &Connection, session_ids: &[String]) -> Result<()> {
+pub(crate) fn delete_in(c: &Connection, session_ids: &[SessionId]) -> Result<()> {
     for id in session_ids {
         c.execute("DELETE FROM sessions WHERE id = ?1", [id])?;
     }

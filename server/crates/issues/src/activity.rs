@@ -5,6 +5,7 @@
 //! 另带 `"issue"`。HTTP 返回的一条动态是 [`Activity`]，kind、body、change 与共同字段平铺在一起。
 
 use chrono::{DateTime, Utc};
+use muliao_platform::ids::{AgentId, SessionId};
 use rusqlite::{Connection, Row, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -46,7 +47,7 @@ pub struct DependencyChange {
 pub struct Arrival {
     #[serde(rename = "from")]
     pub before: (),
-    pub to: String,
+    pub to: AgentId,
 }
 
 /// 时间线上发生的一件事。
@@ -78,7 +79,7 @@ pub enum Happening {
     },
     /// agent id，或 null（负责的 agent 已删除）
     Owner {
-        change: Change<Option<String>>,
+        change: Change<Option<AgentId>>,
     },
     /// 上游 issue 编号列表的前后
     DependsOn {
@@ -154,7 +155,7 @@ pub struct Activity {
     /// 做这件事的人：agent id；用户为 `user`，系统自己的清理为 `system`
     pub actor: Actor,
     /// 这件事发生在哪个会话；用户在界面上的操作、系统的清理、会话已删除时为 null
-    pub session_id: Option<String>,
+    pub session_id: Option<SessionId>,
     #[serde(flatten)]
     pub what: Happening,
 }
@@ -210,7 +211,7 @@ pub fn timeline_in(c: &Connection, issue_id: i64) -> Result<Vec<Activity>> {
 }
 
 /// 时间线上来自被删会话的动态保留，只是不再指向它。
-pub(crate) fn forget_session_in(c: &Connection, session_id: &str) -> Result<()> {
+pub(crate) fn forget_session_in(c: &Connection, session_id: &SessionId) -> Result<()> {
     c.execute("UPDATE issue_activities SET session_id = NULL WHERE session_id = ?1", [session_id])?;
     Ok(())
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { Agent, Issue, IssueActivity } from './api'
+import { asAgentId, type Agent, type Issue, type IssueActivity } from './api'
 import {
   FOLD_LIMIT,
   activityText,
@@ -83,7 +83,7 @@ describe('issues', () => {
     // 已去掉的状态（时间线里的旧记录）原样显示
     expect(activityText(agents, at({ kind: 'status', change: { from: 'todo', to: 'in_progress' } }))).toBe('把状态从「todo」改为「进行中」')
     expect(activityText(agents, at({ kind: 'status', change: { from: 'waiting', to: 'in_progress' } }))).toBe('把状态从「waiting」改为「进行中」')
-    expect(activityText(agents, at({ kind: 'assignee', change: { from: null, to: 'a1' } }))).toBe('把指派从「未指派」改为「alpha」')
+    expect(activityText(agents, at({ kind: 'assignee', change: { from: null, to: asAgentId('a1') } }))).toBe('把指派从「未指派」改为「alpha」')
     expect(activityText(agents, at({ kind: 'priority', change: { from: 'none', to: 'high' } }))).toContain('改为')
     expect(activityText(agents, at({ kind: 'depends_on', change: { from: [1, 2], to: [] } }))).toBe('把依赖从「#1, #2」改为「无」')
     expect(activityText(agents, at({ kind: 'dependency', change: { issue: 3, from: 'in_progress', to: 'done' } }))).toBe(
@@ -91,7 +91,7 @@ describe('issues', () => {
     )
     expect(activityText(agents, at({ kind: 'run_failed', body: 'Boom: bad' }))).toBe('在 issue 会话里的运行失败了：Boom: bad')
     expect(activityText(agents, at({ kind: 'unsettled' }))).toContain('已请它表态')
-    expect(activityText(agents, at({ kind: 'stopped', change: { from: null, to: 'a1' } }))).toBe('停止了 alpha 在这个 issue 上的会话')
+    expect(activityText(agents, at({ kind: 'stopped', change: { from: null, to: asAgentId('a1') } }))).toBe('停止了 alpha 在这个 issue 上的会话')
   })
 })
 

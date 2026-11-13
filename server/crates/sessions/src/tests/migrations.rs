@@ -1,9 +1,10 @@
-//! 会话领域库结构升级里换算旧数据的几步（002、003、004、006、007）：在那一步之前的版本插入旧形状的行，升级到那一步，用
+//! 会话领域库结构升级里换算旧数据的几步（002、003、004、006、007、008）：在那一步之前的版本插入旧形状的行，升级到那一步，用
 //! 领域代码读出断言；再升级到最新，断言后面的步骤没有破坏换算结果。
 //!
 //! 只用程序内置的 SQLite（rusqlite bundled）：命令行 sqlite3 版本不同，对 JSON 子类型的处理也不同，拿它手验看不出 004
 //! 把 muliao_parts 存成字符串的 bug。
 
+use muliao_platform::ids::{MediaType, RunId, SessionId};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -80,7 +81,7 @@ impl OldDb {
     /// 一条用户一方的请求，metadata 原样存（旧形状由调用方给）。
     fn request(&self, run: i64, parts: Vec<RequestPart>, metadata: Option<Value>) {
         let r = Request { parts, timestamp: Utc::now(), metadata };
-        history::append_in(&self.conn(), SESSION, run, &[Message::User(r)]).unwrap();
+        history::append_in(&self.conn(), &SessionId::new(SESSION), RunId::new(run), &[Message::User(r)]).unwrap();
     }
 
     /// 一封已交给某次运行的信件。
@@ -96,7 +97,7 @@ impl OldDb {
 
     /// 各条请求记下的段（领域代码读）。
     fn marks(&self) -> Vec<Vec<PartMark>> {
-        history::transcript_in(&self.conn(), SESSION, None)
+        history::transcript_in(&self.conn(), &SessionId::new(SESSION), None)
             .unwrap()
             .into_iter()
             .map(|s| match s.message {
@@ -108,7 +109,7 @@ impl OldDb {
 
     /// 某次运行取走的回答信件里的结果（领域代码读）。
     fn answers(&self, run: i64) -> BTreeMap<String, CallResult> {
-        let mail = mailbox::consumed_by_in(&self.conn(), SESSION, run).unwrap();
+        let mail = mailbox::consumed_by_in(&self.conn(), &SessionId::new(SESSION), RunId::new(run)).unwrap();
         let [m] = mail.as_slice() else { panic!("expected one mail, got {mail:?}") };
         m.body.answers().expect("an answer").clone()
     }
@@ -136,7 +137,7 @@ fn old_attachment(file_id: &str, quoted_name: &str, name: &str, media_type: &str
 }
 
 fn shared(file_id: &str, name: &str, media_type: &str) -> SharedFile {
-    SharedFile { file_id: file_id.into(), name: name.into(), media_type: media_type.into() }
+    SharedFile { file_id: file_id.into(), name: name.into(), media_type: MediaType::parse(media_type).unwrap() }
 }
 
 #[test]
@@ -153,22 +154,57 @@ fn hold_kinds_are_backfilled_from_holders() {
         )
         .unwrap();
     }
-    let check = || {
-        let held = holds::active_among(&db.conn(), &[SESSION.to_owned()]).unwrap();
-        let kinds: Vec<HoldOf> = held[SESSION].iter().map(|h| h.of.clone()).collect();
-        assert_eq!(
-            kinds,
-            [
-                HoldOf::Job { job_id: 7 },
-                HoldOf::Wake { call_id: "c9".into() },
-                HoldOf::Delegation { row: None, call_id: Some("c1".into()) },
-            ]
-        );
-    };
     db.upgrade_to(2);
-    check();
+    // 002 时的占用还靠 holder 认，这一步只看回填的种类（现在的读法要等 008 换成整数列）
+    let mut stmt = c.prepare("SELECT kind FROM session_holds ORDER BY id").unwrap();
+    let kinds: Vec<String> = stmt.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+    assert_eq!(kinds, ["job", "wake", "delegation"]);
     db.upgrade_to_latest();
-    check();
+    let held = holds::active_among(&db.conn(), &[SessionId::new(SESSION)]).unwrap();
+    let kinds: Vec<HoldOf> = held[SESSION].iter().map(|h| h.of.clone()).collect();
+    assert_eq!(
+        kinds,
+        [HoldOf::Job { job_id: 7 }, HoldOf::Wake, HoldOf::Delegation { row: None, call_id: Some("c1".into()) }]
+    );
+}
+
+#[test]
+fn holders_become_a_job_column_and_wakeups_point_at_their_hold() {
+    let db = OldDb::at(7);
+    let c = db.conn();
+    let now = Utc::now();
+    for (kind, holder) in
+        [("job", "job:12"), ("wake", &*format!("wake:{SESSION}:c9")), ("wake", &*format!("wake:{SESSION}:c3"))]
+    {
+        let status = if holder.ends_with("c3") { "cleared" } else { "active" };
+        c.execute(
+            "INSERT INTO session_holds (session_id, kind, holder, awaited, status, created_at) VALUES (?1, ?2, ?3, 1, ?4, ?5)",
+            params![SESSION, kind, holder, status, now],
+        )
+        .unwrap();
+    }
+    for (holder, note) in [(format!("wake:{SESSION}:c9"), "later"), (format!("wake:{SESSION}:c3"), "replaced")] {
+        c.execute(
+            "INSERT INTO wakeups (holder, session_id, due_at, note, created_at) VALUES (?1, ?2, ?3, ?4, ?3)",
+            params![holder, SESSION, now, note],
+        )
+        .unwrap();
+    }
+    db.upgrade_to(8);
+    let c = db.conn();
+    let job = holds::job_in(&c, 12).unwrap().expect("the job's hold");
+    assert!(job.awaited && job.status == holds::HoldStatus::Active && job.of == HoldOf::Job { job_id: 12 });
+    let waiting = crate::wakeups::pending_of_in(&c, &SessionId::new(SESSION)).unwrap();
+    let notes: Vec<&str> = waiting
+        .iter()
+        .map(|(h, _, note)| {
+            assert_eq!(h.of, HoldOf::Wake);
+            note.as_str()
+        })
+        .collect();
+    assert_eq!(notes, ["later"], "only the wake-up whose hold is still active is waiting");
+    let rows: i64 = c.query_row("SELECT count(*) FROM wakeups", [], |r| r.get(0)).unwrap();
+    assert_eq!(rows, 2, "every wake-up row is kept");
 }
 
 #[test]
@@ -238,7 +274,7 @@ fn event_indexes_and_mail_senders_become_part_marks() {
     ];
     db.upgrade_to(4);
     assert_eq!(db.marks(), expected);
-    let first = history::transcript_in(&db.conn(), SESSION, None).unwrap().remove(0).message;
+    let first = history::transcript_in(&db.conn(), &SessionId::new(SESSION), None).unwrap().remove(0).message;
     let Message::User(first) = first else { unreachable!() };
     let meta = first.metadata.unwrap();
     assert_eq!(meta["other"], "keep");
@@ -281,7 +317,7 @@ fn shared_files_keep_only_ids() {
     db.mail(run, "answer", None, "", "[]", &answers.to_string());
 
     let check = || {
-        let stored = history::transcript_in(&db.conn(), SESSION, None).unwrap();
+        let stored = history::transcript_in(&db.conn(), &SessionId::new(SESSION), None).unwrap();
         let Message::User(r) = &stored[0].message else { panic!("expected a request") };
         let files: Vec<Vec<SharedFile>> = r
             .parts
@@ -343,7 +379,7 @@ fn part_marks_stored_as_strings_are_parsed_back() {
     ];
     db.upgrade_to(7);
     assert_eq!(db.marks(), expected);
-    let stored = history::transcript_in(&db.conn(), SESSION, None).unwrap();
+    let stored = history::transcript_in(&db.conn(), &SessionId::new(SESSION), None).unwrap();
     let Message::User(last) = &stored[2].message else { panic!("expected a request") };
     assert_eq!(last.metadata.as_ref(), Some(&right));
     db.upgrade_to_latest();

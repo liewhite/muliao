@@ -4,6 +4,7 @@
 //! 记时间线、投递、通知、放行下游都由单元统一结算。做事的人（[`By`]）是 agent（带它所在的会话）、用户或系统；agent 在自己
 //! 这个 issue 会话里的动作不投回那个会话（避免自激），issue 只在它自己的会话里做，普通对话只建、只派。
 
+use muliao_platform::ids::{AgentId, SessionId};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -40,7 +41,7 @@ const RUN_FAILED_BODY_MAX: usize = 500;
 #[derive(Debug, Clone, PartialEq, Serialize, utoipa::ToSchema)]
 pub struct IssueWork {
     /// 每个 agent 在这个 issue 上的会话：agent id -> 会话 id
-    pub sessions: BTreeMap<String, String>,
+    pub sessions: BTreeMap<AgentId, SessionId>,
     /// 被指派 agent 的 issue 会话的工作状态；没指派给 agent 或它还没有这个会话时为 null
     pub assignee_state: Option<WorkState>,
     /// in_progress、指派给 agent，它的 issue 会话却空闲或不存在：该有人做却没人在做
@@ -79,14 +80,14 @@ pub struct Filter {
     pub statuses: Vec<Status>,
     pub assignee: Option<Assignee>,
     /// 负责项目的 agent id
-    pub owner: Option<String>,
+    pub owner: Option<AgentId>,
 }
 
 /// 新建的一个 issue（一批里的一项）。
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewIssue {
     /// 负责项目的 agent id，必填
-    pub owner: String,
+    pub owner: AgentId,
     pub title: String,
     pub description: String,
     pub status: Status,
@@ -103,7 +104,7 @@ pub struct NewIssue {
 pub struct Stopping {
     pub issue: Issue,
     /// 被指派的 agent（停的是它的会话）
-    pub agent: String,
+    pub agent: AgentId,
     /// 真的停了一个会话；它还没有这个 issue 的会话时为 false
     pub stopped: bool,
 }
@@ -140,7 +141,7 @@ pub(crate) fn in_batch<T>(size: usize, n: usize, key: Option<&str>, r: Result<T>
 fn work_in(c: &Connection, issues: &[Issue]) -> Result<BTreeMap<i64, IssueWork>> {
     let ids: Vec<i64> = issues.iter().map(|i| i.id).collect();
     let mut sessions = conversation::sessions_among(c, &ids)?;
-    let keys: Vec<(i64, String)> =
+    let keys: Vec<(i64, AgentId)> =
         issues.iter().filter_map(|i| agent_of(i.assignee.as_ref()).map(|a| (i.id, a.to_owned()))).collect();
     let states = conversation::states_in(c, &keys)?;
     let mut links = links_in(c, &ids)?;
@@ -160,7 +161,7 @@ fn work_in(c: &Connection, issues: &[Issue]) -> Result<BTreeMap<i64, IssueWork>>
                 waiting_on: snap.waiting_on,
                 finished: i.status.finished(),
                 reviewable: cannot_review(i.status, i.assignee.as_ref()).is_none(),
-                startable: start_assignee(i.status, i.owner.as_deref()).is_ok(),
+                startable: start_assignee(i.status, i.owner.as_ref()).is_ok(),
             },
         );
     }
@@ -184,7 +185,7 @@ pub fn user_actions_in(
     c: &Connection,
     start: DateTime<Utc>,
     end: DateTime<Utc>,
-    agent_ids: Option<&[String]>,
+    agent_ids: Option<&[AgentId]>,
     tz: Tz,
 ) -> Result<Vec<UserActions>> {
     // 时间经 rusqlite 的 chrono 转换传，和存下时同一种文字形式，按文字比较才对
@@ -280,7 +281,7 @@ impl Board {
         // 投回」的规则
         let by = By::agent(&e.agent_id, &e.session_id);
         self.changes.open_in(tx, issue_id, &by, Routing::Direct(e.agent_id.clone()), |c| c.unsettled())?;
-        tracing::info!(issue_id, run_id = e.run_id, "issue left unsettled, asked");
+        tracing::info!(issue_id, run_id = %e.run_id, "issue left unsettled, asked");
         Ok(())
     }
 
@@ -289,13 +290,13 @@ impl Board {
     fn on_run_failed(&self, tx: &mut Tx<'_>, e: &RunFailed) -> Result<()> {
         let SessionOrigin::Issue { issue_id } = e.origin else { return Ok(()) };
         if model::find_in(tx, issue_id)?.is_none() {
-            tracing::info!(issue_id, run_id = e.run_id, "run failed on a deleted issue");
+            tracing::info!(issue_id, run_id = %e.run_id, "run failed on a deleted issue");
             return Ok(());
         }
         let by = By::agent(&e.agent_id, &e.session_id);
         let body = truncate(e.error.trim(), RUN_FAILED_BODY_MAX);
         self.changes.open_in(tx, issue_id, &by, Routing::RecordOnly, |c| c.run_failed(body))?;
-        tracing::info!(issue_id, run_id = e.run_id, "issue run failure recorded");
+        tracing::info!(issue_id, run_id = %e.run_id, "issue run failure recorded");
         Ok(())
     }
 
@@ -306,7 +307,7 @@ impl Board {
         Arc::new(move |tx, agent_id| this.on_agent_deleting(tx, agent_id))
     }
 
-    fn on_agent_deleting(&self, tx: &mut Tx<'_>, agent_id: &str) -> Result<()> {
+    fn on_agent_deleting(&self, tx: &mut Tx<'_>, agent_id: &AgentId) -> Result<()> {
         let theirs = model::query(tx, "assignee = ?1 OR owner_agent_id = ?1 ORDER BY id", [agent_id])?;
         let by = By::system();
         for issue in theirs {
@@ -314,7 +315,7 @@ impl Board {
                 if agent_of(c.issue().assignee.as_ref()) == Some(agent_id) {
                     c.set_assignee(None)?;
                 }
-                if c.issue().owner.as_deref() == Some(agent_id) {
+                if c.issue().owner.as_ref() == Some(agent_id) {
                     c.clear_deleted_owner()?;
                 }
                 Ok(())
@@ -347,7 +348,7 @@ impl Board {
                     conditions.push(format!("assignee = ?{}", values.len()));
                 }
                 if let Some(o) = &filter.owner {
-                    values.push(o.clone());
+                    values.push(o.to_string());
                     conditions.push(format!("owner_agent_id = ?{}", values.len()));
                 }
                 let filter = format!("{} ORDER BY updated_at DESC, id DESC", conditions.join(" AND "));
@@ -481,7 +482,7 @@ impl Board {
     pub async fn start(&self, issue_id: i64) -> Result<Issue> {
         self.as_user(issue_id, move |c| {
             let issue = c.issue();
-            let owner = start_assignee(issue.status, issue.owner.as_deref())
+            let owner = start_assignee(issue.status, issue.owner.as_ref())
                 .map_err(|r| conflict(format!("issue #{issue_id} {r}")))?
                 .to_owned();
             c.apply(Patch {
@@ -503,7 +504,7 @@ impl Board {
             let issue = c.issue().clone();
             refuse(issue_id, cannot_review(issue.status, issue.assignee.as_ref()))?;
             let timeline = c.timeline()?;
-            let Some(agent) = handed_by(&issue.creator, &timeline).map(str::to_owned) else {
+            let Some(agent) = handed_by(&issue.creator, &timeline).cloned() else {
                 return Err(conflict(format!(
                     "issue #{issue_id} was not handed to you by an agent: assign it to an agent yourself"
                 )));
@@ -564,7 +565,7 @@ impl Board {
             .db
             .read(move |c| {
                 let issue = issue_in(c, issue_id)?;
-                let Some(agent) = agent_of(issue.assignee.as_ref()).map(str::to_owned) else {
+                let Some(agent) = agent_of(issue.assignee.as_ref()).cloned() else {
                     return Err(conflict(format!(
                         "issue #{issue_id} is not assigned to an agent: there is no conversation to stop (use \
                          issue_update to change it)"

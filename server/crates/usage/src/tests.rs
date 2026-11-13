@@ -52,12 +52,12 @@ async fn insert_at(log: &UsageLog, at: DateTime<Utc>, e: UsageEntry) {
 #[tokio::test(flavor = "multi_thread")]
 async fn record_and_session_totals() {
     let (_dir, log) = log().await;
-    assert_eq!(log.session_totals("s1").await.unwrap(), UsageTotals::default());
+    assert_eq!(log.session_totals(&"s1".into()).await.unwrap(), UsageTotals::default());
     log.record(entry("a", Some("s1"), "p:m", totals(1, 10))).await.unwrap();
     log.record(UsageEntry { kind: RunKind::Compaction, ..entry("a", Some("s1"), "p:m", totals(1, 5)) }).await.unwrap();
     log.record(entry("a", Some("s2"), "p:m", totals(1, 100))).await.unwrap();
     log.record(entry("a", None, "p:m", totals(1, 1000))).await.unwrap();
-    let s1 = log.session_totals("s1").await.unwrap();
+    let s1 = log.session_totals(&"s1".into()).await.unwrap();
     assert_eq!(s1, totals(1, 10) + totals(1, 5));
     assert_eq!(s1.input_tokens, 15);
     assert_eq!(s1.cache_write_tokens, 6);

@@ -2,6 +2,7 @@
 //! 同名，可选 approval）加任意附件。agent 直接用文件工具读、改、执行里面的文件；这里是平台自己的读写：skill 索引、
 //! skill_run 要的脚本位置与批准、界面的编辑页（只改 SKILL.md）。
 
+use muliao_platform::ids::AgentId;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -121,7 +122,7 @@ impl SkillStore {
     }
 
     /// agent 能用的这个 skill 的脚本在哪、哪些要批准（skill_run 用）；不存在或它不能用都是 NotFound。
-    pub async fn scripts(&self, name: &str, agent_id: &str) -> Result<SkillScripts> {
+    pub async fn scripts(&self, name: &str, agent_id: &AgentId) -> Result<SkillScripts> {
         let snapshot = self.source.snapshot().await?;
         let grants = grants_for(&snapshot, &Actor::Agent(agent_id.to_owned()));
         let found = usable(&snapshot, StoredKind::Skill, &grants).into_iter().find(|a| a.name == name);

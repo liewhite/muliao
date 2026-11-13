@@ -9,6 +9,7 @@
 //!   actor 里执行停止事务；不在跑就直接执行。返回时停止事务已提交。
 //! - 到点唤醒与委派的运行中检查：一个节拍循环（[`Actors::start`]）。
 
+use muliao_platform::ids::SessionId;
 use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, Mutex, Weak};
@@ -36,18 +37,18 @@ use muliao_platform::errors::{Error, Result, broken, conflict, not_found};
 /// 构造（组合根里没有构造环）。
 #[derive(Clone)]
 pub struct Waker {
-    tx: mpsc::UnboundedSender<String>,
+    tx: mpsc::UnboundedSender<SessionId>,
 }
 
 impl Waker {
     /// 一个叫醒句柄与它的接收端（交给 [`Actors::start`]）。
-    pub fn channel() -> (Self, mpsc::UnboundedReceiver<String>) {
+    pub fn channel() -> (Self, mpsc::UnboundedReceiver<SessionId>) {
         let (tx, rx) = mpsc::unbounded_channel();
         (Self { tx }, rx)
     }
 
     /// 这个事务提交后叫醒（回滚就不叫）。
-    pub(crate) fn wake_on_commit(&self, tx: &mut Tx<'_>, session_id: &str) {
+    pub(crate) fn wake_on_commit(&self, tx: &mut Tx<'_>, session_id: &SessionId) {
         let (sender, id) = (self.tx.clone(), session_id.to_owned());
         tx.on_commit(move || {
             let _ = sender.send(id);
@@ -82,7 +83,7 @@ enum Command {
 
 struct Inner {
     core: Arc<Core>,
-    actors: Mutex<HashMap<String, mpsc::UnboundedSender<Command>>>,
+    actors: Mutex<HashMap<SessionId, mpsc::UnboundedSender<Command>>>,
 }
 
 /// 全部会话 actor。
@@ -93,7 +94,7 @@ pub struct Actors {
 
 impl Actors {
     /// 起叫醒的分发与节拍循环。之后调 [`Actors::resume`] 接着跑重启前没做完的。
-    pub fn start(core: Arc<Core>, mut wakes: mpsc::UnboundedReceiver<String>) -> Self {
+    pub fn start(core: Arc<Core>, mut wakes: mpsc::UnboundedReceiver<SessionId>) -> Self {
         let actors = Actors { inner: Arc::new(Inner { core, actors: Mutex::default() }) };
         let weak = Arc::downgrade(&actors.inner);
         tokio::spawn(async move {
@@ -142,21 +143,21 @@ impl Actors {
     }
 
     /// 停止会话：返回时停止事务已提交（之后投进来的信照常唤醒会话，不会被清掉）。
-    pub(crate) async fn stop(&self, session_id: &str) -> Result<Halted> {
+    pub(crate) async fn stop(&self, session_id: &SessionId) -> Result<Halted> {
         let (tx, rx) = oneshot::channel();
         self.send(session_id, Command::Stop(tx));
         rx.await.map_err(|_| broken("the session actor went away while stopping"))?
     }
 
     /// 手动压缩：排在当前运行之后。返回压缩的步数（0 是保留窗口之外没有可压缩的）。
-    pub(crate) async fn compact(&self, session_id: &str) -> Result<usize> {
+    pub(crate) async fn compact(&self, session_id: &SessionId) -> Result<usize> {
         let (tx, rx) = oneshot::channel();
         self.send(session_id, Command::Compact(tx));
         rx.await.map_err(|_| broken("the session actor went away while compacting"))?
     }
 
     /// 重试最近一次最终失败的运行（同一个运行接着跑）。会话在跑、或最近一次运行没有失败时 Conflict。
-    pub(crate) async fn retry(&self, session_id: &str) -> Result<()> {
+    pub(crate) async fn retry(&self, session_id: &SessionId) -> Result<()> {
         let (tx, rx) = oneshot::channel();
         self.send(session_id, Command::Retry(tx));
         rx.await.map_err(|_| broken("the session actor went away while retrying"))?
@@ -164,7 +165,7 @@ impl Actors {
 
     /// 停下一个 thread 的回调（提交后调用，不等它）。
     fn stop_thread(inner: Weak<Inner>) -> StopThread {
-        Arc::new(move |thread_id: String| {
+        Arc::new(move |thread_id: SessionId| {
             let Some(inner) = inner.upgrade() else { return };
             tokio::spawn(async move {
                 match (Actors { inner }).stop(&thread_id).await {
@@ -179,7 +180,7 @@ impl Actors {
         })
     }
 
-    fn send(&self, session_id: &str, cmd: Command) {
+    fn send(&self, session_id: &SessionId, cmd: Command) {
         let mut actors = self.inner.actors.lock().expect("actors lock");
         let cmd = match actors.get(session_id) {
             Some(tx) => match tx.send(cmd) {
@@ -197,7 +198,7 @@ impl Actors {
 }
 
 /// 一个会话的 actor：处理命令，有事就跑，没事就退出。
-async fn actor(inner: Arc<Inner>, id: String, mut rx: mpsc::UnboundedReceiver<Command>) {
+async fn actor(inner: Arc<Inner>, id: SessionId, mut rx: mpsc::UnboundedReceiver<Command>) {
     let mut compactions: Vec<oneshot::Sender<Result<usize>>> = Vec::new();
     loop {
         while let Ok(cmd) = rx.try_recv() {
@@ -231,7 +232,7 @@ async fn actor(inner: Arc<Inner>, id: String, mut rx: mpsc::UnboundedReceiver<Co
 /// 没在跑时收到的命令。
 async fn idle_command(
     inner: &Arc<Inner>,
-    id: &str,
+    id: &SessionId,
     cmd: Command,
     compactions: &mut Vec<oneshot::Sender<Result<usize>>>,
 ) {
@@ -249,7 +250,7 @@ async fn idle_command(
 }
 
 /// 有没结束的运行，或按唤醒规则该开始一次：就是工作状态的 running（同一条规则，删除是否拒绝也看它）。
-async fn has_work(core: &Core, id: &str) -> Result<bool> {
+async fn has_work(core: &Core, id: &SessionId) -> Result<bool> {
     let id = id.to_owned();
     core.db
         .read(move |c| {
@@ -262,12 +263,12 @@ async fn has_work(core: &Core, id: &str) -> Result<bool> {
 }
 
 /// 会话最后一条消息（判断一次尝试有没有往前推进）。读不出来时记下错误、当作没有：只影响退避要不要从头算。
-async fn last_message(core: &Core, id: &str) -> Option<i64> {
+async fn last_message(core: &Core, id: &SessionId) -> Option<i64> {
     let session_id = id.to_owned();
     match core.db.read(move |c| crate::history::last_message_id_in(c, &session_id)).await {
         Ok(last) => last,
         Err(e) => {
-            tracing::error!(session_id = id, error = %e, "reading the last message of the session failed");
+            tracing::error!(session_id = %id, error = %e, "reading the last message of the session failed");
             None
         }
     }
@@ -277,7 +278,7 @@ async fn last_message(core: &Core, id: &str) -> Option<i64> {
 /// 的事务就出错），立即再跑只会再错一遍。
 async fn run_with_retries(
     inner: &Arc<Inner>,
-    id: &str,
+    id: &SessionId,
     rx: &mut mpsc::UnboundedReceiver<Command>,
     compactions: &mut Vec<oneshot::Sender<Result<usize>>>,
 ) -> bool {
@@ -337,7 +338,7 @@ async fn run_with_retries(
         if failure.transient
             && let Some(delay) = backoff.next_delay()
         {
-            tracing::warn!(session_id = id, error = %failure.message, retry_in = ?delay, "run failed transiently; retrying");
+            tracing::warn!(session_id = %id, error = %failure.message, retry_in = ?delay, "run failed transiently; retrying");
             attempts.retrying(&failure.message, delay);
             // 退避期间也能停止（停在两次尝试之间：没有已产生、没保存的部分）
             let sleep = tokio::time::sleep(delay);
@@ -365,8 +366,8 @@ async fn run_with_retries(
 
 /// 最终失败：记在运行记录上，结清交给它的委派，发布 RunFailed。这个收尾自己出错时（如订阅者出 bug）只记下失败，不带
 /// 收尾：委派不结清，发起方的运行中检查会如实说，由它停掉 thread。返回有没有运行记录可记。
-async fn fail(core: &Core, id: &str, error: &str) -> bool {
-    tracing::error!(session_id = id, error, "run failed");
+async fn fail(core: &Core, id: &SessionId, error: &str) -> bool {
+    tracing::error!(session_id = %id, error, "run failed");
     let (session_id, message, waker, events, live) =
         (id.to_owned(), error.to_owned(), core.waker.clone(), core.events.clone(), core.live.clone());
     let full = core
@@ -397,7 +398,7 @@ async fn fail(core: &Core, id: &str, error: &str) -> bool {
         return recorded;
     }
     if let Err(e) = full {
-        tracing::error!(session_id = id, error = %e, "settling a failed run failed; recording the failure alone");
+        tracing::error!(session_id = %id, error = %e, "settling a failed run failed; recording the failure alone");
         let (session_id, message, live) = (id.to_owned(), error.to_owned(), core.live.clone());
         let alone = core
             .db
@@ -408,14 +409,14 @@ async fn fail(core: &Core, id: &str, error: &str) -> bool {
             .await;
         match alone {
             Ok(recorded) => return recorded,
-            Err(e) => tracing::error!(session_id = id, error = %e, "recording a failed run failed"),
+            Err(e) => tracing::error!(session_id = %id, error = %e, "recording a failed run failed"),
         }
     }
     false
 }
 
 /// 手动重试：最近一次运行最终失败、没有在跑的运行时，把它重新算作没结束（actor 随后接着跑）。
-async fn reopen(core: &Core, id: &str) -> Result<()> {
+async fn reopen(core: &Core, id: &SessionId) -> Result<()> {
     let (id, live) = (id.to_owned(), core.live.clone());
     core.db
         .write(move |tx| {
@@ -432,7 +433,7 @@ async fn reopen(core: &Core, id: &str) -> Result<()> {
 }
 
 /// 手动压缩（没在跑时）：结果（含失败）交回发起的用户，不另记运行记录。
-async fn compact(core: &Core, id: &str) -> Result<usize> {
+async fn compact(core: &Core, id: &SessionId) -> Result<usize> {
     let session_id = id.to_owned();
     let agent_id = core
         .db
@@ -450,9 +451,9 @@ async fn compact(core: &Core, id: &str) -> Result<usize> {
     }
     .await;
     match &result {
-        Ok(0) => tracing::info!(session_id = id, "nothing to compact beyond the kept steps"),
-        Ok(n) => tracing::info!(session_id = id, steps = n, "session compacted by the user"),
-        Err(e) => tracing::error!(session_id = id, error = %e, "manual compaction failed"),
+        Ok(0) => tracing::info!(session_id = %id, "nothing to compact beyond the kept steps"),
+        Ok(n) => tracing::info!(session_id = %id, steps = n, "session compacted by the user"),
+        Err(e) => tracing::error!(session_id = %id, error = %e, "manual compaction failed"),
     }
     result
 }

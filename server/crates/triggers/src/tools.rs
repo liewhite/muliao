@@ -3,6 +3,7 @@
 use agenter::{Tool, ToolCtx, ToolError, ToolOutput};
 use chrono::{DateTime, Utc};
 use muliao_assets::agents::{AgentNames, agent_names_in, named_in};
+use muliao_platform::ids::SessionId;
 use muliao_platform::tooling::{BuiltinTool, RunScope, ToolTraits, builtin};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -36,7 +37,7 @@ struct TriggerInfo {
     disabled_reason: Option<String>,
     faults: Vec<TriggerFault>,
     /// 最近一次触发开出的会话；已结束的（跑完的一次性触发器）在这里能看到它的结果去了哪
-    last_session_id: Option<String>,
+    last_session_id: Option<SessionId>,
     /// 不为空表示它已经跑完、不会再触发了
     finished_at: Option<DateTime<Utc>>,
 }

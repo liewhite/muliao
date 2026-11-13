@@ -2,6 +2,7 @@
 
 #![allow(dead_code)]
 
+use muliao_platform::ids::{AgentId, SessionId};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -35,12 +36,12 @@ pub struct World {
     pub secrets: Arc<Secrets>,
     pub files: Arc<FileStore>,
     pub tools: Vec<BuiltinTool>,
-    pub me: String,
-    pub other: String,
-    pub session: String,
+    pub me: AgentId,
+    pub other: AgentId,
+    pub session: SessionId,
     pub root: PathBuf,
     pub events: Arc<Events>,
-    _wakes: tokio::sync::mpsc::UnboundedReceiver<String>,
+    _wakes: tokio::sync::mpsc::UnboundedReceiver<SessionId>,
 }
 
 /// 一次工具调用的结局，变成文字好比对：交还模型的错误照原文，等批准的写成 `NEEDS_APPROVAL <pin>`。
@@ -124,7 +125,7 @@ pub async fn world(max_output_chars: usize) -> World {
     let me = agents.create(spec("me"), &Actor::User).await.unwrap().id;
     let other = agents.create(spec("other"), &Actor::User).await.unwrap().id;
     std::fs::create_dir_all(agents.workspace(&me)).unwrap();
-    let session = "s1".to_owned();
+    let session = SessionId::new("s1");
     let (sid, aid) = (session.clone(), me.clone());
     db.write(move |tx| {
         tx.execute(
@@ -143,7 +144,7 @@ impl World {
     }
 
     pub fn ws(&self) -> PathBuf {
-        self.dir.path().join("workspaces").join(&self.me)
+        self.dir.path().join("workspaces").join(self.me.as_str())
     }
 
     /// 这个 agent 在资源目录里的目录（按名字）。

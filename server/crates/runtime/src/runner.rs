@@ -5,6 +5,7 @@
 //! 一次运行（[`Run`]）从会话的一次运行开始到结束或挂起：工具组（含 MCP 连接）与这次的 [`RunScope`] 都跟着它，丢掉它就
 //! 断开 MCP。压缩（[`Runtime::summarize`]）是另一个入口：无工具的一次文本生成。
 
+use muliao_platform::ids::{AgentId, SessionId};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -50,7 +51,7 @@ pub struct Runtime {
 pub struct RunSpec<'a> {
     /// 这次运行用的资源（[`Runtime::run_assets`] 在运行开头取的一份，整次运行与压缩都用它）
     pub assets: &'a RunAssets,
-    pub session_id: &'a str,
+    pub session_id: &'a SessionId,
     pub audience: Audience,
     /// 会话来源的说明（会话创建时定下、整个会话不变）
     pub origin_note: &'a str,
@@ -92,7 +93,7 @@ impl Runtime {
 
     /// agent 现在的配置与它能用的资源，出自同一份快照（[`RunAssets`]）：没加载时 NotFound（带上原因），要它的运行当场失败，
     /// 不沿用旧值。会话的一次运行在开头取一份，整次运行与压缩都用它。
-    pub async fn run_assets(&self, agent_id: &str) -> Result<RunAssets, Error> {
+    pub async fn run_assets(&self, agent_id: &AgentId) -> Result<RunAssets, Error> {
         RunAssets::of(&*self.d.source.snapshot().await?, agent_id)
     }
 
@@ -105,7 +106,7 @@ impl Runtime {
     /// 这个 agent 在这个会话里的指令：只由会话级、agent 级的稳定内容组成，同一个会话的两次运行得到同一段文字（缓存前缀）。
     fn instructions(&self, assets: &RunAssets, origin_note: &str, summary: Option<&str>) -> String {
         let agent = &assets.agent;
-        let id = agent.id.as_str();
+        let id = &agent.id;
         let workspace = self.d.agents.workspace(id);
         build_instructions(&InstructionParts {
             agent_id: id,
@@ -124,7 +125,7 @@ impl Runtime {
     /// 组装一次运行：按 agent 现在的规则开放内置工具，连上它的 MCP server（连不上的跳过，写进 notices），组装指令与模型。
     pub async fn start(&self, spec: RunSpec<'_>) -> Result<Run, Error> {
         let (assets, dir) = (spec.assets, &spec.assets.agent);
-        let agent_id = dir.id.as_str();
+        let agent_id = &dir.id;
         let model = self.d.models.resolve(dir.file.model())?;
         let workspace = self.d.agents.workspace(agent_id);
         // 资源目录里与它相关、没加载的文件（读坏、名字冲突），告诉模型去修
@@ -162,8 +163,8 @@ impl Runtime {
         let settings = Settings { thinking: thinking_of(dir.file.thinking()), max_tokens: None };
         let agent = Agent::new(model, instructions, settings, tools).expect("tool names were checked to be unique");
         tracing::info!(
-            agent = agent_id,
-            session_id = spec.session_id,
+            agent = %agent_id,
+            session_id = %spec.session_id,
             model = dir.file.model(),
             thinking = dir.file.thinking().as_str(),
             tools = agent.tools().len(),
@@ -171,7 +172,7 @@ impl Runtime {
         );
         Ok(Run {
             agent,
-            scope: RunScope::new(agent_id.to_owned(), workspace, spec.session_id.to_owned(), spec.audience),
+            scope: RunScope::new(agent_id.clone(), workspace, spec.session_id.clone(), spec.audience),
             notices,
             redaction: self.d.toolbox.redaction(),
             files: self.d.files.clone(),
@@ -183,7 +184,7 @@ impl Runtime {
     pub async fn summarize(
         &self,
         assets: &RunAssets,
-        session_id: &str,
+        session_id: &SessionId,
         instructions: &str,
         prompt: &str,
     ) -> Result<String, Error> {
@@ -196,8 +197,7 @@ impl Runtime {
             timestamp: Utc::now(),
             metadata: None,
         })];
-        let meter =
-            Meter::new(self.d.usage.clone(), dir.id.as_str(), Some(session_id), dir.file.model(), RunKind::Compaction);
+        let meter = Meter::new(self.d.usage.clone(), &dir.id, Some(session_id), dir.file.model(), RunKind::Compaction);
         let step = agent.step(&(), &history, &HashMap::new(), &mut |_| {}).await.map_err(|e| Error::Upstream {
             message: format!("summarizing for compaction failed: {e}"),
             transient: e.is_transient(),
@@ -322,8 +322,8 @@ impl Drop for Run {
 /// 入账（UsageLog::record 的约定），按已入账算。
 struct Meter {
     usage: Arc<UsageLog>,
-    agent_id: String,
-    session_id: Option<String>,
+    agent_id: AgentId,
+    session_id: Option<SessionId>,
     model: String,
     kind: RunKind,
     /// 整次运行花掉的（日志用）
@@ -331,11 +331,17 @@ struct Meter {
 }
 
 impl Meter {
-    fn new(usage: Arc<UsageLog>, agent_id: &str, session_id: Option<&str>, model: &str, kind: RunKind) -> Self {
+    fn new(
+        usage: Arc<UsageLog>,
+        agent_id: &AgentId,
+        session_id: Option<&SessionId>,
+        model: &str,
+        kind: RunKind,
+    ) -> Self {
         Self {
             usage,
             agent_id: agent_id.to_owned(),
-            session_id: session_id.map(str::to_owned),
+            session_id: session_id.cloned(),
             model: model.to_owned(),
             kind,
             spent: Mutex::default(),

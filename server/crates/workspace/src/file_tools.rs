@@ -6,6 +6,7 @@
 //! run_shell 生成文件、再 read_file/share_file 它；并行执行时文件还没生成，报 file not found（#224）。文件工具都是瞬时的
 //! 本地操作，串行几乎没有代价；不夹着文件工具时 run_shell 等之间照旧并行。
 
+use muliao_platform::ids::{AgentId, MediaType};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -14,7 +15,7 @@ use std::time::SystemTime;
 use agenter::{Content, File, FileSource, Tool, ToolCtx, ToolError, ToolOutput};
 use muliao_assets::source::AssetSource;
 use muliao_assets::tree::Expect;
-use muliao_files::{FileStore, INLINE_IMAGE_TYPES};
+use muliao_files::FileStore;
 use muliao_platform::errors::DomainError;
 use muliao_platform::errors::Error;
 use muliao_platform::fs::{read_text, real};
@@ -70,7 +71,7 @@ fn invalid(message: impl Into<String>) -> ToolError {
     ToolError::Retry(message.into())
 }
 
-async fn confinement(deps: &FileTools, agent_id: &str) -> Result<Confinement, ToolError> {
+async fn confinement(deps: &FileTools, agent_id: &AgentId) -> Result<Confinement, ToolError> {
     Ok(deps.confiner.of(agent_id).await?)
 }
 
@@ -86,18 +87,18 @@ const COMPRESSED: &[&str] = &["gz", "z", "bz2", "xz", "br", "tgz", "taz", "tz", 
 
 /// 按扩展名定工作目录里文件的类型（share_file、read_file 与工作目录浏览共用）。认不出、或是压缩过的时，用 RFC 2046 的
 /// 「未知二进制」类型。
-pub fn media_type_of(name: &str) -> String {
+pub fn media_type_of(name: &str) -> MediaType {
+    let unknown = || MediaType::known("application/octet-stream");
     let ext = Path::new(name).extension().map(|e| e.to_string_lossy().to_lowercase());
     if ext.as_deref().is_some_and(|e| COMPRESSED.contains(&e)) {
-        return "application/octet-stream".to_owned();
+        return unknown();
     }
-    mime_guess::from_path(name).first_raw().unwrap_or("application/octet-stream").to_owned()
+    mime_guess::from_path(name).first_raw().and_then(|t| MediaType::parse(t).ok()).unwrap_or_else(unknown)
 }
 
 /// 能交给模型看的图片的类型；其余文件当文本读。
-fn image_type(path: &Path) -> Option<String> {
-    let media_type = media_type_of(&path.file_name().unwrap_or_default().to_string_lossy());
-    INLINE_IMAGE_TYPES.contains(&media_type.as_str()).then_some(media_type)
+fn image_type(path: &Path) -> Option<MediaType> {
+    Some(media_type_of(&path.file_name().unwrap_or_default().to_string_lossy())).filter(MediaType::is_inline_image)
 }
 
 // ---- 读过的文件（write_file 覆盖资源文件前核对） ----
@@ -256,7 +257,7 @@ impl Tool<RunScope> for ReadFile {
 
 /// 图片以内容交回；运行端口把它存进文件存储，历史里只留引用，发请求时再展开给模型（超过模型接口上限的在那里整理）。存
 /// 不进文件存储的（超过 max_bytes）在这里就拒绝，模型可以先缩小一份。
-async fn read_image(target: &Path, media_type: &str, max_bytes: u64) -> Result<ToolOutput, ToolError> {
+async fn read_image(target: &Path, media_type: &MediaType, max_bytes: u64) -> Result<ToolOutput, ToolError> {
     let meta = match tokio::fs::metadata(target).await {
         Ok(m) if m.is_file() => m,
         _ => return Err(not_found(format!("file not found: {}", target.display())).into()),
@@ -272,7 +273,7 @@ async fn read_image(target: &Path, media_type: &str, max_bytes: u64) -> Result<T
     let data = tokio::fs::read(target).await.map_err(|e| io_error(e, ""))?;
     Ok(vec![
         Content::text(format!("{} ({media_type}, {} bytes)", target.display(), data.len())),
-        Content::File(File { media_type: media_type.to_owned(), source: FileSource::Data(data) }),
+        Content::File(File { media_type: media_type.to_string(), source: FileSource::Data(data) }),
     ])
 }
 
@@ -853,7 +854,7 @@ impl Tool<RunScope> for ShareFile {
             return Err(not_found(format!("file not found: {}", target.display())).into());
         }
         let name = target.file_name().unwrap_or_default().to_string_lossy().into_owned();
-        let meta = deps.files.put_path(&name, &media_type_of(&name), &target).await.map_err(|e| store_error(e, ""))?;
+        let meta = deps.files.put_path(&name, media_type_of(&name), &target).await.map_err(|e| store_error(e, ""))?;
         tracing::info!(agent = %scope.agent_id, session_id = %scope.session_id, file_id = %meta.id, "file shared with user");
         attach(scope, &ctx.call.id, &[SharedFile::of(&meta)]);
         Ok(agenter::tool::text(format!("shared file {} with the user; it is shown with your reply", meta.name)))

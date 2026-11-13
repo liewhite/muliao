@@ -5,6 +5,7 @@ use axum::http::StatusCode;
 use muliao_issues::activity::Activity;
 use muliao_issues::graph::Upstream;
 use muliao_issues::{Assignee, BoardIssue, By, Filter, IssueDetail, NewIssue, Patch, Priority, Status};
+use muliao_platform::ids::AgentId;
 use serde::Deserialize;
 use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::router::OpenApiRouter;
@@ -34,7 +35,7 @@ pub struct IssueQuery {
     /// agent id 或 `user`
     pub assignee: Option<String>,
     /// 负责项目的 agent id
-    pub owner: Option<String>,
+    pub owner: Option<AgentId>,
 }
 
 #[utoipa::path(get, path = "/api/issues", tag = "issues", params(IssueQuery),
@@ -48,7 +49,7 @@ async fn list_issues(State(s): State<AppState>, Query(q): Query<IssueQuery>) -> 
 pub struct IssueCreate {
     pub title: String,
     /// 负责的项目（agent id），必填
-    pub owner: String,
+    pub owner: AgentId,
     #[serde(default)]
     pub description: String,
     #[serde(default)]
@@ -95,7 +96,7 @@ async fn get_issue(State(s): State<AppState>, Path(issue_id): Path<i64>) -> ApiR
 #[derive(Deserialize, ToSchema)]
 pub struct IssuePatch {
     #[serde(default)]
-    pub owner: Option<String>,
+    pub owner: Option<AgentId>,
     #[serde(default)]
     pub title: Option<String>,
     #[serde(default)]

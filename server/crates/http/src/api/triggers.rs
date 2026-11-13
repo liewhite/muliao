@@ -6,6 +6,7 @@
 use axum::extract::State;
 use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
+use muliao_platform::ids::{AgentId, SessionId};
 use muliao_triggers::faults::TriggerFault;
 use muliao_triggers::once::{OnceConfig, OnceStatus};
 use muliao_triggers::precheck::Precheck;
@@ -52,7 +53,7 @@ async fn trigger_kinds(State(s): State<AppState>) -> axum::Json<Vec<TriggerKindO
 pub struct TriggerOut {
     id: i64,
     name: String,
-    agent_id: String,
+    agent_id: AgentId,
     prompt: String,
     enabled: bool,
     /// 触发前的前置检查；没有则每次都交给 agent
@@ -60,7 +61,7 @@ pub struct TriggerOut {
     last_checked_at: Option<DateTime<Utc>>,
     last_fired_at: Option<DateTime<Utc>>,
     /// 上一次触发开出的、还在的会话
-    last_session_id: Option<String>,
+    last_session_id: Option<SessionId>,
     /// 被自动停用的原因（重新启用时清除）
     disabled_reason: Option<String>,
     /// 脚本出错：前置检查失败、流式命令反复退出
@@ -141,7 +142,7 @@ async fn list_triggers(
 #[derive(Deserialize, ToSchema)]
 pub struct TriggerCreate {
     name: String,
-    agent_id: String,
+    agent_id: AgentId,
     prompt: String,
     /// 触发前的前置检查；不给则每次都交给 agent
     #[serde(default)]
@@ -233,7 +234,7 @@ pub struct FiredOut {
     /// 是否投出了信（前置检查判定这次不触发时为 false）
     pub fired: bool,
     /// 这次新开的会话；没触发时为 null
-    pub session_id: Option<String>,
+    pub session_id: Option<SessionId>,
 }
 
 /// 立即触发一次（不带事件内容）。有前置检查时同样先跑检查，可以用来测试整条链路（检查失败 422 带原因）。不消耗一次性

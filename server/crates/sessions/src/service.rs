@@ -1,6 +1,7 @@
 //! 界面用的会话门面（HTTP 层只经这里）：会话页、会话列表、发消息、停止、删除、手动压缩、重试最终失败的运行。别的领域
 //! 用各模块的 `*_in` 查询（在自己的事务里）与 [`crate::inbound::SenderInbox`]、[`crate::work::SessionWork`]。
 
+use muliao_platform::ids::SessionId;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -84,14 +85,14 @@ impl SessionService {
         self.db.write(move |tx| receive_in(tx, &waker, Inbound::user(message))).await
     }
 
-    pub async fn get(&self, session_id: &str) -> Result<Session> {
+    pub async fn get(&self, session_id: &SessionId) -> Result<Session> {
         let id = session_id.to_owned();
         self.db
             .read(move |c| directory::get_in(c, &id)?.ok_or_else(|| not_found(format!("session {id:?} not found"))))
             .await
     }
 
-    pub async fn detail(&self, session_id: &str) -> Result<SessionView> {
+    pub async fn detail(&self, session_id: &SessionId) -> Result<SessionView> {
         // 先取快照再读库：快照这一段已在展示的消息不在历史里重复；之间换了段时，新保存的消息照旧由旧快照展示，saved 事件
         // 随后让前端重新拉取
         let live = self.live.snapshot(session_id);
@@ -145,9 +146,9 @@ impl SessionService {
         self.db
             .read(move |c| {
                 let ids = directory::listed_ids_in(c, &listing)?;
-                let states: BTreeMap<String, WorkState> =
+                let states: BTreeMap<SessionId, WorkState> =
                     statuses_in(c, &ids)?.into_iter().map(|(k, s)| (k, s.state)).collect();
-                let active: Vec<String> = ids.iter().filter(|x| states[*x] != WorkState::Idle).cloned().collect();
+                let active: Vec<SessionId> = ids.iter().filter(|x| states[*x] != WorkState::Idle).cloned().collect();
                 Ok::<_, Error>(
                     directory::listed_page_in(c, &listing, &active, limit, offset)?
                         .into_iter()
@@ -160,7 +161,7 @@ impl SessionService {
 
     /// 用户停止会话：结束正在进行的运行（已产生的部分照常保存）、清空信箱，连带停下它发起的异步工作。返回时已生效。
     /// 会话不存在时 NotFound。
-    pub async fn stop(&self, session_id: &str) -> Result<()> {
+    pub async fn stop(&self, session_id: &SessionId) -> Result<()> {
         match self.actors.stop(session_id).await? {
             Halted::Stopped => Ok(()),
             Halted::Gone => Err(not_found(format!("session {session_id:?} not found"))),
@@ -168,7 +169,7 @@ impl SessionService {
     }
 
     /// 用户删除会话（规则见 [`crate::deletion`]）：忙时 Conflict。
-    pub async fn delete(&self, session_id: &str) -> Result<()> {
+    pub async fn delete(&self, session_id: &SessionId) -> Result<()> {
         let (id, waker, events) = (session_id.to_owned(), self.waker.clone(), self.events.clone());
         self.db
             .write(move |tx| {
@@ -180,18 +181,18 @@ impl SessionService {
     }
 
     /// 用户手动压缩上下文：排在当前运行之后，做完返回压缩的步数（0 是保留窗口之外没有可压缩的）。
-    pub async fn compact(&self, session_id: &str) -> Result<usize> {
+    pub async fn compact(&self, session_id: &SessionId) -> Result<usize> {
         self.actors.compact(session_id).await
     }
 
     /// 重试最近一次最终失败的运行。
-    pub async fn retry(&self, session_id: &str) -> Result<()> {
+    pub async fn retry(&self, session_id: &SessionId) -> Result<()> {
         self.actors.retry(session_id).await
     }
 }
 
 /// 实时快照里的调用同样挂上它开出或续写的 thread：中途打开会话页时这一段的调用也显示它开出的 thread。
-fn with_threads(mut live: LiveSegment, call_threads: &BTreeMap<String, String>) -> LiveSegment {
+fn with_threads(mut live: LiveSegment, call_threads: &BTreeMap<String, SessionId>) -> LiveSegment {
     for e in &mut live.events {
         if let RunEvent::Item { item } = &mut e.event {
             annotate_threads(std::slice::from_mut(&mut **item), call_threads);

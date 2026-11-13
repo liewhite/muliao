@@ -1,5 +1,6 @@
 //! 触发器的测试：真库、真的会话来信入口与通知、真起命令（写沙箱 enforce）；时间由测试给（`fire_due(now)`）。
 
+use muliao_platform::ids::{AgentId, SessionId};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -40,8 +41,8 @@ struct World {
     dir: tempfile::TempDir,
     db: Arc<Database>,
     triggers: TriggerDomain,
-    me: String,
-    _wakes: tokio::sync::mpsc::UnboundedReceiver<String>,
+    me: AgentId,
+    _wakes: tokio::sync::mpsc::UnboundedReceiver<SessionId>,
 }
 
 fn fast() -> stream::Timing {
@@ -130,7 +131,7 @@ impl World {
     }
 
     fn ws(&self) -> PathBuf {
-        self.dir.path().join("workspaces").join(&self.me)
+        self.dir.path().join("workspaces").join(self.me.as_str())
     }
 
     async fn create(&self, name: &str, kind: &str, config: Value, precheck: Option<Precheck>) -> Trigger {
@@ -165,7 +166,7 @@ impl World {
     }
 
     /// 这个触发器开出的会话：(id, 标题)，按建立顺序
-    async fn sessions(&self, trigger_id: i64) -> Vec<(String, String)> {
+    async fn sessions(&self, trigger_id: i64) -> Vec<(SessionId, String)> {
         self.db
             .read(move |c| {
                 let mut stmt = c.prepare(
@@ -177,7 +178,7 @@ impl World {
             .unwrap()
     }
 
-    async fn mail(&self, session_id: &str) -> Vec<String> {
+    async fn mail(&self, session_id: &SessionId) -> Vec<String> {
         let sid = session_id.to_owned();
         self.db
             .read(move |c| queued_in(c, &sid))
@@ -189,19 +190,19 @@ impl World {
     }
 
     /// 让会话空闲：丢掉排着的信
-    async fn idle(&self, session_id: &str) {
+    async fn idle(&self, session_id: &SessionId) {
         let sid = session_id.to_owned();
         self.db.write(move |tx| discard_queued_in(tx, &sid)).await.unwrap();
     }
 
     /// 让会话在等：丢掉排着的信，登记一项占用（像后台任务）
-    async fn waiting(&self, session_id: &str) {
+    async fn waiting(&self, session_id: &SessionId) {
         self.idle(session_id).await;
         let sid = session_id.to_owned();
         self.db.write(move |tx| SessionWork::new(Waker::channel().0).hold_in(tx, &sid, 1, false)).await.unwrap();
     }
 
-    async fn notifications(&self) -> Vec<(String, Option<String>)> {
+    async fn notifications(&self) -> Vec<(String, Option<SessionId>)> {
         self.db
             .read(|c| {
                 let mut stmt = c.prepare("SELECT title, session_id FROM notifications ORDER BY id")?;
@@ -277,7 +278,7 @@ async fn schedule_fires_advances_and_skips_while_the_previous_session_is_busy() 
     assert!(sessions[0].1.starts_with("tick · "), "{}", sessions[0].1);
     assert_eq!(w.mail(&sessions[0].0).await, vec!["do tick"]);
     let after = w.get(t.id).await;
-    assert_eq!(after.last_session_id.as_deref(), Some(sessions[0].0.as_str()));
+    assert_eq!(after.last_session_id.as_ref(), Some(&sessions[0].0));
     let following = at(w.status(t.id).await["next_run_at"].as_str().unwrap());
     assert!(following > late && following <= late + chrono::Duration::minutes(5));
 

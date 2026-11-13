@@ -14,6 +14,7 @@ use axum::http::{HeaderName, HeaderValue};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
 use chrono::{DateTime, Utc};
+use muliao_platform::ids::AgentId;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::Serialize;
 use utoipa::ToSchema;
@@ -53,7 +54,7 @@ pub fn public_routes() -> Router<AppState> {
 
 #[derive(Serialize, ToSchema)]
 pub struct SitePageOut {
-    pub agent_id: String,
+    pub agent_id: AgentId,
     /// 页面目录名（site/<name>/）
     pub name: String,
     /// index.html 的 <title>，没有就是 name
@@ -67,7 +68,7 @@ pub struct SitePageOut {
 /// 页面名在网址里编码（同 Python 的 `quote(page, safe='')`）
 const PAGE_NAME: &AsciiSet = &NON_ALPHANUMERIC.remove(b'-').remove(b'.').remove(b'_').remove(b'~');
 
-fn site_url(auth: &Auth, agent_id: &str, page: &str) -> String {
+fn site_url(auth: &Auth, agent_id: &AgentId, page: &str) -> String {
     let encoded = utf8_percent_encode(page, PAGE_NAME);
     format!("{SITES_PATH}/{agent_id}/{encoded}/{}/", auth.sign_site(agent_id, page))
 }
@@ -91,14 +92,14 @@ async fn list_pages(State(s): State<AppState>) -> ApiResult<axum::Json<Vec<SiteP
     Ok(axum::Json(out))
 }
 
-fn check(s: &AppState, agent_id: &str, page: &str, sig: &str) -> ApiResult<()> {
+fn check(s: &AppState, agent_id: &AgentId, page: &str, sig: &str) -> ApiResult<()> {
     if s.auth.verify_site(agent_id, page, sig) { Ok(()) } else { Err(ApiError::not_found("Not Found")) }
 }
 
 /// 不带结尾斜杠时页面里的相对路径会解析到上一级，补上。
 async fn page_root(
     State(s): State<AppState>,
-    Path((agent_id, page, sig)): Path<(String, String, String)>,
+    Path((agent_id, page, sig)): Path<(AgentId, String, String)>,
 ) -> ApiResult<Response> {
     check(&s, &agent_id, &page, &sig)?;
     Ok(Redirect::temporary(&site_url(&s.auth, &agent_id, &page)).into_response())
@@ -106,23 +107,23 @@ async fn page_root(
 
 async fn page_index(
     State(s): State<AppState>,
-    Path((agent_id, page, sig)): Path<(String, String, String)>,
+    Path((agent_id, page, sig)): Path<(AgentId, String, String)>,
 ) -> ApiResult<Response> {
     serve(s, agent_id, page, sig, String::new()).await
 }
 
 async fn page_file(
     State(s): State<AppState>,
-    Path((agent_id, page, sig, path)): Path<(String, String, String, String)>,
+    Path((agent_id, page, sig, path)): Path<(AgentId, String, String, String)>,
 ) -> ApiResult<Response> {
     serve(s, agent_id, page, sig, path).await
 }
 
-async fn serve(s: AppState, agent_id: String, page: String, sig: String, path: String) -> ApiResult<Response> {
+async fn serve(s: AppState, agent_id: AgentId, page: String, sig: String, path: String) -> ApiResult<Response> {
     check(&s, &agent_id, &page, &sig)?;
     s.services.agents.get_active(&agent_id).await?;
     let sites = s.services.sites.clone();
     let file = blocking(move || sites.file(&agent_id, &page, &path)).await?;
     let headers = PAGE_HEADERS.iter().map(|(k, v)| (HeaderName::from_static(k), HeaderValue::from_static(v)));
-    file_response(&file.path, &file.media_type, None, headers).await
+    file_response(&file.path, file.media_type.as_str(), None, headers).await
 }

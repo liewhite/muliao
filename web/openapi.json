@@ -455,9 +455,10 @@
           {
             "name": "agent_id",
             "in": "path",
+            "description": "agent 的编号",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/AgentId"
             }
           }
         ],
@@ -492,9 +493,10 @@
           {
             "name": "agent_id",
             "in": "path",
+            "description": "agent 的编号",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/AgentId"
             }
           }
         ],
@@ -529,9 +531,10 @@
           {
             "name": "agent_id",
             "in": "path",
+            "description": "agent 的编号",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/AgentId"
             }
           }
         ],
@@ -596,9 +599,10 @@
           {
             "name": "agent_id",
             "in": "path",
+            "description": "agent 的编号",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/AgentId"
             }
           }
         ],
@@ -635,9 +639,10 @@
           {
             "name": "agent_id",
             "in": "path",
+            "description": "agent 的编号",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/AgentId"
             }
           }
         ],
@@ -681,9 +686,10 @@
           {
             "name": "agent_id",
             "in": "path",
+            "description": "agent 的编号",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/AgentId"
             }
           }
         ],
@@ -720,9 +726,10 @@
           {
             "name": "agent_id",
             "in": "path",
+            "description": "agent 的编号",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/AgentId"
             }
           }
         ],
@@ -766,9 +773,10 @@
           {
             "name": "agent_id",
             "in": "path",
+            "description": "agent 的编号",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/AgentId"
             }
           }
         ],
@@ -805,9 +813,10 @@
           {
             "name": "agent_id",
             "in": "path",
+            "description": "agent 的编号",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/AgentId"
             }
           }
         ],
@@ -842,9 +851,10 @@
           {
             "name": "agent_id",
             "in": "path",
+            "description": "agent 的编号",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/AgentId"
             }
           }
         ],
@@ -1806,7 +1816,7 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/AgentId"
             }
           },
           {
@@ -1950,9 +1960,10 @@
           {
             "name": "session_id",
             "in": "path",
+            "description": "会话的编号",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/SessionId"
             }
           }
         ],
@@ -1987,9 +1998,10 @@
           {
             "name": "session_id",
             "in": "path",
+            "description": "会话的编号",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/SessionId"
             }
           }
         ],
@@ -2027,9 +2039,10 @@
           {
             "name": "session_id",
             "in": "path",
+            "description": "会话的编号",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/SessionId"
             }
           }
         ],
@@ -2094,9 +2107,10 @@
           {
             "name": "session_id",
             "in": "path",
+            "description": "会话的编号",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/SessionId"
             }
           }
         ],
@@ -2125,9 +2139,10 @@
           {
             "name": "session_id",
             "in": "path",
+            "description": "会话的编号",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/SessionId"
             }
           }
         ],
@@ -2156,9 +2171,10 @@
           {
             "name": "session_id",
             "in": "path",
+            "description": "会话的编号",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/SessionId"
             }
           }
         ],
@@ -2196,9 +2212,10 @@
           {
             "name": "session_id",
             "in": "path",
+            "description": "会话的编号",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/SessionId"
             }
           }
         ],
@@ -2317,18 +2334,19 @@
         "operationId": "list_workspace",
         "parameters": [
           {
+            "name": "agent_id",
+            "in": "path",
+            "description": "agent 的编号",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/AgentId"
+            }
+          },
+          {
             "name": "path",
             "in": "query",
             "description": "相对目录根的路径，空为根",
             "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "agent_id",
-            "in": "path",
-            "required": true,
             "schema": {
               "type": "string"
             }
@@ -2377,18 +2395,19 @@
         "operationId": "read_workspace_file",
         "parameters": [
           {
+            "name": "agent_id",
+            "in": "path",
+            "description": "agent 的编号",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/AgentId"
+            }
+          },
+          {
             "name": "path",
             "in": "query",
             "description": "相对目录根的路径，空为根",
             "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "agent_id",
-            "in": "path",
-            "required": true,
             "schema": {
               "type": "string"
             }
@@ -2485,9 +2504,10 @@
           {
             "name": "agent_id",
             "in": "path",
+            "description": "agent 的编号",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/AgentId"
             }
           },
           {
@@ -2557,7 +2577,7 @@
             "description": "负责项目的 agent id",
             "required": false,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/AgentId"
             }
           }
         ],
@@ -3492,6 +3512,15 @@
         "operationId": "agent_history",
         "parameters": [
           {
+            "name": "agent_id",
+            "in": "path",
+            "description": "agent 的编号",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/AgentId"
+            }
+          },
+          {
             "name": "query",
             "in": "query",
             "description": "关键词（每个词都要出现在标题、摘要或引用里）；不给按日期倒序",
@@ -3525,8 +3554,7 @@
             "description": "1–3，默认 1",
             "required": false,
             "schema": {
-              "type": "integer",
-              "format": "int64"
+              "$ref": "#/components/schemas/Importance"
             }
           },
           {
@@ -3537,14 +3565,6 @@
             "schema": {
               "type": "integer",
               "minimum": 0
-            }
-          },
-          {
-            "name": "agent_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
             }
           }
         ],
@@ -3714,11 +3734,15 @@
                 "description": "做这件事的人：agent id；用户为 `user`，系统自己的清理为 `system`"
               },
               "session_id": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "description": "这件事发生在哪个会话；用户在界面上的操作、系统的清理、会话已删除时为 null"
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/SessionId",
+                    "description": "这件事发生在哪个会话；用户在界面上的操作、系统的清理、会话已删除时为 null"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
             }
           }
@@ -3921,6 +3945,10 @@
           }
         }
       },
+      "AgentId": {
+        "type": "string",
+        "description": "agent 的编号（agents 表的 id，也是它资源目录、工作目录的名字）"
+      },
       "AgentOut": {
         "type": "object",
         "required": [
@@ -3936,7 +3964,7 @@
         ],
         "properties": {
           "id": {
-            "type": "string"
+            "$ref": "#/components/schemas/AgentId"
           },
           "name": {
             "type": "string"
@@ -3997,11 +4025,15 @@
         ],
         "properties": {
           "agent_id": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "已有的 agent（它自己的资产总能用）；null 为还没建的"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AgentId",
+                "description": "已有的 agent（它自己的资产总能用）；null 为还没建的"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "roles": {
             "type": "array",
@@ -4136,7 +4168,7 @@
             "default": null
           },
           "to": {
-            "type": "string"
+            "$ref": "#/components/schemas/AgentId"
           }
         },
         "additionalProperties": false
@@ -4293,11 +4325,15 @@
             "type": "string"
           },
           "owner": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "null 归平台"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AgentId",
+                "description": "null 归平台"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "description": {
             "type": "string"
@@ -4355,7 +4391,7 @@
             "type": "string"
           },
           "media_type": {
-            "type": "string"
+            "$ref": "#/components/schemas/MediaType"
           },
           "inline": {
             "type": "boolean",
@@ -4407,7 +4443,7 @@
           "threads": {
             "type": "array",
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/SessionId"
             },
             "description": "开出或续写的 thread（子会话 id），由会话接口按调用 id 填（[`annotate_threads`]）"
           },
@@ -4565,11 +4601,15 @@
                 "type": "string"
               },
               "owner": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "description": "agent 的 id；null 归平台（内置工具、界面上建的、迁移前的公共资产）"
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/AgentId",
+                    "description": "agent 的 id；null 归平台（内置工具、界面上建的、迁移前的公共资产）"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "description": {
                 "type": "string"
@@ -4702,6 +4742,39 @@
             }
           }
         ]
+      },
+      "Change_Option_AgentId": {
+        "type": "object",
+        "description": "属性从什么改成什么（存为 `{\"from\": ..., \"to\": ...}`）。",
+        "required": [
+          "from",
+          "to"
+        ],
+        "properties": {
+          "from": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "description": "agent 的编号（agents 表的 id，也是它资源目录、工作目录的名字）"
+              }
+            ]
+          },
+          "to": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "description": "agent 的编号（agents 表的 id，也是它资源目录、工作目录的名字）"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
       },
       "Change_Option_String": {
         "type": "object",
@@ -5071,7 +5144,7 @@
             ],
             "properties": {
               "session_id": {
-                "type": "string"
+                "$ref": "#/components/schemas/SessionId"
               },
               "kind": {
                 "type": "string",
@@ -5153,7 +5226,7 @@
             "type": "string"
           },
           "media_type": {
-            "type": "string"
+            "$ref": "#/components/schemas/MediaType"
           },
           "size": {
             "type": "integer",
@@ -5192,11 +5265,15 @@
             "description": "是否投出了信（前置检查判定这次不触发时为 false）"
           },
           "session_id": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "这次新开的会话；没触发时为 null"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SessionId",
+                "description": "这次新开的会话；没触发时为 null"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -5333,7 +5410,7 @@
             ],
             "properties": {
               "change": {
-                "$ref": "#/components/schemas/Change_Option_String"
+                "$ref": "#/components/schemas/Change_Option_AgentId"
               },
               "kind": {
                 "type": "string",
@@ -5458,6 +5535,13 @@
           }
         }
       },
+      "Importance": {
+        "type": "integer",
+        "format": "int64",
+        "description": "重要程度：1 日常、2 值得注意、3 重大。",
+        "maximum": 3,
+        "minimum": 1
+      },
       "Issue": {
         "type": "object",
         "description": "人与 agent 协作的一件事（读模型，也是 HTTP 返回的形状）。",
@@ -5491,11 +5575,15 @@
             "$ref": "#/components/schemas/Priority"
           },
           "owner": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "负责的项目（agent id）：创建时必填，不随指派变化，只能显式修改；只在负责的 agent 被删除后为空"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AgentId",
+                "description": "负责的项目（agent id）：创建时必填，不随指派变化，只能显式修改；只在负责的 agent 被删除后为空"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "assignee": {
             "oneOf": [
@@ -5533,7 +5621,7 @@
             "type": "string"
           },
           "owner": {
-            "type": "string",
+            "$ref": "#/components/schemas/AgentId",
             "description": "负责的项目（agent id），必填"
           },
           "description": {
@@ -5585,9 +5673,13 @@
         "description": "只修改给出的字段。assignee 给出 null 表示取消指派，不出现表示不变。",
         "properties": {
           "owner": {
-            "type": [
-              "string",
-              "null"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AgentId"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "title": {
@@ -5661,10 +5753,11 @@
             "type": "object",
             "description": "每个 agent 在这个 issue 上的会话：agent id -> 会话 id",
             "additionalProperties": {
-              "type": "string"
+              "$ref": "#/components/schemas/SessionId"
             },
             "propertyNames": {
-              "type": "string"
+              "type": "string",
+              "description": "agent 的编号（agents 表的 id，也是它资源目录、工作目录的名字）"
             }
           },
           "assignee_state": {
@@ -6141,6 +6234,11 @@
           }
         }
       },
+      "MailId": {
+        "type": "integer",
+        "format": "int64",
+        "description": "一封信件的编号（mail 表的行号）"
+      },
       "MailKindOut": {
         "oneOf": [
           {
@@ -6224,8 +6322,7 @@
             ],
             "properties": {
               "id": {
-                "type": "integer",
-                "format": "int64"
+                "$ref": "#/components/schemas/MailId"
               },
               "content": {
                 "type": "string"
@@ -6285,9 +6382,13 @@
             "type": "string"
           },
           "owner": {
-            "type": [
-              "string",
-              "null"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AgentId"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "description": {
@@ -6371,9 +6472,13 @@
         ],
         "properties": {
           "owner": {
-            "type": [
-              "string",
-              "null"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AgentId"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "transport": {
@@ -6435,9 +6540,13 @@
             ],
             "properties": {
               "owner": {
-                "type": [
-                  "string",
-                  "null"
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/AgentId"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
               "name": {
@@ -6460,6 +6569,10 @@
           "stdio",
           "http"
         ]
+      },
+      "MediaType": {
+        "type": "string",
+        "description": "媒体类型：只存 `type/subtype`（小写）。参数（如 charset）不影响怎么显示和交给模型，下载一律按原始字节。"
       },
       "MemoryIn": {
         "type": "object",
@@ -6495,9 +6608,13 @@
             "type": "string"
           },
           "owner": {
-            "type": [
-              "string",
-              "null"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AgentId"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "content": {
@@ -6546,9 +6663,13 @@
             "type": "string"
           },
           "session_id": {
-            "type": [
-              "string",
-              "null"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SessionId"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "issue_id": {
@@ -6587,9 +6708,13 @@
             "format": "int64"
           },
           "session_id": {
-            "type": [
-              "string",
-              "null"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SessionId"
+              },
+              {
+                "type": "null"
+              }
             ]
           }
         }
@@ -6621,11 +6746,15 @@
         "type": "object",
         "properties": {
           "owner": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "agent 的 id；null 归平台"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AgentId",
+                "description": "agent 的 id；null 归平台"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -6803,7 +6932,7 @@
             "format": "int64"
           },
           "agent_id": {
-            "type": "string"
+            "$ref": "#/components/schemas/AgentId"
           },
           "day": {
             "type": "string",
@@ -6822,8 +6951,7 @@
             }
           },
           "importance": {
-            "type": "integer",
-            "format": "int64"
+            "$ref": "#/components/schemas/Importance"
           },
           "created_at": {
             "type": "string",
@@ -7033,7 +7161,7 @@
           "agents": {
             "type": "array",
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/AgentId"
             },
             "description": "带这个角色的 agent 的 id（含归档的）；base 是全部 agent"
           }
@@ -7159,7 +7287,7 @@
             ],
             "properties": {
               "session_id": {
-                "type": "string"
+                "$ref": "#/components/schemas/SessionId"
               },
               "agent": {
                 "type": "string"
@@ -7176,6 +7304,11 @@
         ],
         "description": "推给前端的一条（SSE 事件名 `run`）。"
       },
+      "RunId": {
+        "type": "integer",
+        "format": "int64",
+        "description": "一次运行的编号（runs 表的行号）"
+      },
       "RunRecord": {
         "type": "object",
         "required": [
@@ -7186,11 +7319,10 @@
         ],
         "properties": {
           "id": {
-            "type": "integer",
-            "format": "int64"
+            "$ref": "#/components/schemas/RunId"
           },
           "session_id": {
-            "type": "string"
+            "$ref": "#/components/schemas/SessionId"
           },
           "started_at": {
             "type": "string",
@@ -7291,7 +7423,7 @@
         ],
         "properties": {
           "session_id": {
-            "type": "string"
+            "$ref": "#/components/schemas/SessionId"
           }
         }
       },
@@ -7368,7 +7500,7 @@
             "format": "int64"
           },
           "agent_id": {
-            "type": "string"
+            "$ref": "#/components/schemas/AgentId"
           },
           "skill": {
             "type": "string"
@@ -7389,7 +7521,7 @@
             }
           },
           "session_id": {
-            "type": "string",
+            "$ref": "#/components/schemas/SessionId",
             "description": "用户点「始终允许」的那次调用所在的会话（可能已删除）"
           },
           "created_at": {
@@ -7417,11 +7549,15 @@
         ],
         "properties": {
           "owner": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "新建时的 owner；已有的不变"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AgentId",
+                "description": "新建时的 owner；已有的不变"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "value": {
             "type": "string"
@@ -7449,9 +7585,13 @@
         ],
         "properties": {
           "owner": {
-            "type": [
-              "string",
-              "null"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AgentId"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "name": {
@@ -7682,6 +7822,10 @@
           }
         }
       },
+      "SessionId": {
+        "type": "string",
+        "description": "会话的编号"
+      },
       "SessionListItem": {
         "allOf": [
           {
@@ -7791,10 +7935,10 @@
         ],
         "properties": {
           "id": {
-            "type": "string"
+            "$ref": "#/components/schemas/SessionId"
           },
           "agent_id": {
-            "type": "string"
+            "$ref": "#/components/schemas/AgentId"
           },
           "title": {
             "type": "string"
@@ -7804,11 +7948,15 @@
             "description": "会话的来源与发起方（结构化，前端不认识库里的编号格式）"
           },
           "parent_session_id": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "委派产生的子会话：父会话与 thread 名（thread 名取自 origin，方便界面直接用）"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SessionId",
+                "description": "委派产生的子会话：父会话与 thread 名（thread 名取自 origin，方便界面直接用）"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "thread": {
             "type": [
@@ -7846,7 +7994,7 @@
             "type": "string"
           },
           "media_type": {
-            "type": "string"
+            "$ref": "#/components/schemas/MediaType"
           }
         }
       },
@@ -7861,7 +8009,7 @@
         ],
         "properties": {
           "agent_id": {
-            "type": "string"
+            "$ref": "#/components/schemas/AgentId"
           },
           "name": {
             "type": "string",
@@ -7899,9 +8047,13 @@
             "type": "string"
           },
           "owner": {
-            "type": [
-              "string",
-              "null"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AgentId"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "body": {
@@ -7921,11 +8073,15 @@
         ],
         "properties": {
           "owner": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "新建时的 owner；已有的不变"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AgentId",
+                "description": "新建时的 owner；已有的不变"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "description": {
             "type": "string"
@@ -7957,9 +8113,13 @@
             "type": "string"
           },
           "owner": {
-            "type": [
-              "string",
-              "null"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AgentId"
+              },
+              {
+                "type": "null"
+              }
             ]
           }
         }
@@ -7998,7 +8158,7 @@
         ],
         "properties": {
           "agent_id": {
-            "type": "string"
+            "$ref": "#/components/schemas/AgentId"
           },
           "prompt": {
             "type": "string"
@@ -8135,7 +8295,7 @@
                 "type": "string"
               },
               "agent_id": {
-                "type": "string"
+                "$ref": "#/components/schemas/AgentId"
               },
               "prompt": {
                 "type": "string"
@@ -8220,7 +8380,7 @@
                 "type": "string"
               },
               "agent_id": {
-                "type": "string"
+                "$ref": "#/components/schemas/AgentId"
               },
               "prompt": {
                 "type": "string"
@@ -8254,11 +8414,15 @@
                 "format": "date-time"
               },
               "last_session_id": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "description": "上一次触发开出的、还在的会话"
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/SessionId",
+                    "description": "上一次触发开出的、还在的会话"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "disabled_reason": {
                 "type": [
@@ -8355,9 +8519,13 @@
             ],
             "properties": {
               "agent_id": {
-                "type": [
-                  "string",
-                  "null"
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/AgentId"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
               "model": {
@@ -8662,7 +8830,7 @@
             ],
             "properties": {
               "thread_session_id": {
-                "type": "string"
+                "$ref": "#/components/schemas/SessionId"
               },
               "check_seconds": {
                 "type": [

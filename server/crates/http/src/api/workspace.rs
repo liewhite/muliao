@@ -8,6 +8,7 @@ use axum::extract::State;
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::Response;
 use chrono::{DateTime, Utc};
+use muliao_platform::ids::{AgentId, SessionId};
 use muliao_workspace::browse::{Entry, WorkspaceFile};
 use muliao_workspace::grants::GrantInfo;
 use serde::{Deserialize, Serialize};
@@ -60,15 +61,16 @@ pub async fn browse_file(f: WorkspaceFile) -> ApiResult<Response> {
     let name = f.path.file_name().unwrap_or_default().to_string_lossy().into_owned();
     let disposition = if f.inline() { Disposition::Inline } else { Disposition::Attachment };
     let no_cache = (header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
-    file_response(&f.path, &f.media_type, Some((disposition, &name)), untrusted_headers().chain([no_cache])).await
+    file_response(&f.path, f.media_type.as_str(), Some((disposition, &name)), untrusted_headers().chain([no_cache]))
+        .await
 }
 
 /// 列出工作目录里 path（相对工作目录，空为根）这一层：目录在前，各自按名称排序。
-#[utoipa::path(get, path = "/api/agents/{agent_id}/workspace", tag = "workspace", params(PathQuery),
+#[utoipa::path(get, path = "/api/agents/{agent_id}/workspace", tag = "workspace", params(("agent_id" = AgentId, Path, description = "agent 的编号"), PathQuery),
     responses((status = 200, body = Vec<EntryOut>), (status = 404, body = ErrorOut), (status = 422, body = ErrorOut)))]
 async fn list_workspace(
     State(s): State<AppState>,
-    Path(agent_id): Path<String>,
+    Path(agent_id): Path<AgentId>,
     Query(q): Query<PathQuery>,
 ) -> ApiResult<axum::Json<Vec<EntryOut>>> {
     s.services.agents.get_active(&agent_id).await?;
@@ -78,11 +80,11 @@ async fn list_workspace(
 }
 
 /// 工作目录里一个文件的内容。
-#[utoipa::path(get, path = "/api/agents/{agent_id}/workspace/file", tag = "workspace", params(PathQuery),
+#[utoipa::path(get, path = "/api/agents/{agent_id}/workspace/file", tag = "workspace", params(("agent_id" = AgentId, Path, description = "agent 的编号"), PathQuery),
     responses((status = 200, description = "文件内容"), (status = 404, body = ErrorOut), (status = 422, body = ErrorOut)))]
 async fn read_workspace_file(
     State(s): State<AppState>,
-    Path(agent_id): Path<String>,
+    Path(agent_id): Path<AgentId>,
     Query(q): Query<PathQuery>,
 ) -> ApiResult<Response> {
     s.services.agents.get_active(&agent_id).await?;
@@ -93,13 +95,13 @@ async fn read_workspace_file(
 #[derive(Serialize, ToSchema)]
 pub struct ScriptGrantOut {
     pub id: i64,
-    pub agent_id: String,
+    pub agent_id: AgentId,
     pub skill: String,
     pub script: String,
     pub args: Vec<String>,
     pub secrets: Vec<String>,
     /// 用户点「始终允许」的那次调用所在的会话（可能已删除）
-    pub session_id: String,
+    pub session_id: SessionId,
     pub created_at: DateTime<Utc>,
     /// 按它直接放行的次数与最后一次的时间
     pub hits: i64,
@@ -139,8 +141,9 @@ async fn revoke_script_grant(State(s): State<AppState>, Path(grant_id): Path<i64
 
 /// 结束这个 agent 的一个运行中的后台任务；结局（被结束）照常作为事件回到发起它的会话。已经结束的 409。
 #[utoipa::path(post, path = "/api/agents/{agent_id}/jobs/{job_id}/kill", tag = "workspace",
-    responses((status = 202), (status = 404, body = ErrorOut), (status = 409, body = ErrorOut)))]
-async fn kill_job(State(s): State<AppState>, Path((agent_id, job_id)): Path<(String, i64)>) -> ApiResult<StatusCode> {
+    responses((status = 202), (status = 404, body = ErrorOut), (status = 409, body = ErrorOut)),
+    params(("agent_id" = AgentId, Path, description = "agent 的编号"), ("job_id" = i64, Path)))]
+async fn kill_job(State(s): State<AppState>, Path((agent_id, job_id)): Path<(AgentId, i64)>) -> ApiResult<StatusCode> {
     s.services.jobs.kill(job_id, &agent_id).await?;
     Ok(StatusCode::ACCEPTED)
 }

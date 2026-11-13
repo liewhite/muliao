@@ -1,5 +1,5 @@
 //! 到点唤醒（`wakeups` 的唯一读写处，docs/architecture.md 第 7 节）：会话用 wake_me 约一个时刻，到点时向它投一封事件信件
-//! （带约的时候写的说明），它接着做。约好之后会话上有一个 active 占用（`wake:<会话>:<调用 id>`），所以工作状态是 waiting、
+//! （带约的时候写的说明），它接着做。约好之后会话上有一个 active 占用（每行唤醒引用它），所以工作状态是 waiting、
 //! 委派来的工作不结清；到点由 `deliver_in` 交回并释放，和别的占用走同一个出口。
 //!
 //! - 一个会话至多一个还在等的唤醒：再约就取代（旧的占用放弃），也可以取消；会话被停止时占用被清掉，到点不投。
@@ -8,10 +8,11 @@
 use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
 use muliao_platform::db::{Database, Tx};
+use muliao_platform::ids::SessionId;
 use rusqlite::{Connection, params};
 
 use crate::actor::Waker;
-use crate::holds::{self, Hold, Outside, abandon_in, active_wakes_in};
+use crate::holds::{self, Hold, abandon_in, active_wakes_in};
 use crate::work::{EventSource, deliver_in};
 use muliao_platform::errors::Result;
 
@@ -32,7 +33,7 @@ struct Wakeup {
 }
 
 /// 取消会话还在等的唤醒（至多一个），返回它原定的时刻。
-pub(crate) fn cancel_in(c: &Connection, session_id: &str) -> Result<Option<DateTime<Utc>>> {
+pub(crate) fn cancel_in(c: &Connection, session_id: &SessionId) -> Result<Option<DateTime<Utc>>> {
     let mut cancelled = None;
     for (hold, wakeup) in waiting_in(c, Some(session_id))? {
         abandon_in(c, &hold)?;
@@ -42,12 +43,12 @@ pub(crate) fn cancel_in(c: &Connection, session_id: &str) -> Result<Option<DateT
 }
 
 /// 占用还 active 的唤醒（按约的时刻）；session_id：只看这个会话的。
-fn waiting_in(c: &Connection, session_id: Option<&str>) -> Result<Vec<(Hold, Wakeup)>> {
-    let mut stmt = c.prepare("SELECT due_at, note, created_at FROM wakeups WHERE holder = ?1")?;
+fn waiting_in(c: &Connection, session_id: Option<&SessionId>) -> Result<Vec<(Hold, Wakeup)>> {
+    let mut stmt = c.prepare("SELECT due_at, note, created_at FROM wakeups WHERE hold_id = ?1")?;
     let mut waiting = Vec::new();
-    for (hold, holder) in active_wakes_in(c, session_id)? {
+    for hold in active_wakes_in(c, session_id)? {
         let wakeup =
-            stmt.query_row([&holder], |r| Ok(Wakeup { due_at: r.get(0)?, note: r.get(1)?, created_at: r.get(2)? }))?;
+            stmt.query_row([hold.id], |r| Ok(Wakeup { due_at: r.get(0)?, note: r.get(1)?, created_at: r.get(2)? }))?;
         waiting.push((hold, wakeup));
     }
     waiting.sort_by_key(|(_, w)| w.due_at);
@@ -57,25 +58,22 @@ fn waiting_in(c: &Connection, session_id: Option<&str>) -> Result<Vec<(Hold, Wak
 /// 约一次唤醒，取代会话还在等的那个。awaited：用户是否在等约它的那次运行的回答（唤醒的信件随之推送）。
 pub(crate) fn schedule_in(
     c: &Connection,
-    session_id: &str,
-    call_id: &str,
+    session_id: &SessionId,
     due_at: DateTime<Utc>,
     note: &str,
     awaited: bool,
 ) -> Result<Scheduled> {
-    let of = Outside::Wake { call_id: call_id.to_owned() };
-    let holder = of.holder(session_id);
     let replaced = cancel_in(c, session_id)?;
-    holds::hold_in(c, session_id, of, awaited)?;
+    let hold = holds::hold_wake_in(c, session_id, awaited)?;
     c.execute(
-        "INSERT INTO wakeups (holder, session_id, due_at, note, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![holder, session_id, due_at, note, Utc::now()],
+        "INSERT INTO wakeups (hold_id, due_at, note, created_at) VALUES (?1, ?2, ?3, ?4)",
+        params![hold.id, due_at, note, Utc::now()],
     )?;
     Ok(Scheduled { due_at, replaced })
 }
 
 /// 会话还在等的唤醒（至多一个）：约的时刻与说明，会话页的等待项用。
-pub(crate) fn pending_of_in(c: &Connection, session_id: &str) -> Result<Vec<(Hold, DateTime<Utc>, String)>> {
+pub(crate) fn pending_of_in(c: &Connection, session_id: &SessionId) -> Result<Vec<(Hold, DateTime<Utc>, String)>> {
     Ok(waiting_in(c, Some(session_id))?.into_iter().map(|(h, w)| (h, w.due_at, w.note)).collect())
 }
 

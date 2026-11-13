@@ -7,6 +7,7 @@
 import { readFile, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import openapiTS, { astToString } from 'openapi-typescript'
+import ts from 'typescript'
 
 const SPEC = new URL('../openapi.json', import.meta.url)
 export const OUTPUT = new URL('../src/schema.d.ts', import.meta.url)
@@ -59,10 +60,29 @@ export function relaxRequestDefaults(spec) {
   return spec
 }
 
+/** 后端各种编号的类型（platform::ids）：生成成带品牌的字符串，传错位置（把会话编号当 agent 编号）编译不过 */
+export const BRANDED = ['AgentId', 'SessionId']
+
+/** `string & { readonly __brand: '<name>' }` */
+function brand(name) {
+  const f = ts.factory
+  const tag = f.createPropertySignature(
+    [f.createModifier(ts.SyntaxKind.ReadonlyKeyword)],
+    '__brand',
+    undefined,
+    f.createLiteralTypeNode(f.createStringLiteral(name, true)),
+  )
+  return f.createIntersectionTypeNode([f.createKeywordTypeNode(ts.SyntaxKind.StringKeyword), f.createTypeLiteralNode([tag])])
+}
+
 export async function generate() {
   const spec = JSON.parse(await readFile(SPEC, 'utf8'))
+  const transform = (_schema, { path }) => {
+    const name = path?.startsWith(PREFIX) ? path.slice(PREFIX.length) : undefined
+    return BRANDED.includes(name) ? brand(name) : undefined
+  }
   // 没有字段的对象（如 ChangedEvent）默认生成 Record<string, never>，与 SSE 联合里加上的 type 字段相交就成了 never
-  return HEADER + astToString(await openapiTS(relaxRequestDefaults(spec), { emptyObjectsUnknown: true }))
+  return HEADER + astToString(await openapiTS(relaxRequestDefaults(spec), { emptyObjectsUnknown: true, transform }))
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

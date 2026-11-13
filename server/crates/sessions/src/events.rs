@@ -4,6 +4,7 @@
 //!
 //! 订阅在组合根装配时登记一次（[`Events::subscribe`]），之后不变；没登记完就发布是装配漏了，当场 panic。
 
+use muliao_platform::ids::{AgentId, RunId, SessionId};
 use std::sync::{Arc, OnceLock};
 
 use muliao_platform::db::Tx;
@@ -15,12 +16,12 @@ use crate::origins::SessionOrigin;
 /// 一次运行结束了（完成、停在挂起的调用上、被停止）；没有可交给模型的空闲收尾不发。只带事实。
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunEnded {
-    pub session_id: String,
+    pub session_id: SessionId,
     pub session_title: String,
     pub origin: SessionOrigin,
-    pub agent_id: String,
+    pub agent_id: AgentId,
     pub agent_name: String,
-    pub run_id: i64,
+    pub run_id: RunId,
     /// 模型的最后回答；停在提问、等批准上时是问题与等批准的调用，只停在等 agent 上时为空
     pub answer: String,
     pub stopped: bool,
@@ -33,10 +34,10 @@ pub struct RunEnded {
 /// 一次运行最终失败了（暂时性失败的重试用完，或契约外的失败）。不自动重试。
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunFailed {
-    pub session_id: String,
-    pub agent_id: String,
+    pub session_id: SessionId,
+    pub agent_id: AgentId,
     pub agent_name: String,
-    pub run_id: i64,
+    pub run_id: RunId,
     pub origin: SessionOrigin,
     /// 失败的原文，怎么截给人看由订阅方定
     pub error: String,
@@ -45,15 +46,15 @@ pub struct RunFailed {
 /// 会话被停止：cleared 是被清掉的占用（如后台任务，它在外面的工作被放弃；委派由会话领域自己停）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionStopped {
-    pub session_id: String,
+    pub session_id: SessionId,
     pub cleared: Vec<HoldOf>,
 }
 
 /// 会话被删除：引用它的数据由各领域清理。
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionDeleted {
-    pub session_id: String,
-    pub agent_id: String,
+    pub session_id: SessionId,
+    pub agent_id: AgentId,
 }
 
 type Handler<E> = Arc<dyn Fn(&mut Tx<'_>, &E) -> muliao_platform::errors::Result<()> + Send + Sync>;

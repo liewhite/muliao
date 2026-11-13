@@ -3,6 +3,7 @@
 //! 写入方只有调用模型的运行端口（runtime），读取方只有界面：没有事件、不参与别的领域的清理，行只增不改，一直留着。
 //! 时间存 UTC（`created_at` 的文本形式按时间先后可比，范围查询直接比较）；按天汇总时按配置的时区切日。
 
+use muliao_platform::ids::{AgentId, SessionId};
 use std::collections::BTreeMap;
 use std::ops::{Add, AddAssign};
 use std::sync::Arc;
@@ -65,9 +66,9 @@ impl AddAssign for UsageTotals {
 /// 一笔用量（一次模型请求，或运行收尾时还没记上的部分）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsageEntry {
-    pub agent_id: String,
+    pub agent_id: AgentId,
     /// 不属于任何会话的运行为空（历史数据里有）
-    pub session_id: Option<String>,
+    pub session_id: Option<SessionId>,
     pub kind: RunKind,
     /// `<provider 名>:<模型名>`，与 agent.toml 的 model 同一格式
     pub model: String,
@@ -86,7 +87,7 @@ pub enum UsageGroup {
 /// 一个分组的汇总。没有选中的维度为 None（例如只按模型分组时 agent_id 与 day 都是 None）。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
 pub struct UsageBucket {
-    pub agent_id: Option<String>,
+    pub agent_id: Option<AgentId>,
     pub model: Option<String>,
     /// 配置时区里的日历日
     pub day: Option<NaiveDate>,
@@ -97,7 +98,7 @@ pub struct UsageBucket {
 /// 汇总要用到的那几列。
 struct Row {
     created_at: DateTime<Utc>,
-    agent_id: String,
+    agent_id: AgentId,
     model: String,
     totals: UsageTotals,
 }
@@ -106,7 +107,7 @@ struct Row {
 /// 切日）。结果按 (天, agent, 模型) 排序。
 fn summarize_rows(rows: impl IntoIterator<Item = Row>, group_by: &[UsageGroup], tz: Tz) -> Vec<UsageBucket> {
     // (天, agent, 模型)：按它排序
-    type Key = (Option<NaiveDate>, Option<String>, Option<String>);
+    type Key = (Option<NaiveDate>, Option<AgentId>, Option<String>);
     let mut summed: BTreeMap<Key, UsageTotals> = BTreeMap::new();
     for row in rows {
         let key = (
@@ -194,8 +195,8 @@ impl UsageLog {
     }
 
     /// 这个会话名下全部行（不分运行类型）的用量之和；还没有记过时各项为 0。
-    pub async fn session_totals(&self, session_id: &str) -> rusqlite::Result<UsageTotals> {
-        let session_id = session_id.to_string();
+    pub async fn session_totals(&self, session_id: &SessionId) -> rusqlite::Result<UsageTotals> {
+        let session_id = session_id.clone();
         self.db
             .read(move |c| {
                 c.query_row(

@@ -48,5 +48,6 @@ pub const MIGRATION: Migration = Migration {
         include_str!("../migrations/005_runs_without_kind.sql"),
         include_str!("../migrations/006_shared_files.sql"),
         include_str!("../migrations/007_part_marks_as_array.sql"),
+        include_str!("../migrations/008_hold_columns.sql"),
     ],
 };

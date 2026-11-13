@@ -13,7 +13,7 @@ import {
 } from '@dnd-kit/core'
 import { Link, useNavigate } from 'react-router-dom'
 import { selectableAgents } from '../agentGroups'
-import { api, type Issue, type IssuePriority, type IssueStatus } from '../api'
+import { api, asAgentId, type Issue, type IssuePriority, type IssueStatus } from '../api'
 import {
   PRIORITIES,
   PRIORITY_LABEL,
@@ -418,7 +418,7 @@ function NewIssueForm() {
       if (parsed === null) throw new Error('依赖只能填 issue 编号，如 #12, #15')
       await api.createIssue({
         title,
-        owner,
+        owner: asAgentId(owner),
         description,
         status,
         priority,
@@ -475,7 +475,7 @@ export default function Issues() {
   const [view, changeView] = useStoredState(VIEW_KEY, oneOf<View>(['board', 'list', 'graph'], 'board'))
   // 按负责项目筛选：看一个项目的全部 issue（含已完成、已取消）
   const [owner, setOwner] = useState(ALL_OWNERS)
-  const loaded = useLoad(() => api.issues(owner === ALL_OWNERS ? undefined : owner), [owner])
+  const loaded = useLoad(() => api.issues(owner === ALL_OWNERS ? undefined : asAgentId(owner)), [owner])
   // 拖拽后先在本地挪动，接口返回、重新拉取之后以服务端为准；连着拖几张时每张各占一项
   const [moving, setMoving] = useState<ReadonlyMap<number, PendingMove>>(new Map())
   const issues = loaded.data && moveIssues(loaded.data, moving)

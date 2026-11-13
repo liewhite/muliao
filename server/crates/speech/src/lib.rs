@@ -7,6 +7,7 @@
 //! 转写是用户在界面上同步等待的一次调用：服务出错或不可达时报 外部服务出错（[`Error::Upstream`]）（HTTP 层映射成 502），原因原样
 //! 交给界面，由用户决定重录，不重试。
 
+use muliao_platform::ids::MediaType;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -45,7 +46,7 @@ pub trait Transcriber: Send + Sync {
     fn max_bytes(&self) -> u64;
 
     /// 转写出的文字（首尾空白已去掉）；听不到人说话时为空字符串。
-    fn transcribe<'a>(&'a self, audio: &'a [u8], media_type: &'a str) -> BoxFuture<'a, Result<String, Error>>;
+    fn transcribe<'a>(&'a self, audio: &'a [u8], media_type: &'a MediaType) -> BoxFuture<'a, Result<String, Error>>;
 }
 
 /// 按配置选实现。`client` 是共用的出站 HTTP 客户端（由组合根创建）。
@@ -66,11 +67,10 @@ pub fn build(cfg: &TranscriptionConfig, client: reqwest::Client) -> Arc<dyn Tran
     }
 }
 
-/// 请求的 Content-Type → (不带参数的 MIME 类型, 音频格式)；不是支持的音频类型时报 InvalidInput。
-pub fn audio_type(media_type: &str) -> Result<(String, &'static str), DomainError> {
-    let base = media_type.split(';').next().unwrap_or_default().trim().to_lowercase();
-    match AUDIO_FORMATS.iter().find(|(mime, _)| *mime == base) {
-        Some((_, format)) => Ok((base, format)),
+/// 媒体类型对应的音频格式；不是支持的音频类型时报 InvalidInput。
+pub fn audio_format(media_type: &MediaType) -> Result<&'static str, DomainError> {
+    match AUDIO_FORMATS.iter().find(|(mime, _)| *mime == media_type.as_str()) {
+        Some((_, format)) => Ok(format),
         None => {
             let supported: Vec<&str> = AUDIO_FORMATS.iter().map(|(m, _)| *m).collect();
             Err(DomainError::invalid(format!("unsupported audio type {media_type:?}; supported: {supported:?}")))
@@ -132,9 +132,9 @@ impl Transcriber for DashScope {
         self.max_bytes
     }
 
-    fn transcribe<'a>(&'a self, audio: &'a [u8], media_type: &'a str) -> BoxFuture<'a, Result<String, Error>> {
+    fn transcribe<'a>(&'a self, audio: &'a [u8], media_type: &'a MediaType) -> BoxFuture<'a, Result<String, Error>> {
         Box::pin(async move {
-            let (mime, format) = audio_type(media_type)?;
+            let format = audio_format(media_type)?;
             if audio.is_empty() {
                 return Err(DomainError::invalid("audio is empty").into());
             }
@@ -144,7 +144,7 @@ impl Transcriber for DashScope {
                 .post(&self.url)
                 .header(reqwest::header::AUTHORIZATION, &self.authorization)
                 .header("X-DashScope-SSE", "disable")
-                .json(&self.body(audio, &mime, format))
+                .json(&self.body(audio, media_type.as_str(), format))
                 .timeout(TIMEOUT)
                 .send()
                 .await;
@@ -179,8 +179,9 @@ mod tests {
 
     #[test]
     fn audio_types_ignore_codecs_and_case() {
-        assert_eq!(audio_type("audio/webm;codecs=opus").unwrap(), ("audio/webm".to_string(), "webm"));
-        assert_eq!(audio_type("Audio/MP4").unwrap(), ("audio/mp4".to_string(), "mp4"));
-        assert!(audio_type("video/webm").is_err());
+        let format = |raw: &str| audio_format(&MediaType::parse(raw).unwrap());
+        assert_eq!(format("audio/webm;codecs=opus").unwrap(), "webm");
+        assert_eq!(format("Audio/MP4").unwrap(), "mp4");
+        assert!(format("video/webm").is_err());
     }
 }

@@ -4,6 +4,7 @@
 //! 消息上的约定（metadata 键、标记、事后补的结果）登记在 [`crate::conventions`] 与 `muliao_runtime::conventions`（工具交回的
 //! 文件与图片），这里只读它们来展示。
 
+use muliao_platform::ids::SessionId;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
@@ -89,7 +90,7 @@ pub struct CallItem {
     /// 调用参数原文
     pub text: String,
     /// 开出或续写的 thread（子会话 id），由会话接口按调用 id 填（[`annotate_threads`]）
-    pub threads: Vec<String>,
+    pub threads: Vec<SessionId>,
     pub wait: Option<CallWait>,
     /// 参数按工具自己的展示规则画成的展示块；None 显示原文（工具没定规则、参数不合它的类型）
     #[schema(value_type = Option<Vec<muliao_platform::tool_views::ViewBlock>>)]
@@ -450,7 +451,7 @@ pub(crate) fn annotate_approvals(items: &mut [Item], open: &OpenAsks) {
 
 /// 工具调用挂上它开出或续写的 thread（call_threads：调用 id → thread，见 [`crate::thread_calls::call_threads_in`]），界面
 /// 据此把 thread 显示在这次调用处。只看调用 id，不看调用有没有结果、结果是谁补的。
-pub(crate) fn annotate_threads(items: &mut [Item], call_threads: &BTreeMap<String, String>) {
+pub(crate) fn annotate_threads(items: &mut [Item], call_threads: &BTreeMap<String, SessionId>) {
     for item in items.iter_mut() {
         if let Item::ToolCall(call) = item
             && let Some(thread) = call_threads.get(&call.tool_call_id)
@@ -777,7 +778,7 @@ mod tests {
                 None
             ]
         );
-        annotate_threads(&mut items, &BTreeMap::from([("n".to_owned(), "child".to_owned())]));
+        annotate_threads(&mut items, &BTreeMap::from([("n".to_owned(), SessionId::new("child"))]));
         assert_eq!(["p", "s", "n"].map(|id| call_of(&items, id).threads.len()), [0, 0, 1]);
         assert_eq!(call_of(&items, "n").threads, ["child"]);
     }

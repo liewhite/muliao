@@ -2,6 +2,7 @@
 //! 都只经会话领域的接口做事；挂起的调用（ask_user、ask_agent）交回 `ToolError::Defer`，运行停在这里，回答作为结果交回
 //! （[`crate::pending`]）。
 
+use muliao_platform::ids::SessionId;
 use std::sync::{Arc, OnceLock};
 
 use agenter::{Tool, ToolCtx, ToolError, ToolOutput};
@@ -34,7 +35,7 @@ impl Stopper {
         assert!(self.0.set(actors).is_ok(), "the session stopper is bound once");
     }
 
-    pub async fn stop(&self, session_id: &str) -> Result<Halted> {
+    pub async fn stop(&self, session_id: &SessionId) -> Result<Halted> {
         self.0.get().expect("session actors are started before any run").stop(session_id).await
     }
 }
@@ -427,8 +428,8 @@ impl Tool<RunScope> for WakeMe {
             .note
             .filter(|n| !n.trim().is_empty())
             .ok_or_else(|| ToolError::Retry("`note` is required: say what to do when woken".into()))?;
-        let (call, awaited) = (call_id(&ctx), ctx.deps.user_waits());
-        let scheduled = self.db.write(move |tx| schedule_in(tx, &session_id, &call, due_at, &note, awaited)).await?;
+        let awaited = ctx.deps.user_waits();
+        let scheduled = self.db.write(move |tx| schedule_in(tx, &session_id, due_at, &note, awaited)).await?;
         let mut text = format!("scheduled wake-up at {}", local_time(scheduled.due_at, tz));
         if let Some(r) = scheduled.replaced {
             text.push_str(&format!("; replaced the one at {}", local_time(r, tz)));

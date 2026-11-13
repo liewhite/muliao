@@ -21,6 +21,9 @@ import { Link, useNavigate } from 'react-router-dom'
 import {
   agentRoute,
   api,
+  asSessionId,
+  type AgentId,
+  type SessionId,
   type ApprovalChoice,
   type Attachment,
   type CompactionInfo,
@@ -563,7 +566,7 @@ function UnlinkedThreads({ threads }: { threads: Session[] }) {
 
 /** 等待项上的操作：结束后台任务、停止 thread（经页面的 action，出错显示在输入框上方） */
 interface WaitActions {
-  agentId: string
+  agentId: AgentId
   run: (fn: () => Promise<unknown>) => void
   busy: boolean
 }
@@ -859,18 +862,18 @@ function UsageLine({ context, usage }: Pick<SessionDetail, 'context' | 'usage'>)
 
 /** 会话页按哪些事件重新拉取：连上了（之前可能丢了事件），或这个会话的历史或运行状态变了（saved：又保存了一步，
  * 或运行、压缩开始、结束、失败、停止、重试） */
-function refetchesSession(e: PageEvent, id: string): boolean {
+function refetchesSession(e: PageEvent, id: SessionId): boolean {
   if (e.type === 'connected') return true
   return e.type === 'saved' && e.session_id === id
 }
 
 /** 用户看过了这个会话：指向它的通知标为已读（会话的未读由通知派生），标记本身幂等 */
-function markSessionRead(id: string) {
+function markSessionRead(id: SessionId) {
   void api.markRead(id).catch((e) => console.error('marking session read failed', e))
 }
 
 export default function SessionView() {
-  const id = useRouteParam('id')
+  const id = asSessionId(useRouteParam('id'))
   const navigate = useNavigate()
   const confirm = useConfirm()
   // 整份会话（含全部历史，大的有几 MB）不随任何会话的 changed 重新拉取：只按这个会话自己的事件刷新（连上了、saved），

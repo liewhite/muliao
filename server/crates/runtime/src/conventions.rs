@@ -9,7 +9,8 @@
 //! metadata 的键带 `muliao_` 前缀：以后别的地方往同一个字段写东西时不撞名。
 
 use agenter::{Content, File, FileSource, Message, RequestPart, ToolResult};
-use muliao_files::{FileMeta, INLINE_IMAGE_TYPES, file_url, parse_file_url};
+use muliao_files::{FileMeta, file_url, parse_file_url};
+use muliao_platform::ids::MediaType;
 use muliao_platform::tooling::RunScope;
 use serde::{Deserialize, Serialize};
 
@@ -21,7 +22,7 @@ pub const TOOL_ATTACHMENTS: &str = "muliao_attachments";
 pub struct SharedFile {
     pub file_id: String,
     pub name: String,
-    pub media_type: String,
+    pub media_type: MediaType,
 }
 
 impl SharedFile {
@@ -36,7 +37,7 @@ pub struct Attachment {
     /// 文件存储的地址（files::file_url）：界面直接用它显示与下载
     pub url: String,
     pub name: String,
-    pub media_type: String,
+    pub media_type: MediaType,
     /// 能内联显示的图片；其余是下载链接
     pub inline: bool,
 }
@@ -47,7 +48,7 @@ impl From<&SharedFile> for Attachment {
             url: file_url(&f.file_id, &f.name),
             name: f.name.clone(),
             media_type: f.media_type.clone(),
-            inline: INLINE_IMAGE_TYPES.contains(&f.media_type.as_str()),
+            inline: f.media_type.is_inline_image(),
         }
     }
 }
@@ -56,12 +57,8 @@ impl From<&SharedFile> for Attachment {
 pub fn attachment_of_ref(file: &File) -> Option<Attachment> {
     let FileSource::Url(url) = &file.source else { return None };
     let (_, name) = parse_file_url(url)?;
-    Some(Attachment {
-        url: url.clone(),
-        name,
-        media_type: file.media_type.clone(),
-        inline: INLINE_IMAGE_TYPES.contains(&file.media_type.as_str()),
-    })
+    let media_type = MediaType::parse(&file.media_type).ok()?;
+    Some(Attachment { url: url.clone(), name, inline: media_type.is_inline_image(), media_type })
 }
 
 /// 在工具里调用：把这些文件挂到这次调用的结果上给用户看（运行端口在这一步结束时并进结果）。

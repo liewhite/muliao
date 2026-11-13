@@ -7,6 +7,7 @@
 //!
 //! 会话的未读不另存：有指向它的未读通知就是未读（[`unread_sessions_in`]），所以正常跑完不通知的定时会话不算未读。
 
+use muliao_platform::ids::SessionId;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -32,7 +33,7 @@ pub struct Notify {
     pub title: String,
     pub body: String,
     /// 通知关于的会话（打开它即已读、随它删除）；系统通知为 None
-    pub session_id: Option<String>,
+    pub session_id: Option<SessionId>,
     /// 交给用户审核的 issue：点开打开它（而不是会话），可以直接通过或打回；其余为 None
     pub issue_id: Option<i64>,
 }
@@ -41,7 +42,7 @@ pub struct Notify {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub struct NotificationEvent {
     pub notification_id: i64,
-    pub session_id: Option<String>,
+    pub session_id: Option<SessionId>,
 }
 
 /// 一条通知（读模型）。
@@ -50,7 +51,7 @@ pub struct Notification {
     pub id: i64,
     pub title: String,
     pub body: String,
-    pub session_id: Option<String>,
+    pub session_id: Option<SessionId>,
     pub issue_id: Option<i64>,
     /// 点开打开的页面（推送与通知页共用）；系统通知为 None
     pub url: Option<String>,
@@ -60,7 +61,7 @@ pub struct Notification {
 
 /// 点开通知打开的页面：交给用户审核的 issue，否则通知关于的会话；都没有时为 None（推送点开看通知页）。是前端的路由，
 /// 由 crates/muliao/tests/frontend_contract.rs 与前端核对。
-pub fn url_of(session_id: Option<&str>, issue_id: Option<i64>) -> Option<String> {
+pub fn url_of(session_id: Option<&SessionId>, issue_id: Option<i64>) -> Option<String> {
     match (issue_id, session_id) {
         (Some(issue), _) => Some(format!("/issues/{issue}")),
         (None, Some(session)) => Some(format!("/sessions/{session}")),
@@ -71,13 +72,13 @@ pub fn url_of(session_id: Option<&str>, issue_id: Option<i64>) -> Option<String>
 const COLUMNS: &str = "id, title, body, session_id, issue_id, unread, created_at";
 
 fn notification(r: &Row<'_>) -> rusqlite::Result<Notification> {
-    let session_id: Option<String> = r.get(3)?;
+    let session_id: Option<SessionId> = r.get(3)?;
     let issue_id: Option<i64> = r.get(4)?;
     Ok(Notification {
         id: r.get(0)?,
         title: r.get(1)?,
         body: r.get(2)?,
-        url: url_of(session_id.as_deref(), issue_id),
+        url: url_of(session_id.as_ref(), issue_id),
         session_id,
         issue_id,
         unread: r.get(5)?,
@@ -101,7 +102,7 @@ pub struct PushMessage {
     pub title: String,
     pub body: String,
     pub url: Option<String>,
-    pub session_id: Option<String>,
+    pub session_id: Option<SessionId>,
     pub issue_id: Option<i64>,
     /// 此刻的未读通知数（应用角标）
     pub unread: i64,
@@ -131,12 +132,12 @@ pub fn unread_count_in(c: &Connection) -> rusqlite::Result<i64> {
 }
 
 /// 这些会话里未读的：有指向它的未读通知（会话列表、会话页用）。
-pub fn unread_sessions_in(c: &Connection, session_ids: &[String]) -> rusqlite::Result<BTreeSet<String>> {
+pub fn unread_sessions_in(c: &Connection, session_ids: &[SessionId]) -> rusqlite::Result<BTreeSet<SessionId>> {
     // 调用方一次传一页会话列表，远小于 SQLite 一条语句的参数上限（32766）
     let marks = vec!["?"; session_ids.len()].join(", ");
     let mut stmt =
         c.prepare(&format!("SELECT DISTINCT session_id FROM notifications WHERE unread AND session_id IN ({marks})"))?;
-    stmt.query_map(params_from_iter(session_ids), |r| r.get::<_, String>(0))?.collect()
+    stmt.query_map(params_from_iter(session_ids), |r| r.get::<_, SessionId>(0))?.collect()
 }
 
 /// 通知的写入与查询。克隆共享同一份。
@@ -246,7 +247,7 @@ impl Notifications {
         self.db.read(unread_count_in).await
     }
 
-    pub async fn unread_sessions(&self, session_ids: Vec<String>) -> rusqlite::Result<BTreeSet<String>> {
+    pub async fn unread_sessions(&self, session_ids: Vec<SessionId>) -> rusqlite::Result<BTreeSet<SessionId>> {
         self.db.read(move |c| unread_sessions_in(c, &session_ids)).await
     }
 
@@ -256,8 +257,8 @@ impl Notifications {
     }
 
     /// 用户看过了会话（打开它、看着它时又来了通知）：指向它的通知已读（会话的未读就是这些通知）。
-    pub async fn mark_session_read(&self, session_id: &str) -> rusqlite::Result<()> {
-        self.mark("session_id = ?1", session_id.to_owned().into()).await
+    pub async fn mark_session_read(&self, session_id: &SessionId) -> rusqlite::Result<()> {
+        self.mark("session_id = ?1", session_id.to_string().into()).await
     }
 
     /// 用户打开了 issue：请他审核它的通知已读。
