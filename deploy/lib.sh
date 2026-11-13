@@ -23,7 +23,7 @@ CONFIG=$MULIAO_HOME/config.toml
 DATA=$MULIAO_HOME/data
 LOGFILE=$MULIAO_HOME/muliao.log
 BACKUPS=$MULIAO_HOME/backups
-# Rust 版的安装：app/<时间>-<commit>/{muliao,muliao-migrate,web/,COMMIT}，app/current 是在用那一版的副本
+# Rust 版的安装：app/<时间>-<commit>/{muliao,web/,COMMIT}，app/current 是在用那一版的副本
 APP=$MULIAO_HOME/app
 # 代码签名证书与私钥（第一次安装时生成，之后不再换：换了就要重新授权）
 SIGNING=$MULIAO_HOME/codesign

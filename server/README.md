@@ -15,7 +15,6 @@ Cargo workspace，一个领域一个 crate（`crates/<领域>`，包名 `muliao-
 | 5 | `triggers` |
 | 6 | `history` |
 | 适配 | `http`（接口与 SSE）、`muliao`（组合根，二进制 `muliao`） |
-| 工具 | `migrate`（旧库迁移，二进制 `muliao-migrate`；用组合根的表结构，并装配新版检查迁移结果） |
 
 规则（docs/architecture.md 2.3）：
 - 只依赖更早一层的 crate；同层、反向需要的调用由组合根注入函数。由 `crates/muliao/tests/layers.rs` 检查（层表在那里，新领域先在那里定层）。
@@ -30,9 +29,3 @@ cd server
 cargo test --workspace          # 含对本机线上配置与 secret 的只读检查（没有 ~/.muliao/config.toml 时跳过）
 cargo clippy --workspace --all-targets && cargo fmt --check
 ```
-
-## 旧库迁移（#688）
-```
-cargo run --release -p muliao-migrate -- <Python 版的库> <新库> [-c ~/.muliao/config.toml] [--no-verify]
-```
-只读打开旧库，写新库（不能已存在；先写 `<新库>.partial`，成功才改名），再在新库的副本上启动新版、经 HTTP 打开每个会话页、issue 页与各列表页检查。报告写到 `<新库>.report.md`：每张表迁了多少、没迁的和改了的各多少、为什么。迁什么、不迁什么见 `crates/migrate/src/copy.rs` 开头。

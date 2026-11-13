@@ -1945,29 +1945,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "muliao-migrate"
-version = "0.1.0"
-dependencies = [
- "agenter",
- "anyhow",
- "axum",
- "chrono",
- "muliao-files",
- "muliao-platform",
- "muliao-runtime",
- "muliao-server",
- "muliao-sessions",
- "muliao-workspace",
- "reqwest",
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "muliao-notifications"
 version = "0.1.0"
 dependencies = [

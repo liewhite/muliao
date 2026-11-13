@@ -6,7 +6,7 @@
 deploy/install.sh          # 编译并安装 main；也可以指定分支或 tag：deploy/install.sh <引用>
 ```
 
-脚本在常驻的仓库副本 `~/.muliao/build/src`（`MULIAO_BUILD` 可改；保留 Rust 编译缓存和 `node_modules`，第二次起只编改了的部分）检出要装的版本，`cargo build --release --locked` 编出 `muliao` 与 `muliao-migrate`，`npm ci && npm run build` 构建前端，用固定证书签名 `muliao`（见下「macOS 文件访问授权」），放进新目录 `~/.muliao/app/<时间>-<commit>/`（`muliao`、`muliao-migrate`、`web/`、`COMMIT` 文件写着完整 commit），再把这个目录整个复制成 `~/.muliao/app/current`（真目录，不是链接）。程序要重启服务后才用上；前端装完就是新的（服务从 `current/web` 读），所以装完尽快重启。保留最近 3 个版本目录；退回上一版：`deploy/activate.sh ~/.muliao/app/<上一版目录>` 再重启。依赖：rustup 装的 `~/.cargo/bin/cargo`、`~/.cargo/bin/rcodesign`（`cargo install --locked apple-codesign`）、Homebrew 的 node/npm 与 openssl；锁文件（`Cargo.lock`、`package-lock.json`）定版本。
+脚本在常驻的仓库副本 `~/.muliao/build/src`（`MULIAO_BUILD` 可改；保留 Rust 编译缓存和 `node_modules`，第二次起只编改了的部分）检出要装的版本，`cargo build --release --locked` 编出 `muliao`，`npm ci && npm run build` 构建前端，用固定证书签名 `muliao`（见下「macOS 文件访问授权」），放进新目录 `~/.muliao/app/<时间>-<commit>/`（`muliao`、`web/`、`COMMIT` 文件写着完整 commit），再把这个目录整个复制成 `~/.muliao/app/current`（真目录，不是链接）。程序要重启服务后才用上；前端装完就是新的（服务从 `current/web` 读），所以装完尽快重启。保留最近 3 个版本目录；退回上一版：`deploy/activate.sh ~/.muliao/app/<上一版目录>` 再重启。依赖：rustup 装的 `~/.cargo/bin/cargo`、`~/.cargo/bin/rcodesign`（`cargo install --locked apple-codesign`）、Homebrew 的 node/npm 与 openssl；锁文件（`Cargo.lock`、`package-lock.json`）定版本。
 
 ### macOS 文件访问授权（#715）
 
