@@ -1,6 +1,6 @@
 // 通知的未读数：导航上的数字与应用图标角标共用这一份，事实在服务端（GET /api/notifications/unread）。
 // 推送到达时 Service Worker 按推送里带的未读数设置角标；应用打开时由这里按服务端的数刷新。回到前台不单独重拉：事件流
-// 断过的会重连，连上时 Loader 照常重新拉取。
+// 断了的由看门狗重连（最多晚约两个心跳周期），连上时 Loader 照常重新拉取。
 
 import { useEffect } from 'react'
 import { api } from './api'

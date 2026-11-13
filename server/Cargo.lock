@@ -1899,7 +1899,6 @@ dependencies = [
  "muliao-speech",
  "muliao-triggers",
  "muliao-usage",
- "muliao-web",
  "muliao-workspace",
  "percent-encoding",
  "rusqlite",

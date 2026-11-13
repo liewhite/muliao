@@ -15,7 +15,7 @@ use muliao_sessions::conventions::{PartKind, PartMark, attach_run_context, mark_
 use muliao_sessions::history::append_in;
 use muliao_sessions::mailbox::{NewMail, consume_in, give_in, post_in};
 use muliao_sessions::origins::Origin;
-use muliao_sessions::runs::{Outcome, end_in, start_in};
+use muliao_sessions::runs::{Outcome, current_or_start_in, end_in};
 use serde_json::{Value, json};
 
 use crate::*;
@@ -157,7 +157,7 @@ impl World {
             .write(move |tx| {
                 let mail =
                     from.map(|(o, t)| post_in(tx, &waker, &session, NewMail::message(o, t, true))).transpose()?;
-                let run = start_in(tx, &live, &session)?;
+                let run = current_or_start_in(tx, &live, &session)?;
                 if let Some(m) = mail {
                     give_in(tx, &[m], run)?;
                     consume_in(tx, &[m], run)?;

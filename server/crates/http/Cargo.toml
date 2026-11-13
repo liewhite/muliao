@@ -9,7 +9,6 @@ muliao-platform = { workspace = true }
 muliao-assets = { workspace = true }
 muliao-files = { workspace = true }
 muliao-usage = { workspace = true }
-muliao-web = { workspace = true }
 muliao-speech = { workspace = true }
 muliao-runtime = { workspace = true }
 muliao-sessions = { workspace = true }

@@ -106,8 +106,11 @@ fn query(c: &Connection, filter: &str, params: impl rusqlite::Params) -> Result<
     rows.into_iter().map(record).collect()
 }
 
-/// 开始一次运行，返回它的编号。调用方在同一事务里查过这个会话没有没结束的运行（actor 串行）。
-pub fn start_in(tx: &mut Tx<'_>, live: &Live, session_id: &str) -> Result<i64> {
+/// 会话没结束的那次运行（续跑）的编号；没有就开始一次新的。同一会话因此至多一个没结束的运行。
+pub fn current_or_start_in(tx: &mut Tx<'_>, live: &Live, session_id: &str) -> Result<i64> {
+    if let Some(r) = unfinished_in(tx, session_id)? {
+        return Ok(r.id);
+    }
     tx.execute("INSERT INTO runs (session_id, started_at) VALUES (?1, ?2)", params![session_id, Utc::now()])?;
     let id = tx.last_insert_rowid();
     live.saved_on_commit(tx, session_id);

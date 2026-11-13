@@ -17,7 +17,6 @@ export const FILTERS = {
 } satisfies Record<string, { label: string; origins: Origin[] | null }>
 export type Filter = keyof typeof FILTERS
 
-
 export interface SessionGroup<T> {
   agentId: AgentId
   sessions: T[]

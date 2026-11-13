@@ -226,10 +226,7 @@ async fn begin(core: &Core, session_id: &str) -> Result<Begun> {
     core.db
         .write(move |tx| {
             let session = directory::running_in(tx, &session_id)?;
-            let run_id = match runs::unfinished_in(tx, &session_id)? {
-                Some(r) => r.id,
-                None => runs::start_in(tx, &live, &session_id)?,
-            };
+            let run_id = runs::current_or_start_in(tx, &live, &session_id)?;
             let queued = queued_in(tx, &session_id)?;
             // 信箱里已有的信交给这次运行，哪怕它在交给模型之前就最终失败：失败的结清据此了结它们带来的委派，也不会为它们再唤醒
             give_in(tx, &queued.iter().map(|m| m.id).collect::<Vec<_>>(), run_id)?;

@@ -151,7 +151,7 @@ mod tests {
         assert_eq!(file_in(&root, "a.txt").unwrap().media_type, "text/plain");
         assert!(file_in(&root, "../secret").is_err());
         assert!(file_in(&root, "out").is_err());
-        assert_eq!(list_dir(&root, "nope").unwrap_err().message, "no such file in the directory: 'nope'");
-        assert_eq!(file_in(&root, "sub").unwrap_err().message, "not a file: 'sub'");
+        assert_eq!(list_dir(&root, "nope").unwrap_err().message, "no such file in the directory: \"nope\"");
+        assert_eq!(file_in(&root, "sub").unwrap_err().message, "not a file: \"sub\"");
     }
 }

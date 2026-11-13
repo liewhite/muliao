@@ -152,7 +152,7 @@ mod tests {
         assert!(sites.file("a1", "dash", "sub/").unwrap().path.ends_with("sub/index.html"));
         assert!(sites.file("a1", "dash", "leak").is_err());
         assert!(sites.file("a1", "dash", "../../x").is_err());
-        assert_eq!(sites.file("a1", "nope", "").unwrap_err().message, "agent 'a1' has no page 'nope'");
+        assert_eq!(sites.file("a1", "nope", "").unwrap_err().message, r#"agent "a1" has no page "nope""#);
         assert!(sites.pages("other").is_empty());
     }
 }

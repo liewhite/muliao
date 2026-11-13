@@ -122,10 +122,10 @@ async fn skill_run_checks_the_skill_and_the_script() {
             ("skill_run", json!({"skill": "plain", "script": "scripts/deploy.sh", "timeout": 10})),
         ])
         .await;
-    assert!(out[0].contains("skill \"theirs\" not found") || out[0].contains("skill 'theirs' not found"), "{}", out[0]);
+    assert!(out[0].contains("skill \"theirs\" not found"), "{}", out[0]);
     assert!(out[1].contains("inside the skill's directory"));
     assert!(out[2].contains("inside the skill's directory"));
-    assert!(out[3].contains("has no script 'scripts/missing.sh'"));
+    assert!(out[3].contains(r#"has no script "scripts/missing.sh""#));
     assert!(out[4].contains("is not executable"));
 }
 
