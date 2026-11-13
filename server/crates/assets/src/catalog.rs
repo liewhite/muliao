@@ -7,29 +7,22 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 
 use crate::access::Sharing;
-use crate::formats::mcp::McpFile;
-use crate::formats::memory::MemoryText;
-use crate::formats::skill::SkillDir;
-use crate::kinds::{Content, Kind, StoredKind};
+use crate::kinds::{Kind, Shown, StoredKind};
 use crate::rules::{GLOBAL_MEMORY, ToolSpec};
 use crate::source::AssetSource;
 use crate::tree::{Owner, remove};
 use muliao_platform::errors::{Result, conflict, invalid};
 
-/// 种类专有的详情：内置工具的读写与是否管理类；存成文件的是它的内容，secret 只有 allow_shell（密文不出这个领域）。
+/// 种类专有的详情：内置工具的读写与是否管理类；存成文件的是它能给领域外看的内容（[`Shown`]）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Detail {
     Tool(ToolSpec),
-    Memory(MemoryText),
-    Skill(SkillDir),
-    Mcp(McpFile),
-    Secret { allow_shell: bool },
+    Stored(Shown),
 }
 
-/// 资源池里的一项。内置工具归平台、没有描述、修改时间与文件。
+/// 资源池里的一项。内置工具归平台、没有描述、修改时间与文件。种类就是详情的种类（[`CatalogAsset::kind`]）。
 #[derive(Debug, Clone)]
 pub struct CatalogAsset {
-    pub kind: Kind,
     pub name: String,
     pub owner: Owner,
     pub description: String,
@@ -41,6 +34,15 @@ pub struct CatalogAsset {
     /// 文件或目录的位置；内置工具为 None
     pub path: Option<PathBuf>,
     pub detail: Detail,
+}
+
+impl CatalogAsset {
+    pub fn kind(&self) -> Kind {
+        match &self.detail {
+            Detail::Tool(_) => Kind::Tool,
+            Detail::Stored(s) => s.kind().kind(),
+        }
+    }
 }
 
 pub struct AssetCatalog {
@@ -57,7 +59,6 @@ impl AssetCatalog {
         let snapshot = self.source.snapshot().await?;
         let sharing = Sharing::of(&snapshot);
         let tools = snapshot.tools.specs().iter().map(|t| CatalogAsset {
-            kind: Kind::Tool,
             name: t.name.clone(),
             owner: Owner::Platform,
             description: String::new(),
@@ -68,20 +69,14 @@ impl AssetCatalog {
             detail: Detail::Tool(t.clone()),
         });
         let files = StoredKind::BY_NAME.into_iter().flat_map(|k| snapshot.of_kind(k)).map(|a| CatalogAsset {
-            kind: a.kind.kind(),
             name: a.name.clone(),
             owner: a.owner.clone(),
             description: a.description().to_owned(),
             updated_at: Some(a.updated_at),
-            roles: sharing.including(a.kind.kind(), a.rule_name()),
-            shared: sharing.shared(a.kind.kind(), a.rule_name(), &a.owner),
+            roles: sharing.including(a.kind().kind(), a.rule_name()),
+            shared: sharing.shared(a.kind().kind(), a.rule_name(), &a.owner),
             path: Some(a.path.clone()),
-            detail: match &a.content {
-                Content::Memory(m) => Detail::Memory(m.clone()),
-                Content::Skill(s) => Detail::Skill(s.clone()),
-                Content::Mcp(m) => Detail::Mcp(m.clone()),
-                Content::Secret(s) => Detail::Secret { allow_shell: s.allow_shell },
-            },
+            detail: Detail::Stored(a.content.shown()),
         });
         Ok(tools.chain(files).collect())
     }

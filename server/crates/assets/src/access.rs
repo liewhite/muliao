@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use muliao_platform::fs::{is_within, real};
 
 use crate::access_file::ACCESS_FILE;
-use crate::kinds::{Kind, StoredKind};
+use crate::kinds::{Kind, KindContent, StoredKind};
 use crate::naming::PLATFORM;
 use crate::rules::{Action, BASE, Role, Rules, ToolSpec, pattern_of, permission_of, permits};
 use crate::tree::{Asset, Owner, Snapshot};
@@ -64,7 +64,7 @@ impl Grants {
     /// 能对这项资产做这个动作的来源：它名下的、放行它的角色（含 base）、它自己的 allow；都没有就是不能做。最终规则是各来源的
     /// 并集，所以「某个来源放行」＝它的 allow 匹配且最终的 deny 没拦。
     pub fn source(&self, action: Action, asset: &Asset) -> Source {
-        let (kind, name) = (asset.kind.kind(), asset.rule_name());
+        let (kind, name) = (asset.kind().kind(), asset.rule_name());
         let granting: Vec<&Option<String>> = self
             .allows
             .iter()
@@ -150,26 +150,33 @@ pub fn check_change(snapshot: &Snapshot, actor: &Actor, asset: &Asset) -> Result
     }
     Err(forbidden(format!(
         "{} {:?} belongs to {}; only its owner, an agent whose roles grant 'write:{}:{}', or an admin can change it",
-        asset.kind.label(),
+        asset.kind().label(),
         asset.name,
         snapshot.owner_label(&asset.owner),
-        asset.kind,
+        asset.kind(),
         asset.name
     )))
 }
 
-/// [`Snapshot::existing`]，已存在的再要 actor 能改它。
-pub fn writable<'s>(snapshot: &'s Snapshot, kind: StoredKind, name: &str, actor: &Actor) -> Result<Option<&'s Asset>> {
-    let asset = snapshot.existing(kind, name)?;
-    if let Some(a) = asset {
-        check_change(snapshot, actor, a)?;
-    }
-    Ok(asset)
+/// 按名字认的这一种资源（[`Snapshot::existing`]）与它带类型的内容，已存在的再要 actor 能改它。
+pub fn writable<'s, C: KindContent>(
+    snapshot: &'s Snapshot,
+    name: &str,
+    actor: &Actor,
+) -> Result<Option<(&'s Asset, &'s C)>> {
+    let Some(a) = snapshot.existing(C::KIND, name)? else { return Ok(None) };
+    check_change(snapshot, actor, a)?;
+    Ok(C::of(&a.content).map(|c| (a, c)))
 }
 
-/// grants 能用的这一种资源，按名称。
-pub fn usable<'s>(snapshot: &'s Snapshot, kind: StoredKind, grants: &Grants) -> Vec<&'s Asset> {
-    snapshot.of_kind(kind).into_iter().filter(|a| grants.uses(a)).collect()
+/// grants 能用的这一种资源与它们带类型的内容，按名称（记忆含各 agent 的私有记忆）。
+pub fn usable<'s, C: KindContent>(snapshot: &'s Snapshot, grants: &Grants) -> Vec<(&'s Asset, &'s C)> {
+    snapshot
+        .of_kind(C::KIND)
+        .into_iter()
+        .filter(|a| grants.uses(a))
+        .filter_map(|a| C::of(&a.content).map(|c| (a, c)))
+        .collect()
 }
 
 /// agent 能写哪里的领域输入（工作区领域把它并进默认可写范围），全部由它的 Grants 换算。资源树（tree）整个只按规则与
@@ -250,13 +257,13 @@ pub fn write_scope(snapshot: &Snapshot, agent_id: &AgentId) -> WriteScope {
     let located = snapshot
         .all()
         .map(|a| {
-            let whose = format!("It belongs to {} ({} {:?})", snapshot.owner_label(&a.owner), a.kind.label(), a.name);
+            let whose = format!("It belongs to {} ({} {:?})", snapshot.owner_label(&a.owner), a.kind().label(), a.name);
             let advice = match a.rule_name() {
                 None => format!("{whose}: it is that agent's private memory, which only it (or an admin) changes.]"),
                 Some(rule_name) => format!(
                     "{whose}: ask its owner or an admin to change it, or ask the user or an admin to grant you '{}' in \
                      {}.]",
-                    permission_of(Action::Write, a.kind.kind(), rule_name),
+                    permission_of(Action::Write, a.kind().kind(), rule_name),
                     access_path.display()
                 ),
             };
@@ -293,7 +300,9 @@ impl Reach {
 pub fn reach_of(snapshot: &Snapshot, grants: &Grants) -> Reach {
     let assets = StoredKind::BY_NAME
         .into_iter()
-        .flat_map(|k| usable(snapshot, k, grants).into_iter().map(move |a| pattern_of(k.kind(), &a.name)))
+        .flat_map(|k| snapshot.of_kind(k))
+        .filter(|a| grants.uses(a))
+        .map(|a| pattern_of(a.kind().kind(), &a.name))
         .collect();
     let tools =
         snapshot.tools.specs().iter().filter(|t| grants.rules().includes(Kind::Tool, Some(&t.name))).cloned().collect();

@@ -154,7 +154,7 @@ async fn catalog_transfer_and_roles() {
         .await
         .unwrap();
     let all = catalog.catalog().await.unwrap();
-    let s = all.iter().find(|c| c.kind == Kind::Skill && c.name == "s").unwrap();
+    let s = all.iter().find(|c| c.kind() == Kind::Skill && c.name == "s").unwrap();
     assert_eq!(s.roles, vec!["team".to_owned()]);
     assert!(!s.shared, "a role held by nobody does not share it");
     assert!(matches!(all[0].detail, Detail::Tool(_)));

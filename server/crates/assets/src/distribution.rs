@@ -6,8 +6,7 @@ use std::sync::Arc;
 
 use crate::access::{Actor, Grants, Reach, Source, WriteScope, grants_for, holders_of, reach_of, write_scope};
 use crate::access_file;
-use crate::kinds::StoredKind;
-use crate::mcp::{McpServer, server_of};
+use crate::kinds::{Shown, StoredKind};
 use crate::rules::{Action, AgentRules, BUILTIN_ROLES, Role, Rules};
 use crate::source::AssetSource;
 use crate::tree::{Owner, Snapshot};
@@ -29,10 +28,9 @@ pub struct RoleView {
     pub holders: Vec<AgentId>,
 }
 
-/// agent 能用的一项资源。
+/// agent 能用的一项资源。种类就是内容的种类（[`UsedAsset::kind`]）。
 #[derive(Debug, Clone)]
 pub struct UsedAsset {
-    pub kind: StoredKind,
     pub name: String,
     pub owner: Owner,
     pub description: String,
@@ -40,8 +38,13 @@ pub struct UsedAsset {
     pub source: Source,
     /// 能改
     pub editable: bool,
-    /// MCP server 的配置与启用状态；别的种类为 None
-    pub mcp: Option<McpServer>,
+    pub content: Shown,
+}
+
+impl UsedAsset {
+    pub fn kind(&self) -> StoredKind {
+        self.content.kind()
+    }
 }
 
 /// 预览还没建的 agent 或角色时，在 plan 里给它的那一节用的名字（只算、不写）
@@ -99,22 +102,19 @@ impl Distribution {
         let snapshot = self.source.snapshot().await?;
         let grants = grants_for(&snapshot, &Actor::Agent(agent_id.to_owned()));
         let mut used = Vec::new();
-        for kind in StoredKind::ALL {
-            for a in snapshot.of_kind(kind) {
-                let source = grants.source(Action::Use, a);
-                if !source.any() {
-                    continue;
-                }
-                used.push(UsedAsset {
-                    kind,
-                    name: a.name.clone(),
-                    owner: a.owner.clone(),
-                    description: a.description().to_owned(),
-                    source,
-                    editable: grants.writes(a),
-                    mcp: (kind == StoredKind::Mcp).then(|| server_of(a)),
-                });
+        for a in StoredKind::ALL.into_iter().flat_map(|k| snapshot.of_kind(k)) {
+            let source = grants.source(Action::Use, a);
+            if !source.any() {
+                continue;
             }
+            used.push(UsedAsset {
+                name: a.name.clone(),
+                owner: a.owner.clone(),
+                description: a.description().to_owned(),
+                source,
+                editable: grants.writes(a),
+                content: a.content.shown(),
+            });
         }
         Ok(used)
     }

@@ -14,7 +14,7 @@ use chrono::{DateTime, Utc};
 use muliao_assets::access::Actor;
 use muliao_assets::catalog::{CatalogAsset, Detail};
 use muliao_assets::formats::mcp::{McpConfig, McpTransport};
-use muliao_assets::kinds::StoredKind;
+use muliao_assets::kinds::{Shown, StoredKind};
 use muliao_assets::mcp::McpServer;
 use muliao_assets::memory::MemoryInfo;
 use muliao_assets::tree::Owner;
@@ -133,10 +133,10 @@ impl McpConfigOut {
 fn catalog_out(e: CatalogAsset) -> CatalogAssetOut {
     let detail = match &e.detail {
         Detail::Tool(t) => CatalogDetail::Tool { access: Access::of(t.access), admin: t.admin },
-        Detail::Skill(_) => CatalogDetail::Skill,
-        Detail::Mcp(m) => CatalogDetail::Mcp(McpConfigOut::of(&m.config, m.enabled)),
-        Detail::Secret { allow_shell } => CatalogDetail::Secret { allow_shell: *allow_shell },
-        Detail::Memory(_) => CatalogDetail::Memory,
+        Detail::Stored(Shown::Skill(_)) => CatalogDetail::Skill,
+        Detail::Stored(Shown::Mcp(m)) => CatalogDetail::Mcp(McpConfigOut::of(&m.config, m.enabled)),
+        Detail::Stored(Shown::Secret { allow_shell }) => CatalogDetail::Secret { allow_shell: *allow_shell },
+        Detail::Stored(Shown::Memory(_)) => CatalogDetail::Memory,
     };
     CatalogAssetOut {
         owner: owner_out(&e.owner),

@@ -11,7 +11,7 @@ use muliao_platform::fs::RealPath;
 use sha2::{Digest, Sha256};
 
 use crate::access::{Actor, Grants, grants_for, usable};
-use crate::formats::skill::{SKILL_FILE, body_of, compose};
+use crate::formats::skill::{SKILL_FILE, SkillDir, body_of, compose};
 use crate::kinds::StoredKind;
 use crate::source::AssetSource;
 use crate::tree::{Asset, Expect, Owner, Snapshot, version_of};
@@ -28,13 +28,13 @@ pub struct SkillMeta {
 
 /// grants 能用的 skill，按名称。
 pub(crate) fn index_of(snapshot: &Snapshot, grants: &Grants) -> Vec<SkillMeta> {
-    usable(snapshot, StoredKind::Skill, grants).into_iter().map(meta).collect()
+    usable::<SkillDir>(snapshot, grants).into_iter().map(meta).collect()
 }
 
-fn meta(a: &Asset) -> SkillMeta {
+fn meta((a, dir): (&Asset, &SkillDir)) -> SkillMeta {
     SkillMeta {
         name: a.name.clone(),
-        description: a.description().to_owned(),
+        description: dir.description.clone(),
         owner: a.owner.clone(),
         path: a.path.join(SKILL_FILE),
     }
@@ -125,18 +125,18 @@ impl SkillStore {
     pub async fn scripts(&self, name: &str, agent_id: &AgentId) -> Result<SkillScripts> {
         let snapshot = self.source.snapshot().await?;
         let grants = grants_for(&snapshot, &Actor::Agent(agent_id.to_owned()));
-        let found = usable(&snapshot, StoredKind::Skill, &grants).into_iter().find(|a| a.name == name);
-        let a = found.ok_or_else(|| {
+        let found = usable::<SkillDir>(&snapshot, &grants).into_iter().find(|(a, _)| a.name == name);
+        let (a, dir) = found.ok_or_else(|| {
             not_found(format!("skill {name:?} not found among the skills you can use (see your skill index)"))
         })?;
-        Ok(SkillScripts { directory: a.path.clone(), approval: a.content.skill().approval.clone() })
+        Ok(SkillScripts { directory: a.path.clone(), approval: dir.approval.clone() })
     }
 
     pub async fn read(&self, name: &str) -> Result<Skill> {
         let snapshot = self.source.snapshot().await?;
-        let asset = snapshot.asset(StoredKind::Skill, name)?;
-        let text = crate::formats::read(&asset.path.join(SKILL_FILE)).map_err(invalid)?;
-        Ok(Skill { meta: meta(asset), body: body_of(&text), version: version_of(&text) })
+        let found = snapshot.typed::<SkillDir>(name)?;
+        let text = crate::formats::read(&found.0.path.join(SKILL_FILE)).map_err(invalid)?;
+        Ok(Skill { meta: meta(found), body: body_of(&text), version: version_of(&text) })
     }
 
     /// skill 的目录（界面只读浏览它的文件用）。
@@ -165,6 +165,6 @@ impl SkillStore {
         };
         let text = compose(current.as_deref(), name, description, body).map_err(invalid)?;
         self.source.write(&[(md, text, Expect::version(version))]).await?;
-        Ok(meta(self.source.snapshot().await?.asset(StoredKind::Skill, name)?))
+        Ok(meta(self.source.snapshot().await?.typed::<SkillDir>(name)?))
     }
 }

@@ -8,7 +8,7 @@ use muliao_assets::access::{Actor, Reach, Source};
 use muliao_assets::distribution::{RoleSpec, RoleView, UsedAsset};
 use muliao_assets::formats::agent_file::{AgentConfig, Thinking};
 use muliao_assets::formats::mcp::McpTransport;
-use muliao_assets::kinds::StoredKind;
+use muliao_assets::kinds::Shown;
 use muliao_assets::rules::{AgentRules, Rules, ToolSpec};
 use muliao_assets::service::{AgentPatch, AgentSpec, AgentView};
 use muliao_platform::ids::AgentId;
@@ -475,12 +475,12 @@ async fn agent_assets(
     let mut out =
         AgentAssetsOut { memories: vec![], memory_preview: preview, skills: vec![], secrets: vec![], mcp: vec![] };
     for u in used {
-        match u.kind {
-            StoredKind::Memory => out.memories.push(asset_out(u)),
-            StoredKind::Skill => out.skills.push(asset_out(u)),
-            StoredKind::Secret => out.secrets.push(asset_out(u)),
-            StoredKind::Mcp => {
-                let server = u.mcp.clone().expect("an MCP asset carries its server config");
+        match &u.content {
+            Shown::Memory(_) => out.memories.push(asset_out(u)),
+            Shown::Skill(_) => out.skills.push(asset_out(u)),
+            Shown::Secret { .. } => out.secrets.push(asset_out(u)),
+            Shown::Mcp(file) => {
+                let (transport, enabled) = (file.config.transport(), file.enabled);
                 let a = asset_out(u);
                 out.mcp.push(McpAssetOut {
                     name: a.name,
@@ -488,8 +488,8 @@ async fn agent_assets(
                     description: a.description,
                     source: a.source,
                     editable: a.editable,
-                    transport: server.config.transport(),
-                    enabled: server.enabled,
+                    transport,
+                    enabled,
                 });
             }
         }

@@ -9,6 +9,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 
 use crate::access::{Actor, Grants, grants_for, usable};
+use crate::formats::memory::MemoryText;
 use crate::kinds::StoredKind;
 use crate::source::AssetSource;
 use crate::tree::{Asset, Expect, Owner, Snapshot, version_of};
@@ -16,11 +17,11 @@ use muliao_platform::errors::{Result, not_found};
 
 /// 这个 agent（grants 是它的）能用的每一块记忆，按名字。
 pub(crate) fn blocks_of(snapshot: &Snapshot, grants: &Grants, agent_id: &AgentId) -> Vec<MemoryBlock> {
-    usable(snapshot, StoredKind::Memory, grants)
+    usable::<MemoryText>(snapshot, grants)
         .into_iter()
-        .map(|a| MemoryBlock {
+        .map(|(a, m)| MemoryBlock {
             name: a.name.clone(),
-            content: a.content.memory().text.clone(),
+            content: m.text.clone(),
             editable: grants.writes(a),
             yours: a.owner.is(agent_id),
             path: a.path.clone(),

@@ -6,7 +6,7 @@ use crate::tree::Expect;
 use std::sync::Arc;
 
 use crate::access::{Grants, usable};
-use crate::formats::mcp::{McpConfig, parse, render};
+use crate::formats::mcp::{McpConfig, McpFile, parse, render};
 use crate::kinds::StoredKind;
 use crate::source::AssetSource;
 use crate::tree::{Asset, Owner, Snapshot};
@@ -21,14 +21,13 @@ pub struct McpServer {
     pub enabled: bool,
 }
 
-pub fn server_of(a: &Asset) -> McpServer {
-    let file = a.content.mcp();
+fn server_of((a, file): (&Asset, &McpFile)) -> McpServer {
     McpServer { owner: a.owner.clone(), name: a.name.clone(), config: file.config.clone(), enabled: file.enabled }
 }
 
 /// grants 能用的、已启用的 server，按名称。
 pub(crate) fn servers_of(snapshot: &Snapshot, grants: &Grants) -> Vec<McpServer> {
-    usable(snapshot, StoredKind::Mcp, grants).into_iter().map(server_of).filter(|s| s.enabled).collect()
+    usable::<McpFile>(snapshot, grants).into_iter().map(server_of).filter(|s| s.enabled).collect()
 }
 
 pub struct McpRegistry {
@@ -41,7 +40,7 @@ impl McpRegistry {
     }
 
     pub async fn get(&self, name: &str) -> Result<McpServer> {
-        Ok(server_of(self.source.snapshot().await?.asset(StoredKind::Mcp, name)?))
+        Ok(server_of(self.source.snapshot().await?.typed::<McpFile>(name)?))
     }
 
     /// 用户在界面上新增 server（启用的，归 owner）。probe 给出时先用它连接验证（连不上是它返回的错误，不写入），返回它

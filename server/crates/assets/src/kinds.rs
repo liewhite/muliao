@@ -142,7 +142,7 @@ impl Section {
     }
 }
 
-/// 各种类专有的内容（load 读出的）。
+/// 各种类专有的内容（load 读出的）。资源是哪一种只从这里来（[`Content::kind`]），不另存一份。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Content {
     Memory(MemoryText),
@@ -152,6 +152,15 @@ pub enum Content {
 }
 
 impl Content {
+    pub fn kind(&self) -> StoredKind {
+        match self {
+            Content::Memory(_) => StoredKind::Memory,
+            Content::Skill(_) => StoredKind::Skill,
+            Content::Mcp(_) => StoredKind::Mcp,
+            Content::Secret(_) => StoredKind::Secret,
+        }
+    }
+
     /// skill 与 secret 的描述（记忆、MCP 为空）。
     pub fn description(&self) -> &str {
         match self {
@@ -159,6 +168,71 @@ impl Content {
             Content::Secret(s) => &s.description,
             Content::Memory(_) | Content::Mcp(_) => "",
         }
+    }
+
+    /// 能交出资源领域的部分：secret 只有 allow_shell（密文不出这个领域）。
+    pub fn shown(&self) -> Shown {
+        match self {
+            Content::Memory(m) => Shown::Memory(m.clone()),
+            Content::Skill(s) => Shown::Skill(s.clone()),
+            Content::Mcp(m) => Shown::Mcp(m.clone()),
+            Content::Secret(s) => Shown::Secret { allow_shell: s.allow_shell },
+        }
+    }
+}
+
+/// 一项资源能给领域外看的内容（界面的资源页与 agent 详情），按种类。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Shown {
+    Memory(MemoryText),
+    Skill(SkillDir),
+    Mcp(McpFile),
+    Secret { allow_shell: bool },
+}
+
+impl Shown {
+    pub fn kind(&self) -> StoredKind {
+        match self {
+            Shown::Memory(_) => StoredKind::Memory,
+            Shown::Skill(_) => StoredKind::Skill,
+            Shown::Mcp(_) => StoredKind::Mcp,
+            Shown::Secret { .. } => StoredKind::Secret,
+        }
+    }
+}
+
+/// 一种存成文件的资源的内容类型：按种类查询（[`crate::tree::Snapshot::typed`]、[`crate::access::usable`]）直接拿到它。
+/// 快照里这一种的资源就是内容是这一种的那些（[`Content::kind`]），所以 [`KindContent::of`] 是按内容挑选，不是核对。
+pub trait KindContent: Sized {
+    const KIND: StoredKind;
+    fn of(content: &Content) -> Option<&Self>;
+}
+
+impl KindContent for MemoryText {
+    const KIND: StoredKind = StoredKind::Memory;
+    fn of(content: &Content) -> Option<&Self> {
+        if let Content::Memory(c) = content { Some(c) } else { None }
+    }
+}
+
+impl KindContent for SkillDir {
+    const KIND: StoredKind = StoredKind::Skill;
+    fn of(content: &Content) -> Option<&Self> {
+        if let Content::Skill(c) = content { Some(c) } else { None }
+    }
+}
+
+impl KindContent for McpFile {
+    const KIND: StoredKind = StoredKind::Mcp;
+    fn of(content: &Content) -> Option<&Self> {
+        if let Content::Mcp(c) = content { Some(c) } else { None }
+    }
+}
+
+impl KindContent for SecretFile {
+    const KIND: StoredKind = StoredKind::Secret;
+    fn of(content: &Content) -> Option<&Self> {
+        if let Content::Secret(c) = content { Some(c) } else { None }
     }
 }
 
@@ -235,21 +309,3 @@ static MEMORY: KindSpec = KindSpec {
     load: memory::load,
     vet: memory::vet,
 };
-
-/// 按种类取内容（调用方按 kind 已知它是哪种；对不上是代码错误）。
-macro_rules! content_accessor {
-    ($fn:ident, $variant:ident, $ty:ty) => {
-        impl Content {
-            pub fn $fn(&self) -> &$ty {
-                match self {
-                    Content::$variant(c) => c,
-                    other => panic!("asset content is {other:?}, not {}", stringify!($variant)),
-                }
-            }
-        }
-    };
-}
-content_accessor!(memory, Memory, MemoryText);
-content_accessor!(skill, Skill, SkillDir);
-content_accessor!(mcp, Mcp, McpFile);
-content_accessor!(secret, Secret, SecretFile);

@@ -32,7 +32,7 @@ use sha2::{Digest, Sha256};
 
 use crate::access_file::{self, ACCESS_FILE};
 use crate::formats::agent_file::{self, AGENT_FILE, AgentFile};
-use crate::kinds::{Content, Kind, Section, StoredKind};
+use crate::kinds::{Content, Kind, KindContent, Section, StoredKind};
 use crate::naming::{AgentName, PLATFORM};
 use crate::rules::{Action, AgentRules, Roles, ToolTable, pattern_of};
 use muliao_platform::errors::{Result, conflict, not_found};
@@ -142,10 +142,10 @@ pub struct AgentDir {
     pub file: AgentFile,
 }
 
-/// 一项资源。path：记忆、MCP、secret 是那个文件，skill 是它的目录。私有记忆的 name 是它的 agent 的名字，只用于显示。
+/// 一项资源。path：记忆、MCP、secret 是那个文件，skill 是它的目录。私有记忆的 name 是它的 agent 的名字，只用于显示。种类就是内容的种类
+/// （[`Asset::kind`]）。
 #[derive(Debug, Clone)]
 pub struct Asset {
-    pub kind: StoredKind,
     pub name: String,
     pub owner: Owner,
     pub path: PathBuf,
@@ -154,6 +154,10 @@ pub struct Asset {
 }
 
 impl Asset {
+    pub fn kind(&self) -> StoredKind {
+        self.content.kind()
+    }
+
     pub fn description(&self) -> &str {
         self.content.description()
     }
@@ -161,7 +165,7 @@ impl Asset {
     /// 规则里指它的名字（`<action>:<kind>:<名>`）。私有记忆为 None：它按所属的 agent 认，只有不限种类的规则
     /// （`write:*`）管得到它。
     pub fn rule_name(&self) -> Option<&str> {
-        match (self.kind, &self.owner) {
+        match (self.kind(), &self.owner) {
             (StoredKind::Memory, Owner::Agent(_)) => None,
             _ => Some(&self.name),
         }
@@ -248,6 +252,12 @@ impl Snapshot {
 
     pub fn asset(&self, kind: StoredKind, name: &str) -> Result<&Asset> {
         self.get(kind, name).ok_or_else(|| not_found(format!("{} {name:?} not found", kind.label())))
+    }
+
+    /// 按名字认的这一种资源与它带类型的内容；没有时 NotFound。
+    pub fn typed<C: KindContent>(&self, name: &str) -> Result<(&Asset, &C)> {
+        let a = self.asset(C::KIND, name)?;
+        C::of(&a.content).map(|c| (a, c)).ok_or_else(|| not_found(format!("{} {name:?} not found", C::KIND.label())))
     }
 
     /// agent 的私有记忆；它的目录里没有 memory.md（或读坏了）时 None。
@@ -520,7 +530,7 @@ impl Reader<'_> {
                     return self.problem(path, format!("expected a {what}"), owner.agent());
                 }
                 match self.loaded(kind, &name, path, owner) {
-                    Some(asset) => self.found.entry(kind).or_default().entry(name).or_default().push(asset),
+                    Some(asset) => self.found.entry(asset.kind()).or_default().entry(name).or_default().push(asset),
                     None => {
                         self.unloaded.entry(kind).or_default().insert(name.clone());
                         if *owner == Owner::Platform {
@@ -544,7 +554,6 @@ impl Reader<'_> {
                     self.problem(path.clone(), w, owner.agent());
                 }
                 Some(Asset {
-                    kind,
                     name: name.to_owned(),
                     owner: owner.clone(),
                     path,

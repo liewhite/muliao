@@ -30,12 +30,12 @@ pub struct SecretInfo {
     pub updated_at: DateTime<Utc>,
 }
 
-fn info(a: &Asset) -> SecretInfo {
+fn info((a, file): (&Asset, &SecretFile)) -> SecretInfo {
     SecretInfo {
         owner: a.owner.clone(),
         key: a.name.clone(),
-        description: a.description().to_owned(),
-        allow_shell: a.content.secret().allow_shell,
+        description: file.description.clone(),
+        allow_shell: file.allow_shell,
         updated_at: a.updated_at,
     }
 }
@@ -67,10 +67,10 @@ impl Secrets {
         validate_key(key).map_err(invalid)?;
         let ciphertext = self.vault.encrypt(value);
         let w = self.source.writing().await?;
-        let existing = writable(&w.snapshot, StoredKind::Secret, key, actor)?;
-        let allow_shell = allow_shell.unwrap_or_else(|| existing.is_none_or(|a| a.content.secret().allow_shell));
+        let existing = writable::<SecretFile>(&w.snapshot, key, actor)?;
+        let allow_shell = allow_shell.unwrap_or_else(|| existing.is_none_or(|(_, f)| f.allow_shell));
         // 已有的也按 owner 重算：正在删除的 agent 名下的不再写
-        let owner = existing.map_or(owner, |a| &a.owner);
+        let owner = existing.map_or(owner, |(a, _)| &a.owner);
         let path = w.snapshot.path_of(StoredKind::Secret, key, owner)?;
         let text = render(&SecretFile { description: description.to_owned(), ciphertext, allow_shell });
         muliao_platform::fs::write_atomic(&path, text.as_bytes())?;
@@ -80,7 +80,7 @@ impl Secrets {
     }
 
     pub async fn get(&self, key: &str) -> Result<SecretInfo> {
-        Ok(info(self.source.snapshot().await?.asset(StoredKind::Secret, key)?))
+        Ok(info(self.source.snapshot().await?.typed::<SecretFile>(key)?))
     }
 
     /// MCP 配置里的 `${vault:KEY}` 按 user 能用的 secret 代入（不交给 agent 自己的命令）：代入好的配置与用到的明文（脱敏用）。
@@ -103,8 +103,8 @@ impl Secrets {
         }
         let snapshot = self.source.snapshot().await?;
         let grants = grants_for(&snapshot, user);
-        let found: BTreeMap<&str, &Asset> =
-            usable(&snapshot, StoredKind::Secret, &grants).into_iter().map(|a| (a.name.as_str(), a)).collect();
+        let found: BTreeMap<&str, (&Asset, &SecretFile)> =
+            usable::<SecretFile>(&snapshot, &grants).into_iter().map(|(a, f)| (a.name.as_str(), (a, f))).collect();
         let missing: Vec<&String> = keys.iter().filter(|k| !found.contains_key(k.as_str())).collect();
         if !missing.is_empty() {
             return Err(not_found(format!(
@@ -113,8 +113,7 @@ impl Secrets {
             )));
         }
         if shell {
-            let denied: Vec<&String> =
-                keys.iter().filter(|k| !found[k.as_str()].content.secret().allow_shell).collect();
+            let denied: Vec<&String> = keys.iter().filter(|k| !found[k.as_str()].1.allow_shell).collect();
             if !denied.is_empty() {
                 return Err(invalid(format!(
                     "secret(s) {denied:?} are not allowed in shell commands (allow_shell = false): use them through a \
@@ -124,8 +123,8 @@ impl Secrets {
         }
         let mut values = BTreeMap::new();
         for k in keys {
-            let a = found[k.as_str()];
-            let value = self.vault.decrypt(&a.content.secret().ciphertext).map_err(|_| {
+            let (a, file) = found[k.as_str()];
+            let value = self.vault.decrypt(&file.ciphertext).map_err(|_| {
                 invalid(format!(
                     "secret {k:?} cannot be decrypted ({} was changed by hand?); set it again with vault_set",
                     a.path.display()
