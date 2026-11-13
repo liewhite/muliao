@@ -110,7 +110,7 @@ async fn stdio_server_runs_in_the_users_write_sandbox() {
         async move {
             Ok(Confinement {
                 sandbox,
-                writable: WritablePaths::of(vec![(true, ws)], agent.to_string()),
+                writable: WritablePaths::of(vec![(true, ws)], agent),
                 home,
                 explain: Arc::new(|_: &Path| String::new()),
                 unreadable: vec![],

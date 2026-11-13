@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Button, Card, Chip, Form, toast } from '@heroui/react'
 import { BellRing, LogOut, ShieldCheck, Trash2 } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
-import { api, unauthorizedEvent, type AgentId, sessionRoute } from '../api'
+import { api, unauthorizedEvent, sessionRoute } from '../api'
 import { useReturnState } from '../nav'
 import { enablePush, pushState, unsubscribePush, type PushState } from '../push'
 import {
@@ -135,7 +135,7 @@ function ScriptGrants() {
                     <div className="flex min-w-0 flex-1 flex-col gap-0.5 text-sm">
                       <div className="flex flex-wrap items-center gap-1.5">
                         <Chip size="sm" color="accent" variant="soft">
-                          {agentLabel(agents.data, g.agent_id as AgentId)}
+                          {agentLabel(agents.data, g.agent_id)}
                         </Chip>
                         <span className="break-all font-mono">
                           {g.skill}/{g.script}

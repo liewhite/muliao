@@ -149,7 +149,7 @@ impl World {
 
     async fn call(&self, me: &str, name: &str, args: Value, max_chars: usize) -> Result<String, String> {
         let tool = tools(self.history.clone(), max_chars).into_iter().find(|t| t.name() == name).unwrap();
-        let scope = RunScope::new(me.into(), "/tmp".into(), "s".into(), Audience::None);
+        let scope = RunScope::new(AgentId::new(me), "/tmp".into(), SessionId::new("s"), Audience::None);
         let args = args.to_string();
         let call = ToolCall { id: "c".into(), name: name.into(), args: args.clone(), meta: None };
         match tool.tool.call(ToolCtx { deps: &scope, call: &call, retries: 0, approval: None }, &args).await {

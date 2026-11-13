@@ -384,7 +384,7 @@ mod tests {
     fn mail(id: i64, body: MailBody) -> Mail {
         Mail {
             id: MailId::new(id),
-            session_id: "s".into(),
+            session_id: muliao_platform::ids::SessionId::new("s"),
             body,
             awaited: false,
             state: MailState::Queued,
@@ -482,6 +482,6 @@ mod tests {
         let closing = closing_on_stop(&at);
         assert!(closing.stopped.is_empty());
         assert_eq!(closing.answered.iter().map(|r| r.call_id.as_str()).collect::<Vec<_>>(), ["q1"]);
-        assert_eq!(closing.used, [7]);
+        assert_eq!(closing.used, [MailId::new(7)]);
     }
 }

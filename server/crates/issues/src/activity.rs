@@ -228,7 +228,7 @@ mod tests {
             Happening::Description,
             Happening::Status { change: Change::new(String::from("todo").into(), String::from("done").into()) },
             Happening::Assignee { change: Change::new(None, Some(Assignee::User)) },
-            Happening::Owner { change: Change::new(Some("abc".into()), None) },
+            Happening::Owner { change: Change::new(Some(AgentId::new("abc")), None) },
             Happening::DependsOn { change: Change::new(vec![1], vec![]) },
             Happening::Dependency {
                 change: DependencyChange {
@@ -237,14 +237,14 @@ mod tests {
                     to: String::from("done").into(),
                 },
             },
-            Happening::Stopped { change: Arrival { before: (), to: "abc".into() } },
+            Happening::Stopped { change: Arrival { before: (), to: AgentId::new("abc") } },
             Happening::Unsettled,
         ];
         for what in all {
             let (kind, body, change) = what.stored();
             assert_eq!(Happening::parse(kind, body, change.as_deref()).unwrap(), what);
         }
-        let (_, _, change) = Happening::Stopped { change: Arrival { before: (), to: "a".into() } }.stored();
+        let (_, _, change) = Happening::Stopped { change: Arrival { before: (), to: AgentId::new("a") } }.stored();
         assert_eq!(change.unwrap(), r#"{"from":null,"to":"a"}"#);
         let (_, _, change) = Happening::Assignee { change: Change::new(None, Some(Assignee::User)) }.stored();
         assert_eq!(change.unwrap(), r#"{"from":null,"to":"user"}"#);

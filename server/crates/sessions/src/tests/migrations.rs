@@ -161,7 +161,7 @@ fn hold_kinds_are_backfilled_from_holders() {
     assert_eq!(kinds, ["job", "wake", "delegation"]);
     db.upgrade_to_latest();
     let held = holds::active_among(&db.conn(), &[SessionId::new(SESSION)]).unwrap();
-    let kinds: Vec<HoldOf> = held[SESSION].iter().map(|h| h.of.clone()).collect();
+    let kinds: Vec<HoldOf> = held[&SessionId::new(SESSION)].iter().map(|h| h.of.clone()).collect();
     assert_eq!(
         kinds,
         [HoldOf::Job { job_id: 7 }, HoldOf::Wake, HoldOf::Delegation { row: None, call_id: Some("c1".into()) }]
@@ -266,7 +266,7 @@ fn event_indexes_and_mail_senders_become_part_marks() {
     let expected = vec![
         vec![
             event(1, EventSource::Job { job_id: 12 }, false),
-            event(2, EventSource::Thread { session_id: "s2".into() }, true),
+            event(2, EventSource::Thread { session_id: SessionId::new("s2") }, true),
         ],
         vec![event(0, EventSource::Wake, false), sent(1, Origin::User), sent(2, Origin::User)],
         vec![sent(0, Origin::Trigger)],

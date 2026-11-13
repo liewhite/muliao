@@ -77,7 +77,7 @@ async fn world() -> World {
 
 fn new(owner: &str, title: &str, status: Status, assignee: Option<Assignee>) -> NewIssue {
     NewIssue {
-        owner: owner.into(),
+        owner: AgentId::new(owner),
         title: title.into(),
         description: String::new(),
         status,
@@ -89,7 +89,7 @@ fn new(owner: &str, title: &str, status: Status, assignee: Option<Assignee>) -> 
 }
 
 fn agent(id: &str) -> Option<Assignee> {
-    Some(Assignee::Agent(id.into()))
+    Some(Assignee::Agent(AgentId::new(id)))
 }
 
 impl World {
@@ -369,7 +369,7 @@ async fn a_run_ending_with_the_issue_unsettled_asks_the_agent_to_settle_it() {
         session_id: its.clone(),
         session_title: "t".into(),
         origin: SessionOrigin::Issue { issue_id: i.id },
-        agent_id: A.into(),
+        agent_id: AgentId::new(A),
         agent_name: "alpha".into(),
         run_id: RunId::new(1),
         answer: "好了".into(),
@@ -388,7 +388,7 @@ async fn a_run_ending_with_the_issue_unsettled_asks_the_agent_to_settle_it() {
     w.publish(run_ended, ended(false, vec![])).await;
     let t = w.timeline(i.id).await;
     assert_eq!(kinds(&t), ["created", "unsettled"]);
-    assert_eq!(t[1].actor, Actor::Agent(A.into()));
+    assert_eq!(t[1].actor, Actor::Agent(AgentId::new(A)));
     let letters = w.letters(i.id, A).await;
     assert_eq!(letters.len(), 1, "delivered into its own session although recorded there");
     assert!(letters[0].contains("a comment alone does not settle it"), "{}", letters[0]);
@@ -413,7 +413,7 @@ async fn failures_deleted_sessions_and_deleted_agents_are_recorded_without_deliv
         run_failed,
         RunFailed {
             session_id: its.clone(),
-            agent_id: A.into(),
+            agent_id: AgentId::new(A),
             agent_name: "alpha".into(),
             run_id: RunId::new(2),
             origin: SessionOrigin::Issue { issue_id: i.id },
@@ -426,7 +426,7 @@ async fn failures_deleted_sessions_and_deleted_agents_are_recorded_without_deliv
     assert!(body.starts_with("坏坏") && body.contains("[truncated: 100 more chars]"), "{body}");
     assert!(w.letters(i.id, A).await.is_empty(), "a failure is not delivered (it would retry forever)");
     // 会话删除：时间线不再指向它
-    w.publish(session_deleted, SessionDeleted { session_id: its.clone(), agent_id: A.into() }).await;
+    w.publish(session_deleted, SessionDeleted { session_id: its.clone(), agent_id: AgentId::new(A) }).await;
     assert!(w.timeline(i.id).await.iter().all(|a| a.session_id.is_none()));
     // 删除 agent：指派人、负责人置空，以系统身份记
     let hook = w.board.deletion_hook();
@@ -486,7 +486,7 @@ async fn issue_show_lists_and_stop_rules() {
     let found = w.board.list(Filter { statuses: vec![Status::InProgress], ..Filter::default() }).await.unwrap();
     assert_eq!(found.iter().map(|b| b.issue.id).collect::<Vec<_>>(), [i.id]);
     assert!(!found[0].work.stalled, "its session has mail to run");
-    assert_eq!(found[0].work.sessions.keys().collect::<Vec<_>>(), [B]);
+    assert_eq!(found[0].work.sessions.keys().collect::<Vec<_>>(), [&AgentId::new(B)]);
     w.consume_all().await;
     assert!(w.board.get(i.id).await.unwrap().work.stalled);
     let json = serde_json::to_value(w.board.get(i.id).await.unwrap()).unwrap();
@@ -494,7 +494,7 @@ async fn issue_show_lists_and_stop_rules() {
         (json["assignee"].as_str(), json["status"].as_str(), json["assignee_state"].as_str()),
         (Some(B), Some("in_progress"), Some("idle"))
     );
-    let by_owner = w.board.list(Filter { owner: Some(B.into()), ..Filter::default() }).await.unwrap();
+    let by_owner = w.board.list(Filter { owner: Some(AgentId::new(B)), ..Filter::default() }).await.unwrap();
     assert!(by_owner.is_empty());
     // issue_stop 的规则（停会话本身在端到端测试里）
     let err = w.board.stop(by_agent(A, "x"), i.id, Status::Done, None).await.unwrap_err();

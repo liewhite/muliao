@@ -174,8 +174,11 @@ base_url = "{}"
     let usage = Arc::new(UsageLog::new(db.clone(), chrono_tz::UTC));
     let vault = Arc::new(Vault::new("3QOHdQSfwdIhMog5wkCMiIBXFANh4YdV-XA9xY3RmyY=").unwrap());
     let secrets = Arc::new(Secrets::new(source.clone(), vault));
-    let attachment =
-        SharedFile { file_id: "f1".into(), name: "report.pdf".into(), media_type: MediaType::known("application/pdf") };
+    let attachment = SharedFile {
+        file_id: "f1".into(),
+        name: "report.pdf".into(),
+        media_type: MediaType::parse("application/pdf").unwrap(),
+    };
     let toolbox = Arc::new(Toolbox::new(vec![
         builtin(Snap { attachment }, ToolTraits::read().secret_args(&["token"])),
         builtin(Hidden, ToolTraits::write().admin()),
@@ -190,7 +193,7 @@ base_url = "{}"
         async move {
             Ok(Confinement {
                 sandbox: Arc::new(FakeSandbox),
-                writable: WritablePaths::of(vec![], agent.to_string()),
+                writable: WritablePaths::of(vec![], agent),
                 home,
                 explain: Arc::new(|_: &Path| String::new()),
                 unreadable: vec![],
@@ -257,7 +260,7 @@ async fn a_run_from_start_to_finish() {
     assert!(notices.contains("MCP server \"nokey\"") && notices.contains("NOPE"), "{notices}");
     assert!(notices.contains("MCP server \"down\" failed"), "{notices}");
     assert!(notices.contains("MCP server \"local\" failed") && notices.contains("/nonexistent/wrapped"), "{notices}");
-    assert_eq!(*w.confined.lock().unwrap(), [me.as_str()], "the stdio server is confined as the agent using it");
+    assert_eq!(*w.confined.lock().unwrap(), std::slice::from_ref(&me), "the stdio server is confined as the agent using it");
 
     // 用户发来一张图片附件
     let meta = w.files.put("photo.png", MediaType::parse("image/png").unwrap(), PNG).await.unwrap();

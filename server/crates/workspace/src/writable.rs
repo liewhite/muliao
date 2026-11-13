@@ -100,7 +100,7 @@ impl Confiner {
         // 平台的私有文件排在最后：任何授权都放不开
         rules.extend(private.iter().map(|p| (false, p.clone())));
         // 换成真实路径要读文件系统，限时（见 [`Resolving`]）
-        let owner = agent_id.to_string();
+        let owner = agent_id.clone();
         let (writable, unreadable) = self
             .resolving(agent_id)
             .run(RESOLVE_LIMIT, move |resolve| {

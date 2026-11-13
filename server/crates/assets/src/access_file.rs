@@ -383,16 +383,15 @@ pub fn vet(before: Option<&str>, after: &str, tools: &ToolTable, addressable: &[
 /// 手写 access.toml 时（文件工具经写入口）：after 里新出现的 `[agents.<id>]` 节（before 没有的）中，id 不是数据库里的
 /// agent（known）的那些。抄错的 id 会让这一节的 deny 不生效（等于放宽权限），所以写入口拒绝；已有的节不查（agent 删除时
 /// 由平台去掉它那一节）。平台自己改它（[`plan`]）只写认得的 id，不经这里。
-pub fn unknown_new_agents(before: Option<&str>, after: &str, known: &BTreeSet<AgentId>) -> Vec<String> {
-    let sections = |text: Option<&str>| -> Vec<String> {
+pub fn unknown_new_agents(before: Option<&str>, after: &str, known: &BTreeSet<AgentId>) -> Vec<AgentId> {
+    // 节名就是 agent 编号：在这里读入
+    let sections = |text: Option<&str>| -> Vec<AgentId> {
         let Some(Ok(data)) = text.map(|t| t.parse::<toml::Table>()) else { return Vec::new() };
-        data.get("agents").and_then(toml::Value::as_table).map(|t| t.keys().cloned().collect()).unwrap_or_default()
+        let ids = data.get("agents").and_then(toml::Value::as_table).map(|t| t.keys().map(AgentId::new).collect());
+        ids.unwrap_or_default()
     };
     let old = sections(before);
-    sections(Some(after))
-        .into_iter()
-        .filter(|id| !old.contains(id) && !known.contains(id.as_str()))
-        .collect()
+    sections(Some(after)).into_iter().filter(|id| !old.contains(id) && !known.contains(id)).collect()
 }
 
 /// 文件里写着的每一条规则（[roles.*] 与 [agents.*] 的 allow、deny 里的字符串），不管形式对不对；读不出时没有。
@@ -569,7 +568,7 @@ allow = []
         assert_eq!(a.roles["base"].description, builtin_description("base").unwrap());
         assert!(a.roles["base"].fixed.allow.contains(&"use:tool:read_file".to_owned()));
         assert!(!a.roles["base"].fixed.allow.contains(&"use:tool:create_agent".to_owned()));
-        assert_eq!(a.rules[A1].roles, ["trading"]);
+        assert_eq!(a.rules[&AgentId::new(A1)].roles, ["trading"]);
         assert_eq!(a.problems.len(), 3, "{:?}", a.problems);
 
         for bad in [
@@ -630,7 +629,7 @@ allow = []
         assert!(!out.contains("[roles]") && !out.contains("[agents]\n"), "{out}");
         let back = parse(Some(&out), &BTreeSet::from([AgentId::new(A1)]), &tools());
         assert!(back.readable, "{:?}", back.problems);
-        assert_eq!(back.rules[A1].roles, ["r"]);
+        assert_eq!(back.rules[&AgentId::new(A1)].roles, ["r"]);
         set_agent_rules(&mut doc, &AgentId::new(A1), &name("交易员"), &AgentRules::default()).unwrap();
         assert!(!doc.to_string().contains("交易员"));
         let x = name("x");

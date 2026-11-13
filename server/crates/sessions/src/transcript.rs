@@ -508,7 +508,7 @@ mod tests {
     }
 
     fn thread_s1() -> EventSource {
-        EventSource::Thread { session_id: "s1".into() }
+        EventSource::Thread { session_id: SessionId::new("s1") }
     }
 
     fn at(s: &str) -> DateTime<Utc> {
@@ -620,7 +620,7 @@ mod tests {
             items[3],
             Item::Event(EventItem {
                 text: "still going".into(),
-                source: EventSource::Thread { session_id: "s1".into() },
+                source: EventSource::Thread { session_id: SessionId::new("s1") },
                 check_in: true,
                 at: ts
             })
@@ -780,7 +780,7 @@ mod tests {
         );
         annotate_threads(&mut items, &BTreeMap::from([("n".to_owned(), SessionId::new("child"))]));
         assert_eq!(["p", "s", "n"].map(|id| call_of(&items, id).threads.len()), [0, 0, 1]);
-        assert_eq!(call_of(&items, "n").threads, ["child"]);
+        assert_eq!(call_of(&items, "n").threads, [SessionId::new("child")]);
     }
 
     #[test]

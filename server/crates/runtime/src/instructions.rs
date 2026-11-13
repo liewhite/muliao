@@ -212,7 +212,7 @@ mod tests {
             SkillMeta {
                 name: "s1".into(),
                 description: "d1".into(),
-                owner: Owner::Agent("id1".into()),
+                owner: Owner::Agent(AgentId::new("id1")),
                 path: "/a/me/skills/s1/SKILL.md".into(),
             },
             SkillMeta {

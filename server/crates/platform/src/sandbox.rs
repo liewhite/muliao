@@ -6,6 +6,7 @@
 //! 路径、把命令包进本系统的沙箱；当前系统没有适配器时报错，不退回到不隔离。哪些类别默认可写、agent 的授权怎么并进来，
 //! 是工作区领域的事。
 
+use crate::ids::AgentId;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -68,26 +69,26 @@ pub fn covers(paths: &[RealPath], path: &Path) -> std::io::Result<bool> {
 pub struct WritablePaths {
     rules: Vec<(bool, RealPath)>,
     /// 这组路径属于谁（agent 的 id）：只用于系统日志里认出是谁的命令
-    owner: String,
+    owner: AgentId,
 }
 
 impl WritablePaths {
     /// rules 的路径可以带符号链接：在这里换成真实路径（读文件系统）。
-    pub fn of(rules: impl IntoIterator<Item = (bool, PathBuf)>, owner: impl Into<String>) -> Self {
+    pub fn of(rules: impl IntoIterator<Item = (bool, PathBuf)>, owner: AgentId) -> Self {
         let rules = rules.into_iter().flat_map(|(w, p)| real_forms(&p).into_iter().map(move |form| (w, form)));
         Self::resolved(rules, owner)
     }
 
     /// 规则的路径已由调用方换成真实路径（[`real_forms`]）时用：调用方要自己掌握逐条读文件系统的过程（如限时）。
-    pub fn resolved(rules: impl IntoIterator<Item = (bool, RealPath)>, owner: impl Into<String>) -> Self {
-        Self { rules: rules.into_iter().collect(), owner: owner.into() }
+    pub fn resolved(rules: impl IntoIterator<Item = (bool, RealPath)>, owner: AgentId) -> Self {
+        Self { rules: rules.into_iter().collect(), owner }
     }
 
     pub fn rules(&self) -> &[(bool, RealPath)] {
         &self.rules
     }
 
-    pub fn owner(&self) -> &str {
+    pub fn owner(&self) -> &AgentId {
         &self.owner
     }
 
@@ -295,7 +296,7 @@ mod tests {
     fn last_covering_rule_wins() {
         let dir = tempfile::tempdir().unwrap();
         let base = real(dir.path()).unwrap();
-        let w = WritablePaths::of([(true, base.to_path_buf()), (false, base.join("private"))], "a1");
+        let w = WritablePaths::of([(true, base.to_path_buf()), (false, base.join("private"))], AgentId::new("a1"));
         assert!(w.permits(&base.join("x")));
         assert!(!w.permits(&base.join("private/x")));
         assert!(!w.permits(Path::new("/etc/hosts")));
@@ -307,14 +308,14 @@ mod tests {
         let base = real(dir.path()).unwrap();
         std::fs::create_dir(base.join("t")).unwrap();
         std::os::unix::fs::symlink(base.join("t"), base.join("l")).unwrap();
-        let w = WritablePaths::of([(true, base.join("l"))], "a1");
+        let w = WritablePaths::of([(true, base.join("l"))], AgentId::new("a1"));
         assert_eq!(w.rules(), &[(true, real_nofollow(base.join("l")).unwrap()), (true, real(base.join("t")).unwrap())]);
     }
 
     #[test]
     fn profile_quotes_paths() {
         let sb = Seatbelt::new("/Users/x".into());
-        let w = WritablePaths { rules: vec![(true, RealPath::assumed("/a \"b\"".into()))], owner: "id1".into() };
+        let w = WritablePaths { rules: vec![(true, RealPath::assumed("/a \"b\"".into()))], owner: AgentId::new("id1") };
         let p = sb.profile(&w, &[RealPath::assumed("/secret".into())]);
         assert!(p.contains(r#"(allow file-write* (subpath "/a \"b\""))"#), "{p}");
         assert!(

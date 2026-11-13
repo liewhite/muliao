@@ -1,5 +1,6 @@
 //! 收件箱与推送的测试：真库，推送服务用 wiremock 扮（发出的请求按 RFC 8291 解密核对内容）。
 
+use muliao_platform::ids::AgentId;
 use muliao_platform::ids::{RunId, SessionId};
 use std::sync::Arc;
 use std::time::Duration;
@@ -106,7 +107,7 @@ impl Harness {
             .notify(Notify {
                 title: title.into(),
                 body: "b".into(),
-                session_id: session.map(Into::into),
+                session_id: session.map(SessionId::new),
                 issue_id: None,
             })
             .await
@@ -134,10 +135,10 @@ type HandlerOf<E> =
 
 fn ended(waiting_on: Vec<Waiting>, awaited: bool, stopped: bool) -> RunEnded {
     RunEnded {
-        session_id: "s1".into(),
+        session_id: SessionId::new("s1"),
         session_title: "标题".into(),
         origin: SessionOrigin::User,
-        agent_id: "a1".into(),
+        agent_id: AgentId::new("a1"),
         agent_name: "muliao".into(),
         run_id: RunId::new(1),
         answer: "做完了".into(),
@@ -173,7 +174,12 @@ async fn inbox_unread_and_marking() {
     let s2 = h.notify("会话二", Some("s2")).await;
     let review = h
         .notifications
-        .notify(Notify { title: "审核".into(), body: "b".into(), session_id: Some("s3".into()), issue_id: Some(42) })
+        .notify(Notify {
+            title: "审核".into(),
+            body: "b".into(),
+            session_id: Some(SessionId::new("s3")),
+            issue_id: Some(42),
+        })
         .await
         .unwrap();
 
@@ -192,12 +198,16 @@ async fn inbox_unread_and_marking() {
 
     let ids: Vec<SessionId> = ["s1", "s2", "s3", "none"].map(SessionId::new).to_vec();
     let unread = h.notifications.unread_sessions(ids.clone()).await.unwrap();
-    assert_eq!(unread.into_iter().collect::<Vec<_>>(), ["s1", "s2", "s3"]);
+    assert_eq!(unread.into_iter().collect::<Vec<_>>(), ["s1", "s2", "s3"].map(SessionId::new));
 
     h.notifications.mark_session_read(&SessionId::new("s1")).await.unwrap();
     h.notifications.mark_issue_read(42).await.unwrap();
     let unread = h.notifications.unread_sessions(ids).await.unwrap();
-    assert_eq!(unread.into_iter().collect::<Vec<_>>(), ["s2"], "reading the issue also reads its session's notice");
+    assert_eq!(
+        unread.into_iter().collect::<Vec<_>>(),
+        [SessionId::new("s2")],
+        "reading the issue also reads its session's notice"
+    );
     assert_eq!(h.notifications.unread_count().await.unwrap(), 2);
 
     // 标到 s1 为止：之后才到的 s2 保持未读
@@ -219,8 +229,8 @@ async fn session_events_write_and_delete_notifications() {
     assert_eq!(list[0].session_id.as_ref().map(SessionId::as_str), Some("s1"));
 
     let failed = RunFailed {
-        session_id: "s1".into(),
-        agent_id: "a1".into(),
+        session_id: SessionId::new("s1"),
+        agent_id: AgentId::new("a1"),
         agent_name: "muliao".into(),
         run_id: RunId::new(2),
         origin: SessionOrigin::User,
@@ -232,7 +242,11 @@ async fn session_events_write_and_delete_notifications() {
     assert_eq!(n.body, format!("{}…[truncated: 300 more chars]", "错".repeat(500)), "trimmed, then cut to 500 chars");
 
     let other = h.notify("别的", Some("s2")).await;
-    h.publish(|s| &s.session_deleted, SessionDeleted { session_id: "s1".into(), agent_id: "a1".into() }).await;
+    h.publish(
+        |s| &s.session_deleted,
+        SessionDeleted { session_id: SessionId::new("s1"), agent_id: AgentId::new("a1") },
+    )
+    .await;
     let left: Vec<i64> = h.notifications.list(10).await.unwrap().iter().map(|n| n.id).collect();
     assert_eq!(left, vec![other]);
 }
@@ -402,7 +416,11 @@ async fn deleted_notifications_and_devices_are_not_pushed() {
     let (device, _) = receiver(&format!("{}/push/dev", server.uri()));
     h.add_session("s1", "t").await;
     let id = h.quiet(Some("s1")).await;
-    h.publish(|s| &s.session_deleted, SessionDeleted { session_id: "s1".into(), agent_id: "a1".into() }).await;
+    h.publish(
+        |s| &s.session_deleted,
+        SessionDeleted { session_id: SessionId::new("s1"), agent_id: AgentId::new("a1") },
+    )
+    .await;
     h.add_device(&device).await;
     assert_eq!(h.notifications.push().deliver_now(id, &device.endpoint).await, None);
     let other = h.quiet(None).await;

@@ -1,5 +1,6 @@
 //! 起命令的底层：写沙箱、secret 注入与脱敏、超时与取消杀进程组、输出读法。真起 bash 与 sandbox-exec。
 
+use muliao_platform::ids::AgentId;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -40,7 +41,7 @@ fn confinement(e: &Env) -> Confinement {
     // 可写目录的上级（临时目录）不放开：outside 必须写不了
     Confinement {
         sandbox,
-        writable: WritablePaths::of(rules, "test-agent"),
+        writable: WritablePaths::of(rules, AgentId::new("test-agent")),
         home,
         explain: Arc::new(|p: &Path| format!("{} is not writable", p.display())),
         unreadable: vec![real(&e.private).unwrap()],

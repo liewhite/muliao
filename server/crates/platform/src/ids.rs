@@ -36,37 +36,6 @@ macro_rules! text_id {
             }
         }
 
-        // 按编号作键的表可以用字符串查（与字符串的比较、哈希、排序相同）
-        impl std::borrow::Borrow<str> for $name {
-            fn borrow(&self) -> &str {
-                &self.0
-            }
-        }
-
-        impl PartialEq<str> for $name {
-            fn eq(&self, other: &str) -> bool {
-                self.0 == other
-            }
-        }
-
-        impl PartialEq<&str> for $name {
-            fn eq(&self, other: &&str) -> bool {
-                self.0 == *other
-            }
-        }
-
-        impl From<&str> for $name {
-            fn from(id: &str) -> Self {
-                Self(id.to_owned())
-            }
-        }
-
-        impl From<String> for $name {
-            fn from(id: String) -> Self {
-                Self(id)
-            }
-        }
-
         // 与内部的值写法相同（报错文字里 `{id:?}` 不带类型名）
         impl fmt::Debug for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -110,12 +79,6 @@ macro_rules! row_id {
 
             pub fn get(self) -> i64 {
                 self.0
-            }
-        }
-
-        impl PartialEq<i64> for $name {
-            fn eq(&self, other: &i64) -> bool {
-                self.0 == *other
             }
         }
 
@@ -171,7 +134,7 @@ row_id!(
 const INLINE_IMAGES: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/webp"];
 
 /// 媒体类型：只存 `type/subtype`（小写）。参数（如 charset）不影响怎么显示和交给模型，下载一律按原始字节。
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(into = "String", try_from = "String")]
 #[schema(value_type = String)]
 pub struct MediaType(String);
@@ -190,12 +153,6 @@ impl MediaType {
             return Err(DomainError::invalid(format!("media type {raw:?} must be 'type/subtype'")));
         }
         Ok(Self(essence.to_lowercase()))
-    }
-
-    /// 程序里写死的已知类型（必须已是规整的写法）。
-    pub fn known(essence: &'static str) -> Self {
-        debug_assert!(Self::parse(essence).is_ok_and(|m| m.0 == essence), "{essence:?} is not normalized");
-        Self(essence.to_owned())
     }
 
     pub fn as_str(&self) -> &str {
@@ -219,6 +176,13 @@ impl TryFrom<String> for MediaType {
 impl From<MediaType> for String {
     fn from(m: MediaType) -> String {
         m.0
+    }
+}
+
+// 与内部的值写法相同（报错文字里 `{media_type:?}` 不带类型名）
+impl fmt::Debug for MediaType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
     }
 }
 
@@ -301,7 +265,7 @@ mod tests {
             assert!(MediaType::parse(bad).is_err(), "{bad:?}");
         }
         assert!(MediaType::parse("IMAGE/PNG").unwrap().is_inline_image());
-        assert!(!MediaType::known("image/svg+xml").is_inline_image());
+        assert!(!MediaType::parse("image/svg+xml").unwrap().is_inline_image());
     }
 
     #[test]

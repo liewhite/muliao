@@ -88,7 +88,7 @@ const COMPRESSED: &[&str] = &["gz", "z", "bz2", "xz", "br", "tgz", "taz", "tz", 
 /// 按扩展名定工作目录里文件的类型（share_file、read_file 与工作目录浏览共用）。认不出、或是压缩过的时，用 RFC 2046 的
 /// 「未知二进制」类型。
 pub fn media_type_of(name: &str) -> MediaType {
-    let unknown = || MediaType::known("application/octet-stream");
+    let unknown = || MediaType::parse("application/octet-stream").expect("a valid media type");
     let ext = Path::new(name).extension().map(|e| e.to_string_lossy().to_lowercase());
     if ext.as_deref().is_some_and(|e| COMPRESSED.contains(&e)) {
         return unknown();

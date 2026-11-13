@@ -3,6 +3,7 @@
 mod common;
 
 use muliao_platform::ids::AgentId;
+use muliao_platform::ids::SessionId;
 use std::sync::Arc;
 
 use agenter::{Content, ToolCall, ToolCtx, ToolError};
@@ -24,7 +25,7 @@ struct Kit {
 impl Kit {
     async fn call(&self, me: &AgentId, name: &str, args: &str) -> Result<String, ToolError> {
         let tool = self.tools.iter().find(|t| t.name() == name).unwrap();
-        let scope = RunScope::new(me.clone(), "/w".into(), "s".into(), Audience::User);
+        let scope = RunScope::new(me.clone(), "/w".into(), SessionId::new("s"), Audience::User);
         let call = ToolCall { id: "c".into(), name: name.into(), args: args.into(), meta: None };
         let out = tool.tool.call(ToolCtx { deps: &scope, call: &call, retries: 0, approval: None }, args).await?;
         match out.as_slice() {

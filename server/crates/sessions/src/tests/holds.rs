@@ -115,8 +115,8 @@ async fn a_deleted_thread_is_no_longer_owed() {
     let (before, only_r2, after) = owed;
     let threads =
         |o: &[crate::thread_calls::Owed]| o.iter().map(|o| o.delegation.thread_id.clone()).collect::<Vec<_>>();
-    assert_eq!(threads(&before), ["t1", "t2"]);
-    assert_eq!(threads(&only_r2), ["t2"]);
-    assert_eq!(threads(&after), ["t2"]);
+    assert_eq!(threads(&before), [sid("t1"), sid("t2")]);
+    assert_eq!(threads(&only_r2), [sid("t2")]);
+    assert_eq!(threads(&after), [sid("t2")]);
     assert!(matches!(after[0].hold.of, HoldOf::Delegation { call_id: None, .. }));
 }

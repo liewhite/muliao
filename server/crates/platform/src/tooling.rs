@@ -195,7 +195,7 @@ mod tests {
 
     #[test]
     fn result_metadata_is_taken_once_per_call() {
-        let scope = RunScope::new("a".into(), "/w".into(), "s".into(), Audience::None);
+        let scope = RunScope::new(AgentId::new("a"), "/w".into(), SessionId::new("s"), Audience::None);
         scope.set_result_metadata("c1", "k", Value::from(1));
         scope.set_result_metadata("c1", "k", Value::from(2));
         scope.set_result_metadata("c1", "j", Value::from(3));

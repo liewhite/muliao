@@ -1,6 +1,7 @@
 //! 前后端各写一份的常量与路由：前端（web/src）的值必须与后端的唯一来源一致。接口里的类型由 OpenAPI 生成，这里管的是
 //! 不在接口类型里的那几个值（指代用户的值、系统 actor、文件地址前缀、全局记忆的名字、通知点开的页面路由）。
 
+use muliao_platform::ids::SessionId;
 use std::path::PathBuf;
 
 /// web/src/<file> 里 `export const <name> = ` 这一行等号后面的部分
@@ -47,6 +48,6 @@ fn frontend_constants_match_the_backend() {
 #[test]
 fn notification_urls_are_the_frontend_routes() {
     use muliao_notifications::inbox::url_of;
-    assert_eq!(url_of(Some(&"s1".into()), None).unwrap(), route("api.ts", "sessionRoute", "s1"));
-    assert_eq!(url_of(Some(&"s1".into()), Some(7)).unwrap(), route("issues.ts", "issueRoute", "7"));
+    assert_eq!(url_of(Some(&SessionId::new("s1")), None).unwrap(), route("api.ts", "sessionRoute", "s1"));
+    assert_eq!(url_of(Some(&SessionId::new("s1")), Some(7)).unwrap(), route("issues.ts", "issueRoute", "7"));
 }

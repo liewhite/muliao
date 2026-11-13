@@ -1,5 +1,6 @@
 use super::*;
 use chrono::TimeZone;
+use muliao_platform::ids::{AgentId, SessionId};
 
 fn totals(requests: u64, input: u64) -> UsageTotals {
     UsageTotals { requests, input_tokens: input, output_tokens: 1, cache_read_tokens: 2, cache_write_tokens: 3 }
@@ -7,8 +8,8 @@ fn totals(requests: u64, input: u64) -> UsageTotals {
 
 fn entry(agent: &str, session: Option<&str>, model: &str, t: UsageTotals) -> UsageEntry {
     UsageEntry {
-        agent_id: agent.into(),
-        session_id: session.map(Into::into),
+        agent_id: AgentId::new(agent),
+        session_id: session.map(SessionId::new),
         kind: RunKind::Run,
         model: model.into(),
         totals: t,
@@ -52,12 +53,12 @@ async fn insert_at(log: &UsageLog, at: DateTime<Utc>, e: UsageEntry) {
 #[tokio::test(flavor = "multi_thread")]
 async fn record_and_session_totals() {
     let (_dir, log) = log().await;
-    assert_eq!(log.session_totals(&"s1".into()).await.unwrap(), UsageTotals::default());
+    assert_eq!(log.session_totals(&SessionId::new("s1")).await.unwrap(), UsageTotals::default());
     log.record(entry("a", Some("s1"), "p:m", totals(1, 10))).await.unwrap();
     log.record(UsageEntry { kind: RunKind::Compaction, ..entry("a", Some("s1"), "p:m", totals(1, 5)) }).await.unwrap();
     log.record(entry("a", Some("s2"), "p:m", totals(1, 100))).await.unwrap();
     log.record(entry("a", None, "p:m", totals(1, 1000))).await.unwrap();
-    let s1 = log.session_totals(&"s1".into()).await.unwrap();
+    let s1 = log.session_totals(&SessionId::new("s1")).await.unwrap();
     assert_eq!(s1, totals(1, 10) + totals(1, 5));
     assert_eq!(s1.input_tokens, 15);
     assert_eq!(s1.cache_write_tokens, 6);
@@ -91,12 +92,17 @@ async fn summarize_groups_by_day_in_the_configured_timezone() {
         by_agent_model,
         vec![
             UsageBucket {
-                agent_id: Some("a".into()),
+                agent_id: Some(AgentId::new("a")),
                 model: Some("p:m".into()),
                 day: None,
                 totals: totals(1, 10) + totals(1, 20)
             },
-            UsageBucket { agent_id: Some("b".into()), model: Some("p:x".into()), day: None, totals: totals(2, 40) },
+            UsageBucket {
+                agent_id: Some(AgentId::new("b")),
+                model: Some("p:x".into()),
+                day: None,
+                totals: totals(2, 40)
+            },
         ]
     );
 
