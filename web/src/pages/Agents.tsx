@@ -153,7 +153,8 @@ const THINKING_LABEL: Record<Thinking, string> = {
   high: 'high',
   xhigh: 'xhigh',
 }
-const THINKINGS = ['default', 'off', 'low', 'medium', 'high', 'xhigh'] as const satisfies readonly Thinking[]
+// THINKING_LABEL 的类型要求每种档位都有显示名，所以它的键恰好是全部档位（唯一一份）
+const THINKINGS = Object.keys(THINKING_LABEL) as Thinking[]
 
 /** agent 的模型 "<provider 名>:<模型名>"：provider 来自服务端配置，模型名向该 provider 实时查询；旁边是它的思考档位 */
 function ModelInput({
