@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { asAgentId } from './api'
-import { FILTERS, ORIGIN_LABEL, groupByAgent, parseFilter, splitActive } from './sessionGroups'
+import { FILTERS, ORIGIN_LABEL, groupByAgent, splitActive } from './sessionGroups'
 
 const a = asAgentId('agent-a')
 const b = asAgentId('agent-b')
@@ -46,16 +46,5 @@ describe('FILTERS', () => {
     expect(FILTERS.all.origins).toBeNull()
     const covered = Object.values(FILTERS).flatMap((f) => f.origins ?? [])
     expect([...covered].sort()).toEqual(Object.keys(ORIGIN_LABEL).sort())
-  })
-})
-
-describe('parseFilter', () => {
-  it('记住的分类原样取回，没记过或不认识的值回到「对话」', () => {
-    expect(parseFilter('issue')).toBe('issue')
-    expect(parseFilter('auto')).toBe('auto')
-    expect(parseFilter('all')).toBe('all')
-    expect(parseFilter(null)).toBe('chat')
-    expect(parseFilter('inbox')).toBe('chat')
-    expect(parseFilter('toString')).toBe('chat')
   })
 })

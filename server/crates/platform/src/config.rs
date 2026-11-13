@@ -11,8 +11,6 @@ use std::path::{Path, PathBuf};
 use chrono_tz::Tz;
 use serde::Deserialize;
 
-use crate::sandbox::Mode;
-
 pub const DEFAULT_CONFIG_PATH: &str = "~/.muliao/config.toml";
 
 /// 密钥类的值：Debug 不打印内容，只能经 [`Secret::expose`] 取用。
@@ -223,8 +221,6 @@ pub struct RuntimeConfig {
     /// 触发器前置检查的时限：检查本该便宜
     pub precheck_timeout_seconds: f64,
     pub tool_output_max_chars: usize,
-    /// agent 的命令与文件工具写到可写路径之外时：enforce 拒绝；report 放行并记录
-    pub write_sandbox: Mode,
     /// 单个文件（用户上传的附件、agent 发出的文件）的字节上限
     pub upload_max_bytes: u64,
 }
@@ -237,7 +233,6 @@ impl Default for RuntimeConfig {
             memory_max_chars: 4000,
             precheck_timeout_seconds: 30.0,
             tool_output_max_chars: 20_000,
-            write_sandbox: Mode::Enforce,
             upload_max_bytes: 50 * 1024 * 1024,
         }
     }

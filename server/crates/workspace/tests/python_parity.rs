@@ -1,10 +1,11 @@
 //! 和 Python 版逐字对齐的证据：fixtures 里是 Python 版对同一批输入算出的结果（Python 版与生成脚本 gen_edits.py 已随 #717 删除，要看从 git 历史取）。
 //! 例外（#802）：用例 109、531 的「多处出现在第几行」改成按 read_file 的切行规则算（前面的修改留下单独的 \r，Python 版按 \n 数），
-//! fixtures 里这两条已换成新结果。
+//! fixtures 里这两条已换成新结果。fixtures 里的 ranges（回显范围，Python difflib 算的）不再比对：#803 起回显范围用 similar 算，
+//! 只保证覆盖到改动处。
 
 use std::collections::{BTreeMap, HashMap};
 
-use muliao_workspace::edits::{Change, apply_each, changed_ranges};
+use muliao_workspace::edits::{Change, apply_each};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -14,7 +15,6 @@ struct EditCase {
     error: Option<String>,
     after: Option<BTreeMap<String, String>>,
     counts: Option<BTreeMap<String, usize>>,
-    ranges: Option<BTreeMap<String, Vec<(usize, usize)>>>,
 }
 
 #[derive(Deserialize)]
@@ -45,9 +45,6 @@ fn multi_edits_match_python() {
                 assert_eq!(case.error, None, "case {n}: Python failed, Rust did not");
                 assert_eq!(Some(&after), case.after.as_ref(), "case {n}");
                 assert_eq!(Some(&counts), case.counts.as_ref(), "case {n}");
-                let ranges: BTreeMap<String, Vec<(usize, usize)>> =
-                    after.iter().map(|(k, a)| (k.clone(), changed_ranges(&case.texts[k], a, 2))).collect();
-                assert_eq!(Some(&ranges), case.ranges.as_ref(), "case {n}");
             }
             Err(e) => assert_eq!(Some(&e.message), case.error.as_ref(), "case {n}"),
         }

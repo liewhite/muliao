@@ -9,18 +9,7 @@ use muliao_platform::tooling::{BuiltinTool, ToolTraits, builtin};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::{SearchHit, WebError, WebProvider};
-
-/// 按 platform::tooling 的统一规则：交还模型的按「请重试」、暂时不可用的按暂时性失败、其余让这次运行失败。
-impl From<WebError> for ToolError {
-    fn from(e: WebError) -> Self {
-        match e {
-            WebError::Rejected(reason) => ToolError::Retry(reason),
-            WebError::Transient(reason) => ToolError::Unavailable(reason.into()),
-            WebError::Failed(reason) => ToolError::Abort(reason.into()),
-        }
-    }
-}
+use crate::{SearchHit, WebProvider};
 
 /// web 工具组（配置了 `[web]` 才有）。max_chars：网页正文最多给模型多少字符（配置 runtime.tool_output_max_chars）。
 pub fn tools(web: Arc<dyn WebProvider>, max_chars: usize) -> Vec<BuiltinTool> {
@@ -118,16 +107,18 @@ mod tests {
     use agenter::{Content, ToolCall};
     use futures::future::BoxFuture;
 
+    use muliao_platform::errors::{Error, Result, invalid};
+
     use super::*;
     use crate::{Page, SearchHit};
 
     struct Fake;
 
     impl WebProvider for Fake {
-        fn search<'a>(&'a self, query: &'a str, limit: u32) -> BoxFuture<'a, Result<Vec<SearchHit>, WebError>> {
+        fn search<'a>(&'a self, query: &'a str, limit: u32) -> BoxFuture<'a, Result<Vec<SearchHit>>> {
             Box::pin(async move {
                 match query {
-                    "down" => Err(WebError::Transient("down".into())),
+                    "down" => Err(Error::Upstream { message: "down".into(), transient: true }),
                     _ => Ok(vec![SearchHit {
                         title: format!("{query}:{limit}"),
                         url: "u".into(),
@@ -138,10 +129,10 @@ mod tests {
                 }
             })
         }
-        fn fetch<'a>(&'a self, url: &'a str) -> BoxFuture<'a, Result<Page, WebError>> {
+        fn fetch<'a>(&'a self, url: &'a str) -> BoxFuture<'a, Result<Page>> {
             Box::pin(async move {
                 match url {
-                    "missing" => Err(WebError::Rejected("gone".into())),
+                    "missing" => Err(invalid("gone")),
                     _ => Ok(Page { title: "T".into(), content: "0123456789".into() }),
                 }
             })

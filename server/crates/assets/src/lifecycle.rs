@@ -57,10 +57,10 @@ impl AgentLifecycle {
         let agent = self.db.read(move |c| agents::deletable_in(c, &id)).await?;
         // 删除最后要改 access.toml：同样的改动现在就算一遍，不合法时先拒绝，不让 agent 停在正在删除、删文件一直失败
         retire_plan(&*self.source.snapshot().await?, &agent.id)?;
-        let (id, by, hooks) = (agent_id.to_owned(), actor.as_str().to_owned(), self.hooks.clone());
+        let (id, hooks) = (agent_id.to_owned(), self.hooks.clone());
         self.db
             .write(move |tx| {
-                agents::mark_deleting_in(tx, &id, &by)?;
+                agents::mark_deleting_in(tx, &id)?;
                 for hook in hooks.iter() {
                     hook(tx, &id)?;
                 }
@@ -74,7 +74,7 @@ impl AgentLifecycle {
 
     /// 启动时：接着删停在正在删除的 agent（上次删文件失败或服务中途重启）。失败的记 error，下次启动再试。
     pub async fn resume_deletions(&self) -> Result<()> {
-        for (agent_id, _) in self.db.read(agents::deleting_in).await? {
+        for agent_id in self.db.read(agents::deleting_in).await? {
             let workspace = crate::service::workspace_of(&self.workspaces_dir, &agent_id);
             if let Err(e) = remove_files(self.db.clone(), self.source.clone(), workspace, agent_id.clone()).await {
                 tracing::error!(agent = %agent_id, error = %e, "removing the files of a deleted agent failed again");
@@ -126,7 +126,7 @@ async fn remove_files(db: Arc<Database>, source: Arc<AssetSource>, workspace: Pa
         return Ok(());
     }
     // 工作目录里可能有 venv、clone 的仓库：放到阻塞线程里删。删不干净（它留在后台的进程还在往里写）只记
-    // warning：工作目录只是文件，不能让删除卡住；残留由启动检查列出（AgentService::report_leftovers）
+    // warning：工作目录只是文件，不能让删除卡住
     let path = workspace.clone();
     if let Err(e) = tokio::task::spawn_blocking(move || remove(&path)).await.expect("removing a workspace panicked") {
         tracing::warn!(agent = %agent_id, path = %workspace.display(), error = %e,

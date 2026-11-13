@@ -66,7 +66,6 @@ pub struct App {
     pub bus: Arc<Bus>,
     state: AppState,
     source: Arc<AssetSource>,
-    agents: Arc<AgentService>,
     lifecycle: Arc<AgentLifecycle>,
     workspace: Workspace,
     triggers: TriggerDomain,
@@ -122,7 +121,7 @@ pub async fn assemble(settings: Settings, web_dir: PathBuf) -> anyhow::Result<Ap
 
     // ---- 工作区 ----
     let home = std::env::home_dir().context("the service user has no home directory")?;
-    let sandbox = muliao_platform::sandbox::sandbox_for(rt.write_sandbox, &home).map_err(anyhow::Error::msg)?;
+    let sandbox = muliao_platform::sandbox::sandbox_for(&home).map_err(anyhow::Error::msg)?;
     let workspace = Workspace::build(WorkspaceDeps {
         db: db.clone(),
         sandbox,
@@ -271,15 +270,14 @@ pub async fn assemble(settings: Settings, web_dir: PathBuf) -> anyhow::Result<Ap
             web_dir,
         },
     );
-    Ok(App { bus, state, source, agents, lifecycle, workspace, triggers, actors })
+    Ok(App { bus, state, source, lifecycle, workspace, triggers, actors })
 }
 
 impl App {
-    /// 对外服务之前：确保全局记忆在、报出残留的工作目录、接着删上次没删完的 agent、收掉上次没收尾的后台任务并起运行中
+    /// 对外服务之前：确保全局记忆在、接着删上次没删完的 agent、收掉上次没收尾的后台任务并起运行中
     /// 检查、接着跑停在半路或有信没处理的会话、起触发器、起资源目录的监听。
     pub async fn start(&self) -> anyhow::Result<()> {
         self.source.ensure_global_memory().await.context("the global memory")?;
-        self.agents.report_leftovers().await.context("checking leftover workspaces")?;
         self.lifecycle.resume_deletions().await.context("resuming agent deletions")?;
         self.workspace.jobs.run().await.context("starting background jobs")?;
         self.actors.resume().await.context("resuming sessions")?;

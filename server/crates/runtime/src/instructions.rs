@@ -72,7 +72,7 @@ pub struct InstructionParts<'a> {
 
 pub fn build_instructions(p: &InstructionParts<'_>) -> String {
     let context = [
-        format!("- You are agent {}: {}", py_repr(p.agent_name), p.agent_description),
+        format!("- You are agent {:?}: {}", p.agent_name, p.agent_description),
         format!("- Workspace (base for relative paths and shell cwd): {}", p.workspace.display()),
         format!("- {}", p.origin_note),
     ];
@@ -167,27 +167,6 @@ fn escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#x27;")
 }
 
-/// 名字的引号写法（同 Python 的 `{name!r}`，旧会话的指令前缀因此不变）：默认单引号；含单引号而不含双引号时用双引号。
-pub(crate) fn py_repr(s: &str) -> String {
-    let quote = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
-    let mut out = String::from(quote);
-    for c in s.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if c == quote => {
-                out.push('\\');
-                out.push(c);
-            }
-            c => out.push(c),
-        }
-    }
-    out.push(quote);
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -257,7 +236,7 @@ mod tests {
             summary: Some("earlier"),
         });
         assert!(text.starts_with(
-            "## Runtime context\n- You are agent 'me': does things\n- Workspace (base for relative paths and shell \
+            "## Runtime context\n- You are agent \"me\": does things\n- Workspace (base for relative paths and shell \
              cwd): /w/id1\n- Started by the user.\n\n## Memory\n"
         ));
         // 只转义属性，正文原样
@@ -275,10 +254,7 @@ mod tests {
     }
 
     #[test]
-    fn names_are_quoted_like_python() {
-        assert_eq!(py_repr("a"), "'a'");
-        assert_eq!(py_repr("it's"), "\"it's\"");
-        assert_eq!(py_repr("a'b\"c"), "'a\\'b\"c'");
+    fn attribute_values_are_escaped() {
         assert_eq!(escape("<a&'\">"), "&lt;a&amp;&#x27;&quot;&gt;");
     }
 }

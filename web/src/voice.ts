@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api'
-import { loadFeatures } from './features'
-import { errorMessage as apiErrorMessage } from './load'
+import { errorMessage as apiErrorMessage, never, useLoad } from './load'
 
 // 录音的容器格式：Chrome/Firefox 录 webm/ogg（opus），iOS/Safari 只能录 mp4（aac）；服务端都认
 const RECORDING_TYPES = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4']
@@ -24,19 +23,13 @@ export function appendTranscript(draft: string, text: string): string {
 
 /** 服务端配置了语音转写、且浏览器能录音（需要 HTTPS 或 localhost）时才显示语音输入。 */
 function useVoiceAvailable(): boolean {
-  const [available, setAvailable] = useState(false)
+  // 服务端配置决定的可选能力不随服务端数据变化：不重新拉取
+  const features = useLoad(() => api.features(), [], never)
   useEffect(() => {
-    if (typeof MediaRecorder === 'undefined' || !navigator.mediaDevices?.getUserMedia) return
-    let live = true
-    void loadFeatures().then(
-      (f) => live && setAvailable(f.transcription),
-      (e: unknown) => console.error('loading server features failed', e),
-    )
-    return () => {
-      live = false
-    }
-  }, [])
-  return available
+    if (features.error) console.error('loading server features failed', features.error)
+  }, [features.error])
+  const recordable = typeof MediaRecorder !== 'undefined' && !!navigator.mediaDevices?.getUserMedia
+  return recordable && features.data?.transcription === true
 }
 
 export type VoiceState = 'idle' | 'recording' | 'transcribing'

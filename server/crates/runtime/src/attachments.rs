@@ -21,7 +21,6 @@ use muliao_files::{FileMeta, FileStore, INLINE_IMAGE_TYPES, parse_file_url};
 use muliao_platform::errors::Error;
 
 use crate::images;
-use crate::instructions::py_repr;
 
 pub const UPLOADS_DIR: &str = "uploads";
 
@@ -50,8 +49,8 @@ pub async fn copy_to_workspace(store: &FileStore, files: &[FileMeta], workspace:
 
 pub fn describe(meta: &FileMeta) -> String {
     format!(
-        "[Attached file {} ({}, {} bytes), copied into your workspace at {}]",
-        py_repr(&meta.name),
+        "[Attached file {:?} ({}, {} bytes), copied into your workspace at {}]",
+        meta.name,
         meta.media_type,
         meta.size,
         workspace_path(meta).display()
@@ -94,10 +93,7 @@ async fn image_content(store: &FileStore, meta: &FileMeta) -> Result<Vec<Content
     Ok(match fitted {
         Err(e) => {
             tracing::warn!(file_id = %meta.id, media_type = %meta.media_type, error = %e, "image not decodable, not sent to the model");
-            vec![Content::text(format!(
-                "[image {} could not be decoded as an image, so it is not shown]",
-                py_repr(&meta.name)
-            ))]
+            vec![Content::text(format!("[image {:?} could not be decoded as an image, so it is not shown]", meta.name))]
         }
         Ok(f) => {
             f.note

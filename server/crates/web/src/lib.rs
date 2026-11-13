@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use futures::future::BoxFuture;
 use muliao_platform::config::{WebConfig, WebProviderType};
+use muliao_platform::errors::Result;
 use serde::{Deserialize, Serialize};
 
 /// 交给模型的是它的 JSON；界面展示时从那段 JSON 还原（Deserialize）。
@@ -34,24 +35,14 @@ pub struct Page {
     pub content: String,
 }
 
-/// 搜索、抓取没有交回结果时的结局，按「谁能处理」分。
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum WebError {
-    /// 交还模型：输入被服务拒绝（模型改了再试），或页面经服务和直连都拿不到（原因里写着两边各自的原因，由模型决定
-    /// 稍后重试、换 URL 还是改用浏览器）
-    #[error("{0}")]
-    Rejected(String),
-    /// 服务暂时不可用（连不上、超时、429、5xx）：这一轮按暂时性失败处理，稍后重试
-    #[error("{0}")]
-    Transient(String),
-    /// 配置或账户问题（key 无效、余额不足）、契约之外的响应：模型改不了，让这一轮失败可见
-    #[error("{0}")]
-    Failed(String),
-}
-
+/// 搜索、抓取没有交回结果时按平台的错误分类（[`muliao_platform::errors::Error`]）报，由工具层按统一规则处理：
+/// - 领域错误（InvalidInput）：输入被服务拒绝（模型改了再试），或页面经服务和直连都拿不到（原因里写着两边各自的原因，
+///   由模型决定稍后重试、换 URL 还是改用浏览器）；交还模型。
+/// - 暂时性的外部服务错误：服务暂时不可用（连不上、超时、429、5xx），稍后重试。
+/// - 非暂时性的外部服务错误：配置或账户问题（key 无效、余额不足）、契约之外的响应，模型改不了，让这一轮失败可见。
 pub trait WebProvider: Send + Sync {
-    fn search<'a>(&'a self, query: &'a str, limit: u32) -> BoxFuture<'a, Result<Vec<SearchHit>, WebError>>;
-    fn fetch<'a>(&'a self, url: &'a str) -> BoxFuture<'a, Result<Page, WebError>>;
+    fn search<'a>(&'a self, query: &'a str, limit: u32) -> BoxFuture<'a, Result<Vec<SearchHit>>>;
+    fn fetch<'a>(&'a self, url: &'a str) -> BoxFuture<'a, Result<Page>>;
 }
 
 /// 按配置选实现。`client` 是共用的出站 HTTP 客户端（由组合根创建；要跟随重定向，即 reqwest 的默认设置）。

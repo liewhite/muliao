@@ -4,13 +4,15 @@ import { ChevronDown, ChevronRight, Hourglass } from 'lucide-react'
 import { Link, useMatch } from 'react-router-dom'
 import { api, type AgentId, type SessionListItem, sessionRoute } from '../api'
 import { agentModel, agentLabel } from '../agentGroups'
-import { parseStringList, useStoredState } from '../storedState'
-import { FILTERS, ORIGIN_LABEL, groupByAgent, parseFilter, splitActive, type Filter } from '../sessionGroups'
+import { oneOf, parseStringList, useStoredState } from '../storedState'
+import { FILTERS, ORIGIN_LABEL, groupByAgent, splitActive, type Filter } from '../sessionGroups'
 import { EmptyHint, Loading, Page, Segmented, relativeTime, useAgents } from '../ui'
 import { useLoad } from '../load'
 
 // 选中的分类跨刷新、跨页面记住：从会话或 issue 回来时停在原来的分类（不放 URL：宽屏分屏时右侧切会话会换掉 URL）
 const FILTER_KEY = 'muliao.sessions.filter'
+// 没记过或不认识的值时为「对话」
+const parseFilter = oneOf(Object.keys(FILTERS) as Filter[], 'chat')
 
 // 折叠起来的 agent 分组，跨刷新记住
 const COLLAPSED_KEY = 'muliao.sessions.collapsed'

@@ -19,7 +19,6 @@ use regex::bytes::Regex;
 use serde::Serialize;
 
 use crate::browse::WorkspaceFile;
-use crate::shell_tools::py_repr;
 
 pub const SITE_DIR: &str = "site";
 pub const INDEX: &str = "index.html";
@@ -115,12 +114,12 @@ impl Sites {
     pub fn file(&self, agent_id: &str, page: &str, path: &str) -> Result<WorkspaceFile, DomainError> {
         let found = self.site(agent_id).and_then(|site| page_of(&site, page));
         let Some((page_dir, _)) = found else {
-            return Err(DomainError::not_found(format!("agent {} has no page {}", py_repr(agent_id), py_repr(page))));
+            return Err(DomainError::not_found(format!("agent {agent_id:?} has no page {page:?}")));
         };
         let rel = if path.is_empty() || path.ends_with('/') { format!("{path}{INDEX}") } else { path.to_owned() };
         let target = resolve_within(page_dir.as_path(), &rel)?;
         if !target.as_path().is_file() {
-            return Err(DomainError::not_found(format!("no such file in page {}: {}", py_repr(page), py_repr(path))));
+            return Err(DomainError::not_found(format!("no such file in page {page:?}: {path:?}")));
         }
         Ok(WorkspaceFile::of(target.into_path_buf()))
     }

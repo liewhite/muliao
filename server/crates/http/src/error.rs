@@ -1,4 +1,4 @@
-//! 接口的错误响应：一律是 `{"detail": "<原因>"}`。领域错误按种类映射成 4xx（[`ErrorKind::ScriptFailed`] 为 502），外部服务
+//! 接口的错误响应：一律是 `{"detail": "<原因>"}`。领域错误按种类映射成 4xx，外部服务
 //! 出错为 502 并带上原因；其余（库出错、存下的数据坏了、程序错误）记 error 日志，对外只说 500。
 //! 各领域共用一个错误类型（[`Error`]），这里按它的三类映射。
 
@@ -57,11 +57,8 @@ impl From<DomainError> for ApiError {
             ErrorKind::NotFound => StatusCode::NOT_FOUND,
             ErrorKind::Conflict => StatusCode::CONFLICT,
             ErrorKind::InvalidInput => StatusCode::UNPROCESSABLE_ENTITY,
-            ErrorKind::Unauthorized => StatusCode::UNAUTHORIZED,
             ErrorKind::Forbidden => StatusCode::FORBIDDEN,
             ErrorKind::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
-            // 如手动运行触发器时前置检查失败：原因（可能含脚本 stderr）给已登录的用户看
-            ErrorKind::ScriptFailed => StatusCode::BAD_GATEWAY,
         };
         Self::new(status, d.message)
     }

@@ -38,6 +38,12 @@ fn log_tail(path: &std::path::Path) -> String {
 }
 
 pub const JOBS_DIR: &str = "jobs";
+
+/// 任务的输出日志，相对 agent 工作目录（agent 用 read_file 读）
+pub fn log_path(job_id: i64) -> String {
+    format!("{JOBS_DIR}/{job_id}.log")
+}
+
 /// 运行中检查的节拍（同会话领域的委派检查）
 pub const TICK: Duration = Duration::from_secs(5);
 /// 关停时等照看者写完结局最多这么久
@@ -136,17 +142,16 @@ struct Job {
     agent_id: String,
     command: String,
     state: JobState,
-    log_path: String,
     pid: Option<i32>,
     check_seconds: f64,
     started_at: DateTime<Utc>,
 }
 
 const COLUMNS: &str =
-    "id, session_id, agent_id, command, status, exit_code, log_path, pid, check_seconds, started_at, finished_at";
+    "id, session_id, agent_id, command, status, exit_code, pid, check_seconds, started_at, finished_at";
 
 fn job_of(r: &Row<'_>) -> rusqlite::Result<Job> {
-    let (status, code, at): (String, Option<i32>, Option<DateTime<Utc>>) = (r.get(4)?, r.get(5)?, r.get(10)?);
+    let (status, code, at): (String, Option<i32>, Option<DateTime<Utc>>) = (r.get(4)?, r.get(5)?, r.get(9)?);
     let state = JobState::parse(&status, code, at).ok_or_else(|| {
         rusqlite::Error::FromSqlConversionFailure(
             4,
@@ -160,10 +165,9 @@ fn job_of(r: &Row<'_>) -> rusqlite::Result<Job> {
         agent_id: r.get(2)?,
         command: r.get(3)?,
         state,
-        log_path: r.get(6)?,
-        pid: r.get(7)?,
-        check_seconds: r.get(8)?,
-        started_at: r.get(9)?,
+        pid: r.get(6)?,
+        check_seconds: r.get(7)?,
+        started_at: r.get(8)?,
     })
 }
 
@@ -254,23 +258,6 @@ fn duration(start: DateTime<Utc>, end: DateTime<Utc>) -> String {
     if hours > 0 { format!("{hours}h{minutes:02}m{seconds:02}s") } else { format!("{minutes}m{seconds:02}s") }
 }
 
-/// 数字按 Python 的 `{:g}` 写（6 位有效数字，去掉末尾的 0）：工具文字与 Python 版一致。
-pub fn format_g(x: f64) -> String {
-    if x == 0.0 || !x.is_finite() {
-        return if x == 0.0 { "0".to_owned() } else { x.to_string() };
-    }
-    let sci = format!("{x:.5e}");
-    let (mantissa, exp) = sci.split_once('e').expect("scientific notation");
-    let exp: i32 = exp.parse().expect("exponent");
-    let strip = |s: String| if s.contains('.') { s.trim_end_matches('0').trim_end_matches('.').to_owned() } else { s };
-    if (-4..6).contains(&exp) {
-        strip(format!("{:.*}", (5 - exp) as usize, x))
-    } else {
-        let sign = if exp < 0 { '-' } else { '+' };
-        format!("{}e{sign}{:02}", strip(mantissa.to_owned()), exp.abs())
-    }
-}
-
 /// note：被中断时是原因；退出、被结束时是补充说明（如后代还占着输出），没有为 None。
 fn final_text(job: &Job, end: End, now: DateTime<Utc>, last: &str, note: Option<&str>) -> String {
     let took = duration(job.started_at, now);
@@ -305,14 +292,14 @@ fn check_text(job: &Job, now: DateTime<Utc>, last: &str) -> String {
         duration(job.started_at, now),
         job.command,
         output(job, last),
-        format_g(job.check_seconds),
+        job.check_seconds,
         id = job.id,
     )
 }
 
 fn output(job: &Job, last: &str) -> String {
     let shown = if last.is_empty() { "No output yet.".to_owned() } else { format!("Last lines of output:\n{last}") };
-    format!("{shown}\nFull output: {} (in your workspace)", job.log_path)
+    format!("{shown}\nFull output: {} (in your workspace)", log_path(job.id))
 }
 
 /// 后台任务的启动、照看、查看、结束与运行中检查。
@@ -331,7 +318,7 @@ impl JobRunner {
 
     fn log_file(&self, job: &Job) -> PathBuf {
         // 与起进程时的 cwd 同源（agent 的工作目录）
-        self.commands.workspace(&job.agent_id).join(&job.log_path)
+        self.commands.workspace(&job.agent_id).join(log_path(job.id))
     }
 
     /// 起一个后台任务。awaited：发起它的那次运行里用户是否在等回答（完成通知随它推送）。check_seconds：运行中检查的间隔。
@@ -351,23 +338,20 @@ impl JobRunner {
         // secret 不可用时什么都还没起
         let agent_shell = self.commands.prepare(agent_id, secrets, shell).await?;
         let this = self.clone();
-        let (session_id, agent_id, command, secrets) =
-            (session_id.to_owned(), agent_id.to_owned(), command.to_owned(), secrets.to_vec());
+        let (session_id, agent_id, command) = (session_id.to_owned(), agent_id.to_owned(), command.to_owned());
         // 一气做完：发起它的运行被停止（这个 future 被丢掉）也不会留下没人管的进程或任务行
         let launch = tokio::spawn(async move {
-            this.launch(agent_shell, session_id, agent_id, command, secrets, awaited, check_seconds).await
+            this.launch(agent_shell, session_id, agent_id, command, awaited, check_seconds).await
         });
         launch.await.unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic()))
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn launch(
         self: Arc<Self>,
         agent_shell: AgentShell,
         session_id: String,
         agent_id: String,
         command: String,
-        secrets: Vec<String>,
         awaited: bool,
         check_seconds: f64,
     ) -> Result<JobStarted> {
@@ -378,7 +362,6 @@ impl JobRunner {
         let pgid = spawned.pgid;
         let work = self.work.clone();
         let (sid, aid, cmd) = (session_id.clone(), agent_id.clone(), command.clone());
-        let secrets_json = serde_json::to_string(&secrets).expect("strings serialize");
         let inserted = self
             .db
             .write(move |tx| -> Result<JobStarted> {
@@ -386,13 +369,12 @@ impl JobRunner {
                     return Err(not_found(format!("session {sid:?} not found")));
                 }
                 tx.execute(
-                    "INSERT INTO jobs (session_id, agent_id, command, secrets, status, log_path, pid, check_seconds, \
-                     started_at) VALUES (?1, ?2, ?3, ?4, 'running', '', ?5, ?6, ?7)",
-                    params![sid, aid, cmd, secrets_json, pgid, check_seconds, Utc::now()],
+                    "INSERT INTO jobs (session_id, agent_id, command, status, pid, check_seconds, started_at) \
+                     VALUES (?1, ?2, ?3, 'running', ?4, ?5, ?6)",
+                    params![sid, aid, cmd, pgid, check_seconds, Utc::now()],
                 )?;
                 let id = tx.last_insert_rowid();
-                let log_path = format!("{JOBS_DIR}/{id}.log");
-                tx.execute("UPDATE jobs SET log_path = ?1 WHERE id = ?2", params![log_path, id])?;
+                let log_path = log_path(id);
                 // 同一事务里在会话上登记占用（会话据此知道工作还没做完；用户是否在等结局记在占用上）
                 work.hold_in(tx, &sid, id, awaited)?;
                 Ok(JobStarted { id, log_path })
@@ -573,7 +555,7 @@ impl JobRunner {
             id: job.id,
             command: job.command.clone(),
             state: job.state,
-            log_path: job.log_path.clone(),
+            log_path: log_path(job.id),
             running_for: duration(
                 job.started_at,
                 match job.state {
@@ -735,23 +717,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn numbers_print_like_python_g() {
-        for (x, s) in [
-            (60.0, "60"),
-            (0.5, "0.5"),
-            (300.0, "300"),
-            (1e-5, "1e-05"),
-            (1234567.0, "1.23457e+06"),
-            (0.1234567, "0.123457"),
-            (123456.0, "123456"),
-            (1.5, "1.5"),
-        ] {
-            assert_eq!(format_g(x), s, "{x}");
-        }
-    }
-
-    #[test]
-    fn durations_like_python() {
+    fn durations_are_hours_minutes_seconds() {
         let t = |s: i64| DateTime::<Utc>::from_timestamp(s, 0).unwrap();
         assert_eq!(duration(t(0), t(5)), "0m05s");
         assert_eq!(duration(t(0), t(3725)), "1h02m05s");

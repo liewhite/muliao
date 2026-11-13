@@ -19,7 +19,7 @@ use muliao_platform::bus::Bus;
 use muliao_platform::db::{Database, migrate};
 use muliao_platform::errors::ErrorKind;
 use muliao_platform::retry::Retry;
-use muliao_platform::sandbox::{Mode, sandbox_for};
+use muliao_platform::sandbox::sandbox_for;
 use muliao_platform::tooling::{Audience, RunScope};
 use muliao_platform::vault::Vault;
 use muliao_sessions::actor::Waker;
@@ -81,7 +81,7 @@ async fn world() -> World {
     let (waker, wakes) = Waker::channel();
     let workspace = Workspace::build(WorkspaceDeps {
         db: db.clone(),
-        sandbox: sandbox_for(Mode::Enforce, &home).unwrap(),
+        sandbox: sandbox_for(&home).unwrap(),
         workspaces_dir: workspaces,
         home,
         private_files: vec![],
@@ -452,7 +452,7 @@ async fn a_failing_precheck_alerts_its_agent_once_and_recovers() {
 
     // 立即运行：只报给调用方，不记不告警
     let e = w.svc().run(t.id).await.unwrap_err();
-    assert_eq!(kind_of(e), ErrorKind::ScriptFailed);
+    assert_eq!(kind_of(e), ErrorKind::InvalidInput);
     assert!(w.get(t.id).await.faults.is_empty());
     assert!(w.sessions(t.id).await.is_empty());
 

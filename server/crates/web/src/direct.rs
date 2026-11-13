@@ -3,7 +3,9 @@
 
 use std::time::Duration;
 
-use crate::{Page, WebError, host_of};
+use muliao_platform::errors::{Result, invalid};
+
+use crate::{Page, host_of};
 
 /// 整段（连接到读完）的时限
 const TIMEOUT: Duration = Duration::from_secs(20);
@@ -122,10 +124,10 @@ async fn readable_page(resp: &Response) -> Result<Page, String> {
 }
 
 /// 抓取服务拿不到或不可用（`service_reason`）时直接 GET 一次。直连 404 才说明页面确实不存在，所以服务那句 404 不能单独
-/// 交还（#189）；拿不到时把两边的原因一起交还模型（[`WebError::Rejected`]），不算暂时性失败，包括服务本身也暂时不可用
+/// 交还（#189）；拿不到时把两边的原因一起交还模型（领域错误），不算暂时性失败，包括服务本身也暂时不可用
 /// 时：连不上的多半是目标站点（同 #134 的目标站点超时）。本机整体掉线时两边都报连不上，模型从两条原因里看得出来，由它
 /// 决定稍后重试、换 URL 还是改用浏览器。
-pub async fn fetch(client: &reqwest::Client, url: &str, service_reason: &str) -> Result<Page, WebError> {
+pub async fn fetch(client: &reqwest::Client, url: &str, service_reason: &str) -> Result<Page> {
     let host = host_of(url);
     let fetched = match get(client, url).await {
         Ok(resp) => readable_page(&resp).await.map(|page| (resp, page)),
@@ -133,7 +135,7 @@ pub async fn fetch(client: &reqwest::Client, url: &str, service_reason: &str) ->
     };
     let (resp, page) = fetched.map_err(|e| {
         tracing::warn!(provider = "direct", op = "fetch", %host, reason = %e, "web request failed");
-        WebError::Rejected(format!(
+        invalid(format!(
             "{service_reason}. The fetch service did not return this page, which does not by itself mean the page is \
              missing; {e}"
         ))

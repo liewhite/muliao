@@ -38,7 +38,11 @@ pub use jobs::JobRunner;
 
 pub const MIGRATION: Migration = Migration {
     domain: "workspace",
-    steps: &[include_str!("../migrations/001_workspace.sql"), include_str!("../migrations/002_grant_keys.sql")],
+    steps: &[
+        include_str!("../migrations/001_workspace.sql"),
+        include_str!("../migrations/002_grant_keys.sql"),
+        include_str!("../migrations/003_jobs_columns.sql"),
+    ],
 };
 
 /// 工作区领域要的外部依赖。

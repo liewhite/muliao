@@ -9,18 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use serde::Deserialize;
-
 use crate::fs::{RealPath, is_within, real, real_nofollow};
-
-/// 越界的写：enforce 拒绝；report 放行但由适配器记进系统日志（上线前试跑，统计漏掉的路径）
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum Mode {
-    #[default]
-    Enforce,
-    Report,
-}
 
 /// 一类路径：领域按类别声明默认可写与受保护的范围，适配器换成本系统的具体路径。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,8 +106,6 @@ impl WritablePaths {
 
 /// 一个系统的适配器。
 pub trait Sandbox: Send + Sync {
-    fn mode(&self) -> Mode;
-
     /// 这一类在本系统的具体路径（不存在的也列出：以后建出来就能写）。
     fn paths(&self, category: Category) -> Vec<PathBuf>;
 
@@ -128,9 +115,9 @@ pub trait Sandbox: Send + Sync {
 }
 
 /// 当前系统的适配器（home：服务运行用户的家目录，家目录下的类别按它算）；没有时报错（启动时报出，不退回到不隔离）。
-pub fn sandbox_for(mode: Mode, home: &Path) -> Result<Arc<dyn Sandbox>, String> {
+pub fn sandbox_for(home: &Path) -> Result<Arc<dyn Sandbox>, String> {
     if cfg!(target_os = "macos") && Seatbelt::supported() {
-        return Ok(Arc::new(Seatbelt::new(mode, home.to_path_buf())));
+        return Ok(Arc::new(Seatbelt::new(home.to_path_buf())));
     }
     Err(format!(
         "no write sandbox is available on this system ({}); agents' shell commands cannot run unconfined",
@@ -161,10 +148,6 @@ impl Confinement {
     /// path（绝对路径）的内容能不能读：按它真正读到的真实路径判断；认不出真实路径的不能读。
     pub fn readable(&self, path: &Path) -> bool {
         matches!(covers(&self.unreadable, path), Ok(false))
-    }
-
-    pub fn enforcing(&self) -> bool {
-        self.sandbox.mode() == Mode::Enforce
     }
 }
 
@@ -223,23 +206,19 @@ const UNSANDBOXED_LITERALS: &[&str] = &[
     SANDBOX_EXEC,
 ];
 const UNSANDBOXED_REGEX: &str = r"/(chrome-headless-shell|Chromium|Google Chrome[^/]*)$";
-/// 系统日志里每条记录附带的说明，后面接 agent=<id>
+/// 拒绝记录附带的说明，后面接 agent=<id>
 pub const LOG_MESSAGE: &str = "muliao write sandbox";
 
 /// macOS 的适配器。配置：先放开一切（只限制写，读、网络、进程照旧；跑不起来的几种程序放到沙箱外执行），再禁止一切
 /// 文件写，然后按 [`WritablePaths`] 的顺序逐条放开或收回（SBPL 里后写的规则优先，与「最后一条覆盖它的规则」同义），最后
 /// 禁止读不可读路径的内容。沙箱由子进程继承，nohup、python 起的后代同样受限。
-///
-/// report 模式下「禁止」换成「放行并记进系统日志」。这些记录不落盘（`log show` 事后查不到），只能实时看：
-/// `log stream --style compact --predicate 'eventMessage CONTAINS "muliao write sandbox"'`。
 pub struct Seatbelt {
-    mode: Mode,
     home: PathBuf,
 }
 
 impl Seatbelt {
-    pub fn new(mode: Mode, home: PathBuf) -> Self {
-        Self { mode, home }
+    pub fn new(home: PathBuf) -> Self {
+        Self { home }
     }
 
     pub fn supported() -> bool {
@@ -248,18 +227,9 @@ impl Seatbelt {
 
     pub fn profile(&self, writable: &WritablePaths, unreadable: &[RealPath]) -> String {
         let message = format!("(with message \"{LOG_MESSAGE} agent={}\")", writable.owner());
-        let enforce = self.mode == Mode::Enforce;
-        let refuse = if enforce {
-            format!("(deny file-write* {message}")
-        } else {
-            format!("(allow file-write* (with report) {message}")
-        };
+        let refuse = format!("(deny file-write* {message}");
         // 只禁读内容（file-read-data：文件内容与列目录），stat 照常：`ls -l` 上级目录、`test -f` 不报错
-        let hide = if enforce {
-            format!("(deny file-read-data {message}")
-        } else {
-            format!("(allow file-read-data (with report) {message}")
-        };
+        let hide = format!("(deny file-read-data {message}");
         let programs: Vec<String> =
             UNSANDBOXED_LITERALS.iter().map(|p| format!("(literal {})", quote(Path::new(p)))).collect();
         let mut lines = vec![
@@ -287,10 +257,6 @@ fn quote(path: &Path) -> String {
 }
 
 impl Sandbox for Seatbelt {
-    fn mode(&self) -> Mode {
-        self.mode
-    }
-
     fn paths(&self, category: Category) -> Vec<PathBuf> {
         let home = &self.home;
         match category {
@@ -347,7 +313,7 @@ mod tests {
 
     #[test]
     fn profile_quotes_paths() {
-        let sb = Seatbelt::new(Mode::Enforce, "/Users/x".into());
+        let sb = Seatbelt::new("/Users/x".into());
         let w = WritablePaths { rules: vec![(true, RealPath::assumed("/a \"b\"".into()))], owner: "id1".into() };
         let p = sb.profile(&w, &[RealPath::assumed("/secret".into())]);
         assert!(p.contains(r#"(allow file-write* (subpath "/a \"b\""))"#), "{p}");

@@ -22,7 +22,7 @@ use serde::Deserialize;
 
 use crate::commands::{AgentCommands, Options};
 use crate::grants::{GRANTED_NOTE, ScriptCall, ScriptGrants};
-use crate::jobs::{End, JobRunner, JobState, format_g};
+use crate::jobs::{End, JobRunner, JobState};
 use muliao_platform::errors::Error;
 
 /// run_shell 与 skill_run 共用的依赖。
@@ -87,28 +87,6 @@ const EXIT_CODE: &str = "exit_code:";
 const KILLED: &str = "killed after";
 const STARTED: &str = "started background job";
 
-/// 字符串按 Python 的 repr 写（报错里的名字与 Python 版一致）。
-pub fn py_repr(s: &str) -> String {
-    let quote = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
-    let mut out = String::from(quote);
-    for c in s.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if c == quote => {
-                out.push('\\');
-                out.push(c);
-            }
-            c if (c as u32) < 0x20 || c as u32 == 0x7f => out.push_str(&format!("\\x{:02x}", c as u32)),
-            c => out.push(c),
-        }
-    }
-    out.push(quote);
-    out
-}
-
 /// 同 Python 的 `shlex.quote`：只含安全字符的原样，其余用单引号括起（单引号本身写成 `'"'"'`）。
 pub fn shell_quote(s: &str) -> String {
     if s.is_empty() {
@@ -121,11 +99,6 @@ pub fn shell_quote(s: &str) -> String {
 /// 同 Python 的 `shlex.join`。
 pub fn shell_join<S: AsRef<str>>(parts: &[S]) -> String {
     parts.iter().map(|p| shell_quote(p.as_ref())).collect::<Vec<_>>().join(" ")
-}
-
-/// 数字按 Python 的 `str(float)` 写（`30.0`、`0.5`）。
-fn py_float(x: f64) -> String {
-    if x.is_finite() && x.fract() == 0.0 && x.abs() < 1e16 { format!("{x:.1}") } else { x.to_string() }
 }
 
 /// 结果的展示：前台首行是退出码或超时被杀，其余是输出；后台首行是启动了哪个任务。认不出就显示原文。
@@ -243,9 +216,7 @@ impl ShellTools {
         Ok(format!(
             "{STARTED} {}; output goes to {}.\nYou will get a check-in event every {} seconds while it runs and an \
              event when it finishes; keep working or end your reply.",
-            job.id,
-            job.log_path,
-            format_g(check)
+            job.id, job.log_path, check
         ))
     }
 
@@ -265,7 +236,7 @@ impl ShellTools {
             .map_err(Error::from)?;
         let status = match run.result.exit_code {
             Some(code) => format!("{EXIT_CODE} {code}"),
-            None => format!("{KILLED} {}s timeout", py_float(timeout)),
+            None => format!("{KILLED} {timeout}s timeout"),
         };
         let mut output = truncate(&run.result.stdout, self.max_output_chars);
         if let Some(note) = run.refusal {
@@ -379,16 +350,13 @@ fn script_command(
     let directory = &scripts.directory;
     let path = resolve_within(directory, script).map_err(|_| {
         DomainError::invalid(format!(
-            "script must be a path inside the skill's directory ({}), got {}",
+            "script must be a path inside the skill's directory ({}), got {script:?}",
             directory.display(),
-            py_repr(script)
         ))
     })?;
     if !path.as_path().is_file() {
         return Err(DomainError::not_found(format!(
-            "skill {} has no script {} (looked for {})",
-            py_repr(skill),
-            py_repr(script),
+            "skill {skill:?} has no script {script:?} (looked for {})",
             path.as_path().display()
         )));
     }
@@ -451,10 +419,10 @@ impl Tool<RunScope> for SkillRun {
                 Some(approval) => {
                     if approval.pin != fingerprint {
                         return Err(ToolError::Retry(format!(
-                            "the files of skill {} are not the version the user approved (they changed after approval \
+                            "the files of skill {:?} are not the version the user approved (they changed after approval \
                              was requested, or the request did not record the version); nothing was run. Call it \
                              again to ask the user to approve the current version.",
-                            py_repr(&a.skill)
+                            a.skill
                         )));
                     }
                     if approval.always {
@@ -552,12 +520,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn quoting_matches_python() {
+    fn shell_join_quotes_like_shlex() {
         assert_eq!(shell_join(&["/a b/run.sh", "x", "it's", "", "a=b,c"]), "'/a b/run.sh' x 'it'\"'\"'s' '' a=b,c");
-        assert_eq!(py_repr("a'b"), "\"a'b\"");
-        assert_eq!(py_repr("x\n"), "'x\\n'");
-        assert_eq!(py_float(30.0), "30.0");
-        assert_eq!(py_float(0.5), "0.5");
     }
 
     #[test]

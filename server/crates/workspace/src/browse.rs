@@ -13,7 +13,6 @@ use muliao_platform::fs::{RealPath, is_within, real, resolve_within};
 use serde::Serialize;
 
 use crate::file_tools::media_type_of;
-use crate::shell_tools::py_repr;
 
 fn is_inline(media_type: &str) -> bool {
     INLINE_IMAGE_TYPES.contains(&media_type)
@@ -51,7 +50,7 @@ impl WorkspaceFile {
 fn target(root: &Path, path: &str) -> Result<RealPath, DomainError> {
     let target = resolve_within(root, path)?;
     if !target.as_path().exists() {
-        return Err(DomainError::not_found(format!("no such file in the directory: {}", py_repr(path))));
+        return Err(DomainError::not_found(format!("no such file in the directory: {path:?}")));
     }
     Ok(target)
 }
@@ -62,10 +61,10 @@ pub fn list_dir(root: &Path, path: &str) -> Result<Vec<Entry>, DomainError> {
     let root = real(root).map_err(|e| DomainError::not_found(format!("cannot open the directory: {e}")))?;
     let target = target(root.as_path(), path)?;
     if !target.as_path().is_dir() {
-        return Err(DomainError::invalid(format!("not a directory: {}", py_repr(path))));
+        return Err(DomainError::invalid(format!("not a directory: {path:?}")));
     }
-    let read = std::fs::read_dir(target.as_path())
-        .map_err(|e| DomainError::invalid(format!("cannot list {}: {e}", py_repr(path))))?;
+    let read =
+        std::fs::read_dir(target.as_path()).map_err(|e| DomainError::invalid(format!("cannot list {path:?}: {e}")))?;
     let mut entries = Vec::new();
     for child in read.filter_map(|c| c.ok()) {
         let child = child.path();
@@ -92,7 +91,7 @@ pub fn file_in(root: &Path, path: &str) -> Result<WorkspaceFile, DomainError> {
     let root = real(root).map_err(|e| DomainError::not_found(format!("cannot open the directory: {e}")))?;
     let target = target(root.as_path(), path)?;
     if !target.as_path().is_file() {
-        return Err(DomainError::invalid(format!("not a file: {}", py_repr(path))));
+        return Err(DomainError::invalid(format!("not a file: {path:?}")));
     }
     Ok(WorkspaceFile::of(target.into_path_buf()))
 }
@@ -111,7 +110,7 @@ impl WorkspaceFiles {
     fn root(&self, agent_id: &str) -> Result<PathBuf, DomainError> {
         let root = workspace_of(&self.workspaces_dir, agent_id);
         if !root.is_dir() {
-            return Err(DomainError::not_found(format!("agent {} has no workspace", py_repr(agent_id))));
+            return Err(DomainError::not_found(format!("agent {agent_id:?} has no workspace")));
         }
         Ok(root)
     }

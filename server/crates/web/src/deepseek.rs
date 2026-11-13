@@ -6,7 +6,9 @@ use futures::future::BoxFuture;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
-use crate::{Page, SearchHit, WebError, WebProvider, direct, host_of};
+use muliao_platform::errors::{Error, Result, invalid};
+
+use crate::{Page, SearchHit, WebProvider, direct, host_of};
 
 pub const BASE_URL: &str = "https://api.deepseek.com";
 /// 抓取要等对方站点，给足时间；挂起时及时报错，而不是一直占着这次运行
@@ -68,12 +70,12 @@ impl Failure {
         self.contract && self.status.is_some_and(|s| FETCH_UNAVAILABLE.contains(&s))
     }
 
-    fn into_web(self) -> WebError {
+    fn into_error(self) -> Error {
         match self.status {
-            None => WebError::Transient(self.reason),
-            Some(s) if self.contract && REJECTED_INPUT.contains(&s) => WebError::Rejected(self.reason),
-            Some(s) if TRANSIENT.contains(&s) => WebError::Transient(self.reason),
-            Some(_) => WebError::Failed(self.reason),
+            Some(s) if self.contract && REJECTED_INPUT.contains(&s) => invalid(self.reason),
+            status => {
+                Error::Upstream { transient: status.is_none_or(|s| TRANSIENT.contains(&s)), message: self.reason }
+            }
         }
     }
 }
@@ -93,7 +95,11 @@ impl DeepSeekWeb {
         }
     }
 
-    async fn post<T: DeserializeOwned>(&self, op: &'static str, body: serde_json::Value) -> Result<T, Failure> {
+    async fn post<T: DeserializeOwned>(
+        &self,
+        op: &'static str,
+        body: serde_json::Value,
+    ) -> std::result::Result<T, Failure> {
         let failure = |status: Option<u16>, contract: bool, reason: String| {
             tracing::warn!(provider = "deepseek", op, %reason, "web request failed");
             Failure { status, contract, reason }
@@ -133,12 +139,12 @@ fn preview(bytes: &[u8]) -> String {
 }
 
 impl WebProvider for DeepSeekWeb {
-    fn search<'a>(&'a self, query: &'a str, limit: u32) -> BoxFuture<'a, Result<Vec<SearchHit>, WebError>> {
+    fn search<'a>(&'a self, query: &'a str, limit: u32) -> BoxFuture<'a, Result<Vec<SearchHit>>> {
         Box::pin(async move {
             let resp: SearchResponse = self
                 .post("search", serde_json::json!({"query": query, "count": limit}))
                 .await
-                .map_err(Failure::into_web)?;
+                .map_err(Failure::into_error)?;
             tracing::info!(provider = "deepseek", count = resp.results.len(), "web search");
             Ok(resp
                 .results
@@ -154,7 +160,7 @@ impl WebProvider for DeepSeekWeb {
         })
     }
 
-    fn fetch<'a>(&'a self, url: &'a str) -> BoxFuture<'a, Result<Page, WebError>> {
+    fn fetch<'a>(&'a self, url: &'a str) -> BoxFuture<'a, Result<Page>> {
         Box::pin(async move {
             let failure = match self.post::<FetchResponse>("fetch", serde_json::json!({"url": url})).await {
                 Ok(page) => {
@@ -168,8 +174,8 @@ impl WebProvider for DeepSeekWeb {
             if failure.target_unavailable() {
                 return direct::fetch(&self.client, url, &failure.reason).await;
             }
-            match failure.into_web() {
-                WebError::Transient(reason) => direct::fetch(&self.client, url, &reason).await,
+            match failure.into_error() {
+                e if e.is_transient() => direct::fetch(&self.client, url, &e.to_string()).await,
                 other => Err(other),
             }
         })

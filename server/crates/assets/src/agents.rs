@@ -42,12 +42,19 @@ pub const MIGRATION: Migration = Migration {
         UPDATE agents SET name_key = lower(name);
         CREATE UNIQUE INDEX uq_agents_name_key ON agents (name_key);
     ",
+        "
+        -- 正在删除（#803 起只是一个标记，原 deleting_by 存的发起人没人读，日志里有）：不出现在列表与名称解析里，删完文件后
+        -- 删除这一行
+        ALTER TABLE agents ADD COLUMN deleting INTEGER NOT NULL DEFAULT 0;
+        UPDATE agents SET deleting = 1 WHERE deleting_by IS NOT NULL;
+        ALTER TABLE agents DROP COLUMN deleting_by;
+    ",
     ],
 };
 
 /// 还可用（不在删除中）的 agent
-const LIVE: &str = "deleting_by IS NULL";
-const COLUMNS: &str = "id, name, is_default, archived_at, created_at, deleting_by";
+const LIVE: &str = "NOT deleting";
+const COLUMNS: &str = "id, name, is_default, archived_at, created_at, deleting";
 
 /// 别的领域看到的 agent 身份（读模型）。配置（描述、模型、思考档位、分组）不在这里，在资源快照。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,7 +95,7 @@ impl AgentInfo {
 
 fn info(row: &Row<'_>) -> rusqlite::Result<AgentInfo> {
     let archived_at: Option<DateTime<Utc>> = row.get(3)?;
-    let deleting = row.get::<_, Option<String>>(5)?.is_some();
+    let deleting: bool = row.get(5)?;
     let state = match (deleting, archived_at) {
         (true, _) => AgentState::Deleting,
         (false, Some(at)) => AgentState::Archived { at },
@@ -183,7 +190,7 @@ pub fn agent_names_in(c: &Connection) -> Result<AgentNames> {
 /// 读资源树时按目录名对上 agent 的依据：全部 agent（id → 名字，含正在删除的）与其中正在删除的。一条语句读出，两者一致。
 pub(crate) async fn identities(db: &Database) -> Result<(BTreeMap<String, AgentName>, BTreeSet<String>)> {
     db.read(|c| {
-        let mut stmt = c.prepare("SELECT id, name, deleting_by IS NOT NULL FROM agents")?;
+        let mut stmt = c.prepare("SELECT id, name, deleting FROM agents")?;
         let mut known = BTreeMap::new();
         let mut deleting = BTreeSet::new();
         for row in
@@ -241,30 +248,30 @@ pub(crate) fn deletable_in(c: &Connection, agent_id: &str) -> Result<AgentInfo> 
     Ok(agent)
 }
 
-pub(crate) fn mark_deleting_in(c: &Connection, agent_id: &str, actor: &str) -> Result<()> {
+pub(crate) fn mark_deleting_in(c: &Connection, agent_id: &str) -> Result<()> {
     deletable_in(c, agent_id)?;
     c.execute(
-        "UPDATE agents SET deleting_by = ?2, is_default = 0, updated_at = ?3 WHERE id = ?1",
-        params![agent_id, actor, Utc::now()],
+        "UPDATE agents SET deleting = 1, is_default = 0, updated_at = ?2 WHERE id = ?1",
+        params![agent_id, Utc::now()],
     )?;
     Ok(())
 }
 
-/// 正在删除的 agent（id、发起删除的人），按 id。
-pub(crate) fn deleting_in(c: &Connection) -> Result<Vec<(String, String)>> {
-    let mut stmt = c.prepare("SELECT id, deleting_by FROM agents WHERE deleting_by IS NOT NULL ORDER BY id")?;
-    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+/// 正在删除的 agent 的 id，按 id。
+pub(crate) fn deleting_in(c: &Connection) -> Result<Vec<String>> {
+    let mut stmt = c.prepare("SELECT id FROM agents WHERE deleting ORDER BY id")?;
+    let rows = stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
     Ok(rows)
 }
 
 /// 正在删除的这个 agent；不存在或没在删除时 None。
 pub(crate) fn being_deleted_in(c: &Connection, agent_id: &str) -> Result<Option<AgentInfo>> {
-    one(c, "id = ?1 AND deleting_by IS NOT NULL", agent_id)
+    one(c, "id = ?1 AND deleting", agent_id)
 }
 
 /// 删除正在删除的 agent 的行（它的文件已删）；已不在时什么都不做（删除重做）。
 pub(crate) fn remove_in(c: &Connection, agent_id: &str) -> Result<bool> {
-    Ok(c.execute("DELETE FROM agents WHERE id = ?1 AND deleting_by IS NOT NULL", [agent_id])? > 0)
+    Ok(c.execute("DELETE FROM agents WHERE id = ?1 AND deleting", [agent_id])? > 0)
 }
 
 pub(crate) fn check_archivable(agent: &AgentInfo) -> Result<()> {

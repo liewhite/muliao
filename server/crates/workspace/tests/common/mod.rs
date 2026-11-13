@@ -17,7 +17,7 @@ use muliao_assets::source::AssetSource;
 use muliao_assets::tree::Owner;
 use muliao_files::FileStore;
 use muliao_platform::db::{Database, migrate};
-use muliao_platform::sandbox::{Mode, sandbox_for};
+use muliao_platform::sandbox::sandbox_for;
 use muliao_platform::tooling::{Audience, BuiltinTool, RunScope};
 use muliao_platform::vault::Vault;
 use muliao_runtime::toolbox::Toolbox;
@@ -102,7 +102,7 @@ pub async fn world(max_output_chars: usize) -> World {
     let (waker, wakes) = Waker::channel();
     let workspace = Workspace::build(WorkspaceDeps {
         db: db.clone(),
-        sandbox: sandbox_for(Mode::Enforce, &home).unwrap(),
+        sandbox: sandbox_for(&home).unwrap(),
         workspaces_dir: workspaces,
         home,
         private_files: vec![dir.path().join("config.toml")],

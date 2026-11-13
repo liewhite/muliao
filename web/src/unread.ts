@@ -1,5 +1,6 @@
 // 通知的未读数：导航上的数字与应用图标角标共用这一份，事实在服务端（GET /api/notifications/unread）。
-// 推送到达时 Service Worker 按推送里带的未读数设置角标；应用打开时由这里按服务端的数刷新。
+// 推送到达时 Service Worker 按推送里带的未读数设置角标；应用打开时由这里按服务端的数刷新。回到前台不单独重拉：事件流
+// 断过的会重连，连上时 Loader 照常重新拉取。
 
 import { useEffect } from 'react'
 import { api } from './api'
@@ -17,7 +18,7 @@ function setBadge(count: number) {
 }
 
 /**
- * 登录后在应用根部调用一次，返回未读数：通知变了时（Loader）、回到前台、收到推送时刷新，角标跟着它。
+ * 登录后在应用根部调用一次，返回未读数：通知变了时（Loader）、收到推送时刷新，角标跟着它。
  * 刷新失败只记日志：后台同步，不打断用户的操作
  */
 export function useUnreadCount(): number {
@@ -34,14 +35,7 @@ export function useUnreadCount(): number {
       if (e.data?.type === 'pushed') void unread.reload()
     }
     navigator.serviceWorker?.addEventListener('message', onMessage)
-    const onVisible = () => {
-      if (document.visibilityState === 'visible') void unread.reload()
-    }
-    document.addEventListener('visibilitychange', onVisible)
-    return () => {
-      navigator.serviceWorker?.removeEventListener('message', onMessage)
-      document.removeEventListener('visibilitychange', onVisible)
-    }
+    return () => navigator.serviceWorker?.removeEventListener('message', onMessage)
   }, [])
   return count ?? 0
 }

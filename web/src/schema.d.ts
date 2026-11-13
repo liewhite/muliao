@@ -894,7 +894,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * 立即触发一次（不带事件内容）。有前置检查时同样先跑检查，可以用来测试整条链路（检查失败 502 带原因）。不消耗一次性
+         * 立即触发一次（不带事件内容）。有前置检查时同样先跑检查，可以用来测试整条链路（检查失败 422 带原因）。不消耗一次性
          *     触发器预定的那一次；已结束的触发器不能再运行。
          */
         post: operations["run_trigger"];
@@ -4964,7 +4964,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorOut"];
                 };
             };
-            502: {
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

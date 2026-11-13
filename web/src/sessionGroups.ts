@@ -17,10 +17,6 @@ export const FILTERS = {
 } satisfies Record<string, { label: string; origins: Origin[] | null }>
 export type Filter = keyof typeof FILTERS
 
-/** 记住的分类；没记过或不认识的值时为「对话」 */
-export function parseFilter(saved: string | null): Filter {
-  return saved !== null && Object.hasOwn(FILTERS, saved) ? (saved as Filter) : 'chat'
-}
 
 export interface SessionGroup<T> {
   agentId: AgentId

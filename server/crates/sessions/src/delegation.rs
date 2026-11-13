@@ -29,7 +29,7 @@ use crate::inbound::{Inbound, Opener, create_session_in, receive_in};
 use crate::runs::{RunRecord, latest_among};
 use crate::thread_calls::{Owed, call_in, owed_in, record_call_in};
 use crate::work::{CheckBeats, EventSource, deliver_in, post_check_in};
-use muliao_platform::errors::{Result, broken, invalid};
+use muliao_platform::errors::{Result, invalid};
 
 pub const THREAD_MAX: usize = 100;
 
@@ -81,9 +81,8 @@ pub(crate) fn send_in(
     mode: Mode,
 ) -> Result<Session> {
     if let Some(existing) = call_in(tx, parent_id, call_id)? {
-        return directory::get_in(tx, &existing.thread_id)?.ok_or_else(|| {
-            broken(format!("delegation {} points to a missing thread {}", existing.id, existing.thread_id))
-        });
+        // thread_calls.thread_session_id 引用 sessions（ON DELETE CASCADE）：调用行在，thread 就在
+        return Ok(directory::get_in(tx, &existing.thread_id)?.expect("a delegation's thread exists"));
     }
     let child = open_in(tx, parent_id, agent_id, thread)?;
     let check_seconds = match mode {
@@ -222,9 +221,8 @@ pub(crate) async fn check_threads(db: &Database, waker: &Waker, beats: &Arc<Mute
         let children = directory::among_in(tx, &child_ids)?;
         let mut posted = 0;
         for ((_, child_id), (o, interval)) in &due {
-            let child = children.get(child_id).ok_or_else(|| {
-                broken(format!("delegation {} points to a missing thread {child_id}", o.delegation.id))
-            })?;
+            // 同上：委派引用的 thread 由外键保证存在
+            let child = &children[child_id];
             let agent = agent_in(tx, &child.agent_id)?;
             let text = check_text(child, &agent, states[child_id], runs.get(child_id), now, *interval);
             if post_check_in(tx, &waker, Some(&o.hold), &EventSource::Thread { session_id: child_id.clone() }, &text)? {

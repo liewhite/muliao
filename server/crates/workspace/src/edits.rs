@@ -329,163 +329,16 @@ pub fn apply_each<K: Eq + Hash + Ord + Clone>(
 }
 
 /// after 里改动过的行（各带前后 context 行，相邻的合并）的 `[起, 止)` 行号范围，0 起算。按前后文本比对得出，与替换的
-/// 先后次序无关（后一处替换可能挪动前一处的位置）。纯删除的地方只剩上下文行；整个文件被删空时为空列表。比对同 Python
-/// 的 `difflib.SequenceMatcher(autojunk=False).get_grouped_opcodes`（回显的范围两版一致）。
+/// 先后次序无关（后一处替换可能挪动前一处的位置）。纯删除的地方只剩上下文行；整个文件被删空时为空列表。
 pub fn changed_ranges(before: &str, after: &str, context: usize) -> Vec<(usize, usize)> {
     let (a, b) = (split_lines(before), split_lines(after));
-    grouped_opcodes(&a, &b, context)
+    similar::group_diff_ops(similar::capture_diff_slices(similar::Algorithm::Myers, &a, &b), context)
         .into_iter()
         .filter_map(|group| {
-            let (start, end) = (group[0].j1, group[group.len() - 1].j2);
+            let (start, end) = (group[0].new_range().start, group[group.len() - 1].new_range().end);
             (start < end).then_some((start, end))
         })
         .collect()
-}
-
-// ---- difflib.SequenceMatcher（没有 junk、autojunk=False）的移植 ----
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Tag {
-    Equal,
-    Replace,
-    Delete,
-    Insert,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Opcode {
-    tag: Tag,
-    i1: usize,
-    i2: usize,
-    j1: usize,
-    j2: usize,
-}
-
-fn find_longest_match(
-    a: &[&str],
-    b: &[&str],
-    b2j: &HashMap<&str, Vec<usize>>,
-    (alo, ahi, blo, bhi): (usize, usize, usize, usize),
-) -> (usize, usize, usize) {
-    let (mut besti, mut bestj, mut bestsize) = (alo, blo, 0);
-    let mut j2len: HashMap<usize, usize> = HashMap::new();
-    for (i, item) in a.iter().enumerate().take(ahi).skip(alo) {
-        let mut newj2len = HashMap::new();
-        if let Some(js) = b2j.get(item) {
-            for &j in js {
-                if j < blo {
-                    continue;
-                }
-                if j >= bhi {
-                    break;
-                }
-                let k = j.checked_sub(1).and_then(|p| j2len.get(&p)).copied().unwrap_or(0) + 1;
-                newj2len.insert(j, k);
-                if k > bestsize {
-                    (besti, bestj, bestsize) = (i + 1 - k, j + 1 - k, k);
-                }
-            }
-        }
-        j2len = newj2len;
-    }
-    while besti > alo && bestj > blo && a[besti - 1] == b[bestj - 1] {
-        (besti, bestj, bestsize) = (besti - 1, bestj - 1, bestsize + 1);
-    }
-    while besti + bestsize < ahi && bestj + bestsize < bhi && a[besti + bestsize] == b[bestj + bestsize] {
-        bestsize += 1;
-    }
-    (besti, bestj, bestsize)
-}
-
-fn matching_blocks(a: &[&str], b: &[&str]) -> Vec<(usize, usize, usize)> {
-    let mut b2j: HashMap<&str, Vec<usize>> = HashMap::new();
-    for (j, item) in b.iter().enumerate() {
-        b2j.entry(item).or_default().push(j);
-    }
-    let mut queue = vec![(0, a.len(), 0, b.len())];
-    let mut blocks = Vec::new();
-    while let Some((alo, ahi, blo, bhi)) = queue.pop() {
-        let (i, j, k) = find_longest_match(a, b, &b2j, (alo, ahi, blo, bhi));
-        if k > 0 {
-            blocks.push((i, j, k));
-            if alo < i && blo < j {
-                queue.push((alo, i, blo, j));
-            }
-            if i + k < ahi && j + k < bhi {
-                queue.push((i + k, ahi, j + k, bhi));
-            }
-        }
-    }
-    blocks.sort();
-    let mut merged: Vec<(usize, usize, usize)> = Vec::new();
-    let (mut i1, mut j1, mut k1) = (0, 0, 0);
-    for (i2, j2, k2) in blocks {
-        if i1 + k1 == i2 && j1 + k1 == j2 {
-            k1 += k2;
-        } else {
-            if k1 > 0 {
-                merged.push((i1, j1, k1));
-            }
-            (i1, j1, k1) = (i2, j2, k2);
-        }
-    }
-    if k1 > 0 {
-        merged.push((i1, j1, k1));
-    }
-    merged.push((a.len(), b.len(), 0));
-    merged
-}
-
-fn opcodes(a: &[&str], b: &[&str]) -> Vec<Opcode> {
-    let (mut i, mut j) = (0, 0);
-    let mut out = Vec::new();
-    for (ai, bj, size) in matching_blocks(a, b) {
-        let tag = match (i < ai, j < bj) {
-            (true, true) => Some(Tag::Replace),
-            (true, false) => Some(Tag::Delete),
-            (false, true) => Some(Tag::Insert),
-            (false, false) => None,
-        };
-        if let Some(tag) = tag {
-            out.push(Opcode { tag, i1: i, i2: ai, j1: j, j2: bj });
-        }
-        (i, j) = (ai + size, bj + size);
-        if size > 0 {
-            out.push(Opcode { tag: Tag::Equal, i1: ai, i2: i, j1: bj, j2: j });
-        }
-    }
-    out
-}
-
-fn grouped_opcodes(a: &[&str], b: &[&str], n: usize) -> Vec<Vec<Opcode>> {
-    let mut codes = opcodes(a, b);
-    if codes.is_empty() {
-        codes.push(Opcode { tag: Tag::Equal, i1: 0, i2: 1, j1: 0, j2: 1 });
-    }
-    if codes[0].tag == Tag::Equal {
-        let c = &mut codes[0];
-        (c.i1, c.j1) = (c.i1.max(c.i2.saturating_sub(n)), c.j1.max(c.j2.saturating_sub(n)));
-    }
-    let last = codes.len() - 1;
-    if codes[last].tag == Tag::Equal {
-        let c = &mut codes[last];
-        (c.i2, c.j2) = (c.i2.min(c.i1 + n), c.j2.min(c.j1 + n));
-    }
-    let nn = n + n;
-    let mut groups = Vec::new();
-    let mut group = Vec::new();
-    for mut c in codes {
-        if c.tag == Tag::Equal && c.i2 - c.i1 > nn {
-            group.push(Opcode { tag: c.tag, i1: c.i1, i2: c.i2.min(c.i1 + n), j1: c.j1, j2: c.j2.min(c.j1 + n) });
-            groups.push(std::mem::take(&mut group));
-            (c.i1, c.j1) = (c.i1.max(c.i2 - n), c.j1.max(c.j2 - n));
-        }
-        group.push(c);
-    }
-    if !group.is_empty() && !(group.len() == 1 && group[0].tag == Tag::Equal) {
-        groups.push(group);
-    }
-    groups
 }
 
 #[cfg(test)]
@@ -545,14 +398,12 @@ mod tests {
     }
 
     #[test]
-    fn changed_ranges_match_difflib() {
-        // python3 -c 'import difflib;...get_grouped_opcodes(2)'
+    fn changed_ranges_keep_context() {
         let before: String = (1..=20).map(|i| format!("{i}\n")).collect();
         let after = before.replace("5\n", "five\n").replace("16\n", "");
         assert_eq!(changed_ranges(&before, &after, 2), vec![(2, 7), (12, 17)]);
         assert_eq!(changed_ranges("a\n", "", 2), Vec::<(usize, usize)>::new());
         assert_eq!(changed_ranges("a\nb\n", "a\nb\n", 2), Vec::<(usize, usize)>::new());
-        // 重复的行：difflib 选最长的匹配块
-        assert_eq!(changed_ranges("}\n}\nx\n", "}\n}\n}\nx\n", 0), vec![(0, 1)]);
+        assert_eq!(changed_ranges("}\n}\nx\n", "}\n}\n}\nx\n", 0).len(), 1);
     }
 }

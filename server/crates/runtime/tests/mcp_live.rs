@@ -15,7 +15,7 @@ use muliao_assets::service::{AgentService, AgentSpec};
 use muliao_assets::source::AssetSource;
 use muliao_assets::tree::Owner;
 use muliao_platform::db::{Database, migrate};
-use muliao_platform::sandbox::{Confinement, Mode, WritablePaths, sandbox_for};
+use muliao_platform::sandbox::{Confinement, WritablePaths, sandbox_for};
 use muliao_platform::vault::Vault;
 use muliao_runtime::mcp::{Confine, McpConnector};
 
@@ -102,7 +102,7 @@ async fn stdio_server_runs_in_the_users_write_sandbox() {
     );
     let workspace = agents.workspace(&me);
     let home = std::env::home_dir().unwrap();
-    let sandbox = sandbox_for(Mode::Enforce, &home).unwrap();
+    let sandbox = sandbox_for(&home).unwrap();
     let ws = workspace.clone();
     let confine: Confine = Arc::new(move |agent: String| {
         let (sandbox, home, ws) = (sandbox.clone(), home.clone(), ws.clone());

@@ -79,23 +79,6 @@ impl AgentService {
         workspace_of(&self.workspaces_dir, agent_id)
     }
 
-    /// 启动时：数据库里已没有、还留着工作目录（删除时没删干净）的 agent 记录出来，由人决定是否清理（不阻止启动）。
-    pub async fn report_leftovers(&self) -> Result<()> {
-        let known = agents::identities(&self.db).await?.0;
-        let Ok(entries) = std::fs::read_dir(&self.workspaces_dir) else { return Ok(()) };
-        let mut leftovers: Vec<String> = entries
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .filter(|id| !known.contains_key(id))
-            .collect();
-        leftovers.sort();
-        if !leftovers.is_empty() {
-            tracing::warn!(agent_ids = ?leftovers, "workspaces of deleted agents remain");
-        }
-        Ok(())
-    }
-
     /// actor：创建者。建资源目录（agent.toml、空的私有记忆）、写它的规则、建工作目录、插行。
     pub async fn create(&self, spec: AgentSpec, actor: &Actor) -> Result<AgentInfo> {
         let agent_id = new_agent_id();

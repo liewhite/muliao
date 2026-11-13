@@ -207,25 +207,16 @@ pub fn absolute(workspace: &Path, home: &Path, path: &str) -> PathBuf {
 
 /// 文件工具拿路径的唯一入口：模型给的 path 换成绝对路径（[`absolute`]），并检查这个 agent 能不能这样访问它（按路径的
 /// 身份：大小写不同、经符号链接的写法都按它指向的文件判断）。不能时 Forbidden，说法与命令里被沙箱拒绝时一样，后面补同一句
-/// 说明；只记录不拦的模式下记一条日志放行。返回的是模型的写法（展示、报错里用），身份另按 real 取。
+/// 说明。返回的是模型的写法（展示、报错里用），身份另按 real 取。
 pub fn reach(confinement: &Confinement, workspace: &Path, path: &str, access: Access) -> Result<PathBuf, DomainError> {
     let target = absolute(workspace, &confinement.home, path);
     if confinement.readable(&target) && (access == Access::Read || confinement.writable.permits(&target)) {
         return Ok(target);
     }
-    if confinement.enforcing() {
-        return Err(DomainError::new(
-            ErrorKind::Forbidden,
-            format!("[Errno 1] Operation not permitted: '{}'\n{}", target.display(), (confinement.explain)(&target)),
-        ));
-    }
-    tracing::warn!(
-        agent = confinement.writable.owner(),
-        path = %target.display(),
-        ?access,
-        "file tool access outside the agent's paths (report mode)"
-    );
-    Ok(target)
+    Err(DomainError::new(
+        ErrorKind::Forbidden,
+        format!("[Errno 1] Operation not permitted: '{}'\n{}", target.display(), (confinement.explain)(&target)),
+    ))
 }
 
 /// 报错里的路径：绝对路径或 `~/` 开头，到空白、引号或冒号为止，前面不能紧挨着词字符、`.`、`~`、`/`、`-`（带空格的路径
@@ -264,9 +255,6 @@ fn paths_in(line: &str) -> Vec<&str> {
 /// `~/` 开头的路径：相对路径不知道命令当时在哪个目录。写沙箱拒绝时系统报的错一律是 EPERM：各语言的说法大小写不一（Node
 /// `EPERM: operation not permitted`、Go `operation not permitted`）；EACCES（Permission denied）不是它拦的，不认。
 pub fn denial_note(confinement: &Confinement, output: &str) -> Option<String> {
-    if !confinement.enforcing() {
-        return None;
-    }
     for line in split_lines(output) {
         if !line.to_lowercase().contains("operation not permitted") {
             continue;

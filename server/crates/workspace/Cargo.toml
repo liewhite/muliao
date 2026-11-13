@@ -16,6 +16,7 @@ html-escape = "0.2"
 regex = "1"
 rusqlite = { workspace = true }
 sha2 = "0.10"
+similar = "2"
 thiserror = { workspace = true }
 futures = { workspace = true }
 libc = { workspace = true }

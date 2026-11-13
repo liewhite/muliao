@@ -1,4 +1,4 @@
-//! 起命令的底层：写沙箱的两种模式、secret 注入与脱敏、超时与取消杀进程组、输出读法。真起 bash 与 sandbox-exec。
+//! 起命令的底层：写沙箱、secret 注入与脱敏、超时与取消杀进程组、输出读法。真起 bash 与 sandbox-exec。
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use muliao_platform::fs::real;
-use muliao_platform::sandbox::{Category, Confinement, Mode, WritablePaths, sandbox_for};
+use muliao_platform::sandbox::{Category, Confinement, WritablePaths, sandbox_for};
 use muliao_platform::shell::{Command, ShellResult, run_bash};
 
 struct Env {
@@ -31,9 +31,9 @@ fn env() -> Env {
     Env { _dir: dir, work, outside, private }
 }
 
-fn confinement(mode: Mode, e: &Env) -> Confinement {
+fn confinement(e: &Env) -> Confinement {
     let home = std::env::home_dir().unwrap();
-    let sandbox = sandbox_for(mode, &home).unwrap();
+    let sandbox = sandbox_for(&home).unwrap();
     let mut rules: Vec<(bool, PathBuf)> = Vec::new();
     rules.extend(sandbox.paths(Category::Devices).into_iter().map(|p| (true, p)));
     rules.push((true, e.work.clone()));
@@ -63,39 +63,31 @@ fn none() -> BTreeMap<String, String> {
 }
 
 #[tokio::test]
-async fn allowed_work_gives_the_same_output_in_both_modes() {
+async fn allowed_work_runs_normally() {
     let e = env();
     let script = "mkdir -p sub && echo hello > sub/f && cat sub/f && ls sub && echo err >&2; exit 3";
-    let enforce = run(&confinement(Mode::Enforce, &e), &e.work, script, &none(), Duration::from_secs(30)).await;
-    std::fs::remove_dir_all(e.work.join("sub")).unwrap();
-    let report = run(&confinement(Mode::Report, &e), &e.work, script, &none(), Duration::from_secs(30)).await;
-    assert_eq!(enforce, report);
-    assert_eq!(enforce.exit_code, Some(3));
-    assert_eq!(enforce.stdout, "hello\nf\n");
-    assert_eq!(enforce.stderr, "err\n");
-    assert!(!enforce.left_running);
+    let out = run(&confinement(&e), &e.work, script, &none(), Duration::from_secs(30)).await;
+    assert_eq!(out.exit_code, Some(3));
+    assert_eq!(out.stdout, "hello\nf\n");
+    assert_eq!(out.stderr, "err\n");
+    assert!(!out.left_running);
 }
 
 #[tokio::test]
-async fn writes_outside_are_refused_only_when_enforcing() {
+async fn writes_outside_are_refused() {
     let e = env();
     let target = e.outside.join("x");
     let script = format!("echo x > '{}' && cat '{}'", target.display(), e.private.display());
-    let enforce = run(&confinement(Mode::Enforce, &e), &e.work, &script, &none(), Duration::from_secs(30)).await;
-    assert_ne!(enforce.exit_code, Some(0));
-    assert!(enforce.stderr.contains("Operation not permitted"), "{enforce:?}");
+    let out = run(&confinement(&e), &e.work, &script, &none(), Duration::from_secs(30)).await;
+    assert_ne!(out.exit_code, Some(0));
+    assert!(out.stderr.contains("Operation not permitted"), "{out:?}");
     assert!(!target.exists());
-
-    let report = run(&confinement(Mode::Report, &e), &e.work, &script, &none(), Duration::from_secs(30)).await;
-    assert_eq!(report.exit_code, Some(0), "{report:?}");
-    assert_eq!(report.stdout, "key = 1\n");
-    assert!(target.exists());
 }
 
 #[tokio::test]
 async fn private_files_are_unreadable_but_visible() {
     let e = env();
-    let c = confinement(Mode::Enforce, &e);
+    let c = confinement(&e);
     let script = format!("test -f '{p}' && echo exists; cat '{p}'", p = e.private.display());
     let r = run(&c, &e.work, &script, &none(), Duration::from_secs(30)).await;
     assert_eq!(r.stdout, "exists\n");
@@ -107,7 +99,7 @@ async fn private_files_are_unreadable_but_visible() {
 #[tokio::test]
 async fn secrets_are_injected_redacted_and_env_is_minimal() {
     let e = env();
-    let c = confinement(Mode::Enforce, &e);
+    let c = confinement(&e);
     let secrets = BTreeMap::from([("API_TOKEN".to_owned(), "tok-123456".to_owned())]);
     // SAFETY: 测试进程里设一个变量，看它不被继承（这个测试文件里别的测试不读它）
     unsafe { std::env::set_var("MULIAO_TEST_NOT_INHERITED", "1") };
@@ -126,7 +118,7 @@ async fn secrets_are_injected_redacted_and_env_is_minimal() {
 #[tokio::test]
 async fn timeout_kills_the_whole_group() {
     let e = env();
-    let c = confinement(Mode::Enforce, &e);
+    let c = confinement(&e);
     let marker = e.work.join("survived");
     let script = format!("echo started; (sleep 2; touch '{}') & sleep 60", marker.display());
     let started = Instant::now();
@@ -141,7 +133,7 @@ async fn timeout_kills_the_whole_group() {
 #[tokio::test]
 async fn cancelling_kills_the_group() {
     let e = env();
-    let c = confinement(Mode::Enforce, &e);
+    let c = confinement(&e);
     let marker = e.work.join("survived");
     let script = format!("sleep 2; touch '{}'", marker.display());
     let cmd = Command {
@@ -161,7 +153,7 @@ async fn cancelling_kills_the_group() {
 #[tokio::test]
 async fn exit_does_not_wait_for_descendants_holding_the_pipe() {
     let e = env();
-    let c = confinement(Mode::Enforce, &e);
+    let c = confinement(&e);
     let started = Instant::now();
     let r = run(&c, &e.work, "echo before; sleep 20 &", &none(), Duration::from_secs(60)).await;
     let took = started.elapsed();
@@ -174,7 +166,7 @@ async fn exit_does_not_wait_for_descendants_holding_the_pipe() {
 #[tokio::test]
 async fn merged_output_stdin_and_pipefail() {
     let e = env();
-    let c = confinement(Mode::Enforce, &e);
+    let c = confinement(&e);
     let secrets = none();
     let merged = Command {
         script: "echo a; echo b >&2; echo c",
@@ -218,7 +210,7 @@ async fn merged_output_stdin_and_pipefail() {
 #[tokio::test]
 async fn signal_exit_is_negative() {
     let e = env();
-    let c = confinement(Mode::Enforce, &e);
+    let c = confinement(&e);
     let r = run(&c, &e.work, "kill -TERM $$", &none(), Duration::from_secs(30)).await;
     assert_eq!(r.exit_code, Some(-15));
 }

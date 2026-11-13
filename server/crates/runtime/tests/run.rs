@@ -20,7 +20,7 @@ use muliao_assets::source::AssetSource;
 use muliao_files::FileStore;
 use muliao_platform::config::Settings;
 use muliao_platform::db::{Database, migrate};
-use muliao_platform::sandbox::{Category, Confinement, Mode, Sandbox, WritablePaths};
+use muliao_platform::sandbox::{Category, Confinement, Sandbox, WritablePaths};
 use muliao_platform::tooling::{Audience, RunScope, ToolTraits, builtin};
 use muliao_platform::vault::Vault;
 use muliao_runtime::conventions::{SharedFile, TOOL_ATTACHMENTS, attach, tool_attachments};
@@ -92,9 +92,6 @@ impl Tool<RunScope> for Hidden {
 struct FakeSandbox;
 
 impl Sandbox for FakeSandbox {
-    fn mode(&self) -> Mode {
-        Mode::Enforce
-    }
     fn paths(&self, _category: Category) -> Vec<PathBuf> {
         vec![]
     }
@@ -290,14 +287,19 @@ async fn a_run_from_start_to_finish() {
     let sent: serde_json::Value = server.received_requests().await.unwrap()[0].body_json().unwrap();
     let body = sent.to_string();
     assert!(
-        sent["system"][0]["text"].as_str().unwrap().starts_with("## Runtime context\n- You are agent 'me': 测试 agent")
+        sent["system"][0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("## Runtime context\n- You are agent \"me\": 测试 agent")
     );
     assert!(body.contains("全局记忆"));
     let described = format!(
-        "[Attached file 'photo.png' (image/png, {} bytes), copied into your workspace at uploads/{}/photo.png]",
+        "[Attached file \"photo.png\" (image/png, {} bytes), copied into your workspace at uploads/{}/photo.png]",
         meta.size, meta.id
     );
-    assert!(body.contains(&described), "{body}");
+    // body 是 JSON：引号转义后再找
+    let described = serde_json::to_string(&described).unwrap();
+    assert!(body.contains(described.trim_matches('"')), "{body}");
     assert!(body.contains("\"type\":\"image\""), "the image content is sent: {body}");
     assert!(!body.contains("/api/files/"), "file references never reach the model");
     assert_eq!(sent["tools"].as_array().unwrap().len(), 1);

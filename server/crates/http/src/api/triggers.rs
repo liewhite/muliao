@@ -236,11 +236,11 @@ pub struct FiredOut {
     pub session_id: Option<String>,
 }
 
-/// 立即触发一次（不带事件内容）。有前置检查时同样先跑检查，可以用来测试整条链路（检查失败 502 带原因）。不消耗一次性
+/// 立即触发一次（不带事件内容）。有前置检查时同样先跑检查，可以用来测试整条链路（检查失败 422 带原因）。不消耗一次性
 /// 触发器预定的那一次；已结束的触发器不能再运行。
 #[utoipa::path(post, path = "/api/triggers/{trigger_id}/run", tag = "triggers",
     responses((status = 202, body = FiredOut), (status = 404, body = ErrorOut), (status = 409, body = ErrorOut),
-        (status = 502, body = ErrorOut)))]
+        (status = 422, body = ErrorOut)))]
 async fn run_trigger(
     State(s): State<AppState>,
     Path(trigger_id): Path<i64>,

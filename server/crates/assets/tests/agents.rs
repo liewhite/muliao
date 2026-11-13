@@ -204,7 +204,7 @@ async fn interrupted_deletion_resumes() {
     // 标记了、文件还没删（上次删文件失败或服务重启）
     let id = a.clone();
     w.db.write(move |tx| {
-        tx.execute("UPDATE agents SET deleting_by = 'user' WHERE id = ?1", [&id])?;
+        tx.execute("UPDATE agents SET deleting = 1 WHERE id = ?1", [&id])?;
         Ok::<_, rusqlite::Error>(())
     })
     .await

@@ -3,7 +3,8 @@
 use std::sync::Arc;
 
 use muliao_platform::config::WebConfig;
-use muliao_web::{Page, WebError, WebProvider};
+use muliao_platform::errors::Error;
+use muliao_web::{Page, WebProvider};
 use wiremock::matchers::{body_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -58,9 +59,10 @@ async fn search_errors_are_classified_by_status_and_contract() {
         Mock::given(method("POST")).respond_with(resp).mount(&server).await;
         let err = provider(&server).await.search("q", 1).await.unwrap_err();
         let got = match &err {
-            WebError::Rejected(_) => "rejected",
-            WebError::Transient(_) => "transient",
-            WebError::Failed(_) => "failed",
+            Error::Domain(_) => "rejected",
+            Error::Upstream { transient: true, .. } => "transient",
+            Error::Upstream { transient: false, .. } => "failed",
+            Error::Internal(_) => "internal",
         };
         assert_eq!(got, want, "{err}");
     }
@@ -68,7 +70,7 @@ async fn search_errors_are_classified_by_status_and_contract() {
     let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     let p = provider_at(&format!("http://127.0.0.1:{port}"));
     let r = p.search("q", 1).await;
-    assert!(matches!(r, Err(WebError::Transient(_))), "{r:?}");
+    assert!(r.as_ref().is_err_and(Error::is_transient), "{r:?}");
 }
 
 #[tokio::test]
@@ -153,7 +155,9 @@ async fn fetch_falls_back_when_the_service_is_down_and_reports_both_reasons() {
         ("/pdf", "content-type application/pdf"),
         ("/js", "without extractable text"),
     ] {
-        let Err(WebError::Rejected(reason)) = p.fetch(&format!("{}{route}", server.uri())).await else {
+        let Err(Error::Domain(muliao_platform::errors::DomainError { message: reason, .. })) =
+            p.fetch(&format!("{}{route}", server.uri())).await
+        else {
             panic!("{route}: expected a rejection")
         };
         assert!(reason.contains("HTTP 503"), "{reason}");
@@ -169,8 +173,8 @@ async fn fetch_does_not_fall_back_on_bad_input_or_configuration() {
         // 直连一旦发生会命中这里，测试就会因为 expect(0) 失败
         Mock::given(method("GET")).respond_with(ResponseTemplate::new(200)).expect(0).mount(&server).await;
         let err = provider(&server).await.fetch(&format!("{}/x", server.uri())).await.unwrap_err();
-        assert_eq!(matches!(err, WebError::Rejected(_)), want_rejected, "{status}: {err}");
-        assert_eq!(matches!(err, WebError::Failed(_)), !want_rejected, "{status}: {err}");
+        assert_eq!(matches!(err, Error::Domain(_)), want_rejected, "{status}: {err}");
+        assert_eq!(matches!(err, Error::Upstream { transient: false, .. }), !want_rejected, "{status}: {err}");
     }
 }
 

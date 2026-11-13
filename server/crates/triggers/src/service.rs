@@ -18,7 +18,6 @@ use chrono_tz::Tz;
 use muliao_assets::agents::runnable_agent_in;
 use muliao_assets::lifecycle::DeletionHook;
 use muliao_platform::db::{Database, Tx};
-use muliao_platform::errors::{DomainError, ErrorKind};
 use muliao_sessions::activity::{WorkState, states_of_in};
 use muliao_sessions::inbound::{Refusal, Refused, SenderInbox, SenderMail, SenderTarget};
 use muliao_sessions::origins::Sender;
@@ -455,7 +454,7 @@ impl TriggerService {
     // ---- 触发 ----
 
     /// 用户或 agent 的「立即运行一次」（不带事件内容）：管理操作，不消耗一次性触发器预定的那一次。有前置检查时同样先跑，
-    /// 可以用来测试整条链路；检查判定没事时返回 None。检查失败只报给调用方（ScriptFailed），不记在触发器上、不告警：agent
+    /// 可以用来测试整条链路；检查判定没事时返回 None。检查失败按输入不对报给调用方（改了脚本再试），不记在触发器上、不告警：agent
     /// 修脚本时用它验证，告警会另开会话重复处理；记下了又会压住之后自动触发时的告警（只在新出现时告警）。
     pub async fn run(&self, trigger_id: i64) -> Result<Option<Fired>> {
         self.manageable(trigger_id).await?;
@@ -464,7 +463,7 @@ impl TriggerService {
             Outcome::Nothing => Ok(None),
             Outcome::Skipped(Skip::Disabled | Skip::Archived, detail) => Err(conflict(detail)),
             Outcome::Skipped(Skip::Deleted, detail) => Err(not_found(detail)),
-            Outcome::CheckFailed(error) => Err(DomainError::new(ErrorKind::ScriptFailed, error).into()),
+            Outcome::CheckFailed(error) => Err(invalid(error)),
         }
     }
 
