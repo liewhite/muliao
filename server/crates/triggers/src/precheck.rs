@@ -108,8 +108,7 @@ pub fn decide(
 fn unified_diff(previous: &str, current: &str) -> String {
     let whole = |s: &str| s.lines().map(|l| format!("{l}\n")).collect::<String>();
     let (a, b) = (whole(previous), whole(current));
-    // 在写事务里算：给个时限，十几万行几乎全不同的最坏情况退化成粗粒度的差异，不卡住全平台的写
-    let diff = TextDiff::configure().timeout(Duration::from_millis(500)).diff_lines(&a, &b);
+    let diff = TextDiff::from_lines(&a, &b);
     diff.unified_diff().context_radius(3).header("previous", "current").to_string().trim_end().to_owned()
 }
 

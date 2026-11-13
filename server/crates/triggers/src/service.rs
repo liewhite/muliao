@@ -125,7 +125,8 @@ enum Outcome {
 /// 触发的第一个事务的结果：已经有结果了，或要先在事务外跑前置检查。
 enum First {
     Done(Outcome),
-    Check { agent_id: String, precheck: Precheck },
+    /// previous：changed 检查上一次的输出（基线）
+    Check { agent_id: String, precheck: Precheck, previous: Option<String> },
 }
 
 /// 谁在触发：决定前置检查失败怎么处理。
@@ -512,15 +513,23 @@ impl TriggerService {
                 }
                 match t.precheck.clone() {
                     None => Ok(First::Done(this.deliver_in(tx, &mut t, event.as_deref())?)),
-                    Some(precheck) => Ok(First::Check { agent_id: t.agent_id.clone(), precheck }),
+                    Some(precheck) => {
+                        let previous = baseline_in(tx, trigger_id)?;
+                        Ok(First::Check { agent_id: t.agent_id.clone(), precheck, previous })
+                    }
                 }
             })
             .await?;
-        let (agent_id, precheck) = match first {
+        let (agent_id, precheck, previous) = match first {
             First::Done(outcome) => return Ok(outcome),
-            First::Check { agent_id, precheck } => (agent_id, precheck),
+            First::Check { agent_id, precheck, previous } => (agent_id, precheck, previous),
         };
-        let checked = self.0.precheck.run(&agent_id, &precheck, payload.as_deref()).await?;
+        let max_bytes = self.0.precheck.max_bytes();
+        // diff 在写事务之外算：输出再大也不占着全平台的写
+        let checked = self.0.precheck.run(&agent_id, &precheck, payload.as_deref()).await?.and_then(|output| {
+            let decision = decide(&precheck, &output, previous.as_deref(), max_bytes)?;
+            Ok((output, decision))
+        });
         let record = by == By::Activation;
         if let (Err(Failed(error)), false) = (&checked, record) {
             return Ok(Outcome::CheckFailed(error.clone()));
@@ -536,13 +545,8 @@ impl TriggerService {
                     tracing::info!(trigger_id, "trigger changed during its precheck, result discarded");
                     return Ok(Outcome::Nothing);
                 };
-                let output = match checked {
-                    Ok(output) => output,
-                    Err(Failed(error)) => return this.check_failed_in(tx, &mut t, &precheck, error, record),
-                };
-                let previous = baseline_in(tx, trigger_id)?;
-                let decision = match decide(&precheck, &output, previous.as_deref(), this.0.precheck.max_bytes()) {
-                    Ok(d) => d,
+                let (output, decision) = match checked {
+                    Ok(done) => done,
                     Err(Failed(error)) => return this.check_failed_in(tx, &mut t, &precheck, error, record),
                 };
                 passed_in(tx, &mut t, &precheck, &output, Utc::now())?;
