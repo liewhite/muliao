@@ -56,7 +56,6 @@ muliao-issues = { path = "crates/issues" }
 muliao-triggers = { path = "crates/triggers" }
 muliao-history = { path = "crates/history" }
 muliao-http = { path = "crates/http" }
-muliao-server = { path = "crates/muliao" }
 
 # 解码、缩放图片在未优化的构建里慢几十倍（长截图的测试要十几秒）
 [profile.dev.package.image]
