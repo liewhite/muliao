@@ -7998,7 +7998,7 @@
           "threads": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/SessionOut"
+              "$ref": "#/components/schemas/ThreadOut"
             },
             "description": "这个会话开出的 thread"
           },
@@ -8087,11 +8087,22 @@
             "type": "object",
             "required": [
               "thread",
+              "parent_session_id",
               "kind"
             ],
             "properties": {
               "thread": {
                 "type": "string"
+              },
+              "parent_session_id": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/SessionId"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "kind": {
                 "type": "string",
@@ -8140,7 +8151,7 @@
             }
           }
         ],
-        "description": "会话的来源与发起方（界面按 `kind` 区分）。委派开出的是 thread，带 thread 名；发起方是父会话（存在\n`parent_session_id`，不在这里另存一份）。"
+        "description": "会话的来源与发起方（界面按 `kind` 区分）。委派开出的是 thread，带 thread 名与发起它的父会话（父会话删除后为空）。"
       },
       "SessionOut": {
         "type": "object",
@@ -8149,7 +8160,6 @@
           "agent_id",
           "title",
           "origin",
-          "parent_session_id",
           "unread",
           "created_at",
           "updated_at"
@@ -8166,18 +8176,7 @@
           },
           "origin": {
             "$ref": "#/components/schemas/SessionOrigin",
-            "description": "会话的来源与发起方（结构化，前端不认识库里的编号格式）"
-          },
-          "parent_session_id": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/SessionId",
-                "description": "委派产生的子会话的父会话（thread 名在 origin 里）；别的会话、父会话已删除时为 null"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "description": "会话的来源与发起方（结构化，前端不认识库里的编号格式）；委派开出的 thread 带名字与父会话"
           },
           "unread": {
             "type": "boolean",
@@ -8469,6 +8468,25 @@
           "high",
           "xhigh"
         ]
+      },
+      "ThreadOut": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/SessionOut"
+          },
+          {
+            "type": "object",
+            "required": [
+              "thread"
+            ],
+            "properties": {
+              "thread": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "会话开出的一个 thread：子会话与它的名字（与 origin 里的同一个，列 thread 时不用再按来源收窄）。"
       },
       "ToolOut": {
         "type": "object",

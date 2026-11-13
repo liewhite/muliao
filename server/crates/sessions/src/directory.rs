@@ -20,8 +20,6 @@ pub struct Session {
     pub agent_id: AgentId,
     pub title: String,
     pub origin: SessionOrigin,
-    /// 委派开出的 thread 的父会话（删除后为空）
-    pub parent_session_id: Option<SessionId>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -46,11 +44,10 @@ fn raw(r: &Row<'_>) -> rusqlite::Result<Raw> {
 
 fn session((id, agent_id, title, origin, reference, parent, thread, created_at, updated_at): Raw) -> Result<Session> {
     Ok(Session {
-        origin: SessionOrigin::parse(&origin, reference.as_deref(), thread)?,
+        origin: SessionOrigin::parse(&origin, reference.as_deref(), thread, parent)?,
         id,
         agent_id,
         title,
-        parent_session_id: parent,
         created_at,
         updated_at,
     })
@@ -68,16 +65,19 @@ pub(crate) struct NewSession<'a> {
     pub agent_id: &'a AgentId,
     pub title: &'a str,
     pub origin: SessionOrigin,
-    pub parent_session_id: Option<&'a SessionId>,
 }
 
 pub(crate) fn add_in(c: &Connection, s: NewSession<'_>) -> Result<Session> {
     let now = Utc::now();
     let reference = s.origin.sender().map(Sender::reference);
+    let parent = match &s.origin {
+        SessionOrigin::Delegation { parent_session_id, .. } => parent_session_id.as_ref(),
+        SessionOrigin::User | SessionOrigin::Trigger { .. } | SessionOrigin::Issue { .. } => None,
+    };
     c.execute(
         "INSERT INTO sessions (id, agent_id, title, origin, origin_ref, parent_session_id, thread, created_at, updated_at) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
-        params![s.id, s.agent_id, s.title, s.origin.origin().as_str(), reference, s.parent_session_id, s.origin.thread(), now],
+        params![s.id, s.agent_id, s.title, s.origin.origin().as_str(), reference, parent, s.origin.thread(), now],
     )?;
     Ok(get_in(c, s.id)?.expect("the session was just written"))
 }
@@ -152,9 +152,25 @@ pub fn keyed_among(
     Ok(found)
 }
 
-/// 父会话开出的 thread，按创建顺序。
-pub(crate) fn threads_of(c: &Connection, parent_id: &SessionId) -> Result<Vec<Session>> {
-    query(c, "parent_session_id = ?1 ORDER BY created_at, id", [parent_id])
+/// 父会话开出的一个 thread：会话与它的名字。
+#[derive(Debug, Clone, PartialEq)]
+pub struct Thread {
+    pub session: Session,
+    pub name: String,
+}
+
+/// 父会话开出的 thread，按创建顺序。有父会话的只有委派会话（[`SessionOrigin::parse`]），所以都有名字。
+pub(crate) fn threads_of(c: &Connection, parent_id: &SessionId) -> Result<Vec<Thread>> {
+    let children = query(c, "parent_session_id = ?1 ORDER BY created_at, id", [parent_id])?;
+    children
+        .into_iter()
+        .map(|session| match &session.origin {
+            SessionOrigin::Delegation { thread, .. } => Ok(Thread { name: thread.clone(), session }),
+            SessionOrigin::User | SessionOrigin::Trigger { .. } | SessionOrigin::Issue { .. } => {
+                Err(muliao_platform::errors::broken(format!("session {} has a parent but is no thread", session.id)))
+            }
+        })
+        .collect()
 }
 
 /// thread 由（父会话, agent, 名字）确定。

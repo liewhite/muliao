@@ -180,14 +180,14 @@ pub struct ThreadView {
 
 pub(crate) fn threads_in(c: &Connection, parent_id: &SessionId) -> Result<Vec<ThreadView>> {
     let children = directory::threads_of(c, parent_id)?;
-    let ids: Vec<SessionId> = children.iter().map(|s| s.id.clone()).collect();
+    let ids: Vec<SessionId> = children.iter().map(|t| t.session.id.clone()).collect();
     let states = work_states_in(c, &ids)?;
     let runs = latest_among(c, &ids)?;
     let mut answers = latest_answers_among(c, &ids)?;
     Ok(children
         .into_iter()
-        .map(|child| ThreadView {
-            thread: thread_name(&child).to_owned(),
+        .map(|directory::Thread { session: child, name }| ThreadView {
+            thread: name,
             agent_id: child.agent_id.clone(),
             state: states[&child.id],
             failure: runs.get(&child.id).and_then(RunRecord::failure).map(str::to_owned),

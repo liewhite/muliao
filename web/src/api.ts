@@ -19,6 +19,8 @@ export type Agent = Schemas['AgentOut']
 /** agent 表单的一整份值（新建时预填的缺省、编辑时打开的当前值）；修改只提交改过的字段（Schemas['AgentUpdate']） */
 export type AgentInput = Schemas['AgentDefaults']
 export type Session = Schemas['SessionOut']
+/** 会话开出的一个 thread：子会话加它的名字 */
+export type Thread = Schemas['ThreadOut']
 /** 对等批准的调用的决定：批准、拒绝、始终允许 */
 export type ApprovalChoice = Schemas['Choice']
 export type ScriptGrant = Schemas['ScriptGrantOut']

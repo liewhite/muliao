@@ -236,8 +236,8 @@ fn place(session: &Session) -> String {
     match &session.origin {
         SessionOrigin::Trigger { trigger_id: n } | SessionOrigin::Issue { issue_id: n } => format!("{origin} #{n}"),
         SessionOrigin::User => origin.to_owned(),
-        SessionOrigin::Delegation { thread } => {
-            let parent = session.parent_session_id.as_ref().map_or("(deleted)", SessionId::as_str);
+        SessionOrigin::Delegation { thread, parent_session_id } => {
+            let parent = parent_session_id.as_ref().map_or("(deleted)", SessionId::as_str);
             format!("{origin} thread {thread:?} of {}", chars(parent, 8))
         }
     }

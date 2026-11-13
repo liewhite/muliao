@@ -2206,7 +2206,7 @@ export interface components {
             mail: components["schemas"]["MailOut"][];
             run: components["schemas"]["RunRecord"] | null;
             /** @description 这个会话开出的 thread */
-            threads: components["schemas"]["SessionOut"][];
+            threads: components["schemas"]["ThreadOut"][];
             live: components["schemas"]["LiveSegment"] | null;
             retrying: components["schemas"]["Retrying"] | null;
             /** @description 工作状态（与会话列表同一条规则）：不是 idle 前端就显示停止 */
@@ -2225,15 +2225,13 @@ export interface components {
         SessionListItem: components["schemas"]["SessionOut"] & {
             state: components["schemas"]["WorkState"];
         };
-        /**
-         * @description 会话的来源与发起方（界面按 `kind` 区分）。委派开出的是 thread，带 thread 名；发起方是父会话（存在
-         *     `parent_session_id`，不在这里另存一份）。
-         */
+        /** @description 会话的来源与发起方（界面按 `kind` 区分）。委派开出的是 thread，带 thread 名与发起它的父会话（父会话删除后为空）。 */
         SessionOrigin: {
             /** @enum {string} */
             kind: "user";
         } | {
             thread: string;
+            parent_session_id: components["schemas"]["SessionId"] | null;
             /** @enum {string} */
             kind: "delegation";
         } | {
@@ -2251,9 +2249,8 @@ export interface components {
             id: components["schemas"]["SessionId"];
             agent_id: components["schemas"]["AgentId"];
             title: string;
-            /** @description 会话的来源与发起方（结构化，前端不认识库里的编号格式） */
+            /** @description 会话的来源与发起方（结构化，前端不认识库里的编号格式）；委派开出的 thread 带名字与父会话 */
             origin: components["schemas"]["SessionOrigin"];
-            parent_session_id: components["schemas"]["SessionId"] | null;
             /** @description 有指向它的未读通知（用户在等的回答、提问、agent 主动通知、运行失败）：未读不另存，从通知派生 */
             unread: boolean;
             /** Format: date-time */
@@ -2354,6 +2351,10 @@ export interface components {
          * @enum {string}
          */
         Thinking: "default" | "off" | "low" | "medium" | "high" | "xhigh";
+        /** @description 会话开出的一个 thread：子会话与它的名字（与 origin 里的同一个，列 thread 时不用再按来源收窄）。 */
+        ThreadOut: components["schemas"]["SessionOut"] & {
+            thread: string;
+        };
         /** @description 一个内置工具（当前配置下注册的，工具自己声明读写与是否管理类），在规则里写作 `tool:<name>`。 */
         ToolOut: {
             name: string;

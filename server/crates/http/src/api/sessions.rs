@@ -44,10 +44,8 @@ pub struct SessionOut {
     pub id: SessionId,
     pub agent_id: AgentId,
     pub title: String,
-    /// 会话的来源与发起方（结构化，前端不认识库里的编号格式）
+    /// 会话的来源与发起方（结构化，前端不认识库里的编号格式）；委派开出的 thread 带名字与父会话
     pub origin: SessionOrigin,
-    /// 委派产生的子会话的父会话（thread 名在 origin 里）；别的会话、父会话已删除时为 null
-    pub parent_session_id: Option<SessionId>,
     /// 有指向它的未读通知（用户在等的回答、提问、agent 主动通知、运行失败）：未读不另存，从通知派生
     pub unread: bool,
     pub created_at: DateTime<Utc>,
@@ -62,7 +60,6 @@ impl SessionOut {
             agent_id: s.agent_id,
             title: s.title,
             origin: s.origin,
-            parent_session_id: s.parent_session_id,
             created_at: s.created_at,
             updated_at: s.updated_at,
         }
@@ -293,7 +290,7 @@ pub struct SessionDetail {
     /// 最近一次运行，还没正常结束时（在跑、在等重试，或最终失败：界面显示错误与「重试」）；正常结束的为 null
     pub run: Option<RunRecord>,
     /// 这个会话开出的 thread
-    pub threads: Vec<SessionOut>,
+    pub threads: Vec<ThreadOut>,
     /// 正在进行的运行当前这一段的事件（与 SSE 的 run 事件同一形状），让中途打开页面也能从这一段的开头看起；没有则为 null
     pub live: Option<LiveSegment>,
     /// 这次运行出过暂时性的错、正在自动重试（只在内存里）：上次的错误与下次尝试的时间；没有则为 null
@@ -307,6 +304,14 @@ pub struct SessionDetail {
     pub usage: UsageTotals,
 }
 
+/// 会话开出的一个 thread：子会话与它的名字（与 origin 里的同一个，列 thread 时不用再按来源收窄）。
+#[derive(Serialize, ToSchema)]
+pub struct ThreadOut {
+    #[serde(flatten)]
+    pub session: SessionOut,
+    pub thread: String,
+}
+
 #[utoipa::path(get, path = "/api/sessions/{session_id}", tag = "sessions",
     responses((status = 200, body = SessionDetail), (status = 404, body = ErrorOut)),
     params(("session_id" = SessionId, Path, description = "会话的编号")))]
@@ -316,8 +321,10 @@ async fn get_session(
 ) -> ApiResult<axum::Json<SessionDetail>> {
     let view = s.services.sessions.detail(&session_id).await?;
     let agent_id = view.session.agent_id.clone();
-    let mut outs = session_outs(&s, std::iter::once(view.session).chain(view.threads).collect()).await?;
+    let (names, children): (Vec<String>, Vec<Session>) = view.threads.into_iter().map(|t| (t.name, t.session)).unzip();
+    let mut outs = session_outs(&s, std::iter::once(view.session).chain(children).collect()).await?;
     let session = outs.remove(0);
+    let threads = outs.into_iter().zip(names).map(|(session, thread)| ThreadOut { session, thread }).collect();
     Ok(axum::Json(SessionDetail {
         session,
         items: view.items,
@@ -332,7 +339,7 @@ async fn get_session(
             .collect(),
         mail: mail_outs(&s, view.mail).await?,
         run: view.run,
-        threads: outs,
+        threads,
         live: view.live,
         retrying: view.retrying,
         state: view.state,

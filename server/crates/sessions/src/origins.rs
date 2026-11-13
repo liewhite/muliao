@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use muliao_platform::errors::{Result, broken};
+use muliao_platform::ids::SessionId;
 
 /// 来源的种类：用户在界面发起、触发器、agent 之间委派、issue 看板。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
@@ -66,13 +67,12 @@ impl Sender {
     }
 }
 
-/// 会话的来源与发起方（界面按 `kind` 区分）。委派开出的是 thread，带 thread 名；发起方是父会话（存在
-/// `parent_session_id`，不在这里另存一份）。
+/// 会话的来源与发起方（界面按 `kind` 区分）。委派开出的是 thread，带 thread 名与发起它的父会话（父会话删除后为空）。
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SessionOrigin {
     User,
-    Delegation { thread: String },
+    Delegation { thread: String, parent_session_id: Option<SessionId> },
     Trigger { trigger_id: i64 },
     Issue { issue_id: i64 },
 }
@@ -95,8 +95,14 @@ impl SessionOrigin {
         }
     }
 
-    /// 存下的三列（来源、发起方编号、thread 名）的唯一解析；不合格式是数据坏了。
-    pub(crate) fn parse(origin: &str, reference: Option<&str>, thread: Option<String>) -> Result<Self> {
+    /// 存下的四列（来源、发起方编号、thread 名、父会话）的唯一解析；不合格式是数据坏了。父会话删除后列为空，所以
+    /// 委派会话的父会话可以为空，别的会话一定为空。
+    pub(crate) fn parse(
+        origin: &str,
+        reference: Option<&str>,
+        thread: Option<String>,
+        parent: Option<SessionId>,
+    ) -> Result<Self> {
         let origin = Origin::parse(origin)?;
         let number = || -> Result<i64> {
             reference
@@ -108,11 +114,14 @@ impl SessionOrigin {
                 return Err(broken(format!("a {} origin has no ref, got {reference:?}", origin.as_str())));
             }
             Origin::Delegation => match thread {
-                Some(thread) => SessionOrigin::Delegation { thread },
+                Some(thread) => SessionOrigin::Delegation { thread, parent_session_id: parent },
                 None => return Err(broken("a delegation session has no thread name".to_owned())),
             },
-            _ if thread.is_some() => {
-                return Err(broken(format!("a {} session has a thread name {thread:?}", origin.as_str())));
+            _ if thread.is_some() || parent.is_some() => {
+                return Err(broken(format!(
+                    "a {} session has a thread name {thread:?} or a parent {parent:?}",
+                    origin.as_str()
+                )));
             }
             Origin::User => SessionOrigin::User,
             Origin::Trigger => SessionOrigin::Trigger { trigger_id: number()? },
@@ -123,7 +132,7 @@ impl SessionOrigin {
     /// 委派开出的 thread 的名字；别的会话没有。
     pub fn thread(&self) -> Option<&str> {
         match self {
-            SessionOrigin::Delegation { thread } => Some(thread),
+            SessionOrigin::Delegation { thread, .. } => Some(thread),
             _ => None,
         }
     }
@@ -172,11 +181,15 @@ mod tests {
     #[test]
     fn stored_origins_round_trip_and_bad_ones_are_reported() {
         let issue = SessionOrigin::Issue { issue_id: 7 };
-        assert_eq!(SessionOrigin::parse("issue", Some("7"), None).unwrap(), issue);
-        assert_eq!(SessionOrigin::parse("user", None, None).unwrap(), SessionOrigin::User);
-        assert!(SessionOrigin::parse("user", Some("1"), None).is_err());
-        assert!(SessionOrigin::parse("trigger", None, None).is_err());
-        assert!(SessionOrigin::parse("nope", None, None).is_err());
+        assert_eq!(SessionOrigin::parse("issue", Some("7"), None, None).unwrap(), issue);
+        assert_eq!(SessionOrigin::parse("user", None, None, None).unwrap(), SessionOrigin::User);
+        let parent = Some(SessionId::new("p"));
+        let thread = SessionOrigin::Delegation { thread: "t".into(), parent_session_id: parent.clone() };
+        assert_eq!(SessionOrigin::parse("delegation", None, Some("t".into()), parent.clone()).unwrap(), thread);
+        assert!(SessionOrigin::parse("user", None, None, parent).is_err());
+        assert!(SessionOrigin::parse("user", Some("1"), None, None).is_err());
+        assert!(SessionOrigin::parse("trigger", None, None, None).is_err());
+        assert!(SessionOrigin::parse("nope", None, None, None).is_err());
         assert_eq!(serde_json::to_value(issue).unwrap(), serde_json::json!({"kind": "issue", "issue_id": 7}));
     }
 }

@@ -133,8 +133,9 @@ impl NewMail {
     }
 
     /// 对挂起调用的回答。from_user：用户的回答（否则是交回的结局）。
-    pub(crate) fn answer(answers: BTreeMap<String, CallResult>, from_user: bool, awaited: bool) -> Self {
-        NewMail { body: MailBody::Answer { answers, from_user }, awaited }
+    /// 一次挂起调用的结果（回答信件可以带多个，存储形状不变；现在每封只交一个）。
+    pub(crate) fn answer(call_id: String, result: CallResult, from_user: bool, awaited: bool) -> Self {
+        NewMail { body: MailBody::Answer { answers: BTreeMap::from([(call_id, result)]), from_user }, awaited }
     }
 }
 

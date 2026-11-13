@@ -119,9 +119,8 @@ export function FileBrowser({ source, label, emptyText }: { source: DirSource; l
     const listing = parent === '' ? root.data : dirs[parent]
     // 所在目录还在读（刷新中）
     if (listing === undefined) return null
-    const entry = listing.find((e) => e.name === name)
+    const entry = listing.find((e): e is WorkspaceFileEntry => e.name === name && e.kind === 'file')
     if (entry === undefined) return <EmptyHint>{path} 已不在{label}里</EmptyHint>
-    if (entry.kind === 'dir') return <EmptyHint>{path} 现在是目录</EmptyHint>
     return <FilePreview key={`${path}-${version}`} url={source.fileUrl(path)} path={path} entry={entry} />
   }
 

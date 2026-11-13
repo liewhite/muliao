@@ -26,13 +26,8 @@ fn sid(id: &str) -> SessionId {
     SessionId::new(id)
 }
 
-fn session<'a>(
-    id: &'a SessionId,
-    agent: &'a AgentId,
-    origin: SessionOrigin,
-    parent: Option<&'a SessionId>,
-) -> NewSession<'a> {
-    NewSession { id, agent_id: agent, title: id.as_str(), origin, parent_session_id: parent }
+fn session<'a>(id: &'a SessionId, agent: &'a AgentId, origin: SessionOrigin) -> NewSession<'a> {
+    NewSession { id, agent_id: agent, title: id.as_str(), origin }
 }
 
 #[tokio::test]
@@ -43,7 +38,7 @@ async fn due_wake_ups_are_delivered_and_the_rest_wait() {
     db.write(move |tx| {
         let agent = AgentId::new("a");
         for s in ["s1", "s2", "s3"] {
-            add_in(tx, session(&sid(s), &agent, SessionOrigin::User, None))?;
+            add_in(tx, session(&sid(s), &agent, SessionOrigin::User))?;
         }
         // 先约的反而晚到：按约的时刻挑，不按登记先后
         let later = schedule_in(tx, &sid("s3"), now + Duration::hours(1), "later", false)?;
@@ -96,9 +91,10 @@ async fn a_deleted_thread_is_no_longer_owed() {
     let owed = db
         .write(|tx| {
             let (agent, p) = (AgentId::new("a"), sid("p"));
-            add_in(tx, session(&p, &agent, SessionOrigin::User, None))?;
+            add_in(tx, session(&p, &agent, SessionOrigin::User))?;
             for t in ["t1", "t2"] {
-                add_in(tx, session(&sid(t), &agent, SessionOrigin::Delegation { thread: t.into() }, Some(&p)))?;
+                let origin = SessionOrigin::Delegation { thread: t.into(), parent_session_id: Some(p.clone()) };
+                add_in(tx, session(&sid(t), &agent, origin))?;
             }
             let r1 = record_call_in(tx, &p, "c1", &sid("t1"), None)?;
             let r2 = record_call_in(tx, &p, "c2", &sid("t2"), Some(60.0))?;

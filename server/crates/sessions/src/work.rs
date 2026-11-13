@@ -81,12 +81,7 @@ pub(crate) fn deliver_in(
     let waiting_on_it = hold.call_id().is_some_and(|c| at.paused().is_some_and(|p| p.get(c).is_some()));
     let delivered = match (answer, hold.call_id()) {
         (Some(answer), Some(call_id)) if waiting_on_it => {
-            post_in(
-                tx,
-                waker,
-                session_id,
-                NewMail::answer(BTreeMap::from([(call_id.to_owned(), answer)]), false, hold.awaited),
-            )?;
+            post_in(tx, waker, session_id, NewMail::answer(call_id.to_owned(), answer, false, hold.awaited))?;
             Delivered::Answer
         }
         _ => {

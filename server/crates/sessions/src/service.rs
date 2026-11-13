@@ -11,11 +11,11 @@ use crate::activity::{Wait, WorkState, statuses_in, waits_of_in};
 use crate::actor::{Actors, Waker};
 use crate::compaction::context_tokens;
 use crate::deletion::delete_sessions_in;
-use crate::directory::{self, Listing, Session};
+use crate::directory::{self, Listing, Session, Thread};
 use crate::events::Events;
 use crate::halt::Halted;
 use crate::history::{self, Compaction, context_of};
-use crate::inbound::{Inbound, UserMessage, receive_in};
+use crate::inbound::{CallReply, Inbound, UserMessage, receive_in, reply_in};
 use crate::live::{Live, LiveSegment, Retrying, RunEvent};
 use crate::mailbox::{Mail, visible_in};
 use crate::runs::{self, RunRecord};
@@ -35,7 +35,7 @@ pub struct SessionView {
     pub mail: Vec<Mail>,
     /// 最近一次运行：没结束的（在跑或在等重试）或最终失败的（界面显示错误与「重试」）；正常结束的为 None
     pub run: Option<RunRecord>,
-    pub threads: Vec<Session>,
+    pub threads: Vec<Thread>,
     pub live: Option<LiveSegment>,
     /// 这次运行出过暂时性的错、正在自动重试：上次的错误与下次尝试的时间
     pub retrying: Option<Retrying>,
@@ -82,7 +82,19 @@ impl SessionService {
     /// 用户在界面上发的消息（续写或新建会话），返回信进的会话。
     pub async fn receive(&self, message: UserMessage) -> Result<Session> {
         let waker = self.waker.clone();
-        self.db.write(move |tx| receive_in(tx, &waker, Inbound::user(message))).await
+        self.db
+            .write(move |tx| match message {
+                UserMessage::Message { session, content, attachments } => {
+                    receive_in(tx, &waker, Inbound::user(session, content, attachments))
+                }
+                UserMessage::Answer { session_id, call_id, answers } => {
+                    reply_in(tx, &waker, &session_id, call_id, CallReply::Answer(answers))
+                }
+                UserMessage::Approval { session_id, call_id, choice } => {
+                    reply_in(tx, &waker, &session_id, call_id, CallReply::Approval(choice))
+                }
+            })
+            .await
     }
 
     pub async fn get(&self, session_id: &SessionId) -> Result<Session> {

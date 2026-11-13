@@ -611,7 +611,7 @@ fn every_route_is_described() {
     assert_eq!(required, ["command"]);
     let required: Vec<&str> =
         schemas["SessionOut"]["required"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
-    assert!(required.contains(&"parent_session_id"));
+    assert!(required.contains(&"unread"));
     // 请求里可以不给的照样可以不给
     let required: Vec<&str> =
         schemas["AgentCreate"]["required"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();

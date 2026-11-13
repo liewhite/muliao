@@ -34,7 +34,7 @@ import {
   type Mail,
   type RunRecord,
   type Retrying,
-  type Session,
+  type Thread,
   type SessionDetail,
   type Wait,
   sessionRoute,
@@ -138,7 +138,7 @@ function ToolDetail({ tool }: { tool: ToolView }) {
           {callView !== null ? (
             <ToolViewBlocks blocks={callView} />
           ) : (
-            tool.call && tool.call.args !== '' && tool.call.args !== '{}' && <pre className={CODE_BLOCK}>{tool.call.args}</pre>
+            tool.call && tool.call.args !== '{}' && <pre className={CODE_BLOCK}>{tool.call.args}</pre>
           )}
           {resultView !== null ? (
             <ToolViewBlocks blocks={resultView} />
@@ -241,7 +241,7 @@ interface SessionContext {
   answer: (callId: string, answers: QuestionAnswer[]) => Promise<unknown>
   /** 批准、拒绝或始终允许一次等批准的工具调用 */
   approve: (callId: string, choice: ApprovalChoice) => Promise<unknown>
-  threads: Map<string, Session>
+  threads: Map<string, Thread>
   /**
    * 条目来自哪里：
    * - history：数据库里的历史，与会话的 thread 列表来自同一个响应，引用的 thread 缺失就是已被删除；
@@ -513,25 +513,20 @@ function RunStatus({ run, retrying, onRetry }: { run: RunRecord; retrying: Retry
   )
 }
 
-/** 子会话的 thread 名（在它的来源里）；这里列的子会话都是委派开出的，别的来源没有 thread 名，显示标题 */
-function threadName(s: Session): string {
-  return s.origin.kind === 'delegation' ? s.origin.thread : s.title
-}
-
 /** thread 名与做它的 agent */
-function ThreadName({ thread }: { thread: Session }) {
+function ThreadName({ thread }: { thread: Thread }) {
   return (
     <>
-      {threadName(thread)}（<AgentName id={thread.agent_id} />）
+      {thread.thread}（<AgentName id={thread.agent_id} />）
     </>
   )
 }
 
-function ThreadRow({ thread }: { thread: Session }) {
+function ThreadRow({ thread }: { thread: Thread }) {
   return (
     <Link to={sessionRoute(thread.id)} className="flex items-center gap-2 rounded-lg px-2 py-1 hover:bg-surface-hover">
       <GitBranch className="size-3.5 shrink-0 text-muted" />
-      <span className="truncate font-medium">{threadName(thread)}</span>
+      <span className="truncate font-medium">{thread.thread}</span>
       <span className="truncate text-muted">
         <AgentName id={thread.agent_id} />
       </span>
@@ -557,7 +552,7 @@ function ThreadLinks({ ids, ctx }: { ids: string[]; ctx: SessionContext }) {
 }
 
 /** 没有被任何条目引用的 thread（见 blocks.unlinkedThreads）：只能统一列在这里 */
-function UnlinkedThreads({ threads }: { threads: Session[] }) {
+function UnlinkedThreads({ threads }: { threads: Thread[] }) {
   if (threads.length === 0) return null
   return (
     <div className="flex flex-col gap-1.5 rounded-xl border border-separator p-3 text-sm">
@@ -956,7 +951,8 @@ export default function SessionView() {
   }
 
   const session = detail.data?.session
-  const parentRoute = session?.parent_session_id ? sessionRoute(session.parent_session_id) : '/'
+  const parent = session?.origin.kind === 'delegation' ? session.origin.parent_session_id : null
+  const parentRoute = parent ? sessionRoute(parent) : '/'
   return (
     <Page
       scrollRef={bottom.scrollRef}
@@ -1035,7 +1031,7 @@ export default function SessionView() {
                 </Link>
                 <span className="text-xs text-muted">{formatTime(d.session.created_at)}</span>
               </div>
-              {d.session.parent_session_id && d.session.origin.kind === 'delegation' && (
+              {d.session.origin.kind === 'delegation' && parent && (
                 <Link to={parentRoute} className="flex items-center justify-center gap-1 text-xs text-accent">
                   <CornerLeftUp className="size-3.5" />
                   来自上级会话的 thread「{d.session.origin.thread}」

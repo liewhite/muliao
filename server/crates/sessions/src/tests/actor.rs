@@ -481,7 +481,7 @@ async fn ask_agent_delegates_and_hands_the_answer_back() {
     assert_eq!(texts(&h[3])[0], "对方说是 2");
     let view = w.service.detail(&s).await.unwrap();
     assert_eq!(view.threads.len(), 1);
-    assert_eq!(view.threads[0].agent_id, w.other);
+    assert_eq!(view.threads[0].session.agent_id, w.other);
     let call = view
         .items
         .iter()
@@ -490,7 +490,7 @@ async fn ask_agent_delegates_and_hands_the_answer_back() {
             _ => None,
         })
         .unwrap();
-    assert_eq!(call.threads, vec![view.threads[0].id.clone()], "the thread shows at the call that opened it");
+    assert_eq!(call.threads, vec![view.threads[0].session.id.clone()], "the thread shows at the call that opened it");
 }
 
 #[tokio::test]
