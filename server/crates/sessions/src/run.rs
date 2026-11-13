@@ -197,12 +197,12 @@ pub(crate) async fn execute(core: &Core, session_id: &str, slot: &PartialSlot) -
         finish(core, &begun, end).await?;
         return Ok(());
     }
-    let config = core.runtime.config(&begun.session.agent_id).await?;
+    let assets = core.runtime.run_assets(&begun.session.agent_id).await?;
     let audience = audience_of(&begun.audience_mail.iter().collect::<Vec<_>>(), begun.delegated);
     let mut driver = Driver {
         core,
         begun: &begun,
-        config: &config,
+        assets: &assets,
         audience,
         partial,
         history: begun.context.messages.clone(),
@@ -390,7 +390,7 @@ fn finish_in(
 struct Driver<'a> {
     core: &'a Core,
     begun: &'a Begun,
-    config: &'a RunAssets,
+    assets: &'a RunAssets,
     audience: Audience,
     partial: SharedPartial,
     /// 发给模型的历史（存储形态）：保存一步就接上这一步，压缩后从库里重新加载。这次运行新增的工具调用不脱敏（库里那份
@@ -422,7 +422,7 @@ impl Driver<'_> {
             .core
             .runtime
             .start(RunSpec {
-                config: self.config,
+                assets: self.assets,
                 session_id: self.session_id(),
                 audience: self.audience,
                 origin_note: self.core.notes.of(self.begun.session.origin.origin()),
@@ -693,7 +693,7 @@ impl Driver<'_> {
     }
 
     async fn compact(&mut self) -> std::result::Result<(), Failure> {
-        let compacted = self.core.compactor.compact(self.session_id(), self.config).await?;
+        let compacted = self.core.compactor.compact(self.session_id(), self.assets).await?;
         let session_id = self.session_id().to_owned();
         let (context, through) = self
             .core

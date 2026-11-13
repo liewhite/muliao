@@ -8,8 +8,8 @@ use std::sync::Arc;
 use agenter::{Content, ToolCall, ToolCtx};
 use futures::FutureExt;
 use muliao_assets::access::Actor;
-use muliao_assets::mcp::McpRegistry;
 use muliao_assets::rules::ToolTable;
+use muliao_assets::run_assets::RunAssets;
 use muliao_assets::secrets::Secrets;
 use muliao_assets::service::{AgentService, AgentSpec};
 use muliao_assets::source::AssetSource;
@@ -117,9 +117,10 @@ async fn stdio_server_runs_in_the_users_write_sandbox() {
         }
         .boxed()
     });
-    let (registry, connector) = (McpRegistry::new(source), McpConnector::new(secrets, confine));
+    let connector = McpConnector::new(secrets, confine);
+    let servers = async || RunAssets::of(&source.snapshot().await.unwrap(), &me).unwrap().mcp;
 
-    let reachable = connector.connect_for(&me, &registry.index(&me).await.unwrap(), &workspace).await.unwrap();
+    let reachable = connector.connect_for(&me, &servers().await, &workspace).await.unwrap();
     assert!(reachable.notices.is_empty(), "{:?}", reachable.notices);
     let tools = reachable.connections[0].tools::<()>();
     let call = |name: &str, args: serde_json::Value| {
@@ -144,7 +145,7 @@ async fn stdio_server_runs_in_the_users_write_sandbox() {
 
     // 连不上时信息里的 secret 明文被换掉
     write(&root.join("me/mcp/bad.json"), r#"{"transport": "http", "url": "http://127.0.0.1:9/${vault:TOKEN}"}"#);
-    let again = connector.connect_for(&me, &registry.index(&me).await.unwrap(), &workspace).await.unwrap();
+    let again = connector.connect_for(&me, &servers().await, &workspace).await.unwrap();
     let notice = again.notices.join("\n");
     assert!(notice.contains("MCP server \"bad\"") && notice.contains("127.0.0.1:9/[secret:TOKEN]"), "{notice}");
     assert!(!notice.contains("hunter2"), "{notice}");

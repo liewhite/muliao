@@ -48,8 +48,8 @@ pub struct Runtime {
 
 /// 开始一次运行要的东西（会话领域给）。
 pub struct RunSpec<'a> {
-    /// 这次运行用的资源（[`Runtime::config`] 在运行开头取的一份，整次运行与压缩都用它）
-    pub config: &'a RunAssets,
+    /// 这次运行用的资源（[`Runtime::run_assets`] 在运行开头取的一份，整次运行与压缩都用它）
+    pub assets: &'a RunAssets,
     pub session_id: &'a str,
     pub audience: Audience,
     /// 会话来源的说明（会话创建时定下、整个会话不变）
@@ -92,7 +92,7 @@ impl Runtime {
 
     /// agent 现在的配置与它能用的资源，出自同一份快照（[`RunAssets`]）：没加载时 NotFound（带上原因），要它的运行当场失败，
     /// 不沿用旧值。会话的一次运行在开头取一份，整次运行与压缩都用它。
-    pub async fn config(&self, agent_id: &str) -> Result<RunAssets, Error> {
+    pub async fn run_assets(&self, agent_id: &str) -> Result<RunAssets, Error> {
         RunAssets::of(&*self.d.source.snapshot().await?, agent_id)
     }
 
@@ -103,8 +103,8 @@ impl Runtime {
     }
 
     /// 这个 agent 在这个会话里的指令：只由会话级、agent 级的稳定内容组成，同一个会话的两次运行得到同一段文字（缓存前缀）。
-    fn instructions(&self, config: &RunAssets, origin_note: &str, summary: Option<&str>) -> String {
-        let agent = &config.agent;
+    fn instructions(&self, assets: &RunAssets, origin_note: &str, summary: Option<&str>) -> String {
+        let agent = &assets.agent;
         let id = agent.id.as_str();
         let workspace = self.d.agents.workspace(id);
         build_instructions(&InstructionParts {
@@ -114,8 +114,8 @@ impl Runtime {
             workspace: &workspace,
             asset_dir: &agent.path,
             origin_note,
-            memories: &config.memories,
-            skills: &config.skills,
+            memories: &assets.memories,
+            skills: &assets.skills,
             memory_limit: self.d.source.memory_max_chars(),
             summary,
         })
@@ -123,12 +123,12 @@ impl Runtime {
 
     /// 组装一次运行：按 agent 现在的规则开放内置工具，连上它的 MCP server（连不上的跳过，写进 notices），组装指令与模型。
     pub async fn start(&self, spec: RunSpec<'_>) -> Result<Run, Error> {
-        let (config, dir) = (spec.config, &spec.config.agent);
+        let (assets, dir) = (spec.assets, &spec.assets.agent);
         let agent_id = dir.id.as_str();
         let model = self.d.models.resolve(dir.file.model())?;
         let workspace = self.d.agents.workspace(agent_id);
         // 资源目录里与它相关、没加载的文件（读坏、名字冲突），告诉模型去修
-        let mut notices: Vec<String> = config
+        let mut notices: Vec<String> = assets
             .problems
             .iter()
             .map(|p| {
@@ -140,8 +140,8 @@ impl Runtime {
                 )
             })
             .collect();
-        let mut tools = self.d.toolbox.allowed(&config.rules);
-        let reachable = self.d.mcp.connect_for(agent_id, &config.mcp, &workspace).await?;
+        let mut tools = self.d.toolbox.allowed(&assets.rules);
+        let reachable = self.d.mcp.connect_for(agent_id, &assets.mcp, &workspace).await?;
         notices.extend(reachable.notices);
         for connection in reachable.connections {
             let mine = connection.tools::<RunScope>();
@@ -158,7 +158,7 @@ impl Runtime {
             }
             tools.extend(mine);
         }
-        let instructions = self.instructions(config, spec.origin_note, spec.summary);
+        let instructions = self.instructions(assets, spec.origin_note, spec.summary);
         let settings = Settings { thinking: thinking_of(dir.file.thinking()), max_tokens: None };
         let agent = Agent::new(model, instructions, settings, tools).expect("tool names were checked to be unique");
         tracing::info!(
@@ -179,30 +179,25 @@ impl Runtime {
         })
     }
 
-    /// 用这份配置的模型做一次无工具的文本生成（压缩 session_id 这个会话的上下文），用量记为压缩。
+    /// 用这份资源里 agent.toml 写的模型做一次无工具的文本生成（压缩 session_id 这个会话的上下文），用量记为压缩。
     pub async fn summarize(
         &self,
-        config: &RunAssets,
+        assets: &RunAssets,
         session_id: &str,
         instructions: &str,
         prompt: &str,
     ) -> Result<String, Error> {
-        let config = &config.agent;
-        let model = self.d.models.resolve(config.file.model())?;
-        let settings = Settings { thinking: thinking_of(config.file.thinking()), max_tokens: None };
+        let dir = &assets.agent;
+        let model = self.d.models.resolve(dir.file.model())?;
+        let settings = Settings { thinking: thinking_of(dir.file.thinking()), max_tokens: None };
         let agent: Agent<()> = Agent::new(model, instructions, settings, vec![]).expect("no tools");
         let history = [Message::User(Request {
             parts: vec![RequestPart::Text { text: prompt.to_owned() }],
             timestamp: Utc::now(),
             metadata: None,
         })];
-        let meter = Meter::new(
-            self.d.usage.clone(),
-            config.id.as_str(),
-            Some(session_id),
-            config.file.model(),
-            RunKind::Compaction,
-        );
+        let meter =
+            Meter::new(self.d.usage.clone(), dir.id.as_str(), Some(session_id), dir.file.model(), RunKind::Compaction);
         let step = agent.step(&(), &history, &HashMap::new(), &mut |_| {}).await.map_err(|e| Error::Upstream {
             message: format!("summarizing for compaction failed: {e}"),
             transient: e.is_transient(),

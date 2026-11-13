@@ -5,7 +5,7 @@
 use crate::tree::Expect;
 use std::sync::Arc;
 
-use crate::access::{Actor, Grants, grants_for, usable};
+use crate::access::{Grants, usable};
 use crate::formats::mcp::{McpConfig, parse, render};
 use crate::kinds::StoredKind;
 use crate::source::AssetSource;
@@ -38,12 +38,6 @@ pub struct McpRegistry {
 impl McpRegistry {
     pub fn new(source: Arc<AssetSource>) -> Self {
         Self { source }
-    }
-
-    /// agent 这次运行要连接的 server：它能用的、已启用的，按名称。
-    pub async fn index(&self, agent_id: &str) -> Result<Vec<McpServer>> {
-        let snapshot = self.source.snapshot().await?;
-        Ok(servers_of(&snapshot, &grants_for(&snapshot, &Actor::Agent(agent_id.to_owned()))))
     }
 
     pub async fn get(&self, name: &str) -> Result<McpServer> {

@@ -240,11 +240,11 @@ async fn a_run_from_start_to_finish() {
     // 一个读坏的 skill
     write(&w.root.join("me/skills/broken/SKILL.md"), "no frontmatter\n");
 
-    let config = w.runtime.config(&me).await.unwrap();
+    let assets = w.runtime.run_assets(&me).await.unwrap();
     let run = w
         .runtime
         .start(RunSpec {
-            config: &config,
+            assets: &assets,
             session_id: "s1",
             audience: Audience::User,
             origin_note: "Started by the user.",
@@ -343,7 +343,7 @@ async fn a_run_from_start_to_finish() {
     drop(run);
 
     // 压缩：无工具的一次生成，记为压缩
-    let summary = w.runtime.summarize(&config, "s1", "summarize", "the transcript").await.unwrap();
+    let summary = w.runtime.summarize(&assets, "s1", "summarize", "the transcript").await.unwrap();
     assert_eq!(summary, "好了");
     assert_eq!(w.usage.session_totals("s1").await.unwrap().requests, 3);
 }

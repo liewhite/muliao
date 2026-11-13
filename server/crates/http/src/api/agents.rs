@@ -466,7 +466,7 @@ async fn agent_assets(
 ) -> ApiResult<axum::Json<AgentAssetsOut>> {
     let used = s.services.distribution.assets(&agent_id).await?;
     let memory = &s.services.memory;
-    let preview = muliao_runtime::instructions::memory_section(&memory.for_run(&agent_id).await?, memory.max_chars());
+    let preview = muliao_runtime::instructions::memory_section(&memory.for_agent(&agent_id).await?, memory.max_chars());
     let mut out =
         AgentAssetsOut { memories: vec![], memory_preview: preview, skills: vec![], secrets: vec![], mcp: vec![] };
     for u in used {

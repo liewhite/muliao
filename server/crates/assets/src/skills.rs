@@ -120,12 +120,6 @@ impl SkillStore {
         Self { source }
     }
 
-    /// agent 能用的 skill（自己的与分发给它的），按名称：它的 skill 索引。
-    pub async fn index(&self, agent_id: &str) -> Result<Vec<SkillMeta>> {
-        let snapshot = self.source.snapshot().await?;
-        Ok(index_of(&snapshot, &grants_for(&snapshot, &Actor::Agent(agent_id.to_owned()))))
-    }
-
     /// agent 能用的这个 skill 的脚本在哪、哪些要批准（skill_run 用）；不存在或它不能用都是 NotFound。
     pub async fn scripts(&self, name: &str, agent_id: &str) -> Result<SkillScripts> {
         let snapshot = self.source.snapshot().await?;

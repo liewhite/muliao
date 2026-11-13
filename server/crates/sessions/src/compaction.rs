@@ -151,9 +151,9 @@ impl Compactor {
         verdict(self.threshold_tokens, session_id, history, stale_responses)
     }
 
-    /// 用这份 agent 配置（运行中压缩时是运行的快照）的模型压缩到保留窗口之外没有可压缩的为止（每一批一次模型调用）。
+    /// 用这份资源（运行中压缩时是运行开头取的那份）里的模型压缩到保留窗口之外没有可压缩的为止（每一批一次模型调用）。
     /// 返回压缩的步数；为 0 表示没有可压缩的。模型调用失败时之前批次写下的压缩仍在（每批各自提交）。
-    pub async fn compact(&self, session_id: &str, config: &RunAssets) -> Result<usize> {
+    pub async fn compact(&self, session_id: &str, assets: &RunAssets) -> Result<usize> {
         let mut compacted = 0;
         loop {
             let sid = session_id.to_owned();
@@ -171,7 +171,7 @@ impl Compactor {
             }
             let (chosen, more) = select_steps(&steps, self.keep_steps, TRANSCRIPT_CHARS)?;
             let prompt = compaction_prompt(previous.as_ref().map(|p| p.summary.as_str()), chosen)?;
-            let summary = self.runtime.summarize(config, session_id, COMPACTION_INSTRUCTIONS, &prompt).await?;
+            let summary = self.runtime.summarize(assets, session_id, COMPACTION_INSTRUCTIONS, &prompt).await?;
             let through = chosen.last().and_then(|s| s.last()).expect("at least one step is chosen").id;
             let sid = session_id.to_owned();
             self.db.write(move |tx| add_compaction_in(tx, &sid, through, &summary)).await?;

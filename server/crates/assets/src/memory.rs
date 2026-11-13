@@ -93,8 +93,8 @@ impl MemoryStore {
         }
     }
 
-    /// 组装一次运行的指令时读：这个 agent 能用的每一块（自己的与规则分来的），按名字。
-    pub async fn for_run(&self, agent_id: &str) -> Result<Vec<MemoryBlock>> {
+    /// 这个 agent 能用的每一块（自己的与规则分来的），按名字（界面的合并预览；运行用 [`crate::run_assets::RunAssets`] 里的）。
+    pub async fn for_agent(&self, agent_id: &str) -> Result<Vec<MemoryBlock>> {
         let snapshot = self.source.snapshot().await?;
         Ok(blocks_of(&snapshot, &grants_for(&snapshot, &Actor::Agent(agent_id.to_owned())), agent_id))
     }

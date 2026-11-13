@@ -153,7 +153,7 @@ const THINKING_LABEL: Record<Thinking, string> = {
   high: 'high',
   xhigh: 'xhigh',
 }
-const THINKINGS = Object.keys(THINKING_LABEL) as Thinking[]
+const THINKINGS = ['default', 'off', 'low', 'medium', 'high', 'xhigh'] as const satisfies readonly Thinking[]
 
 /** agent 的模型 "<provider 名>:<模型名>"：provider 来自服务端配置，模型名向该 provider 实时查询；旁边是它的思考档位 */
 function ModelInput({

@@ -2,7 +2,7 @@
 //!
 //! - 快照按树的指纹（每个文件的路径、修改时间、大小）与数据库里的 agent 缓存：文件没变就不重读，直接改文件下次读到就
 //!   生效（运行开始时组装指令、算工具与分发、解析 secret，都读它）。
-//! - agent 的配置（描述、模型、思考档位、分组）只在快照里，数据库只有身份。模型或思考档位在当前配置下不能运行的记成
+//! - agent 的配置（描述、模型、思考档位、分组）只在快照里，数据库只有身份。模型在当前配置下不能运行的记成
 //!   问题报给它；它的运行在取模型时当场失败，不沿用旧值。
 //! - 改写一个资源文件（界面编辑记忆、SKILL.md、MCP，文件工具）只经写入口 [`AssetSource::write`]：在锁里按读树的规则
 //!   校验再原子写入，界面与文件工具对同一份内容结论一致。
@@ -137,7 +137,7 @@ impl AssetSource {
         Ok(snapshot)
     }
 
-    /// 在当前配置下不能运行的模型与思考档位记成问题（agent 照样加载：界面能看能改，运行时报错）。
+    /// 在当前配置下不能运行的模型记成问题（agent 照样加载：界面能看能改，运行时报错）。
     fn checked(&self, snapshot: Snapshot) -> Snapshot {
         let problems: Vec<Problem> = snapshot
             .agents
@@ -158,7 +158,7 @@ impl AssetSource {
         asset_files::in_tree(&self.root, path)
     }
 
-    /// agent.toml 的内容在当前配置下能运行（模型与思考档位），否则 InvalidInput。格式与字段的规则在 AgentFile。
+    /// agent.toml 写的模型在当前配置下能运行，否则 InvalidInput。格式与字段的规则在 AgentFile。
     pub fn check_agent(&self, data: &AgentFile) -> Result<()> {
         (self.check_model)(data.model()).map_err(muliao_platform::errors::invalid)
     }

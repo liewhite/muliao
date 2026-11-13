@@ -1,4 +1,6 @@
 //! 和 Python 版逐字对齐的证据：fixtures 里是 Python 版对同一批输入算出的结果（Python 版与生成脚本 gen_edits.py 已随 #717 删除，要看从 git 历史取）。
+//! 例外（#802）：用例 109、531 的「多处出现在第几行」改成按 read_file 的切行规则算（前面的修改留下单独的 \r，Python 版按 \n 数），
+//! fixtures 里这两条已换成新结果。
 
 use std::collections::{BTreeMap, HashMap};
 

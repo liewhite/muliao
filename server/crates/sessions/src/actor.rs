@@ -453,8 +453,8 @@ async fn compact(core: &Core, id: &str) -> Result<usize> {
         })
         .await?;
     let result = async {
-        let config = core.runtime.config(&agent_id).await?;
-        core.compactor.compact(id, &config).await
+        let assets = core.runtime.run_assets(&agent_id).await?;
+        core.compactor.compact(id, &assets).await
     }
     .await;
     match &result {

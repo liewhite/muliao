@@ -16,6 +16,7 @@ use muliao_assets::kinds::{Kind, StoredKind};
 use muliao_assets::mcp::McpRegistry;
 use muliao_assets::memory::MemoryStore;
 use muliao_assets::rules::{AgentRules, Rules};
+use muliao_assets::run_assets::RunAssets;
 use muliao_assets::secrets::Secrets;
 use muliao_assets::skills::SkillStore;
 use muliao_assets::tree::Owner;
@@ -38,7 +39,7 @@ async fn memory_versions_and_blocks() {
     memory.put("team", "共享", None).await.unwrap();
     let private = memory.read_private(&a).await.unwrap();
     memory.put_private(&a, "我的", Some(&private.version)).await.unwrap();
-    let blocks = memory.for_run(&a).await.unwrap();
+    let blocks = memory.for_agent(&a).await.unwrap();
     let names: Vec<(&str, bool, bool)> = blocks.iter().map(|b| (b.name.as_str(), b.editable, b.yours)).collect();
     // team 没分给它；全局记忆 base 收录但不能改
     assert_eq!(names, vec![("alice", true, true), ("global", false, false)]);
@@ -67,7 +68,7 @@ async fn skills_index_scripts_and_edit() {
     assert_eq!(scripts.fingerprint().unwrap(), before, "hidden files do not count");
     write(&w.root().join("alice/skills/tool/run.sh"), "echo 2");
     assert_ne!(scripts.fingerprint().unwrap(), before);
-    assert_eq!(skills.index(&a).await.unwrap().len(), 1);
+    assert_eq!(RunAssets::of(&w.source.snapshot().await.unwrap(), &a).unwrap().skills.len(), 1);
     let b = w.create("bob").await;
     assert!(skills.scripts("tool", &b).await.is_err(), "not shared with bob");
     // 编辑时保留 approval，旧版本冲突
@@ -107,9 +108,9 @@ async fn mcp_add_probe_and_toggle() {
     let probe = async |_: &muliao_assets::mcp::McpServer| Ok(vec!["t1".to_owned()]);
     let (_, tools) = registry.add("srv", config.clone(), Owner::Agent(a.clone()), Some(probe)).await.unwrap();
     assert_eq!(tools, vec!["t1"]);
-    assert_eq!(registry.index(&a).await.unwrap().len(), 1);
+    assert_eq!(RunAssets::of(&w.source.snapshot().await.unwrap(), &a).unwrap().mcp.len(), 1);
     registry.set_enabled("srv", false).await.unwrap();
-    assert!(registry.index(&a).await.unwrap().is_empty());
+    assert!(RunAssets::of(&w.source.snapshot().await.unwrap(), &a).unwrap().mcp.is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]
