@@ -207,7 +207,8 @@ pub(crate) async fn execute(
         audience,
         partial: partial.clone(),
         history: begun.context.messages.clone(),
-        context: begun.context.clone(),
+        summary: begun.context.summary.clone(),
+        stale_responses: begun.context.stale_responses,
         run_context_row: None,
         compaction_exhausted: false,
     };
@@ -390,7 +391,10 @@ struct Driver<'a> {
     /// 发给模型的历史（存储形态）：保存一步就接上这一步，压缩后从库里重新加载。这次运行新增的工具调用不脱敏（库里那份
     /// 脱敏）：下一步执行的就是它们（#770）
     history: Vec<Message>,
-    context: SessionContext,
+    /// 最近一次压缩的摘要（进指令），和 history 一起由加载上下文得出、压缩后一起重载
+    summary: Option<String>,
+    /// 见 SessionContext::stale_responses
+    stale_responses: Option<usize>,
     /// 挂着这次运行的运行上下文的那条请求：还没挂，或压缩把它切进了摘要时为 None，下一条新请求挂一段
     run_context_row: Option<i64>,
     /// 压缩不下去了：这次运行不再因为上下文大小停下
@@ -417,7 +421,7 @@ impl Driver<'_> {
                 session_id: self.session_id(),
                 audience: self.audience,
                 origin_note: self.core.notes.of(self.begun.session.origin.origin()),
-                summary: self.context.summary.as_deref(),
+                summary: self.summary.as_deref(),
             })
             .await?;
         let run = Arc::new(run);
@@ -674,7 +678,7 @@ impl Driver<'_> {
         if self.compaction_exhausted {
             return false;
         }
-        match self.core.compactor.verdict(self.session_id(), &self.history, self.context.stale_responses) {
+        match self.core.compactor.verdict(self.session_id(), &self.history, self.stale_responses) {
             Verdict::Due => true,
             Verdict::Hopeless => {
                 self.compaction_exhausted = true;
@@ -700,8 +704,9 @@ impl Driver<'_> {
         {
             self.run_context_row = None;
         }
-        self.history = context.messages.clone();
-        self.context = context;
+        self.history = context.messages;
+        self.summary = context.summary;
+        self.stale_responses = context.stale_responses;
         self.compaction_exhausted = compacted == 0;
         Ok(())
     }
@@ -739,8 +744,7 @@ impl Driver<'_> {
                 Ok::<_, Error>(ids)
             })
             .await?;
-        self.history.extend(messages.iter().cloned());
-        self.context.messages.extend(messages);
+        self.history.extend(messages);
         Ok(ids)
     }
 
