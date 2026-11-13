@@ -13,7 +13,7 @@ use muliao_sessions::live::{LiveSegment, Retrying};
 use muliao_sessions::mailbox::{Mail, MailKind, MailState};
 use muliao_sessions::origins::{Origin, Sender, SessionOrigin};
 use muliao_sessions::runs::RunRecord;
-use muliao_sessions::transcript::Item;
+use muliao_sessions::transcript::SavedItem;
 use muliao_sessions::work::EventSource;
 use muliao_usage::UsageTotals;
 use serde::{Deserialize, Serialize};
@@ -280,7 +280,7 @@ pub struct ContextOut {
 pub struct SessionDetail {
     pub session: SessionOut,
     /// 完整原始历史的展示条目（正在进行的那一段由 live 展示）
-    pub items: Vec<Item>,
+    pub items: Vec<SavedItem>,
     /// 压缩点：through_message_id 及之前的消息已由 summary 代替发给模型（原文仍完整展示）
     pub compactions: Vec<CompactionOut>,
     /// 显示在历史之后的信件：排队中的（处理中的用户消息、已提交的回答），以及最近一次停止丢弃的

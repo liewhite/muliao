@@ -11,8 +11,6 @@ use std::sync::{Arc, Mutex};
 use chrono::{DateTime, Utc};
 use muliao_platform::bus::{Bus, ServerEvent};
 use muliao_platform::db::Tx;
-use muliao_platform::text::truncate;
-use muliao_platform::tool_views::truncated;
 use serde::Serialize;
 use utoipa::ToSchema;
 
@@ -135,10 +133,8 @@ impl Live {
         self.segments.lock().expect("live lock").remove(session_id);
     }
 
-    pub(crate) fn item(&self, session_id: &str, agent: &str, mut item: Item) {
-        item.text = truncate(&item.text, PREVIEW_CHARS);
-        item.view = item.view.map(|v| truncated(v, PREVIEW_CHARS));
-        self.publish(session_id, agent, RunEvent::Item { item: Box::new(item) });
+    pub(crate) fn item(&self, session_id: &str, agent: &str, item: Item) {
+        self.publish(session_id, agent, RunEvent::Item { item: Box::new(item.preview(PREVIEW_CHARS)) });
     }
 
     pub(crate) fn delta(&self, session_id: &str, agent: &str, item_type: DeltaType, text: &str) {

@@ -10,7 +10,7 @@ use std::sync::Arc;
 use agenter::{Content, File, Message, Request, RequestPart, ResponsePart, ToolCall, ToolResult};
 use chrono::{DateTime, Utc};
 use muliao_platform::text::truncate;
-use muliao_platform::tool_views::{ToolRender, View};
+use muliao_platform::tool_views::{ToolRender, View, truncated};
 use muliao_runtime::conventions::{Attachment, attachment_of_ref, result_images, tool_attachments};
 use serde::Serialize;
 
@@ -25,42 +25,26 @@ use crate::work::{EventSource, parse_source};
 /// 各工具的展示规则（`Toolbox::renders`）；只要文字的投影给空的。
 pub type Renders = HashMap<String, Arc<ToolRender>>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ItemType {
-    User,
-    Event,
-    Assistant,
-    Thinking,
-    ToolCall,
-    ToolResult,
-    ToolError,
-    Stopped,
-}
-
 /// ask_user 调用的状态，由后端按唯一规则给出（[`annotate_asks`]），前端只渲染。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum AskStatus {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum AskState {
     /// 运行还没停下（还不能回答）
     Asking,
     /// 现在能回答（显示表单）
     Pending,
     /// 回答已提交、还排着
     Submitted,
-    Answered,
-    /// 用户没回答（发了新消息或只回答了别的提问）
-    NotAnswered,
+    /// 每题的回答
+    Answered { answers: Vec<AnsweredQuestion> },
+    /// 用户没回答（发了新消息或只回答了别的提问）；note 是交给模型的说明
+    NotAnswered { note: Option<String> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct AskView {
-    pub status: AskStatus,
     pub questions: Vec<Question>,
-    /// answered 时每题的回答
-    pub answers: Vec<AnsweredQuestion>,
-    /// not_answered 时交给模型的说明
-    pub note: Option<String>,
+    pub state: AskState,
 }
 
 /// 停下来等用户批准的工具调用的状态。
@@ -73,58 +57,161 @@ pub enum ApprovalState {
     Submitted,
 }
 
+/// 工具调用要用户操作的那一面：提问（ask_user，参数合法时），或停下来等批准（由会话接口填，[`annotate_approvals`]）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CallWait {
+    Ask(AskView),
+    Approval { state: ApprovalState },
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, utoipa::ToSchema)]
-pub struct Item {
-    #[serde(rename = "type")]
-    pub kind: ItemType,
+pub struct UserItem {
     pub text: String,
-    /// 工具调用、结果与错误的工具名；其他条目为 None
-    pub tool_name: Option<String>,
-    /// 会话事件（event）的来源，text 是事件内容；其他条目为 None
-    pub source: Option<EventSource>,
-    /// 事件是运行中检查（工作还在进行）；其他条目为 false
-    pub check_in: bool,
-    pub tool_call_id: Option<String>,
-    /// 来源消息的数据库 id；会话接口填充，用于定位压缩点；实时条目为 None
-    pub message_id: Option<i64>,
-    /// 用户消息的附件，或工具结果挂上的文件（TOOL_ATTACHMENTS）；其他条目为空
     pub attachments: Vec<Attachment>,
-    /// 工具调用开出或续写的 thread（子会话 id），由会话接口按调用 id 填（[`annotate_threads`]）；其他条目为空
+}
+
+/// 会话事件：text 是事件内容。
+#[derive(Debug, Clone, PartialEq, Serialize, utoipa::ToSchema)]
+pub struct EventItem {
+    pub text: String,
+    pub source: EventSource,
+    /// 运行中检查（工作还在进行）
+    pub check_in: bool,
+    /// 交给模型的时间（所在请求的 timestamp）
+    pub at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, utoipa::ToSchema)]
+pub struct CallItem {
+    pub tool_name: String,
+    pub tool_call_id: String,
+    /// 调用参数原文
+    pub text: String,
+    /// 开出或续写的 thread（子会话 id），由会话接口按调用 id 填（[`annotate_threads`]）
     pub threads: Vec<String>,
-    /// 工具交回给模型的图片（如浏览器截图）：属于这次调用的过程，不是给用户的文件；其他条目为空
-    pub images: Vec<Attachment>,
-    /// ask_user 的调用（参数合法时）；其他条目为 None
-    pub ask: Option<AskView>,
-    /// 停下来等用户批准的工具调用，由会话接口填（[`annotate_approvals`]）；其他条目（含已有结果的调用）为 None
-    pub approval: Option<ApprovalState>,
-    /// 工具调用的参数、结果按工具自己的展示规则画成的展示块；None 显示原文（工具没定规则、参数或结果不合它的类型、
-    /// 被退回的错误、事后补的结果、带图片的结果）。其他条目为 None
+    pub wait: Option<CallWait>,
+    /// 参数按工具自己的展示规则画成的展示块；None 显示原文（工具没定规则、参数不合它的类型）
     #[schema(value_type = Option<Vec<muliao_platform::tool_views::ViewBlock>>)]
     pub view: Option<View>,
-    /// 工具调用开始执行的时间（tool_call），工具结束的时间（tool_result、tool_error），或事件交给模型的时间（event，
-    /// 所在请求的 timestamp）；其他条目，以及拿不到真实时间的（事后补的结果、没记结束时间的结果、调用方没给保存时间的
-    /// 投影）为 None
+    /// 开始执行的时间；调用方没给保存时间的投影为 None
     pub at: Option<DateTime<Utc>>,
 }
 
-impl Item {
-    fn new(kind: ItemType, text: impl Into<String>) -> Self {
-        Item {
-            kind,
-            text: text.into(),
-            tool_name: None,
-            source: None,
-            check_in: false,
-            tool_call_id: None,
-            message_id: None,
-            attachments: Vec::new(),
-            threads: Vec::new(),
-            images: Vec::new(),
-            ask: None,
-            approval: None,
-            view: None,
-            at: None,
+#[derive(Debug, Clone, PartialEq, Serialize, utoipa::ToSchema)]
+pub struct ResultItem {
+    pub tool_name: String,
+    pub tool_call_id: String,
+    /// 交给模型的文字（各文字段以换行连接）
+    pub text: String,
+    /// 工具结果挂上的文件（TOOL_ATTACHMENTS）
+    pub attachments: Vec<Attachment>,
+    /// 工具交回给模型的图片（如浏览器截图）：属于这次调用的过程，不是给用户的文件
+    pub images: Vec<Attachment>,
+    /// 结果按工具自己的展示规则画成的展示块；None 显示原文（工具没定规则、结果不合它的类型、事后补的结果、带图片的结果）
+    #[schema(value_type = Option<Vec<muliao_platform::tool_views::ViewBlock>>)]
+    pub view: Option<View>,
+    /// 工具结束的时间；事后补的结果、没记结束时间的结果为 None
+    pub at: Option<DateTime<Utc>>,
+}
+
+/// 失败、参数被拒绝交还模型重试的结果。
+#[derive(Debug, Clone, PartialEq, Serialize, utoipa::ToSchema)]
+pub struct ErrorItem {
+    pub tool_name: String,
+    pub tool_call_id: String,
+    pub text: String,
+    pub at: Option<DateTime<Utc>>,
+}
+
+/// 一条展示条目：每种只带自己的字段。U 是用户消息条目：会话页是 [`UserItem`]，热历史的时间线另带发送方
+/// （[`crate::recall::SentUser`]）。
+#[derive(Debug, Clone, PartialEq, Serialize, utoipa::ToSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Item<U = UserItem> {
+    User(#[schema(inline)] U),
+    Event(EventItem),
+    Assistant {
+        text: String,
+    },
+    Thinking {
+        text: String,
+    },
+    ToolCall(CallItem),
+    ToolResult(ResultItem),
+    ToolError(ErrorItem),
+    /// 用户中途停下了运行
+    Stopped,
+}
+
+/// 历史里的一条：来源消息的数据库 id（用于定位压缩点）与条目。
+#[derive(Debug, Clone, PartialEq, Serialize, utoipa::ToSchema)]
+pub struct SavedItem {
+    pub message_id: i64,
+    pub item: Item,
+}
+
+impl<U: AsRef<UserItem>> Item<U> {
+    /// 条目的正文（工具调用是参数原文）；停下的标记没有。
+    pub fn text(&self) -> &str {
+        match self {
+            Item::User(u) => &u.as_ref().text,
+            Item::Event(EventItem { text, .. })
+            | Item::Assistant { text }
+            | Item::Thinking { text }
+            | Item::ToolCall(CallItem { text, .. })
+            | Item::ToolResult(ResultItem { text, .. })
+            | Item::ToolError(ErrorItem { text, .. }) => text,
+            Item::Stopped => "",
         }
+    }
+
+    /// 给用户的文件：用户消息的附件，或工具结果挂上的文件。
+    pub fn attachments(&self) -> &[Attachment] {
+        match self {
+            Item::User(u) => &u.as_ref().attachments,
+            Item::ToolResult(r) => &r.attachments,
+            _ => &[],
+        }
+    }
+}
+
+impl AsRef<UserItem> for UserItem {
+    fn as_ref(&self) -> &UserItem {
+        self
+    }
+}
+
+impl Item {
+    /// 用户消息条目换成 f 给出的（其余原样）。
+    pub fn map_user<V>(self, f: impl FnOnce(UserItem) -> V) -> Item<V> {
+        match self {
+            Item::User(u) => Item::User(f(u)),
+            Item::Event(e) => Item::Event(e),
+            Item::Assistant { text } => Item::Assistant { text },
+            Item::Thinking { text } => Item::Thinking { text },
+            Item::ToolCall(c) => Item::ToolCall(c),
+            Item::ToolResult(r) => Item::ToolResult(r),
+            Item::ToolError(e) => Item::ToolError(e),
+            Item::Stopped => Item::Stopped,
+        }
+    }
+
+    /// 实时展示的预览：正文与展示块截到 max_chars 个字符。
+    pub(crate) fn preview(mut self, max_chars: usize) -> Self {
+        match &mut self {
+            Item::ToolCall(CallItem { text, view, .. }) | Item::ToolResult(ResultItem { text, view, .. }) => {
+                *text = truncate(text, max_chars);
+                *view = view.take().map(|v| truncated(v, max_chars));
+            }
+            Item::User(UserItem { text, .. })
+            | Item::Event(EventItem { text, .. })
+            | Item::Assistant { text }
+            | Item::Thinking { text }
+            | Item::ToolError(ErrorItem { text, .. }) => *text = truncate(text, max_chars),
+            Item::Stopped => {}
+        }
+        self
     }
 }
 
@@ -132,20 +219,16 @@ impl Item {
 /// 是收到调用事件的时间）。
 pub fn call_item(call: &ToolCall, started_at: Option<DateTime<Utc>>, renders: &Renders) -> Item {
     let questions = if call.name == ASK_USER { questions_of(&call.args) } else { Vec::new() };
-    Item {
-        tool_name: Some(call.name.clone()),
-        tool_call_id: Some(call.id.clone()),
-        at: started_at,
+    Item::ToolCall(CallItem {
+        tool_name: call.name.clone(),
+        tool_call_id: call.id.clone(),
+        text: call.args.clone(),
+        threads: Vec::new(),
+        wait: (!questions.is_empty()).then_some(CallWait::Ask(AskView { questions, state: AskState::Asking })),
         // 参数解析不了（不是合法 JSON、不合工具的参数类型）时 call_view 给 None：按原文展示
         view: renders.get(&call.name).and_then(|r| r.call_view(&call.args)),
-        ask: (!questions.is_empty()).then(|| AskView {
-            status: AskStatus::Asking,
-            questions,
-            answers: Vec::new(),
-            note: None,
-        }),
-        ..Item::new(ItemType::ToolCall, call.args.clone())
-    }
+        at: started_at,
+    })
 }
 
 /// 结果交给模型的文字（各文字段以换行连接；图片另见 images）。
@@ -164,26 +247,24 @@ fn result_text(result: &ToolResult) -> String {
 /// 工具结果，或失败、参数被拒绝交还模型重试的结果（is_error）。事后补的结果没有结束时间。展示规则只用于工具交回的文本
 /// 结果（内容只有一段文字）。
 pub fn result_item(result: &ToolResult, renders: &Renders) -> Item {
-    let base = Item {
-        tool_name: Some(result.tool_name.clone()),
-        tool_call_id: Some(result.call_id.clone()),
-        ..Item::new(ItemType::ToolResult, result_text(result))
-    };
+    let (tool_name, tool_call_id, text) = (result.tool_name.clone(), result.call_id.clone(), result_text(result));
     if result.is_error {
-        return Item { kind: ItemType::ToolError, at: finished_at(result), ..base };
+        return Item::ToolError(ErrorItem { tool_name, tool_call_id, text, at: finished_at(result) });
     }
     let made_up = made_up(result).is_some();
     let view = match (renders.get(&result.tool_name), result.content.as_slice()) {
         (Some(render), [Content::Text { text }]) if !made_up => render.result_view(&result.tool_name, text),
         _ => None,
     };
-    Item {
+    Item::ToolResult(ResultItem {
+        tool_name,
+        tool_call_id,
+        text,
         attachments: tool_attachments(result),
         images: result_images(result),
-        at: if made_up { None } else { finished_at(result) },
         view,
-        ..base
-    }
+        at: if made_up { None } else { finished_at(result) },
+    })
 }
 
 /// 一条请求里连续的用户内容（文字与附件），合成一条用户条目。
@@ -199,7 +280,7 @@ impl UserContent {
             return;
         }
         let own = std::mem::take(self);
-        items.push(Item { attachments: own.attachments, ..Item::new(ItemType::User, own.texts.join("\n")) });
+        items.push(Item::User(UserItem { text: own.texts.join("\n"), attachments: own.attachments }));
     }
 }
 
@@ -230,12 +311,12 @@ fn request_items(request: &Request, renders: &Renders, items: &mut Vec<Item>) ->
             RequestPart::Text { text } if is_event => {
                 own.flush_into(items);
                 let (source, content) = parse_event(text)?;
-                items.push(Item {
-                    source: Some(parse_source(source)),
+                items.push(Item::Event(EventItem {
+                    text: content.to_owned(),
+                    source: parse_source(source),
                     check_in: check_ins.contains(&i),
-                    at: Some(request.timestamp),
-                    ..Item::new(ItemType::Event, content)
-                });
+                    at: request.timestamp,
+                }));
             }
             RequestPart::File(_) if is_event => {
                 return Err(broken(format!("event segment {i} of a request is not text")));
@@ -263,10 +344,10 @@ pub fn to_items<'a>(
                 for part in &response.parts {
                     match part {
                         ResponsePart::Text { text, .. } if !text.is_empty() => {
-                            items.push(Item::new(ItemType::Assistant, text.clone()));
+                            items.push(Item::Assistant { text: text.clone() });
                         }
                         ResponsePart::Thinking { text, .. } if !text.is_empty() => {
-                            items.push(Item::new(ItemType::Thinking, text.clone()));
+                            items.push(Item::Thinking { text: text.clone() });
                         }
                         ResponsePart::ToolCall(call) => items.push(call_item(call, saved_at, renders)),
                         ResponsePart::Text { .. } | ResponsePart::Thinking { .. } => {}
@@ -275,94 +356,95 @@ pub fn to_items<'a>(
             }
         }
         if is_stopped(message) {
-            items.push(Item::new(ItemType::Stopped, ""));
+            items.push(Item::Stopped);
         }
     }
     Ok(items)
 }
 
 /// 给 ask_user 调用填上状态，唯一规则：
-/// - 被退回（结果是 tool_error，如这次运行不提供提问）：不是提问，按普通工具调用加错误展示（ask 为 None）；
+/// - 被退回（结果是 tool_error，如这次运行不提供提问）：不是提问，按普通工具调用加错误展示（wait 为 None）；
 /// - 有结果的按结果（[`AskResult`]）：answered / not_answered；
 /// - 没有结果的：现在能回答是 pending，回答已提交、还排着是 submitted，否则运行还没停下（asking）。
-pub fn annotate_asks(mut items: Vec<Item>, open: &OpenAsks) -> Result<Vec<Item>> {
-    let results: HashMap<String, (ItemType, String)> = items
+pub fn annotate_asks(items: &mut [Item], open: &OpenAsks) -> Result<()> {
+    let results: HashMap<String, Option<String>> = items
         .iter()
-        .filter(|i| {
-            i.tool_name.as_deref() == Some(ASK_USER) && matches!(i.kind, ItemType::ToolResult | ItemType::ToolError)
+        .filter_map(|i| match i {
+            Item::ToolResult(r) if r.tool_name == ASK_USER => Some((r.tool_call_id.clone(), Some(r.text.clone()))),
+            Item::ToolError(e) if e.tool_name == ASK_USER => Some((e.tool_call_id.clone(), None)),
+            _ => None,
         })
-        .filter_map(|i| Some((i.tool_call_id.clone()?, (i.kind, i.text.clone()))))
         .collect();
-    for item in &mut items {
-        let (Some(ask), Some(id)) = (&mut item.ask, &item.tool_call_id) else { continue };
+    for item in items.iter_mut() {
+        let Item::ToolCall(call) = item else { continue };
+        let Some(CallWait::Ask(ask)) = &mut call.wait else { continue };
+        let id = &call.tool_call_id;
         match results.get(id) {
-            Some((ItemType::ToolError, _)) => item.ask = None,
-            Some((_, text)) => {
+            Some(None) => call.wait = None,
+            Some(Some(text)) => {
                 let parsed: AskResult = serde_json::from_str(text)
                     .map_err(|e| broken(format!("result of ask_user call {id} is not an ask result: {e}")))?;
-                ask.status = if parsed.answered { AskStatus::Answered } else { AskStatus::NotAnswered };
-                ask.answers = parsed.answers;
-                ask.note = parsed.note;
+                ask.state = if parsed.answered {
+                    AskState::Answered { answers: parsed.answers }
+                } else {
+                    AskState::NotAnswered { note: parsed.note }
+                };
             }
-            None if open.question(id).is_some() => ask.status = AskStatus::Pending,
-            None if open.submitted.contains(id) => ask.status = AskStatus::Submitted,
+            None if open.question(id).is_some() => ask.state = AskState::Pending,
+            None if open.submitted.contains(id) => ask.state = AskState::Submitted,
             None => {}
         }
     }
-    Ok(items)
+    Ok(())
 }
 
 /// 给等批准的工具调用填上状态：现在能批准是 pending，决定已提交、还排着是 submitted。两者都只含还没有结果的调用
 /// （[`crate::pending::open_asks_of`]），所以不看结果条目。
-pub fn annotate_approvals(mut items: Vec<Item>, open: &OpenAsks) -> Vec<Item> {
-    for item in &mut items {
-        let (ItemType::ToolCall, Some(id)) = (item.kind, &item.tool_call_id) else { continue };
-        if open.can_approve(id) {
-            item.approval = Some(ApprovalState::Pending);
+pub fn annotate_approvals(items: &mut [Item], open: &OpenAsks) {
+    for item in items.iter_mut() {
+        let Item::ToolCall(call) = item else { continue };
+        let id = &call.tool_call_id;
+        let state = if open.can_approve(id) {
+            ApprovalState::Pending
         } else if open.approvals_submitted.contains(id) {
-            item.approval = Some(ApprovalState::Submitted);
-        }
+            ApprovalState::Submitted
+        } else {
+            continue;
+        };
+        call.wait = Some(CallWait::Approval { state });
     }
-    items
 }
 
 /// 工具调用挂上它开出或续写的 thread（call_threads：调用 id → thread，见 [`crate::thread_calls::call_threads_in`]），界面
 /// 据此把 thread 显示在这次调用处。只看调用 id，不看调用有没有结果、结果是谁补的。
-pub fn annotate_threads(mut items: Vec<Item>, call_threads: &BTreeMap<String, String>) -> Vec<Item> {
-    for item in &mut items {
-        if item.kind == ItemType::ToolCall
-            && let Some(thread) = item.tool_call_id.as_ref().and_then(|id| call_threads.get(id))
+pub fn annotate_threads(items: &mut [Item], call_threads: &BTreeMap<String, String>) {
+    for item in items.iter_mut() {
+        if let Item::ToolCall(call) = item
+            && let Some(thread) = call_threads.get(&call.tool_call_id)
         {
-            item.threads = vec![thread.clone()];
+            call.threads = vec![thread.clone()];
         }
     }
-    items
 }
 
 /// 条目的文字记录（压缩交给模型总结的原文）：思考不进，每条截到 max_item_chars 个字符。
 pub fn to_text(items: &[Item], max_item_chars: usize) -> String {
     let mut lines = Vec::new();
     for item in items {
-        let label = match item.kind {
-            ItemType::User => "USER",
-            ItemType::Event => "EVENT",
-            ItemType::Assistant => "ASSISTANT",
-            ItemType::Thinking => continue,
-            ItemType::ToolCall => "TOOL CALL",
-            ItemType::ToolResult => "TOOL RESULT",
-            ItemType::ToolError => "TOOL ERROR",
-            ItemType::Stopped => "STOPPED BY USER",
+        let (label, name) = match item {
+            Item::User(_) => ("USER", None),
+            Item::Event(e) => ("EVENT", Some(e.source.raw())),
+            Item::Assistant { .. } => ("ASSISTANT", None),
+            Item::Thinking { .. } => continue,
+            Item::ToolCall(c) => ("TOOL CALL", Some(c.tool_name.as_str())),
+            Item::ToolResult(r) => ("TOOL RESULT", Some(r.tool_name.as_str())),
+            Item::ToolError(e) => ("TOOL ERROR", Some(e.tool_name.as_str())),
+            Item::Stopped => ("STOPPED BY USER", None),
         };
-        let named = match &item.source {
-            Some(EventSource::Thread { raw, .. } | EventSource::Job { raw, .. } | EventSource::Other { raw }) => {
-                Some(raw.as_str())
-            }
-            None => item.tool_name.as_deref(),
-        };
-        let name = named.filter(|n| !n.is_empty()).map(|n| format!(" {n}")).unwrap_or_default();
+        let name = name.filter(|n| !n.is_empty()).map(|n| format!(" {n}")).unwrap_or_default();
         let files: String =
-            item.attachments.iter().map(|a| format!(" [attachment '{}' ({})]", a.name, a.media_type)).collect();
-        lines.push(format!("[{label}{name}] {}{files}", truncate(&item.text, max_item_chars)));
+            item.attachments().iter().map(|a| format!(" [attachment '{}' ({})]", a.name, a.media_type)).collect();
+        lines.push(format!("[{label}{name}] {}{files}", truncate(item.text(), max_item_chars)));
     }
     lines.join("\n")
 }
@@ -426,8 +508,18 @@ mod tests {
         HashMap::from([("t".to_owned(), Arc::new(r))])
     }
 
-    fn kinds(items: &[Item]) -> Vec<ItemType> {
-        items.iter().map(|i| i.kind).collect()
+    fn kinds(items: &[Item]) -> Vec<String> {
+        items.iter().map(|i| serde_json::to_value(i).unwrap()["type"].as_str().unwrap().to_owned()).collect()
+    }
+
+    fn call_of(items: &[Item], id: &str) -> CallItem {
+        items
+            .iter()
+            .find_map(|i| match i {
+                Item::ToolCall(c) if c.tool_call_id == id => Some(c.clone()),
+                _ => None,
+            })
+            .unwrap()
     }
 
     #[test]
@@ -443,20 +535,33 @@ mod tests {
         mark_events(&mut r, &[3, 4], &[4]);
         attach_run_context(&mut r, "now is 10:00");
         let items = to_items([&Message::User(r)], &Renders::new(), None).unwrap();
-        use ItemType::*;
-        assert_eq!(kinds(&items), [ToolResult, User, Event, Event, User]);
-        assert_eq!(items[1].text, "hi");
-        assert_eq!(items[1].attachments.len(), 1);
-        assert_eq!(items[1].attachments[0].name, "pic.png");
-        assert!(items[1].attachments[0].inline);
-        assert_eq!(items[2].text, "done");
-        assert_eq!(items[2].source, Some(EventSource::Job { raw: "job:7".into(), job_id: 7 }));
-        assert!(!items[2].check_in);
-        assert_eq!(items[2].at, Some(at("2026-11-12T08:00:00Z")));
-        assert!(items[3].check_in);
-        assert_eq!(items[3].source, Some(EventSource::Thread { raw: "thread:s1".into(), session_id: "s1".into() }));
-        assert_eq!(items[4].text, "tail");
-        assert!(items.iter().all(|i| !i.text.contains("now is")));
+        assert_eq!(kinds(&items), ["tool_result", "user", "event", "event", "user"]);
+        let Item::User(user) = &items[1] else { panic!() };
+        assert_eq!(user.text, "hi");
+        assert_eq!(user.attachments.len(), 1);
+        assert_eq!(user.attachments[0].name, "pic.png");
+        assert!(user.attachments[0].inline);
+        let ts = at("2026-11-12T08:00:00Z");
+        assert_eq!(
+            items[2],
+            Item::Event(EventItem {
+                text: "done".into(),
+                source: EventSource::Job { raw: "job:7".into(), job_id: 7 },
+                check_in: false,
+                at: ts
+            })
+        );
+        assert_eq!(
+            items[3],
+            Item::Event(EventItem {
+                text: "still going".into(),
+                source: EventSource::Thread { raw: "thread:s1".into(), session_id: "s1".into() },
+                check_in: true,
+                at: ts
+            })
+        );
+        assert_eq!(items[4].text(), "tail");
+        assert!(items.iter().all(|i| !i.text().contains("now is")));
     }
 
     #[test]
@@ -481,12 +586,13 @@ mod tests {
         ]);
         mark_stopped(&mut m);
         let items = to_items([&m], &renders(), Some(saved)).unwrap();
-        use ItemType::*;
-        assert_eq!(kinds(&items), [Thinking, Assistant, ToolCall, ToolCall, Stopped]);
-        assert_eq!(items[2].at, Some(saved));
-        assert_eq!(items[2].view, Some(vec![fields([("q", "x".into())])]));
-        assert_eq!(items[3].view, None);
-        assert_eq!(items[3].text, "{not json");
+        assert_eq!(kinds(&items), ["thinking", "assistant", "tool_call", "tool_call", "stopped"]);
+        let c1 = call_of(&items, "c1");
+        assert_eq!(c1.at, Some(saved));
+        assert_eq!(c1.view, Some(vec![fields([("q", "x".into())])]));
+        let c2 = call_of(&items, "c2");
+        assert_eq!(c2.view, None);
+        assert_eq!(c2.text, "{not json");
     }
 
     #[test]
@@ -501,17 +607,24 @@ mod tests {
             result("c4", "t", vec![Content::text("shot"), Content::File(file("/api/files/i/s.png"))], false);
         let r = renders();
 
-        let ok = result_item(&ok, &r);
-        assert_eq!((ok.kind, ok.at, ok.text.as_str()), (ItemType::ToolResult, Some(ended), "out"));
+        let Item::ToolResult(ok) = result_item(&ok, &r) else { panic!() };
+        assert_eq!((ok.at, ok.text.as_str()), (Some(ended), "out"));
         assert!(ok.view.is_some());
 
-        let err = result_item(&err, &r);
-        assert_eq!((err.kind, err.at, err.view.clone()), (ItemType::ToolError, Some(ended), None));
+        assert_eq!(
+            result_item(&err, &r),
+            Item::ToolError(ErrorItem {
+                tool_name: "t".into(),
+                tool_call_id: "c2".into(),
+                text: "bad args".into(),
+                at: Some(ended)
+            })
+        );
 
-        let made = result_item(&made, &r);
-        assert_eq!((made.kind, made.at, made.view.clone()), (ItemType::ToolResult, None, None));
+        let Item::ToolResult(made) = result_item(&made, &r) else { panic!() };
+        assert_eq!((made.at, made.view), (None, None));
 
-        let with_image = result_item(&with_image, &r);
+        let Item::ToolResult(with_image) = result_item(&with_image, &r) else { panic!() };
         assert_eq!(with_image.view, None);
         assert_eq!(with_image.images.len(), 1);
         assert_eq!(with_image.text, "shot");
@@ -526,14 +639,14 @@ mod tests {
     fn ask_result(answered: bool) -> String {
         serde_json::to_string(&AskResult {
             answered,
-            answers: if answered {
-                vec![AnsweredQuestion { question: "Which?".into(), selected: vec!["a".into()], other: None }]
-            } else {
-                vec![]
-            },
+            answers: if answered { answered_a() } else { vec![] },
             note: (!answered).then(|| "skipped".into()),
         })
         .unwrap()
+    }
+
+    fn answered_a() -> Vec<AnsweredQuestion> {
+        vec![AnsweredQuestion { question: "Which?".into(), selected: vec!["a".into()], other: None }]
     }
 
     #[test]
@@ -550,41 +663,34 @@ mod tests {
             RequestPart::ToolResult(result("not", ASK_USER, vec![Content::text(ask_result(false))], false)),
             RequestPart::ToolResult(result("refused", ASK_USER, vec![Content::text("no asking here")], true)),
         ]));
-        let items = to_items([&calls, &results], &Renders::new(), None).unwrap();
-        assert!(items.iter().filter(|i| i.kind == ItemType::ToolCall).all(|i| i.ask.is_some()));
+        let mut items = to_items([&calls, &results], &Renders::new(), None).unwrap();
+        assert!(items.iter().all(|i| !matches!(i, Item::ToolCall(c) if c.wait.is_none())));
         let open = OpenAsks {
             answerable: vec![("pending".into(), vec![])],
             submitted: HashSet::from(["submitted".to_owned()]),
             ..Default::default()
         };
-        let items = annotate_asks(items, &open).unwrap();
-        let status = |id: &str| {
-            items
-                .iter()
-                .find(|i| i.kind == ItemType::ToolCall && i.tool_call_id.as_deref() == Some(id))
-                .unwrap()
-                .ask
-                .as_ref()
-                .map(|a| a.status)
+        annotate_asks(&mut items, &open).unwrap();
+        let state = |id: &str| match call_of(&items, id).wait {
+            Some(CallWait::Ask(a)) => Some(a.state),
+            Some(CallWait::Approval { .. }) => panic!("not an approval"),
+            None => None,
         };
-        assert_eq!(status("asking"), Some(AskStatus::Asking));
-        assert_eq!(status("pending"), Some(AskStatus::Pending));
-        assert_eq!(status("submitted"), Some(AskStatus::Submitted));
-        assert_eq!(status("answered"), Some(AskStatus::Answered));
-        assert_eq!(status("not"), Some(AskStatus::NotAnswered));
-        assert_eq!(status("refused"), None);
-        let answered = items.iter().find(|i| i.tool_call_id.as_deref() == Some("answered")).unwrap();
-        assert_eq!(answered.ask.as_ref().unwrap().answers[0].selected, ["a"]);
-        let not = items.iter().find(|i| i.tool_call_id.as_deref() == Some("not")).unwrap();
-        assert_eq!(not.ask.as_ref().unwrap().note.as_deref(), Some("skipped"));
+        assert_eq!(state("asking"), Some(AskState::Asking));
+        assert_eq!(state("pending"), Some(AskState::Pending));
+        assert_eq!(state("submitted"), Some(AskState::Submitted));
+        assert_eq!(state("answered"), Some(AskState::Answered { answers: answered_a() }));
+        assert_eq!(state("not"), Some(AskState::NotAnswered { note: Some("skipped".into()) }));
+        assert_eq!(state("refused"), None);
+        let Some(CallWait::Ask(not)) = call_of(&items, "not").wait else { panic!() };
         assert_eq!(
             Some(&QuestionOption { label: "a".into(), description: String::new() }),
-            not.ask.as_ref().unwrap().questions[0].options.first()
+            not.questions[0].options.first()
         );
 
         let bad = to_items([&response(vec![ResponsePart::ToolCall(call("x", ASK_USER, "{}"))])], &Renders::new(), None)
             .unwrap();
-        assert!(bad[0].ask.is_none());
+        assert_eq!(call_of(&bad, "x").wait, None);
     }
 
     #[test]
@@ -594,21 +700,25 @@ mod tests {
             ResponsePart::ToolCall(call("s", "t", "{}")),
             ResponsePart::ToolCall(call("n", "t", "{}")),
         ]);
-        let items = to_items([&m], &Renders::new(), None).unwrap();
+        let mut items = to_items([&m], &Renders::new(), None).unwrap();
         let open = OpenAsks {
             approvable: vec![("p".into(), "t".into())],
             submitted: HashSet::from(["s".to_owned()]),
             approvals_submitted: HashSet::from(["s".to_owned()]),
             ..Default::default()
         };
-        let items = annotate_approvals(items, &open);
+        annotate_approvals(&mut items, &open);
         assert_eq!(
-            items.iter().map(|i| i.approval).collect::<Vec<_>>(),
-            [Some(ApprovalState::Pending), Some(ApprovalState::Submitted), None]
+            ["p", "s", "n"].map(|id| call_of(&items, id).wait),
+            [
+                Some(CallWait::Approval { state: ApprovalState::Pending }),
+                Some(CallWait::Approval { state: ApprovalState::Submitted }),
+                None
+            ]
         );
-        let items = annotate_threads(items, &BTreeMap::from([("n".to_owned(), "child".to_owned())]));
-        assert_eq!(items.iter().map(|i| i.threads.len()).collect::<Vec<_>>(), [0, 0, 1]);
-        assert_eq!(items[2].threads, ["child"]);
+        annotate_threads(&mut items, &BTreeMap::from([("n".to_owned(), "child".to_owned())]));
+        assert_eq!(["p", "s", "n"].map(|id| call_of(&items, id).threads.len()), [0, 0, 1]);
+        assert_eq!(call_of(&items, "n").threads, ["child"]);
     }
 
     #[test]

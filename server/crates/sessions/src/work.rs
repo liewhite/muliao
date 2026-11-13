@@ -143,6 +143,15 @@ pub enum EventSource {
     Other { raw: String },
 }
 
+impl EventSource {
+    /// 来源原文（如 `job:7`、`thread:<id>`）。
+    pub fn raw(&self) -> &str {
+        match self {
+            EventSource::Thread { raw, .. } | EventSource::Job { raw, .. } | EventSource::Other { raw } => raw,
+        }
+    }
+}
+
 pub fn parse_source(raw: &str) -> EventSource {
     if let Some(id) = raw.strip_prefix("thread:").filter(|s| !s.is_empty()) {
         return EventSource::Thread { raw: raw.to_owned(), session_id: id.to_owned() };

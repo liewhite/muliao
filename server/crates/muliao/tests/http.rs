@@ -214,7 +214,7 @@ async fn a_conversation_over_http_with_live_events() {
         .as_array()
         .unwrap()
         .iter()
-        .map(|i| (i["type"].as_str().unwrap(), i["text"].as_str().unwrap()))
+        .map(|i| (i["item"]["type"].as_str().unwrap(), i["item"]["text"].as_str().unwrap()))
         .collect();
     assert_eq!(texts, [("user", "你好"), ("assistant", "你好，我是 helper")]);
     assert_eq!(detail["run"], Value::Null);

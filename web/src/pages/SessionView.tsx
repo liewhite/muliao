@@ -26,6 +26,7 @@ import {
   type CompactionInfo,
   type ItemSource,
   type Item,
+  type SavedItem,
   type QuestionAnswer,
   type Mail,
   type RunRecord,
@@ -248,7 +249,8 @@ interface SessionContext {
 
 function AskBlock({ block, ctx }: { block: AskBlockData; ctx: SessionContext }) {
   const { ask } = block
-  switch (ask.status) {
+  const { state } = ask
+  switch (state.status) {
     case 'pending':
       return (
         // 等待项里的「跳到提问」滚到这里
@@ -262,7 +264,7 @@ function AskBlock({ block, ctx }: { block: AskBlockData; ctx: SessionContext }) 
     case 'submitted':
       return null
     case 'answered':
-      return <AnsweredQuestions answers={ask.answers} />
+      return <AnsweredQuestions answers={state.answers} />
     case 'not_answered':
       return <QuestionNote text="没有回答这些问题" />
   }
@@ -412,14 +414,14 @@ function Blocks({ items, ctx }: { items: Item[]; ctx: SessionContext }) {
 }
 
 /** 按压缩点切分历史：每个压缩点之前的消息已由摘要代替发给模型（切点总在两轮之间）。 */
-function History({ items, compactions, ctx }: { items: Item[]; compactions: CompactionInfo[]; ctx: SessionContext }) {
+function History({ items, compactions, ctx }: { items: SavedItem[]; compactions: CompactionInfo[]; ctx: SessionContext }) {
   const parts: ReactNode[] = []
   let rest = items
   for (const c of compactions) {
-    const cut = rest.findIndex((i) => i.message_id !== null && i.message_id > c.through_message_id)
+    const cut = rest.findIndex((i) => i.message_id > c.through_message_id)
     const before = cut === -1 ? rest : rest.slice(0, cut)
     rest = cut === -1 ? [] : rest.slice(cut)
-    parts.push(<Blocks key={`b${c.through_message_id}`} items={before} ctx={ctx} />)
+    parts.push(<Blocks key={`b${c.through_message_id}`} items={before.map((i) => i.item)} ctx={ctx} />)
     parts.push(
       <Disclosure key={`c${c.through_message_id}`} className="border-y border-dashed border-separator py-1.5 text-sm text-muted">
         <Disclosure.Heading>
@@ -436,7 +438,7 @@ function History({ items, compactions, ctx }: { items: Item[]; compactions: Comp
       </Disclosure>,
     )
   }
-  parts.push(<Blocks key="rest" items={rest} ctx={ctx} />)
+  parts.push(<Blocks key="rest" items={rest.map((i) => i.item)} ctx={ctx} />)
   return <>{parts}</>
 }
 
@@ -1050,7 +1052,7 @@ export default function SessionView() {
                   run: (fn) => void action.run(fn),
                 }}
               />
-              <UnlinkedThreads threads={unlinkedThreads([...d.items, ...liveItems(shownLive)], d.threads)} />
+              <UnlinkedThreads threads={unlinkedThreads([...d.items.map((i) => i.item), ...liveItems(shownLive)], d.threads)} />
               <div ref={bottom.contentEndRef} aria-hidden />
             </div>
           )

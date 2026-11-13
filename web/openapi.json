@@ -4167,48 +4167,115 @@
           }
         }
       },
-      "AskStatus": {
-        "type": "string",
-        "description": "ask_user 调用的状态，由后端按唯一规则给出（[`annotate_asks`]），前端只渲染。",
-        "enum": [
-          "asking",
-          "pending",
-          "submitted",
-          "answered",
-          "not_answered"
-        ]
+      "AskState": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "运行还没停下（还不能回答）",
+            "required": [
+              "status"
+            ],
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "asking"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "现在能回答（显示表单）",
+            "required": [
+              "status"
+            ],
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "pending"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "回答已提交、还排着",
+            "required": [
+              "status"
+            ],
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "submitted"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "每题的回答",
+            "required": [
+              "answers",
+              "status"
+            ],
+            "properties": {
+              "answers": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/AnsweredQuestion"
+                }
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "answered"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "用户没回答（发了新消息或只回答了别的提问）；note 是交给模型的说明",
+            "required": [
+              "note",
+              "status"
+            ],
+            "properties": {
+              "note": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "not_answered"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "ask_user 调用的状态，由后端按唯一规则给出（[`annotate_asks`]），前端只渲染。"
       },
       "AskView": {
         "type": "object",
         "required": [
-          "status",
           "questions",
-          "answers",
-          "note"
+          "state"
         ],
         "properties": {
-          "status": {
-            "$ref": "#/components/schemas/AskStatus"
-          },
           "questions": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/Question"
             }
           },
-          "answers": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/AnsweredQuestion"
-            },
-            "description": "answered 时每题的回答"
-          },
-          "note": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "not_answered 时交给模型的说明"
+          "state": {
+            "$ref": "#/components/schemas/AskState"
           }
         }
       },
@@ -4314,6 +4381,65 @@
           "waiting"
         ]
       },
+      "CallItem": {
+        "type": "object",
+        "required": [
+          "tool_name",
+          "tool_call_id",
+          "text",
+          "threads",
+          "wait",
+          "view",
+          "at"
+        ],
+        "properties": {
+          "tool_name": {
+            "type": "string"
+          },
+          "tool_call_id": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string",
+            "description": "调用参数原文"
+          },
+          "threads": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "开出或续写的 thread（子会话 id），由会话接口按调用 id 填（[`annotate_threads`]）"
+          },
+          "wait": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CallWait"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "view": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ViewBlock"
+            },
+            "description": "参数按工具自己的展示规则画成的展示块；None 显示原文（工具没定规则、参数不合它的类型）"
+          },
+          "at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "开始执行的时间；调用方没给保存时间的投影为 None"
+          }
+        }
+      },
       "CallResult": {
         "oneOf": [
           {
@@ -4372,6 +4498,50 @@
           }
         ],
         "description": "回答信件里一次调用的结果。"
+      },
+      "CallWait": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AskView"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "ask"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "type": "object",
+            "required": [
+              "state",
+              "kind"
+            ],
+            "properties": {
+              "state": {
+                "$ref": "#/components/schemas/ApprovalState"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "approval"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "工具调用要用户操作的那一面：提问（ask_user，参数合法时），或停下来等批准（由会话接口填，[`annotate_approvals`]）。"
       },
       "CatalogAssetOut": {
         "allOf": [
@@ -4806,6 +4976,34 @@
           }
         }
       },
+      "ErrorItem": {
+        "type": "object",
+        "description": "失败、参数被拒绝交还模型重试的结果。",
+        "required": [
+          "tool_name",
+          "tool_call_id",
+          "text",
+          "at"
+        ],
+        "properties": {
+          "tool_name": {
+            "type": "string"
+          },
+          "tool_call_id": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
       "ErrorOut": {
         "type": "object",
         "description": "错误响应体（各接口的 4xx、5xx 都是它）。",
@@ -4815,6 +5013,33 @@
         "properties": {
           "detail": {
             "type": "string"
+          }
+        }
+      },
+      "EventItem": {
+        "type": "object",
+        "description": "会话事件：text 是事件内容。",
+        "required": [
+          "text",
+          "source",
+          "check_in",
+          "at"
+        ],
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/EventSource"
+          },
+          "check_in": {
+            "type": "boolean",
+            "description": "运行中检查（工作还在进行）"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "交给模型的时间（所在请求的 timestamp）"
           }
         }
       },
@@ -5506,141 +5731,180 @@
         }
       },
       "Item": {
-        "type": "object",
-        "required": [
-          "type",
-          "text",
-          "tool_name",
-          "source",
-          "check_in",
-          "tool_call_id",
-          "message_id",
-          "attachments",
-          "threads",
-          "images",
-          "ask",
-          "approval",
-          "view",
-          "at"
-        ],
-        "properties": {
-          "type": {
-            "$ref": "#/components/schemas/ItemType"
-          },
-          "text": {
-            "type": "string"
-          },
-          "tool_name": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "工具调用、结果与错误的工具名；其他条目为 None"
-          },
-          "source": {
-            "oneOf": [
+        "oneOf": [
+          {
+            "allOf": [
               {
-                "$ref": "#/components/schemas/EventSource",
-                "description": "会话事件（event）的来源，text 是事件内容；其他条目为 None"
+                "type": "object",
+                "required": [
+                  "text",
+                  "attachments"
+                ],
+                "properties": {
+                  "text": {
+                    "type": "string"
+                  },
+                  "attachments": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/Attachment"
+                    }
+                  }
+                }
               },
               {
-                "type": "null"
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "user"
+                    ]
+                  }
+                }
               }
             ]
           },
-          "check_in": {
-            "type": "boolean",
-            "description": "事件是运行中检查（工作还在进行）；其他条目为 false"
-          },
-          "tool_call_id": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "message_id": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int64",
-            "description": "来源消息的数据库 id；会话接口填充，用于定位压缩点；实时条目为 None"
-          },
-          "attachments": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Attachment"
-            },
-            "description": "用户消息的附件，或工具结果挂上的文件（TOOL_ATTACHMENTS）；其他条目为空"
-          },
-          "threads": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "工具调用开出或续写的 thread（子会话 id），由会话接口按调用 id 填（[`annotate_threads`]）；其他条目为空"
-          },
-          "images": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Attachment"
-            },
-            "description": "工具交回给模型的图片（如浏览器截图）：属于这次调用的过程，不是给用户的文件；其他条目为空"
-          },
-          "ask": {
-            "oneOf": [
+          {
+            "allOf": [
               {
-                "$ref": "#/components/schemas/AskView",
-                "description": "ask_user 的调用（参数合法时）；其他条目为 None"
+                "$ref": "#/components/schemas/EventItem"
               },
               {
-                "type": "null"
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "event"
+                    ]
+                  }
+                }
               }
             ]
           },
-          "approval": {
-            "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "text",
+              "type"
+            ],
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "assistant"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "text",
+              "type"
+            ],
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "thinking"
+                ]
+              }
+            }
+          },
+          {
+            "allOf": [
               {
-                "$ref": "#/components/schemas/ApprovalState",
-                "description": "停下来等用户批准的工具调用，由会话接口填（[`annotate_approvals`]）；其他条目（含已有结果的调用）为 None"
+                "$ref": "#/components/schemas/CallItem"
               },
               {
-                "type": "null"
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "tool_call"
+                    ]
+                  }
+                }
               }
             ]
           },
-          "view": {
-            "type": [
-              "array",
-              "null"
-            ],
-            "items": {
-              "$ref": "#/components/schemas/ViewBlock"
-            },
-            "description": "工具调用的参数、结果按工具自己的展示规则画成的展示块；None 显示原文（工具没定规则、参数或结果不合它的类型、\n被退回的错误、事后补的结果、带图片的结果）。其他条目为 None"
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ResultItem"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "tool_result"
+                    ]
+                  }
+                }
+              }
+            ]
           },
-          "at": {
-            "type": [
-              "string",
-              "null"
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ErrorItem"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "tool_error"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "type": "object",
+            "description": "用户中途停下了运行",
+            "required": [
+              "type"
             ],
-            "format": "date-time",
-            "description": "工具调用开始执行的时间（tool_call），工具结束的时间（tool_result、tool_error），或事件交给模型的时间（event，\n所在请求的 timestamp）；其他条目，以及拿不到真实时间的（事后补的结果、没记结束时间的结果、调用方没给保存时间的\n投影）为 None"
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "stopped"
+                ]
+              }
+            }
           }
-        }
-      },
-      "ItemType": {
-        "type": "string",
-        "enum": [
-          "user",
-          "event",
-          "assistant",
-          "thinking",
-          "tool_call",
-          "tool_result",
-          "tool_error",
-          "stopped"
-        ]
+        ],
+        "description": "一条展示条目：每种只带自己的字段。U 是用户消息条目：会话页是 [`UserItem`]，热历史的时间线另带发送方\n（[`crate::recall::SentUser`]）。"
       },
       "JobOut": {
         "type": "object",
@@ -6605,6 +6869,62 @@
           }
         }
       },
+      "ResultItem": {
+        "type": "object",
+        "required": [
+          "tool_name",
+          "tool_call_id",
+          "text",
+          "attachments",
+          "images",
+          "view",
+          "at"
+        ],
+        "properties": {
+          "tool_name": {
+            "type": "string"
+          },
+          "tool_call_id": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string",
+            "description": "交给模型的文字（各文字段以换行连接）"
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Attachment"
+            },
+            "description": "工具结果挂上的文件（TOOL_ATTACHMENTS）"
+          },
+          "images": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Attachment"
+            },
+            "description": "工具交回给模型的图片（如浏览器截图）：属于这次调用的过程，不是给用户的文件"
+          },
+          "view": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ViewBlock"
+            },
+            "description": "结果按工具自己的展示规则画成的展示块；None 显示原文（工具没定规则、结果不合它的类型、事后补的结果、带图片的结果）"
+          },
+          "at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "工具结束的时间；事后补的结果、没记结束时间的结果为 None"
+          }
+        }
+      },
       "Retrying": {
         "type": "object",
         "description": "运行出了暂时性的错、在等下一次尝试（只在内存里，重启后从上一步续跑、不再有它）：会话页显示错误与下次尝试的时间。",
@@ -6915,6 +7235,23 @@
           }
         }
       },
+      "SavedItem": {
+        "type": "object",
+        "description": "历史里的一条：来源消息的数据库 id（用于定位压缩点）与条目。",
+        "required": [
+          "message_id",
+          "item"
+        ],
+        "properties": {
+          "message_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "item": {
+            "$ref": "#/components/schemas/Item"
+          }
+        }
+      },
       "ScheduleConfig": {
         "type": "object",
         "required": [
@@ -7207,7 +7544,7 @@
           "items": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/Item"
+              "$ref": "#/components/schemas/SavedItem"
             },
             "description": "完整原始历史的展示条目（正在进行的那一段由 live 展示）"
           },

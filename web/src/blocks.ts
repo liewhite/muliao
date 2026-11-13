@@ -66,18 +66,11 @@ export function toBlocks(items: Item[]): Block[] {
   // 状态，按普通工具调用展示；运行中还没保存的那一段里它显示为「提问中」，保存后以历史为准
   const asks = new Set<string>()
   for (const item of items) {
-    if (item.tool_call_id !== null && asks.has(item.tool_call_id)) continue
-    if (item.ask !== null && item.tool_call_id !== null) {
-      asks.add(item.tool_call_id)
-      blocks.push({ kind: 'ask', ask: { callId: item.tool_call_id, ask: item.ask } })
-      continue
-    }
     switch (item.type) {
       case 'user':
         blocks.push({ kind: 'user', text: item.text, attachments: item.attachments })
         break
       case 'event':
-        if (item.source === null) throw new Error('event item without a source')
         blocks.push({ kind: 'event', source: item.source, text: item.text, checkIn: item.check_in, at: item.at })
         break
       case 'stopped':
@@ -88,8 +81,13 @@ export function toBlocks(items: Item[]): Block[] {
         blocks.push({ kind: item.type, text: item.text })
         break
       case 'tool_call': {
+        if (item.wait?.kind === 'ask') {
+          asks.add(item.tool_call_id)
+          blocks.push({ kind: 'ask', ask: { callId: item.tool_call_id, ask: item.wait } })
+          break
+        }
         const tool: ToolView = {
-          name: item.tool_name ?? '?',
+          name: item.tool_name,
           args: item.text,
           result: null,
           rejected: false,
@@ -101,9 +99,9 @@ export function toBlocks(items: Item[]): Block[] {
           callView: item.view,
           resultView: null,
         }
-        if (item.tool_call_id) tools.set(item.tool_call_id, tool)
-        if (item.approval !== null && item.tool_call_id !== null) {
-          blocks.push({ kind: 'approval', approval: { callId: item.tool_call_id, status: item.approval, tool } })
+        tools.set(item.tool_call_id, tool)
+        if (item.wait?.kind === 'approval') {
+          blocks.push({ kind: 'approval', approval: { callId: item.tool_call_id, status: item.wait.state, tool } })
         } else {
           blocks.push({ kind: 'tool', tool })
         }
@@ -111,30 +109,32 @@ export function toBlocks(items: Item[]): Block[] {
       }
       case 'tool_result':
       case 'tool_error': {
-        const tool = item.tool_call_id ? tools.get(item.tool_call_id) : undefined
+        if (asks.has(item.tool_call_id)) break
+        const output = item.type === 'tool_result' ? item : { attachments: [], images: [], view: null }
+        const tool = tools.get(item.tool_call_id)
         if (tool) {
           tool.result = item.text
           tool.rejected = item.type === 'tool_error'
-          tool.attachments = item.attachments
-          tool.images = item.images
+          tool.attachments = output.attachments
+          tool.images = output.images
           tool.finishedAt = item.at
-          tool.resultView = item.view
+          tool.resultView = output.view
         } else {
-          // 没有对应调用的错误（如输出校验重试）单独展示
+          // 没有对应调用的结果（调用在压缩前或运行中还没保存的那一段里）单独展示
           blocks.push({
             kind: 'tool',
             tool: {
-              name: item.tool_name ?? 'retry',
+              name: item.tool_name,
               args: '',
               result: item.text,
-              rejected: true,
-              attachments: item.attachments,
-              images: item.images,
-              threads: item.threads,
+              rejected: item.type === 'tool_error',
+              attachments: output.attachments,
+              images: output.images,
+              threads: [],
               startedAt: null,
               finishedAt: item.at,
               callView: null,
-              resultView: item.view,
+              resultView: output.view,
             },
           })
         }
@@ -230,7 +230,7 @@ export function stepThreads(steps: Step[]): string[] {
  * 部分也算）与正在进行的这一段；经 SSE 刚收到、还没重新拉取的调用暂时不带。
  */
 export function unlinkedThreads<T extends { id: string }>(items: Item[], threads: T[]): T[] {
-  const linked = new Set(items.flatMap((i) => i.threads))
+  const linked = new Set(items.flatMap((i) => (i.type === 'tool_call' ? i.threads : [])))
   return threads.filter((t) => !linked.has(t.id))
 }
 

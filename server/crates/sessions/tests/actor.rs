@@ -41,6 +41,7 @@ use muliao_sessions::run::Core;
 use muliao_sessions::runs::{self, Outcome};
 use muliao_sessions::service::SessionService;
 use muliao_sessions::tools::Stopper;
+use muliao_sessions::transcript::Item;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -500,7 +501,14 @@ async fn ask_agent_delegates_and_hands_the_answer_back() {
     let view = w.service.detail(&s).await.unwrap();
     assert_eq!(view.threads.len(), 1);
     assert_eq!(view.threads[0].agent_id, w.other);
-    let call = view.items.iter().find(|i| i.tool_call_id.as_deref() == Some("a1")).unwrap();
+    let call = view
+        .items
+        .iter()
+        .find_map(|i| match &i.item {
+            Item::ToolCall(c) if c.tool_call_id == "a1" => Some(c),
+            _ => None,
+        })
+        .unwrap();
     assert_eq!(call.threads, vec![view.threads[0].id.clone()], "the thread shows at the call that opened it");
 }
 

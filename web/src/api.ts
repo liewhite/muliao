@@ -45,9 +45,12 @@ export const FILES_PATH = '/api/files'
 export type FileInfo = Schemas['FileOut']
 /** 读不出来的资源文件（skill、MCP 配置）：列表接口不含它们，单独列出供删除 */
 export type Attachment = Schemas['Attachment']
+/** 会话条目：按 type 区分，每种只带自己的字段 */
 export type Item = Schemas['Item']
+/** 历史里的一条：来源消息 id（定位压缩点）与条目 */
+export type SavedItem = Schemas['SavedItem']
 /** 工具调用的参数或结果按工具的展示规则画成的一块（后端 platform 的 tool_views.rs） */
-export type ViewBlock = NonNullable<Item['view']>[number]
+export type ViewBlock = Schemas['ViewBlock']
 export type CompactionInfo = Schemas['CompactionOut']
 /** 会话最近一次还没正常结束的运行（在跑、在等重试，或最终失败） */
 export type RunRecord = Schemas['RunRecord']
@@ -64,12 +67,13 @@ export type Question = Schemas['Question']
 export type QuestionAnswer = Schemas['QuestionAnswer']
 export type AnsweredQuestion = Schemas['AnsweredQuestion']
 export type AskView = Schemas['AskView']
+export type AskState = Schemas['AskState']
 
 export type MailState = Schemas['MailState']
 /** 信箱里的一封信：按 kind 区分的联合（用户消息、事件、回答），事件一定带来源 */
 export type Mail = Schemas['SessionDetail']['mail'][number]
 /** 条目或事件的来源：后端解析好的 thread、后台任务或其他（raw 是原文，同一来源按它归在一起） */
-export type ItemSource = NonNullable<Item['source']>
+export type ItemSource = Schemas['EventSource']
 export type SessionDetail = Omit<Schemas['SessionDetail'], 'session' | 'threads'> & {
   session: Session
   threads: Session[]

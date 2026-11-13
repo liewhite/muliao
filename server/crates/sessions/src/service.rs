@@ -20,7 +20,7 @@ use crate::live::{Live, LiveSegment, Retrying, RunEvent};
 use crate::mailbox::{Mail, visible_in};
 use crate::runs::{self, RunRecord};
 use crate::thread_calls::call_threads_in;
-use crate::transcript::{Item, Renders, annotate_approvals, annotate_asks, annotate_threads, to_items};
+use crate::transcript::{Renders, SavedItem, annotate_approvals, annotate_asks, annotate_threads, to_items};
 
 /// 会话页看到的会话（读模型）：一次取齐，与实时快照对得上。
 #[derive(Debug, Clone)]
@@ -28,7 +28,7 @@ pub struct SessionView {
     pub session: Session,
     /// 完整原始历史（不受压缩影响）的展示条目，带来源消息 id 与提问、批准、thread 的状态；正在进行的那一段已经保存的部分
     /// 由实时快照展示，这里不重复
-    pub items: Vec<Item>,
+    pub items: Vec<SavedItem>,
     pub compactions: Vec<Compaction>,
     /// 显示在历史之后的信件：排队中的，以及最近一次停止丢弃的
     pub mail: Vec<Mail>,
@@ -107,15 +107,19 @@ impl SessionService {
                 let status = statuses_in(c, std::slice::from_ref(&id))?.remove(&id).expect("asked for it");
                 let call_threads = call_threads_in(c, &id)?;
                 let after = live.as_ref().and_then(|l| l.after_message_id);
-                let mut items = Vec::new();
+                let (mut ids, mut items) = (Vec::new(), Vec::new());
                 for row in rows.iter().filter(|r| after.is_none_or(|a| r.id <= a)) {
-                    for mut item in to_items([&row.message], &renders, Some(row.created_at))? {
-                        item.message_id = Some(row.id);
+                    for item in to_items([&row.message], &renders, Some(row.created_at))? {
+                        ids.push(row.id);
                         items.push(item);
                     }
                 }
                 let asks = &status.waiting.asks;
-                let items = annotate_approvals(annotate_asks(annotate_threads(items, &call_threads), asks)?, asks);
+                annotate_threads(&mut items, &call_threads);
+                annotate_asks(&mut items, asks)?;
+                annotate_approvals(&mut items, asks);
+                let items =
+                    ids.into_iter().zip(items).map(|(message_id, item)| SavedItem { message_id, item }).collect();
                 let run = runs::latest_in(c, &id)?.filter(|r| r.ended_at.is_none() || r.failed());
                 let waits = waits_of_in(c, &status.waiting)?;
                 Ok::<_, Error>(SessionView {
@@ -189,8 +193,7 @@ impl SessionService {
 fn with_threads(mut live: LiveSegment, call_threads: &BTreeMap<String, String>) -> LiveSegment {
     for e in &mut live.events {
         if let RunEvent::Item { item } = &mut e.event {
-            let annotated = annotate_threads(vec![(**item).clone()], call_threads);
-            **item = annotated.into_iter().next().expect("one in, one out");
+            annotate_threads(std::slice::from_mut(&mut **item), call_threads);
         }
     }
     live

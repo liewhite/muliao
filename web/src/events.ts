@@ -51,24 +51,8 @@ export function liveItems(events: RunEvent[]): Item[] {
       continue
     }
     const last = items.at(-1)
-    if (last?.type === e.item_type) items[items.length - 1] = { ...last, text: last.text + e.text }
-    else
-      items.push({
-        type: e.item_type,
-        text: e.text,
-        tool_name: null,
-        source: null,
-        check_in: false,
-        tool_call_id: null,
-        message_id: null,
-        attachments: [],
-        images: [],
-        threads: [],
-        ask: null,
-        approval: null,
-        view: null,
-        at: null,
-      })
+    if (last?.type === e.item_type) items[items.length - 1] = { type: last.type, text: last.text + e.text }
+    else items.push({ type: e.item_type, text: e.text })
   }
   return items
 }

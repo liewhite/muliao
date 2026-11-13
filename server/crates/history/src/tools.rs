@@ -12,9 +12,8 @@ use muliao_platform::time::parse_local;
 use muliao_platform::tooling::{BuiltinTool, RunScope, ToolTraits, builtin};
 use muliao_sessions::directory::Session;
 use muliao_sessions::origins::{Origin, SessionOrigin};
-use muliao_sessions::recall::{Activity, Entry, between_in, timeline_in};
-use muliao_sessions::transcript::ItemType;
-use muliao_sessions::work::EventSource;
+use muliao_sessions::recall::{Activity, SentUser, between_in, timeline_in};
+use muliao_sessions::transcript::Item;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -477,29 +476,17 @@ fn label_words() -> Vec<String> {
 }
 
 /// 一条的标签；思考不展示（None）。
-fn label(entry: &Entry) -> Result<Option<String>> {
-    let item = &entry.item;
-    let tool = || item.tool_name.clone().ok_or_else(|| Error::Broken("a tool item has no tool name".into()));
-    Ok(Some(match item.kind {
-        ItemType::User => {
-            let sender =
-                entry.sender.ok_or_else(|| Error::Broken("a user entry of a timeline has no sender".into()))?;
-            sender.as_str().to_uppercase()
-        }
-        ItemType::Event => {
-            let source = item.source.as_ref().ok_or_else(|| Error::Broken("an event item has no source".into()))?;
-            let raw = match source {
-                EventSource::Thread { raw, .. } | EventSource::Job { raw, .. } | EventSource::Other { raw } => raw,
-            };
-            format!("{EVENT} {raw}{}", if item.check_in { " (check-in)" } else { "" })
-        }
-        ItemType::Assistant => ASSISTANT.to_owned(),
-        ItemType::ToolCall => format!("{CALL} {}", tool()?),
-        ItemType::ToolResult => format!("{RESULT} {}", tool()?),
-        ItemType::ToolError => format!("{ERROR} {}", tool()?),
-        ItemType::Thinking => return Ok(None),
-        ItemType::Stopped => "-- run stopped by the user --".to_owned(),
-    }))
+fn label(item: &Item<SentUser>) -> Option<String> {
+    Some(match item {
+        Item::User(u) => u.sender.as_str().to_uppercase(),
+        Item::Event(e) => format!("{EVENT} {}{}", e.source.raw(), if e.check_in { " (check-in)" } else { "" }),
+        Item::Assistant { .. } => ASSISTANT.to_owned(),
+        Item::ToolCall(c) => format!("{CALL} {}", c.tool_name),
+        Item::ToolResult(r) => format!("{RESULT} {}", r.tool_name),
+        Item::ToolError(e) => format!("{ERROR} {}", e.tool_name),
+        Item::Thinking { .. } => return None,
+        Item::Stopped => "-- run stopped by the user --".to_owned(),
+    })
 }
 
 /// 标签是 wanted 中某一项本身，或以它加空格开头（区分大小写）："call" 匹配所有工具调用，"call run_shell" 只匹配它。
@@ -600,19 +587,19 @@ impl SessionRead {
             .await?;
         let mut shown = Vec::new();
         for entry in &timeline.entries {
-            let Some(label) = label(entry)? else { continue };
+            let item = &entry.item;
+            let Some(label) = label(item) else { continue };
             if !a.labels.is_empty() && !labelled(&label, &a.labels) {
                 continue;
             }
-            let item = &entry.item;
             if let Some(p) = &pattern
-                && !(p.is_match(&label) || p.is_match(&item.text))
+                && !(p.is_match(&label) || p.is_match(item.text()))
             {
                 continue;
             }
-            let full = matches!(item.kind, ItemType::User | ItemType::Assistant) || a.clip == 0;
-            let mut text = if full { item.text.clone() } else { truncate(&item.text, a.clip) };
-            for f in &item.attachments {
+            let full = matches!(item, Item::User(_) | Item::Assistant { .. }) || a.clip == 0;
+            let mut text = if full { item.text().to_owned() } else { truncate(item.text(), a.clip) };
+            for f in item.attachments() {
                 text.push_str(&format!("\n[attachment {:?} ({})]", f.name, f.media_type));
             }
             shown.push(format!("[{}] {label}\n{}", short_time(entry.at, tz), indented(&text)));

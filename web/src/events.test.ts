@@ -8,13 +8,16 @@ const delta = (item_type: 'assistant' | 'thinking', text: string): RunEvent => (
 const tool = (type: 'tool_call' | 'tool_result', text: string, tool_call_id: string): RunEvent => ({
   ...base,
   event: 'item',
-  item: { type, text, tool_name: 'tool', source: null, check_in: false, tool_call_id, message_id: null, attachments: [], images: [], threads: [], ask: null, approval: null, view: null, at: null },
+  item:
+    type === 'tool_call'
+      ? { type, text, tool_name: 'tool', tool_call_id, threads: [], wait: null, view: null, at: null }
+      : { type, text, tool_name: 'tool', tool_call_id, attachments: [], images: [], view: null, at: null },
 })
 
 describe('liveItems', () => {
   it('joins consecutive thinking deltas into one thinking item before the answer', () => {
     const items = liveItems([delta('thinking', '先'), delta('thinking', '想想'), delta('assistant', '答'), delta('assistant', '案')])
-    expect(items.map((i) => [i.type, i.text])).toEqual([
+    expect(items.map((i) => [i.type, 'text' in i ? i.text : null])).toEqual([
       ['thinking', '先想想'],
       ['assistant', '答案'],
     ])
@@ -28,7 +31,7 @@ describe('liveItems', () => {
       delta('thinking', 'b'),
       delta('assistant', 'done'),
     ])
-    expect(items.map((i) => [i.type, i.text])).toEqual([
+    expect(items.map((i) => [i.type, 'text' in i ? i.text : null])).toEqual([
       ['thinking', 'a'],
       ['tool_call', '{}'],
       ['tool_result', 'ok'],

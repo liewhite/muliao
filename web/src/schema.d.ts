@@ -1221,18 +1221,28 @@ export interface components {
             answers: components["schemas"]["AnsweredQuestion"][];
             note: string | null;
         };
-        /**
-         * @description ask_user 调用的状态，由后端按唯一规则给出（[`annotate_asks`]），前端只渲染。
-         * @enum {string}
-         */
-        AskStatus: "asking" | "pending" | "submitted" | "answered" | "not_answered";
-        AskView: {
-            status: components["schemas"]["AskStatus"];
-            questions: components["schemas"]["Question"][];
-            /** @description answered 时每题的回答 */
+        /** @description ask_user 调用的状态，由后端按唯一规则给出（[`annotate_asks`]），前端只渲染。 */
+        AskState: {
+            /** @enum {string} */
+            status: "asking";
+        } | {
+            /** @enum {string} */
+            status: "pending";
+        } | {
+            /** @enum {string} */
+            status: "submitted";
+        } | {
             answers: components["schemas"]["AnsweredQuestion"][];
-            /** @description not_answered 时交给模型的说明 */
+            /** @enum {string} */
+            status: "answered";
+        } | {
             note: string | null;
+            /** @enum {string} */
+            status: "not_answered";
+        };
+        AskView: {
+            questions: components["schemas"]["Question"][];
+            state: components["schemas"]["AskState"];
         };
         AssetOut: {
             name: string;
@@ -1265,6 +1275,22 @@ export interface components {
          * @enum {string}
          */
         Busy: "running" | "waiting";
+        CallItem: {
+            tool_name: string;
+            tool_call_id: string;
+            /** @description 调用参数原文 */
+            text: string;
+            /** @description 开出或续写的 thread（子会话 id），由会话接口按调用 id 填（[`annotate_threads`]） */
+            threads: string[];
+            wait: components["schemas"]["CallWait"] | null;
+            /** @description 参数按工具自己的展示规则画成的展示块；None 显示原文（工具没定规则、参数不合它的类型） */
+            view: components["schemas"]["ViewBlock"][] | null;
+            /**
+             * Format: date-time
+             * @description 开始执行的时间；调用方没给保存时间的投影为 None
+             */
+            at: string | null;
+        };
         /** @description 回答信件里一次调用的结果。 */
         CallResult: {
             result: components["schemas"]["AskResult"];
@@ -1278,6 +1304,15 @@ export interface components {
             result: components["schemas"]["Decision"];
             /** @enum {string} */
             tool: "approval";
+        };
+        /** @description 工具调用要用户操作的那一面：提问（ask_user，参数合法时），或停下来等批准（由会话接口填，[`annotate_approvals`]）。 */
+        CallWait: (components["schemas"]["AskView"] & {
+            /** @enum {string} */
+            kind: "ask";
+        }) | {
+            state: components["schemas"]["ApprovalState"];
+            /** @enum {string} */
+            kind: "approval";
         };
         /** @description 资源池里的一项，在规则里写作 `<action>:<kind>:<name>`；按 kind 区分的详情。 */
         CatalogAssetOut: components["schemas"]["CatalogDetail"] & {
@@ -1414,9 +1449,29 @@ export interface components {
             /** @description 能内联显示的图片；其余读文件时作为附件返回 */
             inline: boolean;
         };
+        /** @description 失败、参数被拒绝交还模型重试的结果。 */
+        ErrorItem: {
+            tool_name: string;
+            tool_call_id: string;
+            text: string;
+            /** Format: date-time */
+            at: string | null;
+        };
         /** @description 错误响应体（各接口的 4xx、5xx 都是它）。 */
         ErrorOut: {
             detail: string;
+        };
+        /** @description 会话事件：text 是事件内容。 */
+        EventItem: {
+            text: string;
+            source: components["schemas"]["EventSource"];
+            /** @description 运行中检查（工作还在进行） */
+            check_in: boolean;
+            /**
+             * Format: date-time
+             * @description 交给模型的时间（所在请求的 timestamp）
+             */
+            at: string;
         };
         /** @description 事件来源解析成的种类（界面用，不自己解析字符串）。 */
         EventSource: {
@@ -1595,43 +1650,40 @@ export interface components {
             /** @description 用户能一键开工（指派给 owner 并进入 in_progress）：还在 backlog、有 owner */
             startable: boolean;
         };
-        Item: {
-            type: components["schemas"]["ItemType"];
+        /**
+         * @description 一条展示条目：每种只带自己的字段。U 是用户消息条目：会话页是 [`UserItem`]，热历史的时间线另带发送方
+         *     （[`crate::recall::SentUser`]）。
+         */
+        Item: ({
             text: string;
-            /** @description 工具调用、结果与错误的工具名；其他条目为 None */
-            tool_name: string | null;
-            source: components["schemas"]["EventSource"] | null;
-            /** @description 事件是运行中检查（工作还在进行）；其他条目为 false */
-            check_in: boolean;
-            tool_call_id: string | null;
-            /**
-             * Format: int64
-             * @description 来源消息的数据库 id；会话接口填充，用于定位压缩点；实时条目为 None
-             */
-            message_id: number | null;
-            /** @description 用户消息的附件，或工具结果挂上的文件（TOOL_ATTACHMENTS）；其他条目为空 */
             attachments: components["schemas"]["Attachment"][];
-            /** @description 工具调用开出或续写的 thread（子会话 id），由会话接口按调用 id 填（[`annotate_threads`]）；其他条目为空 */
-            threads: string[];
-            /** @description 工具交回给模型的图片（如浏览器截图）：属于这次调用的过程，不是给用户的文件；其他条目为空 */
-            images: components["schemas"]["Attachment"][];
-            ask: components["schemas"]["AskView"] | null;
-            approval: components["schemas"]["ApprovalState"] | null;
-            /**
-             * @description 工具调用的参数、结果按工具自己的展示规则画成的展示块；None 显示原文（工具没定规则、参数或结果不合它的类型、
-             *     被退回的错误、事后补的结果、带图片的结果）。其他条目为 None
-             */
-            view: components["schemas"]["ViewBlock"][] | null;
-            /**
-             * Format: date-time
-             * @description 工具调用开始执行的时间（tool_call），工具结束的时间（tool_result、tool_error），或事件交给模型的时间（event，
-             *     所在请求的 timestamp）；其他条目，以及拿不到真实时间的（事后补的结果、没记结束时间的结果、调用方没给保存时间的
-             *     投影）为 None
-             */
-            at: string | null;
+        } & {
+            /** @enum {string} */
+            type: "user";
+        }) | (components["schemas"]["EventItem"] & {
+            /** @enum {string} */
+            type: "event";
+        }) | {
+            text: string;
+            /** @enum {string} */
+            type: "assistant";
+        } | {
+            text: string;
+            /** @enum {string} */
+            type: "thinking";
+        } | (components["schemas"]["CallItem"] & {
+            /** @enum {string} */
+            type: "tool_call";
+        }) | (components["schemas"]["ResultItem"] & {
+            /** @enum {string} */
+            type: "tool_result";
+        }) | (components["schemas"]["ErrorItem"] & {
+            /** @enum {string} */
+            type: "tool_error";
+        }) | {
+            /** @enum {string} */
+            type: "stopped";
         };
-        /** @enum {string} */
-        ItemType: "user" | "event" | "assistant" | "thinking" | "tool_call" | "tool_result" | "tool_error" | "stopped";
         /** @description 在等的后台任务的详情（与 job_status 同一份）。 */
         JobOut: {
             command: string;
@@ -1904,6 +1956,23 @@ export interface components {
                 [key: string]: components["schemas"]["Choice"];
             };
         };
+        ResultItem: {
+            tool_name: string;
+            tool_call_id: string;
+            /** @description 交给模型的文字（各文字段以换行连接） */
+            text: string;
+            /** @description 工具结果挂上的文件（TOOL_ATTACHMENTS） */
+            attachments: components["schemas"]["Attachment"][];
+            /** @description 工具交回给模型的图片（如浏览器截图）：属于这次调用的过程，不是给用户的文件 */
+            images: components["schemas"]["Attachment"][];
+            /** @description 结果按工具自己的展示规则画成的展示块；None 显示原文（工具没定规则、结果不合它的类型、事后补的结果、带图片的结果） */
+            view: components["schemas"]["ViewBlock"][] | null;
+            /**
+             * Format: date-time
+             * @description 工具结束的时间；事后补的结果、没记结束时间的结果为 None
+             */
+            at: string | null;
+        };
         /** @description 运行出了暂时性的错、在等下一次尝试（只在内存里，重启后从上一步续跑、不再有它）：会话页显示错误与下次尝试的时间。 */
         Retrying: {
             error: string;
@@ -1983,6 +2052,12 @@ export interface components {
         SavedEvent: {
             session_id: string;
         };
+        /** @description 历史里的一条：来源消息的数据库 id（用于定位压缩点）与条目。 */
+        SavedItem: {
+            /** Format: int64 */
+            message_id: number;
+            item: components["schemas"]["Item"];
+        };
         ScheduleConfig: {
             cron: string;
         };
@@ -2047,7 +2122,7 @@ export interface components {
         SessionDetail: {
             session: components["schemas"]["SessionOut"];
             /** @description 完整原始历史的展示条目（正在进行的那一段由 live 展示） */
-            items: components["schemas"]["Item"][];
+            items: components["schemas"]["SavedItem"][];
             /** @description 压缩点：through_message_id 及之前的消息已由 summary 代替发给模型（原文仍完整展示） */
             compactions: components["schemas"]["CompactionOut"][];
             /** @description 显示在历史之后的信件：排队中的（处理中的用户消息、已提交的回答），以及最近一次停止丢弃的 */

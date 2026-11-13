@@ -19,7 +19,7 @@ use crate::history::{Span, spans_between_in, transcript_in};
 use crate::mailbox::{Mail, MailKind, MailState, first_arrivals_between_in, sent_by_in};
 use crate::origins::Origin;
 use crate::runs::started_between_in;
-use crate::transcript::{Item, ItemType, Renders, to_items};
+use crate::transcript::{Item, Renders, UserItem, to_items};
 
 /// 一次最终失败的运行：开始的时刻与错误说明。
 #[derive(Debug, Clone, PartialEq)]
@@ -124,14 +124,24 @@ fn words_of(mail: &Mail) -> UserWords {
     UserWords { session_id: mail.session_id.clone(), at: mail.created_at, text, attachments: mail.attachments.len() }
 }
 
+/// 时间线里的用户消息条目与它的发送方来源：用户在界面上写的是 user，否则是会话的发起方（别的来源只续写自己发起的会话）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct SentUser {
+    pub user: UserItem,
+    pub sender: Origin,
+}
+
+impl AsRef<UserItem> for SentUser {
+    fn as_ref(&self) -> &UserItem {
+        &self.user
+    }
+}
+
 /// 时间线的一条：所在消息保存的时刻与展示条目。
 #[derive(Debug, Clone, PartialEq)]
 pub struct Entry {
     pub at: DateTime<Utc>,
-    pub item: Item,
-    /// 用户消息条目（type 为 user）的发送方来源：用户在界面上写的是 user，否则是会话的发起方（别的来源只续写自己发起的
-    /// 会话）；其他条目为 None
-    pub sender: Option<Origin>,
+    pub item: Item<SentUser>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -164,21 +174,19 @@ pub fn timeline_in(c: &Connection, session: &str, since: Option<DateTime<Utc>>) 
     let mut entries = Vec::new();
     for s in &stored {
         for item in to_items([&s.message], &renders, Some(s.created_at))? {
-            let sender = (item.kind == ItemType::User).then(|| {
-                if from_user(&item, typed.get(&s.run_id).map(Vec::as_slice).unwrap_or_default()) {
-                    Origin::User
-                } else {
-                    row.origin.origin()
-                }
+            let typed = typed.get(&s.run_id).map(Vec::as_slice).unwrap_or_default();
+            let item = item.map_user(|user| {
+                let sender = if from_user(&user, typed) { Origin::User } else { row.origin.origin() };
+                SentUser { user, sender }
             });
-            entries.push(Entry { at: s.created_at, item, sender });
+            entries.push(Entry { at: s.created_at, item });
         }
     }
     Ok(Timeline { session: row, entries })
 }
 
 /// 用户消息条目里有用户在界面上写的一封信：typed 是保存这条消息的那次运行处理的用户消息；只有附件的按条目带不带附件认。
-fn from_user(item: &Item, typed: &[Mail]) -> bool {
+fn from_user(item: &UserItem, typed: &[Mail]) -> bool {
     typed.iter().any(|m| {
         if m.content.trim().is_empty() { !item.attachments.is_empty() } else { has_segment(&item.text, &m.content) }
     })
