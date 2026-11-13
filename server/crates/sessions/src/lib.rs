@@ -40,6 +40,6 @@ pub const MIGRATION: Migration = Migration {
         include_str!("../migrations/001_sessions.sql"),
         include_str!("../migrations/002_hold_kinds.sql"),
         include_str!("../migrations/003_approval_choice.sql"),
-        include_str!("../migrations/004_event_marks.sql"),
+        include_str!("../migrations/004_part_marks.sql"),
     ],
 };

@@ -6,7 +6,7 @@
 //! 猜谁发的；时间线里的用户消息条目按保存它的那次运行处理的用户信件整段对上（[`from_user`]）。时间线的条目与会话页同一份
 //! 投影（[`to_items`]），只要文字，不用工具的展示规则。
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use chrono::{DateTime, Utc};
 use rusqlite::Connection;
@@ -16,10 +16,10 @@ use crate::answers::{AskResult, CallResult, answer_lines};
 use crate::directory::{Session, among_in, with_prefix_in};
 use crate::error::{Result, invalid, not_found};
 use crate::history::{Span, spans_between_in, transcript_in};
-use crate::mailbox::{Mail, MailBody, MailState, first_arrivals_between_in, sent_by_in};
+use crate::mailbox::{Mail, MailBody, first_arrivals_between_in, sent_by_in};
 use crate::origins::Origin;
 use crate::runs::started_between_in;
-use crate::transcript::{Item, Renders, UserItem, to_items};
+use crate::transcript::{Item, Renders, UserItem, to_items_with};
 
 /// 一次最终失败的运行：开始的时刻与错误说明。
 #[derive(Debug, Clone, PartialEq)]
@@ -123,7 +123,7 @@ fn words_of(mail: &Mail) -> UserWords {
     UserWords { session_id: mail.session_id.clone(), at: mail.created_at, text, attachments }
 }
 
-/// 时间线里的用户消息条目与它的发送方来源：用户在界面上写的是 user，否则是会话的发起方（别的来源只续写自己发起的会话）。
+/// 时间线里的用户消息条目与它的发送方来源：交出信件时记下的发送方；没记的（迟到的回答等）算会话的发起方。
 #[derive(Debug, Clone, PartialEq)]
 pub struct SentUser {
     pub user: UserItem,
@@ -162,54 +162,15 @@ pub fn timeline_in(c: &Connection, session: &str, since: Option<DateTime<Utc>>) 
         }
     };
     let stored = transcript_in(c, &row.id, since)?;
-    // 每次运行交给模型的用户消息（信件交给模型时原文作为一整段，content.rs）
-    let mut typed: BTreeMap<i64, Vec<String>> = BTreeMap::new();
-    for m in sent_by_in(c, std::slice::from_ref(&row.id), Origin::User, None, None)? {
-        if let (MailBody::Message { content, .. }, MailState::Consumed, Some(run)) = (m.body, m.state, m.taken_by) {
-            typed.entry(run).or_default().push(content);
-        }
-    }
     let renders = Renders::new();
+    let starter = row.origin.origin();
     let mut entries = Vec::new();
     for s in &stored {
-        for item in to_items([&s.message], &renders, Some(s.created_at))? {
-            let typed = typed.get(&s.run_id).map(Vec::as_slice).unwrap_or_default();
-            let item = item.map_user(|user| {
-                let sender = if from_user(&user, typed) { Origin::User } else { row.origin.origin() };
-                SentUser { user, sender }
-            });
-            entries.push(Entry { at: s.created_at, item });
-        }
+        let items = to_items_with([&s.message], &renders, Some(s.created_at), |user, sender| SentUser {
+            user,
+            sender: sender.unwrap_or(starter),
+        })?;
+        entries.extend(items.into_iter().map(|item| Entry { at: s.created_at, item }));
     }
     Ok(Timeline { session: row, entries })
-}
-
-/// 用户消息条目里有用户在界面上写的一封信：typed 是保存这条消息的那次运行处理的用户消息的原文；只有附件的按条目带不带附件认。
-fn from_user(item: &UserItem, typed: &[String]) -> bool {
-    typed.iter().any(|content| {
-        if content.trim().is_empty() { !item.attachments.is_empty() } else { has_segment(&item.text, content) }
-    })
-}
-
-/// 条目文字里有这一整段：一条用户消息条目是连续内容段用换行连起来的（transcript 的 UserContent）。
-fn has_segment(text: &str, segment: &str) -> bool {
-    text == segment
-        || text.starts_with(&format!("{segment}\n"))
-        || text.ends_with(&format!("\n{segment}"))
-        || text.contains(&format!("\n{segment}\n"))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_segment_is_a_whole_line_run() {
-        assert!(has_segment("hi", "hi"));
-        assert!(has_segment("hi\nthere", "hi"));
-        assert!(has_segment("a\nhi", "hi"));
-        assert!(has_segment("a\nhi\nb", "hi"));
-        assert!(!has_segment("high", "hi"));
-        assert!(!has_segment("a\nhigh", "hi"));
-    }
 }

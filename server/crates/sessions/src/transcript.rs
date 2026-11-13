@@ -16,8 +16,9 @@ use serde::Serialize;
 
 use crate::answers::Waiting;
 use crate::answers::{AnsweredQuestion, AskResult, Question, questions_of};
-use crate::conventions::{event_content, event_marks, finished_at, is_stopped, made_up, run_context_index};
+use crate::conventions::{PartKind, event_content, finished_at, is_stopped, made_up, part_marks, run_context_index};
 use crate::error::{Result, broken};
+use crate::origins::Origin;
 use crate::pending::{ASK_USER, OpenAsk, OpenAsks};
 use crate::work::EventSource;
 
@@ -217,6 +218,10 @@ impl Item {
 /// 一次工具调用的条目。started_at：调用开始执行的时间（回复在执行工具之前保存，所以历史里是回复那一行的保存时间，运行中
 /// 是收到调用事件的时间）。
 pub fn call_item(call: &ToolCall, started_at: Option<DateTime<Utc>>, renders: &Renders) -> Item {
+    call_entry(call, started_at, renders)
+}
+
+fn call_entry<U>(call: &ToolCall, started_at: Option<DateTime<Utc>>, renders: &Renders) -> Item<U> {
     let questions = if call.name == ASK_USER { questions_of(&call.args) } else { Vec::new() };
     Item::ToolCall(CallItem {
         tool_name: call.name.clone(),
@@ -246,6 +251,10 @@ fn result_text(result: &ToolResult) -> String {
 /// 工具结果，或失败、参数被拒绝交还模型重试的结果（is_error）。事后补的结果没有结束时间。展示规则只用于工具交回的文本
 /// 结果（内容只有一段文字）。
 pub fn result_item(result: &ToolResult, renders: &Renders) -> Item {
+    result_entry(result, renders)
+}
+
+fn result_entry<U>(result: &ToolResult, renders: &Renders) -> Item<U> {
     let (tool_name, tool_call_id, text) = (result.tool_name.clone(), result.call_id.clone(), result_text(result));
     if result.is_error {
         return Item::ToolError(ErrorItem { tool_name, tool_call_id, text, at: finished_at(result) });
@@ -266,20 +275,40 @@ pub fn result_item(result: &ToolResult, renders: &Renders) -> Item {
     })
 }
 
-/// 一条请求里连续的用户内容（文字与附件），合成一条用户条目。
+/// 一条请求里连续的、同一发送方的用户内容（文字与附件），合成一条用户条目。sender：信件记下的发送方，没记的（迟到的
+/// 回答、记下发送方之前存的消息）为 None。
 #[derive(Default)]
 struct UserContent {
     texts: Vec<String>,
     attachments: Vec<Attachment>,
+    sender: Option<Origin>,
 }
 
 impl UserContent {
-    fn flush_into(&mut self, items: &mut Vec<Item>) {
-        if self.texts.is_empty() && self.attachments.is_empty() {
+    fn is_empty(&self) -> bool {
+        self.texts.is_empty() && self.attachments.is_empty()
+    }
+
+    /// 接下来的一段来自 sender：发送方变了先把已有的合成一条。
+    fn from<U>(
+        &mut self,
+        sender: Option<Origin>,
+        items: &mut Vec<Item<U>>,
+        user: &impl Fn(UserItem, Option<Origin>) -> U,
+    ) {
+        if self.sender != sender {
+            self.flush_into(items, user);
+            self.sender = sender;
+        }
+    }
+
+    fn flush_into<U>(&mut self, items: &mut Vec<Item<U>>, user: &impl Fn(UserItem, Option<Origin>) -> U) {
+        if self.is_empty() {
             return;
         }
         let own = std::mem::take(self);
-        items.push(Item::User(UserItem { text: own.texts.join("\n"), attachments: own.attachments }));
+        items.push(Item::User(user(UserItem { text: own.texts.join("\n"), attachments: own.attachments }, own.sender)));
+        self.sender = own.sender;
     }
 }
 
@@ -288,49 +317,75 @@ fn attachment(file: &File) -> Result<Attachment> {
 }
 
 /// 一条请求展示成的条目：工具结果各自成条；运行上下文那一段不展示（它是我们加给模型的，不是用户说的话；它仍在消息里
-/// 原样重放，这里只是不投影）；会话事件（其中运行中检查另标）各自成条；其余连续的文字与附件合成一条用户消息。
-fn request_items(request: &Request, renders: &Renders, items: &mut Vec<Item>) -> Result<()> {
-    let events = event_marks(request)?;
+/// 原样重放，这里只是不投影）；会话事件（其中运行中检查另标）各自成条；其余连续的、同一发送方的文字与附件合成一条用户
+/// 消息。
+fn request_items<U>(
+    request: &Request,
+    renders: &Renders,
+    items: &mut Vec<Item<U>>,
+    user: &impl Fn(UserItem, Option<Origin>) -> U,
+) -> Result<()> {
+    let marks = part_marks(request)?;
     let context = run_context_index(request);
     let mut own = UserContent::default();
     for (i, part) in request.parts.iter().enumerate() {
         if Some(i) == context {
             continue;
         }
-        let event = events.iter().find(|e| e.part == i);
-        match (part, event) {
+        let kind = marks.iter().find(|m| m.part == i).map(|m| &m.kind);
+        let sender = match kind {
+            Some(PartKind::Message { origin }) => Some(*origin),
+            _ => None,
+        };
+        match (part, kind) {
             (RequestPart::ToolResult(r), _) => {
-                own.flush_into(items);
-                items.push(result_item(r, renders));
+                own.flush_into(items, user);
+                items.push(result_entry(r, renders));
             }
-            (RequestPart::Text { text }, Some(e)) => {
-                own.flush_into(items);
+            (RequestPart::Text { text }, Some(PartKind::Event { source, check_in })) => {
+                own.flush_into(items, user);
                 items.push(Item::Event(EventItem {
-                    text: event_content(text, &e.source).to_owned(),
-                    source: e.source.clone(),
-                    check_in: e.check_in,
+                    text: event_content(text, source).to_owned(),
+                    source: source.clone(),
+                    check_in: *check_in,
                     at: request.timestamp,
                 }));
             }
-            (RequestPart::Text { text }, None) => own.texts.push(text.clone()),
-            (RequestPart::File(f), _) => own.attachments.push(attachment(f)?),
+            (RequestPart::Text { text }, _) => {
+                own.from(sender, items, user);
+                own.texts.push(text.clone());
+            }
+            (RequestPart::File(f), _) => {
+                own.from(sender, items, user);
+                own.attachments.push(attachment(f)?);
+            }
         }
     }
-    own.flush_into(items);
+    own.flush_into(items, user);
     Ok(())
 }
 
 /// saved_at：这些消息保存的时间，即其中工具调用开始执行的时间（见 [`call_item`]）；不需要时间的投影（压缩的文字记录）
-/// 不给。存下的消息与约定对不上（事件格式、附件引用）时报数据损坏。
+/// 不给。存下的消息与约定对不上（各段的记录、附件引用）时报数据损坏。
 pub fn to_items<'a>(
     messages: impl IntoIterator<Item = &'a Message>,
     renders: &Renders,
     saved_at: Option<DateTime<Utc>>,
 ) -> Result<Vec<Item>> {
+    to_items_with(messages, renders, saved_at, |u, _| u)
+}
+
+/// 同 [`to_items`]，用户消息条目由 user 按条目与它记下的发送方（没记的为 None）给出。
+pub fn to_items_with<'a, U>(
+    messages: impl IntoIterator<Item = &'a Message>,
+    renders: &Renders,
+    saved_at: Option<DateTime<Utc>>,
+    user: impl Fn(UserItem, Option<Origin>) -> U,
+) -> Result<Vec<Item<U>>> {
     let mut items = Vec::new();
     for message in messages {
         match message {
-            Message::User(request) => request_items(request, renders, &mut items)?,
+            Message::User(request) => request_items(request, renders, &mut items, &user)?,
             Message::Assistant(response) => {
                 for part in &response.parts {
                     match part {
@@ -340,7 +395,7 @@ pub fn to_items<'a>(
                         ResponsePart::Thinking { text, .. } if !text.is_empty() => {
                             items.push(Item::Thinking { text: text.clone() });
                         }
-                        ResponsePart::ToolCall(call) => items.push(call_item(call, saved_at, renders)),
+                        ResponsePart::ToolCall(call) => items.push(call_entry(call, saved_at, renders)),
                         ResponsePart::Text { .. } | ResponsePart::Thinking { .. } => {}
                     }
                 }
@@ -449,9 +504,16 @@ mod tests {
     use super::*;
     use crate::answers::QuestionOption;
     use crate::conventions::{
-        EventMark, MadeUp, attach_run_context, format_event, made_up_result, mark_events, mark_stopped,
-        set_finished_at,
+        MadeUp, PartMark, attach_run_context, format_event, made_up_result, mark_parts, mark_stopped, set_finished_at,
     };
+
+    fn event(part: usize, source: EventSource, check_in: bool) -> PartMark {
+        PartMark { part, kind: PartKind::Event { source, check_in } }
+    }
+
+    fn message(part: usize, origin: Origin) -> PartMark {
+        PartMark { part, kind: PartKind::Message { origin } }
+    }
 
     fn job7() -> EventSource {
         EventSource::Job { job_id: 7 }
@@ -529,18 +591,28 @@ mod tests {
             RequestPart::Text { text: format_event(&job7(), "done") },
             RequestPart::Text { text: format_event(&thread_s1(), "still going") },
             RequestPart::Text { text: "tail".into() },
+            RequestPart::Text { text: "late".into() },
         ]);
-        mark_events(
+        mark_parts(
             &mut r,
             vec![
-                EventMark { part: 3, source: job7(), check_in: false },
-                EventMark { part: 4, source: thread_s1(), check_in: true },
+                message(1, Origin::User),
+                message(2, Origin::User),
+                event(3, job7(), false),
+                event(4, thread_s1(), true),
+                message(5, Origin::Trigger),
             ],
         )
         .unwrap();
         attach_run_context(&mut r, "now is 10:00").unwrap();
+        let senders: Vec<Option<Origin>> = to_items_with([&Message::User(r.clone())], &Renders::new(), None, |_, s| s)
+            .unwrap()
+            .into_iter()
+            .filter_map(|i| if let Item::User(s) = i { Some(s) } else { None })
+            .collect();
+        assert_eq!(senders, [Some(Origin::User), Some(Origin::Trigger), None]);
         let items = to_items([&Message::User(r)], &Renders::new(), None).unwrap();
-        assert_eq!(kinds(&items), ["tool_result", "user", "event", "event", "user"]);
+        assert_eq!(kinds(&items), ["tool_result", "user", "event", "event", "user", "user"]);
         let Item::User(user) = &items[1] else { panic!() };
         assert_eq!(user.text, "hi");
         assert_eq!(user.attachments.len(), 1);
@@ -572,7 +644,7 @@ mod tests {
     #[test]
     fn broken_requests_are_reported() {
         let mut r = request(vec![RequestPart::Text { text: "x".into() }]);
-        r.metadata = Some(serde_json::json!({ crate::conventions::RUN_EVENTS: [{ "part": 0, "source": "nope" }] }));
+        r.metadata = Some(serde_json::json!({ crate::conventions::PARTS: [{ "part": 0, "event": "nope" }] }));
         assert!(to_items([&Message::User(r)], &Renders::new(), None).is_err());
         let r = request(vec![RequestPart::File(file("https://elsewhere/x.png"))]);
         assert!(to_items([&Message::User(r)], &Renders::new(), None).is_err());
@@ -731,7 +803,7 @@ mod tests {
             RequestPart::Text { text: format_event(&job7(), "done") },
         ]);
         let mut r = r;
-        mark_events(&mut r, vec![EventMark { part: 2, source: job7(), check_in: false }]).unwrap();
+        mark_parts(&mut r, vec![event(2, job7(), false)]).unwrap();
         let m = response(vec![
             ResponsePart::Thinking { text: "secret thought".into(), meta: None },
             ResponsePart::ToolCall(call("c1", "t", "{\"q\":\"0123456789\"}")),

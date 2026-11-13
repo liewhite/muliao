@@ -11,7 +11,7 @@ use muliao_platform::db::{Database, migrate};
 use muliao_platform::errors::ErrorKind;
 use muliao_platform::tooling::{Audience, RunScope};
 use muliao_sessions::actor::Waker;
-use muliao_sessions::conventions::attach_run_context;
+use muliao_sessions::conventions::{PartKind, PartMark, attach_run_context, mark_parts};
 use muliao_sessions::history::append_in;
 use muliao_sessions::mailbox::{NewMail, consume_in, give_in, post_in};
 use muliao_sessions::origins::Origin;
@@ -80,8 +80,18 @@ fn kind_of(e: Error) -> ErrorKind {
 }
 
 fn user_text(text: &str) -> Message {
-    let mut request =
-        Request { parts: vec![RequestPart::Text { text: text.into() }], timestamp: Utc::now(), metadata: None };
+    user_texts(&[(Origin::User, text)])
+}
+
+/// 一条请求：每段文字记下它所在信件的发送方（交出信件时就这样记）。
+fn user_texts(texts: &[(Origin, &str)]) -> Message {
+    let parts = texts.iter().map(|(_, t)| RequestPart::Text { text: (*t).into() }).collect();
+    let mut request = Request { parts, timestamp: Utc::now(), metadata: None };
+    let marks = texts
+        .iter()
+        .enumerate()
+        .map(|(part, (origin, _))| PartMark { part, kind: PartKind::Message { origin: *origin } });
+    mark_parts(&mut request, marks.collect()).unwrap();
     attach_run_context(&mut request, "Current local time: now").unwrap();
     Message::User(request)
 }
@@ -331,7 +341,10 @@ async fn day_of_work(w: &World) {
     w.run(
         "s-issue-001",
         Some((Origin::Issue, "New activity on issue #7")),
-        vec![user_text("New activity on issue #7"), reply("好的，开工", &[])],
+        vec![
+            user_texts(&[(Origin::Issue, "New activity on issue #7"), (Origin::User, "顺便看下 #8")]),
+            reply("好的，开工", &[]),
+        ],
         Some(Outcome::Done),
     )
     .await;
@@ -415,14 +428,14 @@ async fn session_read_shows_the_timeline_with_labels_grep_clip_and_offset() {
     assert!(out.contains("] result run_shell\n  xxx") && out.contains("…[truncated: 3000 more chars]"), "{out}");
     assert!(!out.contains("Current local time"), "{out}");
 
-    // 来源不是用户的消息标成会话的发起方
+    // 每段按信件记下的发送方标：issue 会话里用户插的话标 USER
     let issue = w.call(A, "session_read", json!({"session": "s-issue", "labels": ["ISSUE"]}), 20_000).await.unwrap();
     assert!(
         issue.contains("1 entries labelled ISSUE") && issue.contains("] ISSUE\n  New activity on issue #7"),
         "{issue}"
     );
     let users = w.call(A, "session_read", json!({"session": "s-issue", "labels": ["USER"]}), 20_000).await.unwrap();
-    assert!(users.contains(": 0 entries"), "{users}");
+    assert!(users.contains("1 entries labelled USER") && users.contains("] USER\n  顺便看下 #8"), "{users}");
 
     // labels 按前缀词匹配，grep 不分大小写、标签和文字都看
     let calls = w.call(A, "session_read", json!({"session": "s-user", "labels": ["call"]}), 20_000).await.unwrap();

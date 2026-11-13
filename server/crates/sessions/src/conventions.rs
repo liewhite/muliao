@@ -9,7 +9,7 @@
 //! | [`RUN_STOPPED`]：运行被用户停止 | 停止时最后那条消息的 metadata | 停止（halt） | 会话条目（「已停止」）、续跑（不重发标了它的请求） |
 //! | [`INTERRUPTED`]：生成到一半被停的回复 | 回复的 metadata | 停止 | 会话条目；压缩判断（[`measured_responses`]） |
 //! | [`MADE_UP`]：事后补的结果（停止、中断时没出结果的调用） | 工具结果的 metadata（`stopped` / `interrupted`） | 停止、续跑 | 模型看结果文字；会话条目（没有结束时间） |
-//! | [`RUN_EVENTS`]：这条请求里哪些段是事件，各自的来源、是不是运行中检查（[`EventMark`]） | 请求的 metadata | 交出信件时 | 会话条目 |
+//! | [`PARTS`]：这条请求里哪些段是信件内容、各是什么（[`PartMark`]：事件的来源与是否运行中检查，消息的发送方） | 请求的 metadata | 交出信件时 | 会话条目、热历史（哪句是用户说的） |
 //! | [`RUN_CONTEXT`]：这次运行的运行上下文（当前时间等） | 单独一段文字，请求的 metadata 记下标 | 每步保存 | 模型；会话条目不展示 |
 //! | [`FINISHED_AT`]：工具调用结束的时刻 | 工具结果的 metadata（RFC3339） | 每步保存 | 会话条目（结果的时间） |
 //! | 「调用是否已有结果」 | 工具结果；没结果的只可能在最后一条回复里 | — | [`unanswered_calls`] |
@@ -21,12 +21,13 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use serde_json::{Map, Value};
 
 use crate::error::{Result, broken};
+use crate::origins::Origin;
 use crate::work::EventSource;
 
 pub const RUN_STOPPED: &str = "muliao_stopped";
 pub const INTERRUPTED: &str = "muliao_interrupted";
 pub const MADE_UP: &str = "muliao_made_up";
-pub const RUN_EVENTS: &str = "muliao_events";
+pub const PARTS: &str = "muliao_parts";
 pub const RUN_CONTEXT: &str = "muliao_run_context";
 pub const FINISHED_AT: &str = "muliao_finished_at";
 
@@ -168,26 +169,47 @@ pub fn results_request(results: Vec<ToolResult>) -> Option<Request> {
     })
 }
 
-/// 请求里的一段事件：第几段（`parts` 的下标）、来源、是不是运行中检查。事件的事实只存在这里，交给模型的文字
-/// （[`format_event`]）是由它派生的写法，读时不反解析。
+/// 请求里一段信件内容是什么：第几段（`parts` 的下标）、哪一种。这些事实只存在这里，读时不从文字反推。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EventMark {
+pub struct PartMark {
     pub part: usize,
-    pub source: EventSource,
-    pub check_in: bool,
+    pub kind: PartKind,
 }
 
-impl EventMark {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PartKind {
+    /// 会话事件：交给模型的文字（[`format_event`]）是由来源派生的写法
+    Event { source: EventSource, check_in: bool },
+    /// 一封消息信件的文字或附件，以及它的发送方来源
+    Message { origin: Origin },
+}
+
+impl PartMark {
     fn to_json(&self) -> Value {
-        serde_json::json!({ "part": self.part, "source": self.source.raw(), "check_in": self.check_in })
+        match &self.kind {
+            PartKind::Event { source, check_in } => {
+                serde_json::json!({ "part": self.part, "event": source.raw(), "check_in": check_in })
+            }
+            PartKind::Message { origin } => serde_json::json!({ "part": self.part, "sender": origin.as_str() }),
+        }
     }
 
     fn from_json(v: &Value) -> Option<Self> {
-        Some(EventMark {
-            part: v.get("part")?.as_u64()? as usize,
-            source: EventSource::parse(v.get("source")?.as_str()?)?,
-            check_in: v.get("check_in")?.as_bool()?,
-        })
+        let part = v.get("part")?.as_u64()? as usize;
+        let kind = match (v.get("event"), v.get("sender")) {
+            (Some(source), None) => PartKind::Event {
+                source: EventSource::parse(source.as_str()?)?,
+                check_in: v.get("check_in")?.as_bool()?,
+            },
+            (None, Some(sender)) => PartKind::Message { origin: Origin::parse(sender.as_str()?).ok()? },
+            _ => return None,
+        };
+        Some(PartMark { part, kind })
+    }
+
+    /// 同一段在前面多了 n 段的请求里。
+    pub fn shifted(self, n: usize) -> Self {
+        PartMark { part: self.part + n, ..self }
     }
 }
 
@@ -207,50 +229,46 @@ pub fn event_content<'a>(text: &'a str, source: &EventSource) -> &'a str {
     text.strip_prefix(event_head(source).as_str()).and_then(|t| t.strip_suffix(EVENT_END)).unwrap_or(text)
 }
 
-/// 这条请求里的事件段，按记下的顺序。读库边界：形状不对是数据与代码不一致。
-pub fn event_marks(request: &Request) -> Result<Vec<EventMark>> {
-    let Some(v) = meta_of(&request.metadata).and_then(|m| m.get(RUN_EVENTS)) else { return Ok(Vec::new()) };
+/// 这条请求里记下的各段，按记下的顺序。读库边界：形状不对是数据与代码不一致。
+pub fn part_marks(request: &Request) -> Result<Vec<PartMark>> {
+    let Some(v) = meta_of(&request.metadata).and_then(|m| m.get(PARTS)) else { return Ok(Vec::new()) };
     v.as_array()
-        .and_then(|a| a.iter().map(EventMark::from_json).collect::<Option<Vec<_>>>())
-        .ok_or_else(|| broken(format!("bad {RUN_EVENTS} in request metadata: {v}")))
+        .and_then(|a| a.iter().map(PartMark::from_json).collect::<Option<Vec<_>>>())
+        .ok_or_else(|| broken(format!("bad {PARTS} in request metadata: {v}")))
 }
 
-/// 整条请求的事件段换成这些（新建请求时）。
-pub fn set_event_marks(request: &mut Request, marks: &[EventMark]) {
+/// 整条请求记下的各段换成这些（新建请求时）。
+pub fn set_part_marks(request: &mut Request, marks: &[PartMark]) {
     if marks.is_empty() {
         if let Some(Value::Object(m)) = &mut request.metadata {
-            m.remove(RUN_EVENTS);
+            m.remove(PARTS);
         }
     } else {
         meta_mut(&mut request.metadata)
-            .insert(RUN_EVENTS.into(), Value::Array(marks.iter().map(EventMark::to_json).collect()));
+            .insert(PARTS.into(), Value::Array(marks.iter().map(PartMark::to_json).collect()));
     }
 }
 
-/// 接在请求末尾的这些事件段记下来（交出信件时；part 已是在整条请求里的下标）。
-pub fn mark_events(request: &mut Request, marks: Vec<EventMark>) -> Result<()> {
+/// 接在请求末尾的这些段记下来（交出信件时；part 已是在整条请求里的下标）。
+pub fn mark_parts(request: &mut Request, marks: Vec<PartMark>) -> Result<()> {
     if marks.is_empty() {
         return Ok(());
     }
-    let mut all = event_marks(request)?;
+    let mut all = part_marks(request)?;
     all.extend(marks);
-    set_event_marks(request, &all);
+    set_part_marks(request, &all);
     Ok(())
 }
 
 /// 把运行上下文作为独立的一段文字放进这条请求，并记下它的下标。放在工具结果之后、别的内容之前：模型先看到「现在
-/// 几点」再看这次要处理的内容。已有的事件下标随之后移。
+/// 几点」再看这次要处理的内容。已记下的各段下标随之后移。
 pub fn attach_run_context(request: &mut Request, text: &str) -> Result<()> {
     assert!(run_context_index(request).is_none(), "request already carries a run context");
     let at = request.parts.iter().position(|p| !matches!(p, RequestPart::ToolResult(_))).unwrap_or(request.parts.len());
-    let mut marks = event_marks(request)?;
+    let marks: Vec<PartMark> =
+        part_marks(request)?.into_iter().map(|m| if m.part >= at { m.shifted(1) } else { m }).collect();
     request.parts.insert(at, RequestPart::Text { text: text.to_owned() });
-    for mark in &mut marks {
-        if mark.part >= at {
-            mark.part += 1;
-        }
-    }
-    set_event_marks(request, &marks);
+    set_part_marks(request, &marks);
     meta_mut(&mut request.metadata).insert(RUN_CONTEXT.into(), Value::from(at));
     Ok(())
 }
@@ -418,10 +436,13 @@ mod tests {
             timestamp: chrono::Utc::now(),
             metadata: None,
         };
-        mark_events(&mut r, vec![EventMark { part: 1, source: job.clone(), check_in: true }]).unwrap();
+        let event = PartKind::Event { source: job, check_in: true };
+        let user = PartKind::Message { origin: Origin::User };
+        mark_parts(&mut r, vec![PartMark { part: 0, kind: user.clone() }, PartMark { part: 1, kind: event.clone() }])
+            .unwrap();
         attach_run_context(&mut r, "now").unwrap();
         assert_eq!(run_context_index(&r), Some(0));
-        assert_eq!(event_marks(&r).unwrap(), [EventMark { part: 2, source: job, check_in: true }]);
+        assert_eq!(part_marks(&r).unwrap(), [PartMark { part: 1, kind: user }, PartMark { part: 2, kind: event }]);
         assert_eq!(searchable_text(&Message::User(r)), format!("hi\n{e}"));
     }
 
