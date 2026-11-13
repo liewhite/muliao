@@ -17,7 +17,7 @@ use crate::access_file::{self, AccessEdit};
 use crate::agents::{self, AgentInfo, AgentNames};
 use crate::formats::agent_file::{self, AGENT_FILE, AgentConfig, AgentFile, Thinking};
 use crate::naming::{AgentName, new_agent_id};
-use crate::rules::AgentRules;
+use crate::rules::{AgentRules, Rule};
 use crate::source::AssetSource;
 use crate::tree::{AgentDir, PRIVATE_MEMORY_FILE, Snapshot, move_to, remove};
 use muliao_platform::errors::{Result, invalid};
@@ -40,8 +40,8 @@ pub struct AgentPatch {
     pub name: Option<String>,
     pub config: AgentConfig,
     pub roles: Option<Vec<String>>,
-    pub allow: Option<Vec<String>>,
-    pub deny: Option<Vec<String>>,
+    pub allow: Option<Vec<Rule>>,
+    pub deny: Option<Vec<Rule>>,
 }
 
 /// 界面与 get_agent / list_agents 看到的 agent：身份、配置、分发规则。config 为 None：它的目录没加载（问题已报出），不能

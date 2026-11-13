@@ -212,7 +212,7 @@ mod tests {
             builtin(Named("f2"), ToolTraits::write()),
             builtin(Named("other"), ToolTraits::read()),
         ]);
-        let rules = Rules::new(vec!["use:tool:f*".into()], vec!["use:tool:other".into()]);
+        let rules = Rules::new(vec!["use:tool:f*".parse().unwrap()], vec!["use:tool:other".parse().unwrap()]);
         let tools = tb.allowed(&rules);
         assert_eq!(tools.iter().map(|t| t.def().name.as_str()).collect::<Vec<_>>(), ["f1", "f2"]);
         assert!(tools[0].sequential() && !tools[1].sequential(), "agenter runs f1 as a barrier");

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use crate::access::{Actor, Grants, Reach, Source, WriteScope, grants_for, holders_of, reach_of, write_scope};
 use crate::access_file;
 use crate::kinds::{Shown, StoredKind};
-use crate::rules::{Action, AgentRules, BUILTIN_ROLES, Role, Rules};
+use crate::rules::{Action, AgentRules, BUILTIN_ROLES, Role, Rule, Rules};
 use crate::source::AssetSource;
 use crate::tree::{Owner, Snapshot};
 use muliao_platform::errors::{Result, conflict, invalid, not_found};
@@ -28,7 +28,7 @@ pub struct RoleView {
     pub holders: Vec<AgentId>,
 }
 
-/// agent 能用的一项资源。种类就是内容的种类（[`UsedAsset::kind`]）。
+/// agent 能用的一项资源（种类就是 content 的种类）。
 #[derive(Debug, Clone)]
 pub struct UsedAsset {
     pub name: String,
@@ -39,12 +39,6 @@ pub struct UsedAsset {
     /// 能改
     pub editable: bool,
     pub content: Shown,
-}
-
-impl UsedAsset {
-    pub fn kind(&self) -> StoredKind {
-        self.content.kind()
-    }
 }
 
 /// 预览还没建的 agent 或角色时，在 plan 里给它的那一节用的名字（只算、不写）
@@ -164,8 +158,8 @@ impl Distribution {
         &self,
         name: &str,
         description: Option<String>,
-        allow: Option<Vec<String>>,
-        deny: Option<Vec<String>>,
+        allow: Option<Vec<Rule>>,
+        deny: Option<Vec<Rule>>,
     ) -> Result<Role> {
         {
             let w = self.source.writing().await?;

@@ -9,7 +9,7 @@ use muliao_assets::distribution::{RoleSpec, RoleView, UsedAsset};
 use muliao_assets::formats::agent_file::{AgentConfig, Thinking};
 use muliao_assets::formats::mcp::McpTransport;
 use muliao_assets::kinds::Shown;
-use muliao_assets::rules::{AgentRules, Rules, ToolSpec};
+use muliao_assets::rules::{AgentRules, Rule, Rules, ToolSpec, texts};
 use muliao_assets::service::{AgentPatch, AgentSpec, AgentView};
 use muliao_platform::ids::AgentId;
 use muliao_platform::tooling::ToolAccess;
@@ -78,8 +78,8 @@ impl AgentOut {
                 group: d.file.group().map(str::to_owned),
             }),
             roles: rules.roles,
-            allow: rules.allow,
-            deny: rules.deny,
+            allow: texts(&rules.allow),
+            deny: texts(&rules.deny),
             created_at: info.created_at,
             is_default: info.is_default,
             archived_at,
@@ -115,8 +115,8 @@ async fn agent_defaults(State(s): State<AppState>) -> axum::Json<AgentDefaults> 
         description: spec.description,
         model: s.services.agents.default_model().to_owned(),
         roles: spec.rules.roles,
-        allow: spec.rules.allow,
-        deny: spec.rules.deny,
+        allow: texts(&spec.rules.allow),
+        deny: texts(&spec.rules.deny),
         thinking: spec.thinking,
         group: spec.group,
     })
@@ -180,7 +180,8 @@ pub struct AgentPreviewIn {
 #[utoipa::path(post, path = "/api/agent-preview", tag = "agents", request_body = AgentPreviewIn,
     responses((status = 200, body = ReachOut), (status = 422, body = ErrorOut)))]
 async fn preview_agent(State(s): State<AppState>, Json(body): Json<AgentPreviewIn>) -> ApiResult<axum::Json<ReachOut>> {
-    let rules = AgentRules { roles: body.roles, allow: body.allow, deny: body.deny };
+    let rules =
+        AgentRules { roles: body.roles, allow: Rule::parse_all(&body.allow)?, deny: Rule::parse_all(&body.deny)? };
     let reach = s.services.distribution.preview_agent(body.agent_id.as_ref(), &rules).await?;
     Ok(axum::Json(ReachOut::of(reach)))
 }
@@ -212,9 +213,9 @@ impl RoleOut {
             assignable: role.assignable(),
             name: role.name,
             description: role.description,
-            fixed_allow: role.fixed.allow,
-            allow: role.rules.allow,
-            deny: role.rules.deny,
+            fixed_allow: texts(&role.fixed.allow),
+            allow: texts(&role.rules.allow),
+            deny: texts(&role.rules.deny),
             reach: ReachOut::of(reach),
             agents: holders,
         }
@@ -239,7 +240,11 @@ pub struct RolePreviewIn {
 #[utoipa::path(post, path = "/api/role-preview", tag = "roles", request_body = RolePreviewIn,
     responses((status = 200, body = ReachOut), (status = 422, body = ErrorOut)))]
 async fn preview_role(State(s): State<AppState>, Json(body): Json<RolePreviewIn>) -> ApiResult<axum::Json<ReachOut>> {
-    let reach = s.services.distribution.preview_role(body.name.as_deref(), &Rules::new(body.allow, body.deny)).await?;
+    let reach = s
+        .services
+        .distribution
+        .preview_role(body.name.as_deref(), &Rules::new(Rule::parse_all(&body.allow)?, Rule::parse_all(&body.deny)?))
+        .await?;
     Ok(axum::Json(ReachOut::of(reach)))
 }
 
@@ -258,8 +263,12 @@ async fn create_role(
     Json(body): Json<RoleIn>,
 ) -> ApiResult<(StatusCode, axum::Json<RoleOut>)> {
     let d = &s.services.distribution;
-    d.create(&RoleSpec { name: name.clone(), description: body.description, rules: Rules::new(body.allow, body.deny) })
-        .await?;
+    d.create(&RoleSpec {
+        name: name.clone(),
+        description: body.description,
+        rules: Rules::new(Rule::parse_all(&body.allow)?, Rule::parse_all(&body.deny)?),
+    })
+    .await?;
     Ok((StatusCode::CREATED, axum::Json(RoleOut::of(d.view(&name).await?))))
 }
 
@@ -283,7 +292,9 @@ async fn update_role(
     Json(body): Json<RoleUpdate>,
 ) -> ApiResult<axum::Json<RoleOut>> {
     let d = &s.services.distribution;
-    d.patch(&name, body.description, body.allow, body.deny).await?;
+    let allow = body.allow.as_deref().map(Rule::parse_all).transpose()?;
+    let deny = body.deny.as_deref().map(Rule::parse_all).transpose()?;
+    d.patch(&name, body.description, allow, deny).await?;
     Ok(axum::Json(RoleOut::of(d.view(&name).await?)))
 }
 
@@ -334,7 +345,11 @@ async fn create_agent(
         model: body.model,
         thinking: body.thinking,
         group: body.group,
-        rules: AgentRules { roles: body.roles, allow: body.allow, deny: body.deny },
+        rules: AgentRules {
+            roles: body.roles,
+            allow: Rule::parse_all(&body.allow)?,
+            deny: Rule::parse_all(&body.deny)?,
+        },
     };
     let created = s.services.agents.create(spec, &Actor::User).await?;
     Ok((StatusCode::CREATED, axum::Json(out(&s, &created.id).await?)))
@@ -388,8 +403,8 @@ async fn update_agent(
             group: body.group,
         },
         roles: body.roles,
-        allow: body.allow,
-        deny: body.deny,
+        allow: body.allow.as_deref().map(Rule::parse_all).transpose()?,
+        deny: body.deny.as_deref().map(Rule::parse_all).transpose()?,
     };
     let updated = s.services.agents.update(&agent_id, patch).await?;
     Ok(axum::Json(out(&s, &updated.id).await?))

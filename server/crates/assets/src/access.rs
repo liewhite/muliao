@@ -13,7 +13,7 @@ use muliao_platform::fs::{is_within, real};
 use crate::access_file::ACCESS_FILE;
 use crate::kinds::{Kind, KindContent, StoredKind};
 use crate::naming::PLATFORM;
-use crate::rules::{Action, BASE, Role, Rules, ToolSpec, pattern_of, permission_of, permits};
+use crate::rules::{Action, Actions, BASE, Role, Rule, Rules, ToolSpec, pattern_of, permission_of, permits};
 use crate::tree::{Asset, Owner, Snapshot};
 use muliao_platform::errors::{Result, forbidden};
 
@@ -40,7 +40,7 @@ impl Actor {
 pub struct Grants {
     agent_id: Option<AgentId>,
     /// 规则的各个来源的 allow：(角色名, allow)，自己的 allow 为 None
-    allows: Vec<(Option<String>, Vec<String>)>,
+    allows: Vec<(Option<String>, Vec<Rule>)>,
     /// 全部来源的并集（deny 作用于每个来源的 allow）
     rules: Rules,
 }
@@ -53,7 +53,7 @@ impl Grants {
     }
 
     pub fn user() -> Self {
-        Self::new(None, vec![(None, Rules::new(vec!["*:*".into()], vec![]))])
+        Self::new(None, vec![(None, Rules::new(vec![Rule::Every(Actions::Any)], vec![]))])
     }
 
     /// 最终规则（全部来源的并集）。

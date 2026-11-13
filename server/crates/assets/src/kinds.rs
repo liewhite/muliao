@@ -13,8 +13,8 @@ use crate::formats::{Draft, Loaded, mcp, memory, secret, skill};
 use crate::naming::validate_slug;
 
 /// AI 资源的种类，也是规则 `action:kind:glob` 里的 kind。内置工具（tool）在代码里、各自注册时声明属性（工具表
-/// [`crate::rules::ToolTable`]），归平台、没有内容；path 是本机上的目录（`write:path:<目录>`，#416），不是资源；其余四种是
-/// 资源目录里的文件。
+/// [`crate::rules::ToolTable`]），归平台、没有内容；其余四种是资源目录里的文件。本机上的可写目录（`write:path:<目录>`，
+/// #416）不是资源，是另一种规则（[`crate::rules::Rule::Path`]）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Kind {
     Tool,
@@ -22,11 +22,10 @@ pub enum Kind {
     Mcp,
     Secret,
     Memory,
-    Path,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 6] = [Kind::Tool, Kind::Skill, Kind::Mcp, Kind::Secret, Kind::Memory, Kind::Path];
+    pub const ALL: [Kind; 5] = [Kind::Tool, Kind::Skill, Kind::Mcp, Kind::Secret, Kind::Memory];
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -35,7 +34,6 @@ impl Kind {
             Kind::Mcp => "mcp",
             Kind::Secret => "secret",
             Kind::Memory => "memory",
-            Kind::Path => "path",
         }
     }
 
@@ -47,7 +45,6 @@ impl Kind {
     pub fn label(self) -> &'static str {
         match self {
             Kind::Tool => "built-in tool",
-            Kind::Path => "writable path",
             Kind::Skill => StoredKind::Skill.spec().label,
             Kind::Mcp => StoredKind::Mcp.spec().label,
             Kind::Secret => StoredKind::Secret.spec().label,

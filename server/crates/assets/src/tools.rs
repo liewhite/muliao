@@ -15,7 +15,7 @@ use crate::access::Actor;
 use crate::distribution::Distribution;
 use crate::formats::agent_file::Thinking;
 use crate::lifecycle::AgentLifecycle;
-use crate::rules::{AgentRules, Role};
+use crate::rules::{AgentRules, Role, Rule, texts};
 use crate::secrets::Secrets;
 use crate::service::{AgentService, AgentSpec, AgentView};
 use crate::tree::Owner;
@@ -108,9 +108,9 @@ impl RoleDetail {
         Self {
             name: r.name.clone(),
             description: r.description.clone(),
-            fixed_allow: r.fixed.allow.clone(),
-            allow: r.rules.allow.clone(),
-            deny: r.rules.deny.clone(),
+            fixed_allow: texts(&r.fixed.allow),
+            allow: texts(&r.rules.allow),
+            deny: texts(&r.rules.deny),
         }
     }
 }
@@ -186,8 +186,8 @@ impl Tool<RunScope> for GetAgent {
             model: config.file.model().to_owned(),
             thinking: config.file.thinking(),
             roles: view.rules.roles.clone(),
-            allow: view.rules.allow.clone(),
-            deny: view.rules.deny.clone(),
+            allow: texts(&view.rules.allow),
+            deny: texts(&view.rules.deny),
             tools: reach.tool_names().into_iter().map(str::to_owned).collect(),
             assets: reach.assets,
             available_roles: self.distribution.list().await?.iter().map(RoleDetail::of).collect(),
@@ -250,7 +250,7 @@ impl Tool<RunScope> for CreateAgent {
             model: a.model,
             thinking: a.thinking,
             group: a.group,
-            rules: AgentRules { roles: a.roles, allow: a.allow, deny: a.deny },
+            rules: AgentRules { roles: a.roles, allow: Rule::parse_all(&a.allow)?, deny: Rule::parse_all(&a.deny)? },
         };
         let created = self.agents.create(spec, &Actor::Agent(ctx.deps.agent_id.clone())).await?;
         Ok(agenter::tool::text(format!("created agent {}", created.name)))

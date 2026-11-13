@@ -27,7 +27,7 @@ async fn create_writes_files_rules_and_row() {
         description: "做交易".into(),
         group: Some("  组 ".into()),
         thinking: Thinking::High,
-        rules: AgentRules { allow: vec!["use:tool:create_agent".into()], ..Default::default() },
+        rules: AgentRules { allow: vec!["use:tool:create_agent".parse().unwrap()], ..Default::default() },
         ..Default::default()
     };
     let info = w.service.create(spec, &Actor::User).await.unwrap();
@@ -37,7 +37,7 @@ async fn create_writes_files_rules_and_row() {
     assert_eq!(config.file.model(), "p:default");
     assert_eq!(config.file.group(), Some("组"));
     assert_eq!(config.file.thinking(), Thinking::High);
-    assert_eq!(view.rules.allow, vec!["use:tool:create_agent".to_owned()]);
+    assert_eq!(muliao_assets::rules::texts(&view.rules.allow), ["use:tool:create_agent"]);
     assert!(w.root().join("交易/memory.md").is_file());
     assert!(w.workspaces().join(info.id.as_str()).is_dir());
     assert!(read(w.root().join("platform/access.toml")).contains(&format!("[agents.{}] # 交易\n", info.id)));
@@ -61,7 +61,7 @@ async fn create_writes_files_rules_and_row() {
     // 只差大小写的名字算同一个
     again("alice", AgentRules::default(), None).await.unwrap();
     assert!(again("Alice", AgentRules::default(), None).await.unwrap_err().to_string().contains("already taken"));
-    let bad = AgentRules { allow: vec!["use:skill:nope".into()], ..Default::default() };
+    let bad = AgentRules { allow: vec!["use:skill:nope".parse().unwrap()], ..Default::default() };
     assert!(again("carol", bad, None).await.is_err());
     assert!(again("carol", AgentRules::default(), Some("q:x")).await.is_err());
     assert!(!w.root().join("carol").exists());
@@ -123,7 +123,7 @@ async fn update_renames_and_rolls_back() {
     let patch = AgentPatch {
         name: Some("bob".into()),
         config: AgentConfig { model: Some("p:other".into()), ..Default::default() },
-        allow: Some(vec!["use:tool:read_file".into()]),
+        allow: Some(vec!["use:tool:read_file".parse().unwrap()]),
         ..Default::default()
     };
     assert!(w.service.update(&id, patch).await.is_err());

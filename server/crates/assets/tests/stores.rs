@@ -149,7 +149,7 @@ async fn catalog_transfer_and_roles() {
         .create(&RoleSpec {
             name: "team".into(),
             description: "团队".into(),
-            rules: Rules::new(vec!["use:skill:s".into()], vec![]),
+            rules: Rules::new(vec!["use:skill:s".parse().unwrap()], vec![]),
         })
         .await
         .unwrap();
@@ -173,7 +173,7 @@ async fn catalog_transfer_and_roles() {
     let preview =
         roles.preview_agent(None, &AgentRules { roles: vec!["admin".into()], ..Default::default() }).await.unwrap();
     assert!(preview.tool_names().contains(&"create_agent"));
-    assert!(roles.preview_role(None, &Rules::new(vec!["use:skill:typo".into()], vec![])).await.is_err());
+    assert!(roles.preview_role(None, &Rules::new(vec!["use:skill:typo".parse().unwrap()], vec![])).await.is_err());
 
     catalog.transfer(StoredKind::Skill, "s", &Owner::Platform).await.unwrap();
     assert!(w.root().join("platform/skills/s/SKILL.md").is_file());

@@ -16,7 +16,7 @@ use indexmap::IndexMap;
 
 use crate::kinds::Kind;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Action {
     Use,
     Write,
@@ -86,7 +86,7 @@ pub fn pattern_of(kind: Kind, name: &str) -> String {
     format!("{kind}:{name}")
 }
 
-/// 一个权限：`action:kind:name`，规则按整串 fnmatch 匹配它。
+/// 一个权限：`action:kind:name`（给人看的说法，如拒绝时告诉它该申请哪条规则）。
 pub fn permission_of(action: Action, kind: Kind, name: &str) -> String {
     format!("{}:{kind}:{name}", action.as_str())
 }
@@ -162,56 +162,157 @@ fn class(p: &[char], c: char) -> Option<(bool, usize)> {
     }
 }
 
+/// 规则里的动作：use、write，或 `*`（两者）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Actions {
+    One(Action),
+    Any,
+}
+
+impl Actions {
+    fn covers(self, action: Action) -> bool {
+        match self {
+            Actions::One(a) => a == action,
+            Actions::Any => true,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Actions::One(a) => a.as_str(),
+            Actions::Any => "*",
+        }
+    }
+}
+
+/// 一条规则，读入时解析一次（[`Rule::parse`]），之后只按变体判断；写回文件与给人看时是原样的字符串（Display）。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Rule {
+    /// `action:*`：不限种类（`write:*` 就是 admin）；不含本机可写目录
+    Every(Actions),
+    /// `action:kind:glob`：按名字通配某一种（tool 只有 use）
+    Named { actions: Actions, kind: Kind, glob: String },
+    /// `write:path:<目录>`：本机上可写的目录（字面，绝对或 `~/` 开头，不带通配符）
+    Path(String),
+}
+
 const ACTIONS: [&str; 3] = ["use", "write", "*"];
+const PATH: &str = "path";
 
-/// 规则针对的种类；`write:*` 这类不限种类的为 None。不是 `action:kind:glob`（action 为 use、write 或 *，kind 为
-/// [`Kind`] 之一，glob 非空）或 `action:*` 形式时报错（原因）；tool 只有 use；path 只有 `write:path:<字面目录>`。
-pub fn kind_of(pattern: &str) -> Result<Option<Kind>, String> {
-    let (action, rest) = pattern.split_once(':').unwrap_or((pattern, ""));
-    let (kind, glob) = rest.split_once(':').map_or((rest, None), |(k, g)| (k, Some(g)));
-    let kind = Kind::parse(kind);
-    let well_formed =
-        ACTIONS.contains(&action) && (rest == "*" || (kind.is_some() && glob.is_some_and(|g| !g.is_empty())));
-    if !well_formed {
-        return Err(format!(
-            "rule {pattern:?} must look like 'action:kind:name' with action one of {ACTIONS:?} and kind one of {:?} \
-             (fnmatch wildcards allowed in the name), or 'action:*'; e.g. 'use:tool:issue_*', 'use:skill:relay-host', \
-             '*:memory:trading', 'write:*'",
-            Kind::ALL.map(Kind::as_str)
-        ));
+impl Rule {
+    /// 不是 `action:kind:glob`（action 为 use、write 或 *，kind 为 [`Kind`] 之一或 path，glob 非空）或 `action:*`
+    /// 形式时报错（原因）；tool 只有 use；path 只有 `write:path:<字面目录>`。
+    pub fn parse(pattern: &str) -> Result<Rule, String> {
+        let malformed = || {
+            let mut kinds: Vec<&str> = Kind::ALL.map(Kind::as_str).to_vec();
+            kinds.push(PATH);
+            format!(
+                "rule {pattern:?} must look like 'action:kind:name' with action one of {ACTIONS:?} and kind one of \
+                 {kinds:?} (fnmatch wildcards allowed in the name), or 'action:*'; e.g. 'use:tool:issue_*', \
+                 'use:skill:relay-host', '*:memory:trading', 'write:*'"
+            )
+        };
+        let (action, rest) = pattern.split_once(':').ok_or_else(malformed)?;
+        let actions = match action {
+            "use" => Actions::One(Action::Use),
+            "write" => Actions::One(Action::Write),
+            "*" => Actions::Any,
+            _ => return Err(malformed()),
+        };
+        if rest == "*" {
+            return Ok(Rule::Every(actions));
+        }
+        let (kind, glob) = rest.split_once(':').ok_or_else(malformed)?;
+        if glob.is_empty() {
+            return Err(malformed());
+        }
+        if kind == PATH {
+            if actions != Actions::One(Action::Write)
+                || !(glob.starts_with('/') || glob.starts_with("~/"))
+                || glob.contains(['*', '?', '['])
+            {
+                return Err(format!(
+                    "rule {pattern:?}: a writable path rule is 'write:path:<directory>' with an absolute or '~/' path \
+                     and no wildcards, e.g. 'write:path:~/projects/arb'; it lets the agent write that directory and \
+                     everything under it"
+                ));
+            }
+            return Ok(Rule::Path(glob.to_owned()));
+        }
+        let kind = Kind::parse(kind).ok_or_else(malformed)?;
+        if kind == Kind::Tool && actions == Actions::One(Action::Write) {
+            return Err(format!("rule {pattern:?}: built-in tools can only be used ('use:tool:...')"));
+        }
+        Ok(Rule::Named { actions, kind, glob: glob.to_owned() })
     }
-    if rest == "*" {
-        return Ok(None);
+
+    /// 一组规则（界面、工具参数交来的）：任一条不合法就 InvalidInput，说明每一处。
+    pub fn parse_all(patterns: &[String]) -> muliao_platform::errors::Result<Vec<Rule>> {
+        let (ok, bad): (Vec<_>, Vec<_>) = patterns.iter().map(|p| Rule::parse(p)).partition(Result::is_ok);
+        if !bad.is_empty() {
+            let reasons: Vec<String> = bad.into_iter().filter_map(Result::err).collect();
+            return Err(muliao_platform::errors::invalid(reasons.join("; ")));
+        }
+        Ok(ok.into_iter().filter_map(Result::ok).collect())
     }
-    let glob = glob.unwrap_or_default();
-    if kind == Some(Kind::Tool) && action == "write" {
-        return Err(format!("rule {pattern:?}: built-in tools can only be used ('use:tool:...')"));
+
+    /// 按名字匹配这个权限（不限种类的也算；本机目录规则不管资源）。
+    fn matches(&self, action: Action, kind: Kind, name: &str) -> bool {
+        match self {
+            Rule::Every(a) => a.covers(action),
+            Rule::Named { actions, kind: k, glob } => actions.covers(action) && *k == kind && fnmatch(name, glob),
+            Rule::Path(_) => false,
+        }
     }
-    if kind == Some(Kind::Path)
-        && (action != "write" || !(glob.starts_with('/') || glob.starts_with("~/")) || glob.contains(['*', '?', '[']))
-    {
-        return Err(format!(
-            "rule {pattern:?}: a writable path rule is 'write:path:<directory>' with an absolute or '~/' path and no \
-             wildcards, e.g. 'write:path:~/projects/arb'; it lets the agent write that directory and everything under it"
-        ));
+
+    fn every(&self, action: Action) -> bool {
+        matches!(self, Rule::Every(a) if a.covers(action))
     }
-    Ok(kind)
+
+    /// 一条 tool 规则匹配不上 tools 里的任何工具（拼错、工具改了名，或这次配置没注册它）。
+    pub fn matches_no_tool(&self, tools: &ToolTable) -> bool {
+        matches!(self, Rule::Named { kind: Kind::Tool, .. })
+            && !tools.names().any(|t| self.matches(Action::Use, Kind::Tool, t))
+    }
+
+    /// 按名字指某一种的规则会拼错；不限种类的与目录规则（目录可以还没建）不查。addressable 是规则能指的全部
+    /// (种类, 名字)，一项都匹配不上时为真。
+    pub fn matches_nothing(&self, addressable: &[(Kind, String)]) -> bool {
+        matches!(self, Rule::Named { .. })
+            && !addressable.iter().any(|(k, n)| Action::ALL.iter().any(|a| self.matches(*a, *k, n)))
+    }
 }
 
-/// 一条 tool 规则匹配不上 tools 里的任何工具（拼错、工具改了名，或这次配置没注册它）。
-pub fn matches_no_tool(pattern: &str, tools: &ToolTable) -> bool {
-    matches!(kind_of(pattern), Ok(Some(Kind::Tool)))
-        && !tools.names().any(|t| fnmatch(&permission_of(Action::Use, Kind::Tool, t), pattern))
+impl std::str::FromStr for Rule {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Rule, String> {
+        Rule::parse(s)
+    }
 }
 
-/// 一组 allow / deny 的 `action:kind:glob`；deny 优先。
+impl std::fmt::Display for Rule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Rule::Every(a) => write!(f, "{}:*", a.as_str()),
+            Rule::Named { actions, kind, glob } => write!(f, "{}:{kind}:{glob}", actions.as_str()),
+            Rule::Path(dir) => write!(f, "write:{PATH}:{dir}"),
+        }
+    }
+}
+
+/// 规则写成字符串（写进 access.toml、交给界面与工具结果）。
+pub fn texts(rules: &[Rule]) -> Vec<String> {
+    rules.iter().map(Rule::to_string).collect()
+}
+
+/// 一组 allow / deny 规则；deny 优先。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Rules {
-    pub allow: Vec<String>,
-    pub deny: Vec<String>,
+    pub allow: Vec<Rule>,
+    pub deny: Vec<Rule>,
 }
 
-fn push_unique(into: &mut Vec<String>, from: &[String]) {
+fn push_unique(into: &mut Vec<Rule>, from: &[Rule]) {
     for p in from {
         if !into.contains(p) {
             into.push(p.clone());
@@ -220,7 +321,7 @@ fn push_unique(into: &mut Vec<String>, from: &[String]) {
 }
 
 impl Rules {
-    pub fn new(allow: Vec<String>, deny: Vec<String>) -> Self {
+    pub fn new(allow: Vec<Rule>, deny: Vec<Rule>) -> Self {
         Self { allow, deny }
     }
 
@@ -252,8 +353,14 @@ impl Rules {
 
     /// `write:path:<目录>` 规则里的目录：(allow 的, deny 的)，按规则顺序。
     pub fn paths(&self) -> (Vec<String>, Vec<String>) {
-        const PREFIX: &str = "write:path:";
-        let pick = |v: &[String]| v.iter().filter_map(|p| p.strip_prefix(PREFIX).map(str::to_owned)).collect();
+        let pick = |v: &[Rule]| {
+            v.iter()
+                .filter_map(|r| match r {
+                    Rule::Path(dir) => Some(dir.clone()),
+                    Rule::Every(_) | Rule::Named { .. } => None,
+                })
+                .collect()
+        };
         (pick(&self.allow), pick(&self.deny))
     }
 
@@ -264,19 +371,17 @@ impl Rules {
 }
 
 /// [`Rules::allows`] 的判断本身：allow 与 deny 可以来自不同的规则（某一来源的 allow 对最终的 deny，[`crate::access::Grants`]）。
-pub fn permits(allow: &[String], deny: &[String], action: Action, kind: Kind, name: Option<&str>) -> bool {
+pub fn permits(allow: &[Rule], deny: &[Rule], action: Action, kind: Kind, name: Option<&str>) -> bool {
     let Some(name) = name else {
-        // 名字写成 `*` 的权限串只被名字部分不限的规则匹配上：`write:memory:*`、`write:*`、`*:*`，不含 `write:memory:a*`
-        let all = permission_of(action, kind, "*");
-        return permits_every(allow, &[], action) && !deny.iter().any(|p| fnmatch(&all, p));
+        // 只有不限种类的 allow 放行；deny 凡是拦这一种全部的都拦：名字当作字面的 `*` 去配，`write:memory:*`、
+        // `write:*`、`*:*` 配得上，`write:memory:a*` 配不上
+        return permits_every(allow, &[], action) && !deny.iter().any(|r| r.matches(action, kind, "*"));
     };
-    let permission = permission_of(action, kind, name);
-    allow.iter().any(|p| fnmatch(&permission, p)) && !deny.iter().any(|p| fnmatch(&permission, p))
+    allow.iter().any(|r| r.matches(action, kind, name)) && !deny.iter().any(|r| r.matches(action, kind, name))
 }
 
-fn permits_every(allow: &[String], deny: &[String], action: Action) -> bool {
-    let every = [format!("{}:*", action.as_str()), "*:*".to_owned()];
-    allow.iter().any(|p| every.contains(p)) && !deny.iter().any(|p| every.contains(p))
+fn permits_every(allow: &[Rule], deny: &[Rule], action: Action) -> bool {
+    allow.iter().any(|r| r.every(action)) && !deny.iter().any(|r| r.every(action))
 }
 
 pub const BASE: &str = "base";
@@ -322,18 +427,19 @@ pub type Roles = IndexMap<String, Role>;
 /// 内置角色固定的规则（顺序同 [`BUILTIN_ROLES`]）：base 是 tools 里全部非管理工具与全局记忆（写成纯 allow：deny 优先于
 /// 一切 allow，写成 deny 的话 admin 也放不开）；admin 是全部工具，并能改任何资产。
 pub fn fixed_rules(tools: &ToolTable) -> [(&'static str, Rules); 2] {
-    let mut base: Vec<String> =
-        tools.specs().iter().filter(|t| !t.admin).map(|t| permission_of(Action::Use, Kind::Tool, &t.name)).collect();
-    base.push(permission_of(Action::Use, Kind::Memory, GLOBAL_MEMORY));
-    [(BASE, Rules::new(base, vec![])), (ADMIN, Rules::new(vec!["use:tool:*".into(), "write:*".into()], vec![]))]
+    let named = |kind, glob: &str| Rule::Named { actions: Actions::One(Action::Use), kind, glob: glob.to_owned() };
+    let mut base: Vec<Rule> = tools.specs().iter().filter(|t| !t.admin).map(|t| named(Kind::Tool, &t.name)).collect();
+    base.push(named(Kind::Memory, GLOBAL_MEMORY));
+    let admin = vec![named(Kind::Tool, "*"), Rule::Every(Actions::One(Action::Write))];
+    [(BASE, Rules::new(base, vec![])), (ADMIN, Rules::new(admin, vec![]))]
 }
 
 /// agent 的分发规则：角色（不含每个 agent 隐含的 base）与它自己的 allow / deny。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AgentRules {
     pub roles: Vec<String>,
-    pub allow: Vec<String>,
-    pub deny: Vec<String>,
+    pub allow: Vec<Rule>,
+    pub deny: Vec<Rule>,
 }
 
 impl AgentRules {
@@ -380,38 +486,70 @@ mod tests {
         assert!(fnmatch("aXbXc", "a*b*c"));
     }
 
+    fn rules(patterns: &[&str]) -> Vec<Rule> {
+        patterns.iter().map(|p| Rule::parse(p).unwrap()).collect()
+    }
+
     #[test]
     fn rule_forms() {
-        assert_eq!(kind_of("use:tool:issue_*"), Ok(Some(Kind::Tool)));
-        assert_eq!(kind_of("write:*"), Ok(None));
-        assert_eq!(kind_of("*:memory:trading"), Ok(Some(Kind::Memory)));
-        assert!(kind_of("write:tool:x").is_err());
-        assert!(kind_of("use:path:/x").is_err());
-        assert!(kind_of("write:path:rel").is_err());
-        assert!(kind_of("write:path:/a/*").is_err());
-        assert_eq!(kind_of("write:path:~/a"), Ok(Some(Kind::Path)));
-        assert!(kind_of("use:skill:").is_err());
-        assert!(kind_of("read:skill:x").is_err());
-        assert!(kind_of("use").is_err());
+        for ok in ["use:tool:issue_*", "write:*", "*:memory:trading", "write:path:~/a", "*:*", "use:skill:[a-c]"] {
+            // 读入再写回是原样
+            assert_eq!(Rule::parse(ok).map(|r| r.to_string()), Ok(ok.to_owned()));
+        }
+        assert_eq!(Rule::parse("write:path:~/a"), Ok(Rule::Path("~/a".into())));
+        assert_eq!(Rule::parse("write:*"), Ok(Rule::Every(Actions::One(Action::Write))));
+        for bad in [
+            "write:tool:x",
+            "use:path:/x",
+            "write:path:rel",
+            "write:path:/a/*",
+            "write:path:",
+            "use:skill:",
+            "read:skill:x",
+            "use",
+            "use:*:x",
+            "use:sk*:x",
+        ] {
+            assert!(Rule::parse(bad).is_err(), "{bad}");
+        }
+        assert!(Rule::parse_all(&["use:skill:a".into(), "bad".into()]).is_err());
     }
 
     #[test]
     fn allows_and_admin() {
-        let r = Rules::new(vec!["use:skill:*".into(), "write:*".into()], vec!["use:skill:secret*".into()]);
+        let r = Rules::new(rules(&["use:skill:*", "write:*"]), rules(&["use:skill:secret*"]));
         assert!(r.allows(Action::Use, Kind::Skill, Some("a")));
         assert!(!r.allows(Action::Use, Kind::Skill, Some("secret-x")));
         assert!(r.allows(Action::Write, Kind::Memory, None));
         assert!(!r.allows(Action::Use, Kind::Memory, None));
         assert!(r.allows_every(Action::Write));
-        let denied = Rules::union([&r, &Rules::new(vec![], vec!["*:*".into()])]);
+        let denied = Rules::union([&r, &Rules::new(vec![], rules(&["*:*"]))]);
         assert!(!denied.allows_every(Action::Write));
         // 私有记忆没有名字：拦这一种全部的 deny 管得到它，按名字拦的管不到
-        let no_memory = Rules::union([&r, &Rules::new(vec![], vec!["write:memory:*".into()])]);
+        let no_memory = Rules::union([&r, &Rules::new(vec![], rules(&["write:memory:*"]))]);
         assert!(!no_memory.allows(Action::Write, Kind::Memory, None));
         assert!(no_memory.allows(Action::Write, Kind::Skill, Some("x")));
-        let by_name = Rules::union([&r, &Rules::new(vec![], vec!["write:memory:t*".into()])]);
+        let by_name = Rules::union([&r, &Rules::new(vec![], rules(&["write:memory:t*"]))]);
         assert!(by_name.allows(Action::Write, Kind::Memory, None));
-        let p = Rules::new(vec!["write:path:/a".into(), "write:*".into()], vec!["write:path:/a/b".into()]);
+        // `*` 动作两种都管；目录规则不管资源
+        let any = Rules::new(rules(&["*:skill:?", "write:path:/a"]), vec![]);
+        assert!(any.allows(Action::Write, Kind::Skill, Some("a")) && any.allows(Action::Use, Kind::Skill, Some("b")));
+        assert!(!any.allows(Action::Use, Kind::Skill, Some("ab")));
+        assert!(!any.allows_every(Action::Write));
+        let p = Rules::new(rules(&["write:path:/a", "write:*"]), rules(&["write:path:/a/b"]));
         assert_eq!(p.paths(), (vec!["/a".to_owned()], vec!["/a/b".to_owned()]));
+    }
+
+    #[test]
+    fn tool_and_name_checks() {
+        let tools = ToolTable::of(vec![ToolSpec { name: "issue_list".into(), access: ToolAccess::Read, admin: false }]);
+        assert!(!Rule::parse("use:tool:issue_*").unwrap().matches_no_tool(&tools));
+        assert!(Rule::parse("use:tool:nope").unwrap().matches_no_tool(&tools));
+        assert!(!Rule::parse("use:skill:nope").unwrap().matches_no_tool(&tools));
+        let addressable = vec![(Kind::Skill, "s".to_owned())];
+        assert!(!Rule::parse("write:skill:s*").unwrap().matches_nothing(&addressable));
+        assert!(Rule::parse("use:skill:typo").unwrap().matches_nothing(&addressable));
+        assert!(!Rule::parse("write:*").unwrap().matches_nothing(&addressable));
+        assert!(!Rule::parse("write:path:/x").unwrap().matches_nothing(&addressable));
     }
 }

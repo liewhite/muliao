@@ -12,7 +12,7 @@
 //! deny = ["use:tool:delete_agent"]
 //! ```
 //!
-//! 读：语法、字段、规则格式任何一处不合法，整份都不合法（readable 为假，只剩内置角色的固定部分，没有任何 agent 的规则），
+//! 读：语法、字段、规则格式任何一处不合法，整份都不合法（[`Access::Invalid`]，没有任何角色与规则），
 //! 由读树的一方决定沿用什么（#550）——跳过写坏的一条（尤其 deny）等于放宽权限（#573）。只引用了不存在的东西（没加载的
 //! agent 目录、匹配不上任何工具的规则）只收窄：记一条问题，其余照常。
 //! 写之前的校验只有 [`vet`] 一个：文件工具改它与平台自己改它（[`plan`]）都调它。平台的改动在原文上改（toml_edit），人手
@@ -28,9 +28,7 @@ use toml_edit::{Array, DocumentMut, Item, Table, TableLike, Value};
 
 use crate::kinds::Kind;
 use crate::naming::{AgentName, is_agent_id, validate_slug};
-use crate::rules::{
-    ADMIN, AgentRules, BASE, Role, Roles, Rules, ToolTable, fixed_rules, fnmatch, kind_of, matches_no_tool,
-};
+use crate::rules::{ADMIN, AgentRules, BASE, Role, Roles, Rule, Rules, ToolTable, fixed_rules, texts};
 use crate::tree::{Expect, Snapshot};
 use muliao_platform::errors::{Result, conflict, invalid};
 
@@ -45,22 +43,21 @@ fn builtin_description(name: &str) -> Option<&'static str> {
     }
 }
 
-/// 读出的一处问题。agent_id：与它相关的 agent（报给它），平台的为 None。invalid：形式不合法，整份因它作废。
+/// 读出的一处只收窄的问题（引用了不存在的东西）。agent_id：与它相关的 agent（报给它），平台的为 None。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccessProblem {
     pub reason: String,
     pub agent_id: Option<AgentId>,
-    pub invalid: bool,
 }
 
-/// 读出的内容：全部角色、各 agent 的规则（按 id，没写的 agent 只有 base）。readable 为假时 roles 只有内置角色的固定
-/// 部分、rules 为空，problems 只有不合法的那几处。
+/// 读出的结果。
 #[derive(Debug, Clone)]
-pub struct Access {
-    pub roles: Roles,
-    pub rules: BTreeMap<AgentId, AgentRules>,
-    pub problems: Vec<AccessProblem>,
-    pub readable: bool,
+pub enum Access {
+    /// 合法：全部角色、各 agent 的规则（按 id，没写的 agent 只有 base）、只收窄的问题，与读出它们的原文（没有文件
+    /// 为 None）
+    Valid { roles: Roles, rules: BTreeMap<AgentId, AgentRules>, problems: Vec<AccessProblem>, text: Option<String> },
+    /// 读不出或不合法，整份作废：每一处的原因
+    Invalid(Vec<String>),
 }
 
 /// 读树时 access.toml 的原文：快照里的角色与规则就是从它读出的，改这个文件（[`plan`]）也从它出发，所以预览、写入与
@@ -74,26 +71,14 @@ pub enum AccessText {
 }
 
 /// 读 path（没有这个文件就是空的）。agents：加载成功的 agent 的 id。
-pub fn read(path: &Path, agents: &BTreeSet<AgentId>, tools: &ToolTable) -> (Access, AccessText) {
-    let text = if path.is_file() {
-        match muliao_platform::fs::read_text(path) {
-            Ok(text) => Some(text),
-            Err(e) => {
-                let mut p = Parser::new(agents, tools);
-                p.invalid(format!("cannot read: {e}"));
-                return (p.done(), AccessText::Invalid(format!("cannot read: {e}")));
-            }
-        }
-    } else {
-        None
-    };
-    let access = parse(text.as_deref(), agents, tools);
-    let text = if access.readable {
-        AccessText::Valid(text)
-    } else {
-        AccessText::Invalid(access.problems.iter().map(|p| p.reason.as_str()).collect::<Vec<_>>().join("; "))
-    };
-    (access, text)
+pub fn read(path: &Path, agents: &BTreeSet<AgentId>, tools: &ToolTable) -> Access {
+    if !path.is_file() {
+        return parse(None, agents, tools);
+    }
+    match muliao_platform::fs::read_text(path) {
+        Ok(text) => parse(Some(&text), agents, tools),
+        Err(e) => Access::Invalid(vec![format!("cannot read: {e}")]),
+    }
 }
 
 /// 文件内容（没有这个文件为 None）读成 [`Access`]。
@@ -105,11 +90,14 @@ struct Parser<'a> {
     agents: &'a BTreeSet<AgentId>,
     tools: &'a ToolTable,
     problems: Vec<AccessProblem>,
+    /// 形式不合法的各处：有一处整份就作废
+    invalid: Vec<String>,
     roles: Roles,
     rules: BTreeMap<AgentId, AgentRules>,
 }
 
-fn builtin_roles(tools: &ToolTable) -> Roles {
+/// 内置角色，只有代码里固定的部分（access.toml 还没读成功过时就只有它们）。
+pub fn builtin_roles(tools: &ToolTable) -> Roles {
     fixed_rules(tools)
         .into_iter()
         .map(|(name, fixed)| {
@@ -129,33 +117,39 @@ struct Entry {
 
 impl<'a> Parser<'a> {
     fn new(agents: &'a BTreeSet<AgentId>, tools: &'a ToolTable) -> Self {
-        Self { agents, tools, problems: Vec::new(), roles: builtin_roles(tools), rules: BTreeMap::new() }
+        Self {
+            agents,
+            tools,
+            problems: Vec::new(),
+            invalid: Vec::new(),
+            roles: builtin_roles(tools),
+            rules: BTreeMap::new(),
+        }
     }
 
     fn problem(&mut self, reason: String, agent_id: Option<AgentId>) {
-        self.problems.push(AccessProblem { reason, agent_id, invalid: false });
+        self.problems.push(AccessProblem { reason, agent_id });
     }
 
     fn invalid(&mut self, reason: String) {
-        self.problems.push(AccessProblem { reason, agent_id: None, invalid: true });
+        self.invalid.push(reason);
     }
 
-    fn done(self) -> Access {
-        if self.problems.iter().any(|p| p.invalid) {
-            let problems = self.problems.into_iter().filter(|p| p.invalid).collect();
-            return Access { roles: builtin_roles(self.tools), rules: BTreeMap::new(), problems, readable: false };
+    fn done(self, text: Option<&str>) -> Access {
+        if !self.invalid.is_empty() {
+            return Access::Invalid(self.invalid);
         }
-        Access { roles: self.roles, rules: self.rules, problems: self.problems, readable: true }
+        Access::Valid { roles: self.roles, rules: self.rules, problems: self.problems, text: text.map(str::to_owned) }
     }
 
     fn parse(mut self, text: Option<&str>) -> Access {
-        let Some(text) = text else { return self.done() };
+        let Some(text) = text else { return self.done(None) };
         let data: toml::Table = match text.parse() {
             Ok(d) => d,
             Err(e) => {
                 let e: toml::de::Error = e;
                 self.invalid(format!("cannot parse: {}", e.message().trim()));
-                return self.done();
+                return self.done(Some(text));
             }
         };
         let mut extra: Vec<&String> = data.keys().filter(|k| !matches!(k.as_str(), "roles" | "agents")).collect();
@@ -169,7 +163,7 @@ impl<'a> Parser<'a> {
         for (id, raw) in self.table(&data, "agents") {
             self.agent(&id, &raw);
         }
-        self.done()
+        self.done(Some(text))
     }
 
     /// 一张表的各节，按名字排（toml::Table 本身有序）。
@@ -286,23 +280,24 @@ impl<'a> Parser<'a> {
     }
 
     /// 形式不对的整份作废；一个工具都匹配不上的只是引用了不存在的工具（留着也什么都不匹配），记一条问题；重复的去重。
-    fn patterns(&mut self, patterns: &[String], what: &str, agent_id: Option<AgentId>) -> Vec<String> {
-        let mut unique: Vec<String> = Vec::new();
+    fn patterns(&mut self, patterns: &[String], what: &str, agent_id: Option<AgentId>) -> Vec<Rule> {
+        let mut unique: Vec<Rule> = Vec::new();
         for p in patterns {
-            if !unique.contains(p) {
-                unique.push(p.clone());
-            }
-        }
-        for p in &unique {
-            match kind_of(p) {
+            match Rule::parse(p) {
                 Err(e) => self.invalid(format!("{what}: {e}")),
-                Ok(_) if matches_no_tool(p, self.tools) => self.problem(
-                    format!(
-                        "{what}: rule {p:?} matches no tool; tools are listed by get_agent, e.g. 'use:tool:issue_*'"
-                    ),
-                    agent_id.clone(),
-                ),
-                Ok(_) => {}
+                Ok(rule) if unique.contains(&rule) => {}
+                Ok(rule) => {
+                    if rule.matches_no_tool(self.tools) {
+                        self.problem(
+                            format!(
+                                "{what}: rule {p:?} matches no tool; tools are listed by get_agent, e.g. \
+                                 'use:tool:issue_*'"
+                            ),
+                            agent_id.clone(),
+                        );
+                    }
+                    unique.push(rule);
+                }
             }
         }
         unique
@@ -349,24 +344,21 @@ impl AccessEdit {
 
 /// access.toml 从 before（没有文件为 None）改成 after 之前的唯一校验，不过就 InvalidInput 说明每一处：
 /// - after 合法（与读树同一套规则）；
-/// - 新加的规则（after 里有、before 整个文件里都没有的）至少匹配 addressable（注册的内置工具与按名字认的资源的
-///   `kind:名`）里的一项，拼错的在写入时报出。已有的不查：资源删掉再建时分发不丢；比整个文件而不按节，agent 改名时它
-///   那一节换了名字也不算新加。不限种类的（`write:*`）与路径规则（目录可以还没建）不查。
-pub fn vet(before: Option<&str>, after: &str, tools: &ToolTable, addressable: &[String]) -> Result<()> {
-    let access = parse(Some(after), &BTreeSet::new(), tools);
-    if !access.readable {
-        return Err(invalid(access.problems.iter().map(|p| p.reason.as_str()).collect::<Vec<_>>().join("; ")));
+/// - 新加的规则（after 里有、before 整个文件里都没有的）至少匹配 addressable（注册的内置工具与按名字认的资源）
+///   里的一项，拼错的在写入时报出。已有的不查：资源删掉再建时分发不丢；比整个文件而不按节，agent 改名时它
+///   那一节换了名字也不算新加。不限种类的（`write:*`）与路径规则（目录可以还没建）不查（[`Rule::matches_nothing`]）。
+pub fn vet(before: Option<&str>, after: &str, tools: &ToolTable, addressable: &[(Kind, String)]) -> Result<()> {
+    if let Access::Invalid(reasons) = parse(Some(after), &BTreeSet::new(), tools) {
+        return Err(invalid(reasons.join("; ")));
     }
     let old: HashSet<String> = rules_in(before).into_iter().collect();
     let mut bad: Vec<String> = Vec::new();
     for p in rules_in(Some(after)) {
-        if old.contains(&p) || bad.contains(&p) || matches!(kind_of(&p), Ok(None | Some(Kind::Path))) {
+        if old.contains(&p) || bad.contains(&p) {
             continue;
         }
-        let matched = addressable
-            .iter()
-            .any(|i| crate::rules::Action::ALL.iter().any(|a| fnmatch(&format!("{}:{i}", a.as_str()), &p)));
-        if !matched {
+        // after 已整份校验过，每条都读得出
+        if Rule::parse(&p).is_ok_and(|r| r.matches_nothing(addressable)) {
             bad.push(p);
         }
     }
@@ -476,14 +468,15 @@ fn replace(parent: &mut dyn TableLike, key: &str, mut item: Item) {
 
 enum FieldValue<'a> {
     Text(&'a str),
-    List(&'a [String]),
+    List(Vec<String>),
 }
 
 /// 界面交来的列表不能有重复（读法遇到重复只是去重，平台自己不写进去）。
-fn distinct(what: &str, values: &[String]) -> Result<()> {
-    let set: HashSet<&String> = values.iter().collect();
+fn distinct<T: Eq + std::hash::Hash + std::fmt::Display>(what: &str, values: &[T]) -> Result<()> {
+    let set: HashSet<&T> = values.iter().collect();
     if set.len() != values.len() {
-        return Err(invalid(format!("{what} must be distinct, got {values:?}")));
+        let shown: Vec<String> = values.iter().map(T::to_string).collect();
+        return Err(invalid(format!("{what} must be distinct, got {shown:?}")));
     }
     Ok(())
 }
@@ -491,9 +484,10 @@ fn distinct(what: &str, values: &[String]) -> Result<()> {
 pub fn set_role(doc: &mut DocumentMut, name: &str, description: &str, rules: &Rules) -> Result<()> {
     distinct("rules", &rules.allow)?;
     distinct("rules", &rules.deny)?;
-    let mut fields = vec![("description", FieldValue::Text(description)), ("allow", FieldValue::List(&rules.allow))];
+    let mut fields =
+        vec![("description", FieldValue::Text(description)), ("allow", FieldValue::List(texts(&rules.allow)))];
     if !rules.deny.is_empty() {
-        fields.push(("deny", FieldValue::List(&rules.deny)));
+        fields.push(("deny", FieldValue::List(texts(&rules.deny))));
     }
     replace(section(doc, "roles"), name, rules_table(&fields));
     Ok(())
@@ -512,11 +506,12 @@ pub fn set_agent_rules(doc: &mut DocumentMut, agent_id: &AgentId, name: &AgentNa
     distinct("roles", &rules.roles)?;
     distinct("rules", &rules.allow)?;
     distinct("rules", &rules.deny)?;
-    let fields: Vec<(&str, FieldValue<'_>)> = [("roles", &rules.roles), ("allow", &rules.allow), ("deny", &rules.deny)]
-        .into_iter()
-        .filter(|(_, v)| !v.is_empty())
-        .map(|(k, v)| (k, FieldValue::List(v)))
-        .collect();
+    let fields: Vec<(&str, FieldValue<'_>)> =
+        [("roles", rules.roles.clone()), ("allow", texts(&rules.allow)), ("deny", texts(&rules.deny))]
+            .into_iter()
+            .filter(|(_, v)| !v.is_empty())
+            .map(|(k, v)| (k, FieldValue::List(v)))
+            .collect();
     let agents = section(doc, "agents");
     if fields.is_empty() {
         agents.remove(agent_id.as_str());
@@ -547,6 +542,10 @@ mod tests {
 
     const A1: &str = "0123456789ab";
 
+    fn rule(s: &str) -> Rule {
+        Rule::parse(s).unwrap()
+    }
+
     #[test]
     fn reads_roles_and_agents() {
         let agents = BTreeSet::from([AgentId::new(A1)]);
@@ -562,14 +561,15 @@ deny = ["use:tool:read_file"]
 [agents.ffffffffffff]
 allow = []
 "#;
-        let a = parse(Some(text), &agents, &tools());
-        assert!(a.readable, "{:?}", a.problems);
-        assert_eq!(a.roles.keys().collect::<Vec<_>>(), ["base", "admin", "trading"]);
-        assert_eq!(a.roles["base"].description, builtin_description("base").unwrap());
-        assert!(a.roles["base"].fixed.allow.contains(&"use:tool:read_file".to_owned()));
-        assert!(!a.roles["base"].fixed.allow.contains(&"use:tool:create_agent".to_owned()));
-        assert_eq!(a.rules[&AgentId::new(A1)].roles, ["trading"]);
-        assert_eq!(a.problems.len(), 3, "{:?}", a.problems);
+        let Access::Valid { roles, rules, problems, .. } = parse(Some(text), &agents, &tools()) else {
+            panic!("valid")
+        };
+        assert_eq!(roles.keys().collect::<Vec<_>>(), ["base", "admin", "trading"]);
+        assert_eq!(roles["base"].description, builtin_description("base").unwrap());
+        assert!(roles["base"].fixed.allow.contains(&rule("use:tool:read_file")));
+        assert!(!roles["base"].fixed.allow.contains(&rule("use:tool:create_agent")));
+        assert_eq!(rules[&AgentId::new(A1)].roles, ["trading"]);
+        assert_eq!(problems.len(), 3, "{problems:?}");
 
         for bad in [
             "x = 1",
@@ -583,17 +583,14 @@ allow = []
             "[roles.r]\ndescription = 1",
             "not toml [",
         ] {
-            let a = parse(Some(bad), &agents, &tools());
-            assert!(!a.readable, "{bad}");
-            assert!(a.rules.is_empty());
-            assert_eq!(a.roles.len(), 2);
+            assert!(matches!(parse(Some(bad), &agents, &tools()), Access::Invalid(_)), "{bad}");
         }
     }
 
     #[test]
     fn vet_checks_only_new_rules() {
         let t = tools();
-        let addressable = vec!["tool:read_file".to_owned(), "skill:s".to_owned()];
+        let addressable = vec![(Kind::Tool, "read_file".to_owned()), (Kind::Skill, "s".to_owned())];
         let before = "[roles.r]\ndescription = \"d\"\nallow = [\"use:skill:gone\"]\n";
         assert!(vet(Some(before), before, &t, &addressable).is_ok());
         let after = "[roles.r]\ndescription = \"d\"\nallow = [\"use:skill:gone\", \"use:skill:typo\", \"write:*\", \"write:path:/x\"]\n";
@@ -613,7 +610,7 @@ allow = []
             &mut doc,
             "s",
             "desc",
-            &Rules::new(vec!["use:skill:a".into(), "use:skill:b".into(), "use:skill:c".into()], vec![]),
+            &Rules::new(vec![rule("use:skill:a"), rule("use:skill:b"), rule("use:skill:c")], vec![]),
         )
         .unwrap();
         // 改名：只换行尾注释
@@ -627,9 +624,10 @@ allow = []
             "{out}"
         );
         assert!(!out.contains("[roles]") && !out.contains("[agents]\n"), "{out}");
-        let back = parse(Some(&out), &BTreeSet::from([AgentId::new(A1)]), &tools());
-        assert!(back.readable, "{:?}", back.problems);
-        assert_eq!(back.rules[&AgentId::new(A1)].roles, ["r"]);
+        let Access::Valid { rules: back, .. } = parse(Some(&out), &BTreeSet::from([AgentId::new(A1)]), &tools()) else {
+            panic!("valid")
+        };
+        assert_eq!(back[&AgentId::new(A1)].roles, ["r"]);
         set_agent_rules(&mut doc, &AgentId::new(A1), &name("交易员"), &AgentRules::default()).unwrap();
         assert!(!doc.to_string().contains("交易员"));
         let x = name("x");

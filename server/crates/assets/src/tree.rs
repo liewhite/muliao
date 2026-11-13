@@ -30,11 +30,11 @@ use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
 use sha2::{Digest, Sha256};
 
-use crate::access_file::{self, ACCESS_FILE};
+use crate::access_file::{self, ACCESS_FILE, Access, AccessText};
 use crate::formats::agent_file::{self, AGENT_FILE, AgentFile};
 use crate::kinds::{Content, Kind, KindContent, Section, StoredKind};
 use crate::naming::{AgentName, PLATFORM};
-use crate::rules::{Action, AgentRules, Roles, ToolTable, pattern_of};
+use crate::rules::{Action, AgentRules, Roles, ToolTable};
 use muliao_platform::errors::{Result, conflict, not_found};
 
 pub const PRIVATE_MEMORY_FILE: &str = "memory.md";
@@ -355,13 +355,13 @@ impl Snapshot {
         self.root.join(PLATFORM).join(ACCESS_FILE)
     }
 
-    /// 规则能按名字指的全部 `kind:名`：注册的内置工具与按名字认的资源（不含私有记忆）。写规则时新加的至少要匹配其中
+    /// 规则能按名字指的全部 (种类, 名字)：注册的内置工具与按名字认的资源（不含私有记忆）。写规则时新加的至少要匹配其中
     /// 一项（[`access_file::vet`]）。
-    pub fn addressable(&self) -> Vec<String> {
+    pub fn addressable(&self) -> Vec<(Kind, String)> {
         self.tools
             .names()
-            .map(|n| pattern_of(Kind::Tool, n))
-            .chain(self.assets.iter().flat_map(|(k, m)| m.keys().map(|n| pattern_of(k.kind(), n))))
+            .map(|n| (Kind::Tool, n.to_owned()))
+            .chain(self.assets.iter().flat_map(|(k, m)| m.keys().map(|n| (k.kind(), n.clone()))))
             .collect()
     }
 
@@ -667,24 +667,35 @@ pub fn load_tree(
         StoredKind::ALL.into_iter().map(|k| (k, r.resolved(k))).collect();
     let path = root.join(PLATFORM).join(ACCESS_FILE);
     let loaded: BTreeSet<AgentId> = agents.keys().cloned().collect();
-    let (access, access_text) = access_file::read(&path, &loaded, &tools);
-    let (roles, rules, consequence) = if access.readable {
-        (access.roles, access.rules, "")
-    } else if let Some(last) = last {
-        // 整个文件读不出来：沿用上一份快照的规则（它自己也可能是沿用来的），否则所有 agent 都没了 admin，平台的问题报
-        // 不到人，也没有 agent 能改回这个文件
-        (last.roles.clone(), last.rules.clone(), "; the rules last read successfully stay in effect until it is fixed")
-    } else {
-        (
-            access.roles,
-            access.rules,
-            "; no earlier version was read since the service started, so only the fixed parts of built-in roles apply \
-             (no agent has admin)",
-        )
+    let (roles, rules, access_text) = match access_file::read(&path, &loaded, &tools) {
+        Access::Valid { roles, rules, problems, text } => {
+            for p in problems {
+                r.problem(path.clone(), p.reason, p.agent_id.as_ref());
+            }
+            (roles, rules, AccessText::Valid(text))
+        }
+        Access::Invalid(reasons) => {
+            let (roles, rules, consequence) = match last {
+                // 整个文件读不出来：沿用上一份快照的规则（它自己也可能是沿用来的），否则所有 agent 都没了 admin，平台的
+                // 问题报不到人，也没有 agent 能改回这个文件
+                Some(last) => (
+                    last.roles.clone(),
+                    last.rules.clone(),
+                    "; the rules last read successfully stay in effect until it is fixed",
+                ),
+                None => (
+                    access_file::builtin_roles(&tools),
+                    BTreeMap::new(),
+                    "; no earlier version was read since the service started, so only the fixed parts of built-in \
+                     roles apply (no agent has admin)",
+                ),
+            };
+            for reason in &reasons {
+                r.problem(path.clone(), format!("{reason}{consequence}"), None);
+            }
+            (roles, rules, AccessText::Invalid(reasons.join("; ")))
+        }
     };
-    for p in access.problems {
-        r.problem(path.clone(), format!("{}{consequence}", p.reason), p.agent_id.as_ref());
-    }
     Snapshot {
         root: root.to_path_buf(),
         names: known.clone(),
