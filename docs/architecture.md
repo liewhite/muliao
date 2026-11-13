@@ -67,7 +67,7 @@ Cargo workspace，一个领域一个 crate（`server/crates/<领域>`，包名 `
 前两条由 Cargo 与 `server/crates/muliao/tests/layers.rs` 检查，其余是约定与装配时的约束：
 - 领域之间只用对方 `pub` 的函数与类型，不写对方表的 SQL。
 - **依赖按层单向**，只能依赖更早一层的 crate：0 `platform` → 1 `assets`、`files`、`usage`、`web`、`speech` → 2 `runtime` → 3 `sessions` → 4 `workspace`、`notifications` → 5 `issues`、`triggers` → 6 `history`（活动概览要读会话与 issue）→ 7 `http` → 8 组合根。Cargo 只拦循环依赖，同层、反向由 `layers.rs` 查（测试用的 dev 依赖不算）；新领域先在它的 `LAYERS` 里定层，没定层的也报错。反向或同层需要的调用由组合根注入函数。
-- `platform` 不认识领域的词汇（会话、issue、agent 这些词都不出现在里面），只有一个例外：`platform::ids` 里各种编号的类型（`AgentId`、`SessionId`、`RunId`、`MailId`、`HoldId`）与规整过的值（`MediaType`、`Importance`）。它们只是名字、不带领域规则，各层都要传，放在最底层才能让不同编号互传编译不过（#805）；只在读入边界构造（读库、HTTP 路径与请求体、工具参数、新建记录）。前端生成接口类型时给 `AgentId`、`SessionId` 打上品牌（`web/scripts/gen-api.mjs`），同样传错位置编译不过。领域不依赖 HTTP 层与组合根；HTTP 层只经各领域给界面的门面（`muliao_http::Services`），业务规则都在领域里，HTTP 层与组合根不另写一份。
+- `platform` 不认识领域的词汇（会话、issue、agent 这些词都不出现在里面），只有一个例外：`platform::ids` 里各种编号的类型（`AgentId`、`SessionId`、`RunId`、`MailId`、`HoldId`、`JobId`、`DelegationId`）与规整过的值（`MediaType`、`Importance`）。它们只是名字、不带领域规则，各层都要传，放在最底层才能让不同编号互传编译不过（#805）；只在读入边界构造（读库、HTTP 路径与请求体、工具参数、新建记录）。前端生成接口类型时给 `AgentId`、`SessionId` 打上品牌（`web/scripts/gen-api.mjs`），同样传错位置编译不过。领域不依赖 HTTP 层与组合根；HTTP 层只经各领域给界面的门面（`muliao_http::Services`），业务规则都在领域里，HTTP 层与组合根不另写一份。
 - 工具的错误一律经 `platform::tooling` 的统一映射交还模型（第 6 节）；agenter 的 `Agent` 只在 `runtime` 构造，会话领域按它的 `Step` 驱动、存它的 `Message`（历史的存储形态），各领域的工具实现它的 `Tool` 接口；路径身份（「是不是同一个路径、在不在某目录下」）只在 `platform::fs::real` 算（#570：APFS 不分大小写与正规化形式），「在不在某目录下」与写沙箱只收它给的 `RealPath`。
 - 写事务经 `platform::db::Database::write`：同步闭包，在单写者线程上执行，里面不能 await（第 3.1 节）。
 - agent 的命令只经 `platform::shell` 起；以哪个 agent 的身份（secret、工作目录、可写路径）由工作区领域拼好交进来（第 9 节）。
