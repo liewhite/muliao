@@ -17,6 +17,7 @@ export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
 # agenter 是 ssh 地址的 git 依赖：用系统 git + 指定 key 拉（不读 ~/.ssh/config 的 Include，免得卡在 iCloud 文件上）
 export CARGO_NET_GIT_FETCH_WITH_CLI=true
 export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -F /dev/null -i $HOME/.ssh/id_rsa}"
+require_signer # 编译前先查，免得编完才发现签不了
 
 [ -d "$SRC/.git" ] || git clone -q "$REPO" "$SRC"
 git -C "$SRC" fetch -q origin "$REF"

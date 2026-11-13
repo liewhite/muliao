@@ -48,27 +48,28 @@ point_entry() {
 # 用 rcodesign（cargo install apple-codesign）直接拿证书文件签：系统的 codesign 只认钥匙串里受信任的证书，而把证书设为
 # 受信任要在 Mac 的图形界面上输密码确认，服务里做不了。
 sign_program() {
-  command -v rcodesign > /dev/null || die "rcodesign not found: cargo install --locked apple-codesign"
+  require_signer
   if [ ! -e "$SIGNING/cert.pem" ]; then
     mkdir -p "$SIGNING" && chmod 700 "$SIGNING" || return 1
-    /opt/homebrew/bin/openssl req -x509 -newkey rsa:2048 -nodes -days 36500 -subj "/CN=muliao code signing" \
+    sign_out=$(/opt/homebrew/bin/openssl req -x509 -newkey rsa:2048 -nodes -days 36500 -subj "/CN=muliao code signing" \
       -addext basicConstraints=critical,CA:false -addext keyUsage=critical,digitalSignature \
       -addext extendedKeyUsage=critical,codeSigning \
-      -keyout "$SIGNING/key.pem.tmp" -out "$SIGNING/cert.pem.tmp" 2> /dev/null || return 1
+      -keyout "$SIGNING/key.pem.tmp" -out "$SIGNING/cert.pem.tmp" 2>&1) || { echo "$sign_out"; return 1; }
     mv "$SIGNING/key.pem.tmp" "$SIGNING/key.pem" && mv "$SIGNING/cert.pem.tmp" "$SIGNING/cert.pem" || return 1
     say "created signing certificate in $SIGNING (keep it: a new one means granting file access again)"
   fi
   # 不要时间戳（默认会连 Apple 的时间戳服务器，网络断了安装就失败；本机授权用不到它）；成功时的过程日志不打印
-  out=$(rcodesign sign --binary-identifier muliao --timestamp-url none \
-    --pem-file "$SIGNING/key.pem" --pem-file "$SIGNING/cert.pem" "$1" 2>&1) || { echo "$out"; return 1; }
+  sign_out=$(rcodesign sign --binary-identifier muliao --timestamp-url none \
+    --pem-file "$SIGNING/key.pem" --pem-file "$SIGNING/cert.pem" "$1" 2>&1) || { echo "$sign_out"; return 1; }
 }
+require_signer() { command -v rcodesign > /dev/null || die "rcodesign not found: cargo install --locked apple-codesign"; }
 
 # 把版本目录 $1 复制成 $APP/current（先复制成 current.new 再换上，current 只在两次改名之间短暂不在）。
 # 服务正在跑的程序文件被删掉不影响它；前端从下次请求起就是新的（服务启动时定下的前端目录就是 current/web）。
 activate() {
   [ -x "$1/muliao" ] || die "activate: $1/muliao not found"
   rm -rf "$APP/current.new" "$APP/current.old"
-  cp -R "$1" "$APP/current.new" || return 1
+  cp -cR "$1" "$APP/current.new" || return 1 # APFS 克隆，不占空间
   if [ -L "$APP/current" ]; then
     rm "$APP/current" # #715 之前 current 是链接
   elif [ -e "$APP/current" ]; then
