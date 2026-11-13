@@ -1361,6 +1361,8 @@ export interface components {
             updated_at: string | null;
             /** @description 文件（skill 是目录）的位置；内置工具为 null */
             path: string | null;
+            /** @description 用户能在界面上删它（内置工具、全局记忆、私有记忆不能） */
+            deletable: boolean;
         };
         CatalogDetail: {
             access: components["schemas"]["Access"];
@@ -3982,7 +3984,7 @@ export interface operations {
                 trigger_id?: number;
                 /** @description 关键字：只列标题或消息含有它的会话（不区分 ASCII 大小写；不能为空串） */
                 q?: string;
-                /** @description 1–200，默认 50 */
+                /** @description 一页的条数，不给取默认；超出范围 422 */
                 limit?: number;
                 offset?: number;
             };
@@ -5067,7 +5069,7 @@ export interface operations {
     list_notifications: {
         parameters: {
             query?: {
-                /** @description 1–500，默认 100 */
+                /** @description 条数，不给取默认；超出范围 422 */
                 limit?: number;
             };
             header?: never;

@@ -33,6 +33,8 @@ pub struct CatalogAsset {
     pub shared: bool,
     /// 文件或目录的位置；内置工具为 None
     pub path: Option<PathBuf>,
+    /// 用户能在界面上删它（[`undeletable`]）
+    pub deletable: bool,
     pub detail: Detail,
 }
 
@@ -47,6 +49,20 @@ impl CatalogAsset {
 
 pub struct AssetCatalog {
     source: Arc<AssetSource>,
+}
+
+/// 用户在界面上删不了这项的原因（资源池的「能不能删」和删除入口都用它）；能删为 None。
+fn undeletable(kind: Kind, name: &str, owner: &Owner) -> Option<String> {
+    match (kind, owner) {
+        (Kind::Tool, _) => Some(format!("built-in tool {name:?} is defined in code and cannot be deleted")),
+        (Kind::Memory, Owner::Agent(_)) => {
+            Some("a private memory goes with its agent; it cannot be deleted on its own".into())
+        }
+        (Kind::Memory, Owner::Platform) if name == GLOBAL_MEMORY => {
+            Some(format!("the global memory {GLOBAL_MEMORY:?} cannot be deleted: the base role always includes it"))
+        }
+        (Kind::Memory | Kind::Skill | Kind::Mcp | Kind::Secret, _) => None,
+    }
 }
 
 impl AssetCatalog {
@@ -66,6 +82,7 @@ impl AssetCatalog {
             roles: sharing.including(Kind::Tool, Some(&t.name)),
             shared: sharing.shared(Kind::Tool, Some(&t.name), &Owner::Platform),
             path: None,
+            deletable: undeletable(Kind::Tool, &t.name, &Owner::Platform).is_none(),
             detail: Detail::Tool(t.clone()),
         });
         let files = StoredKind::BY_NAME.into_iter().flat_map(|k| snapshot.of_kind(k)).map(|a| CatalogAsset {
@@ -76,19 +93,21 @@ impl AssetCatalog {
             roles: sharing.including(a.kind().kind(), a.rule_name()),
             shared: sharing.shared(a.kind().kind(), a.rule_name(), &a.owner),
             path: Some(a.path.clone()),
+            deletable: undeletable(a.kind().kind(), &a.name, &a.owner).is_none(),
             detail: Detail::Stored(a.content.shown()),
         });
         Ok(tools.chain(files).collect())
     }
 
-    /// 删掉这项按名字认的资源的文件或目录（用户在界面上删；私有记忆随 agent）。全局记忆不能删（base 固定收录它）。收录
-    /// 它的规则留着：同名的再建时分发不丢。
+    /// 删掉这项按名字认的资源的文件或目录（用户在界面上删）；删不了的见 [`undeletable`]。收录它的规则留着：同名的
+    /// 再建时分发不丢。
     pub async fn delete(&self, kind: StoredKind, name: &str) -> Result<()> {
-        if kind == StoredKind::Memory && name == GLOBAL_MEMORY {
-            return Err(invalid(format!("the global memory {GLOBAL_MEMORY:?} cannot be deleted")));
-        }
         let w = self.source.writing().await?;
-        remove(&w.snapshot.asset(kind, name)?.path)?;
+        let a = w.snapshot.asset(kind, name)?;
+        if let Some(reason) = undeletable(kind.kind(), name, &a.owner) {
+            return Err(invalid(reason));
+        }
+        remove(&a.path)?;
         tracing::info!(kind = %kind, asset = name, "asset deleted");
         Ok(())
     }

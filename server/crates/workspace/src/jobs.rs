@@ -63,6 +63,9 @@ pub enum JobStatus {
 }
 
 impl JobStatus {
+    const ALL: [JobStatus; 4] = [JobStatus::Running, JobStatus::Exited, JobStatus::Killed, JobStatus::Interrupted];
+
+    /// 状态的名字（存库、报错、界面都是它；serde 的名字由测试钉住与它一致）。
     pub fn as_str(self) -> &'static str {
         match self {
             JobStatus::Running => "running",
@@ -70,6 +73,10 @@ impl JobStatus {
             JobStatus::Killed => "killed",
             JobStatus::Interrupted => "interrupted",
         }
+    }
+
+    fn parse(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|s| s.as_str() == name)
     }
 }
 
@@ -113,25 +120,26 @@ impl JobState {
 
     /// 存下的三列（status、exit_code、finished_at）的唯一解析。
     fn parse(status: &str, code: Option<i32>, at: Option<DateTime<Utc>>) -> Option<Self> {
-        Some(match (status, code, at) {
-            ("running", None, None) => JobState::Running,
-            ("exited", code, Some(at)) => End::Exited { code }.at(at),
-            ("killed", code, Some(at)) => End::Killed { code }.at(at),
-            ("interrupted", None, Some(at)) => End::Interrupted.at(at),
+        Some(match (JobStatus::parse(status)?, code, at) {
+            (JobStatus::Running, None, None) => JobState::Running,
+            (JobStatus::Exited, code, Some(at)) => End::Exited { code }.at(at),
+            (JobStatus::Killed, code, Some(at)) => End::Killed { code }.at(at),
+            (JobStatus::Interrupted, None, Some(at)) => End::Interrupted.at(at),
             _ => return None,
         })
     }
 
     /// 存成三列。
     fn columns(self) -> (&'static str, Option<i32>, Option<DateTime<Utc>>) {
+        let status = self.status().as_str();
         match self {
-            JobState::Running => ("running", None, None),
+            JobState::Running => (status, None, None),
             JobState::Ended { end, at } => {
                 let code = match end {
                     End::Exited { code } | End::Killed { code } => code,
                     End::Interrupted => None,
                 };
-                (self.status().as_str(), code, Some(at))
+                (status, code, Some(at))
             }
         }
     }
@@ -722,5 +730,13 @@ mod tests {
         let t = |s: i64| DateTime::<Utc>::from_timestamp(s, 0).unwrap();
         assert_eq!(duration(t(0), t(5)), "0m05s");
         assert_eq!(duration(t(0), t(3725)), "1h02m05s");
+    }
+
+    #[test]
+    fn status_names_are_one_table() {
+        for s in JobStatus::ALL {
+            assert_eq!(serde_json::to_value(s).unwrap(), s.as_str());
+            assert_eq!(JobStatus::parse(s.as_str()), Some(s));
+        }
     }
 }

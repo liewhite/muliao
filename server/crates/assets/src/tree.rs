@@ -309,12 +309,22 @@ impl Snapshot {
     pub fn owner_dir(&self, owner: &Owner) -> Result<PathBuf> {
         match owner {
             Owner::Platform => Ok(self.root.join(PLATFORM)),
-            Owner::Agent(id) if self.deleting.contains(id) => Err(not_found(format!(
-                "agent {:?} is being deleted; nothing can be written for it",
-                self.names.get(id).map_or(id.as_str(), AgentName::as_str)
-            ))),
-            Owner::Agent(id) => Ok(self.loaded_agent(id)?.path.clone()),
+            Owner::Agent(id) => {
+                self.not_deleting(id)?;
+                Ok(self.loaded_agent(id)?.path.clone())
+            }
         }
+    }
+
+    /// 在资源树上，正在删除的 agent 按不存在处理（写入口、界面读它的私有记忆都经这里）。
+    pub(crate) fn not_deleting(&self, id: &AgentId) -> Result<()> {
+        if self.deleting.contains(id) {
+            return Err(not_found(format!(
+                "agent {:?} is being deleted; nothing can be read or written for it",
+                self.names.get(id).map_or(id.as_str(), AgentName::as_str)
+            )));
+        }
+        Ok(())
     }
 
     pub fn owner_label(&self, owner: &Owner) -> String {
@@ -391,6 +401,16 @@ fn file_name(path: &Path) -> String {
     path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
+/// 资源树根下一个目录名归谁的唯一规则：`platform` 归平台；按 [`AgentName`] 比较（大小写、编码形式不同也算）对上 names
+/// （数据库里的 agent）的归它；都不是为 None。读树、写入口、被拒说明都用它。
+pub(crate) fn dir_owner(names: &BTreeMap<AgentId, AgentName>, dir: &str) -> Option<Owner> {
+    if dir == PLATFORM {
+        return Some(Owner::Platform);
+    }
+    let name = AgentName::parse(dir).ok()?;
+    names.iter().find(|(_, n)| **n == name).map(|(id, _)| Owner::Agent(id.clone()))
+}
+
 /// 读一棵树：一次性的状态（收集到的资源与问题）。
 struct Reader<'a> {
     root: &'a Path,
@@ -423,17 +443,28 @@ impl Reader<'_> {
                 return agents;
             }
         };
-        let known = self.known;
-        let by_name: BTreeMap<&AgentName, &AgentId> = known.iter().map(|(id, name)| (name, id)).collect();
         for entry in entries {
-            if file_name(&entry) == PLATFORM {
+            let dir = file_name(&entry);
+            let owner = dir_owner(self.known, &dir);
+            if owner == Some(Owner::Platform) {
                 continue;
             }
             if !entry.is_dir() {
                 self.problem(entry, "unexpected file; the root holds only platform/ and agent directories", None);
                 continue;
             }
-            if let Some(agent) = self.agent_dir(&entry, &by_name) {
+            let Some(Owner::Agent(id)) = owner else {
+                self.problem(
+                    entry,
+                    format!(
+                        "no agent is named {dir:?}: agent directories are named after their agent, made by create_agent \
+                         and renamed only in the app"
+                    ),
+                    None,
+                );
+                continue;
+            };
+            if let Some(agent) = self.agent_dir(&entry, &id) {
                 agents.insert(agent.id.clone(), agent);
             }
         }
@@ -447,20 +478,8 @@ impl Reader<'_> {
         agents
     }
 
-    /// 目录名（按 [`AgentName`] 比较：大小写、编码形式不同也算）对上数据库里的 agent，再读它的 agent.toml。
-    fn agent_dir(&mut self, path: &Path, by_name: &BTreeMap<&AgentName, &AgentId>) -> Option<AgentDir> {
-        let dir = file_name(path);
-        let Some((name, id)) = AgentName::parse(&dir).ok().and_then(|n| by_name.get_key_value(&n)) else {
-            self.problem(
-                path.to_path_buf(),
-                format!(
-                    "no agent is named {dir:?}: agent directories are named after their agent, made by create_agent \
-                     and renamed only in the app"
-                ),
-                None,
-            );
-            return None;
-        };
+    /// 已认出归 agent id 的目录（[`dir_owner`]）：读它的 agent.toml。
+    fn agent_dir(&mut self, path: &Path, id: &AgentId) -> Option<AgentDir> {
         let file = path.join(AGENT_FILE);
         if !file.is_file() {
             self.problem(path.to_path_buf(), format!("no {AGENT_FILE}"), Some(id));
@@ -468,7 +487,8 @@ impl Reader<'_> {
         }
         match crate::formats::read(&file).and_then(|t| agent_file::parse(&t)) {
             Ok(data) => {
-                Some(AgentDir { id: (*id).clone(), name: (*name).clone(), path: path.to_path_buf(), file: data })
+                let name = self.known[id].clone();
+                Some(AgentDir { id: id.clone(), name, path: path.to_path_buf(), file: data })
             }
             Err(e) => {
                 self.problem(file, e, Some(id));

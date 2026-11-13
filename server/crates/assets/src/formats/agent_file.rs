@@ -79,6 +79,11 @@ fn invalid(reason: impl fmt::Display) -> String {
     format!("invalid {AGENT_FILE}: {reason}")
 }
 
+/// 界面与工具给的分组名的唯一规整：去掉首尾空白，空的是不分组。
+pub(crate) fn group_of(input: &str) -> Option<String> {
+    Some(input.trim().to_owned()).filter(|g| !g.is_empty())
+}
+
 impl AgentFile {
     pub fn new(description: String, model: String, thinking: Thinking, group: Option<String>) -> Result<Self, String> {
         if description.trim().is_empty() {
@@ -98,7 +103,7 @@ impl AgentFile {
     pub fn with(&self, config: &AgentConfig) -> Result<Self, String> {
         let group = match &config.group {
             None => self.group.clone(),
-            Some(g) => Some(g.trim().to_owned()).filter(|g| !g.is_empty()),
+            Some(g) => group_of(g),
         };
         Self::new(
             config.description.clone().unwrap_or_else(|| self.description.clone()),

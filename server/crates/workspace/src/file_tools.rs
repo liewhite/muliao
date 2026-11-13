@@ -522,10 +522,10 @@ pub struct TextEdit {
     old_text: Option<String>,
     /// First line to replace (1-based).
     #[serde(default)]
-    start_line: Option<i64>,
+    start_line: Option<usize>,
     /// Last line to replace (inclusive).
     #[serde(default)]
-    end_line: Option<i64>,
+    end_line: Option<usize>,
     /// The whole text of line start_line.
     #[serde(default)]
     anchor: Option<String>,
@@ -539,32 +539,23 @@ pub struct TextEdit {
 impl TextEdit {
     /// 按它给的定位方式（恰好一种）换成对应的修改。
     fn change(&self) -> Result<Change, DomainError> {
-        let given = [self.start_line.is_some(), self.end_line.is_some(), self.anchor.is_some()];
-        if given.iter().any(|g| *g) && !given.iter().all(|g| *g) {
-            return Err(DomainError::invalid("start_line, end_line and anchor go together: give all three"));
-        }
-        if self.old_text.is_none() == self.start_line.is_none() {
-            return Err(DomainError::invalid(
-                "locate the text in exactly one way: old_text or start_line/end_line/anchor",
-            ));
-        }
-        if let Some(old) = &self.old_text {
-            return Ok(Change::Replace { old: old.clone(), new: self.new_text.clone(), every: self.replace_all });
-        }
-        if self.replace_all {
-            return Err(DomainError::invalid("replace_all does not apply to a line range"));
-        }
-        let (Some(start), Some(end), Some(anchor)) = (self.start_line, self.end_line, &self.anchor) else {
-            unreachable!("checked above")
+        let lines = match (self.start_line, self.end_line, &self.anchor) {
+            (None, None, None) => None,
+            (Some(start), Some(end), Some(anchor)) => Some((start, end, anchor)),
+            _ => return Err(DomainError::invalid("start_line, end_line and anchor go together: give all three")),
         };
-        // 负数与 0 按「不在 1..=行数」报（换成 0 不改变结论）
-        let line = |n: i64| usize::try_from(n).unwrap_or(0);
-        if start < 1 || start > end {
-            return Err(DomainError::invalid(format!(
-                "need 1 <= start_line <= end_line, got start_line={start} end_line={end}"
-            )));
+        let new = self.new_text.clone();
+        match (&self.old_text, lines) {
+            (Some(old), None) => Ok(Change::Replace { old: old.clone(), new, every: self.replace_all }),
+            (None, Some(_)) if self.replace_all => {
+                Err(DomainError::invalid("replace_all does not apply to a line range"))
+            }
+            // 区间本身对不对（1 <= start <= end <= 行数）由 Change 定位时查
+            (None, Some((start, end, anchor))) => Ok(Change::Lines { start, end, anchor: anchor.clone(), new }),
+            (Some(_), Some(_)) | (None, None) => {
+                Err(DomainError::invalid("locate the text in exactly one way: old_text or start_line/end_line/anchor"))
+            }
         }
-        Ok(Change::Lines { start: line(start), end: line(end), anchor: anchor.clone(), new: self.new_text.clone() })
     }
 }
 
@@ -578,10 +569,10 @@ pub struct EditArgs {
     old_text: Option<String>,
     /// First line to replace (1-based); give with `end_line` and `anchor`.
     #[serde(default)]
-    start_line: Option<i64>,
+    start_line: Option<usize>,
     /// Last line to replace (inclusive).
     #[serde(default)]
-    end_line: Option<i64>,
+    end_line: Option<usize>,
     /// The whole text of line start_line, not just its beginning (leading/trailing whitespace ignored).
     #[serde(default)]
     anchor: Option<String>,

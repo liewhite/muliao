@@ -11,15 +11,23 @@ use muliao_platform::errors::{Result, invalid};
 
 // ---- 提问（ask_user）----
 
+// 提问的长度约束：schema 标注（模型看到的）与 [`AskArgs::check`]（模型可能不守）都只引用这里
+const LABEL: (usize, usize) = (1, 80);
+const DESCRIPTION_MAX: usize = 300;
+const QUESTION: (usize, usize) = (1, 500);
+const HEADER: (usize, usize) = (1, 20);
+const OPTIONS: (usize, usize) = (2, 6);
+const QUESTIONS: (usize, usize) = (1, 4);
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct QuestionOption {
     /// Short choice text shown on the button.
-    #[schemars(length(min = 1, max = 80))]
+    #[schemars(length(min = LABEL.0, max = LABEL.1))]
     pub label: String,
     /// What choosing it means, if not obvious.
     #[serde(default)]
-    #[schemars(length(max = 300))]
+    #[schemars(length(max = DESCRIPTION_MAX))]
     pub description: String,
 }
 
@@ -27,51 +35,57 @@ pub struct QuestionOption {
 #[serde(deny_unknown_fields)]
 pub struct Question {
     /// The full question.
-    #[schemars(length(min = 1, max = 500))]
+    #[schemars(length(min = QUESTION.0, max = QUESTION.1))]
     pub question: String,
     /// Very short label, e.g. 'Timeframe'.
-    #[schemars(length(min = 1, max = 20))]
+    #[schemars(length(min = HEADER.0, max = HEADER.1))]
     pub header: String,
-    #[schemars(length(min = 2, max = 6))]
+    #[schemars(length(min = OPTIONS.0, max = OPTIONS.1))]
     pub options: Vec<QuestionOption>,
     /// Allow choosing several options.
     #[serde(default)]
     pub multi_select: bool,
 }
 
-pub const QUESTIONS_MAX: usize = 4;
-
-/// ask_user 的参数，也是读回调用时的解析类型：约束只在这里（[`AskArgs::check`]）与 schema 里写。
+/// ask_user 的参数，也是读回调用时的解析类型：约束只在上面的常量里写。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AskArgs {
     /// The questions, each with 2-6 options; set multi_select when several may apply.
-    #[schemars(length(min = 1, max = 4))]
+    #[schemars(length(min = QUESTIONS.0, max = QUESTIONS.1))]
     pub questions: Vec<Question>,
 }
 
+/// 长度在 (min, max) 里（含两端）。
+fn within(n: usize, (min, max): (usize, usize)) -> bool {
+    (min..=max).contains(&n)
+}
+
 impl AskArgs {
-    /// 长度约束（schema 里也写了，模型可能不守）。
+    /// 长度约束（schema 里也标了，模型可能不守）。
     pub(crate) fn check(&self) -> Result<(), String> {
         let n = self.questions.len();
-        if !(1..=QUESTIONS_MAX).contains(&n) {
-            return Err(format!("ask 1-{QUESTIONS_MAX} questions, got {n}"));
+        if !within(n, QUESTIONS) {
+            return Err(format!("ask {}-{} questions, got {n}", QUESTIONS.0, QUESTIONS.1));
         }
         for (i, q) in self.questions.iter().enumerate() {
             let i = i + 1;
             let len = |s: &str| s.chars().count();
-            if !(1..=500).contains(&len(&q.question)) {
-                return Err(format!("question {i}: `question` must be 1-500 characters"));
+            if !within(len(&q.question), QUESTION) {
+                return Err(format!("question {i}: `question` must be {}-{} characters", QUESTION.0, QUESTION.1));
             }
-            if !(1..=20).contains(&len(&q.header)) {
-                return Err(format!("question {i}: `header` must be 1-20 characters"));
+            if !within(len(&q.header), HEADER) {
+                return Err(format!("question {i}: `header` must be {}-{} characters", HEADER.0, HEADER.1));
             }
-            if !(2..=6).contains(&q.options.len()) {
-                return Err(format!("question {i}: give 2-6 options"));
+            if !within(q.options.len(), OPTIONS) {
+                return Err(format!("question {i}: give {}-{} options", OPTIONS.0, OPTIONS.1));
             }
             for o in &q.options {
-                if !(1..=80).contains(&len(&o.label)) || len(&o.description) > 300 {
-                    return Err(format!("question {i}: option labels are 1-80 characters, descriptions up to 300"));
+                if !within(len(&o.label), LABEL) || len(&o.description) > DESCRIPTION_MAX {
+                    return Err(format!(
+                        "question {i}: option labels are {}-{} characters, descriptions up to {DESCRIPTION_MAX}",
+                        LABEL.0, LABEL.1
+                    ));
                 }
             }
         }

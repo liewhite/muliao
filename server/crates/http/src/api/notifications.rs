@@ -8,7 +8,7 @@ use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
-use crate::error::{ApiError, ApiResult, ErrorOut};
+use crate::error::{ApiResult, ErrorOut};
 use crate::extract::{Json, Path, Query};
 use crate::state::AppState;
 
@@ -26,7 +26,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
 #[derive(Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct ListQuery {
-    /// 1–500，默认 100
+    /// 条数，不给取默认；超出范围 422
     pub limit: Option<usize>,
 }
 
@@ -37,10 +37,7 @@ async fn list_notifications(
     State(s): State<AppState>,
     Query(q): Query<ListQuery>,
 ) -> ApiResult<axum::Json<Vec<Notification>>> {
-    let limit = q.limit.unwrap_or(100);
-    if !(1..=500).contains(&limit) {
-        return Err(ApiError::invalid("limit must be between 1 and 500"));
-    }
+    let limit = q.limit.unwrap_or(muliao_notifications::inbox::LIST_DEFAULT);
     Ok(axum::Json(s.services.notifications.list(limit).await?))
 }
 

@@ -14,7 +14,11 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use muliao_platform::bus::{Bus, ServerEvent};
 use muliao_platform::db::{Database, Tx};
-use muliao_platform::errors::broken;
+use muliao_platform::errors::{Result, broken, invalid};
+
+/// 通知列表的条数：不给时的默认与上限
+pub const LIST_DEFAULT: usize = 100;
+pub const LIST_MAX: usize = 500;
 use muliao_platform::text::truncate;
 use muliao_sessions::answers::Waiting;
 use muliao_sessions::events::{RunEnded, RunFailed, SessionDeleted, Subscribers};
@@ -232,15 +236,19 @@ impl Notifications {
         Ok(())
     }
 
-    /// 最新的 limit 条，新的在前。
-    pub async fn list(&self, limit: usize) -> rusqlite::Result<Vec<Notification>> {
-        self.db
+    /// 最新的 limit 条（1 到 [`LIST_MAX`]，不给时用 [`LIST_DEFAULT`]），新的在前。
+    pub async fn list(&self, limit: usize) -> Result<Vec<Notification>> {
+        if !(1..=LIST_MAX).contains(&limit) {
+            return Err(invalid(format!("limit must be between 1 and {LIST_MAX}, got {limit}")));
+        }
+        Ok(self
+            .db
             .read(move |c| {
                 let mut stmt =
                     c.prepare_cached(&format!("SELECT {COLUMNS} FROM notifications ORDER BY id DESC LIMIT ?1"))?;
                 stmt.query_map([limit as i64], notification)?.collect()
             })
-            .await
+            .await?)
     }
 
     pub async fn unread_count(&self) -> rusqlite::Result<i64> {

@@ -224,6 +224,8 @@ async fn grants_and_write_scope() {
     let refusal = scope.refusal(&bobs.path.join("SKILL.md")).unwrap();
     assert!(refusal.contains("write:skill:bobs"), "{refusal}");
     assert!(scope.refusal(&root.join("bob/x")).unwrap().contains("agent \"bob\"'s directory"));
+    // 目录名只差大小写也认得是谁的（与读树、写入口同一条规则）
+    assert!(scope.refusal(&root.join("BOB/x")).unwrap().contains("agent \"bob\"'s directory"));
     assert!(scope.refusal(&root.join("platform/access.toml")).unwrap().contains("only by an admin"));
     assert!(scope.refusal(&w.dir.path().join("elsewhere")).is_none());
 

@@ -84,7 +84,7 @@ impl AgentService {
     pub async fn create(&self, spec: AgentSpec, actor: &Actor) -> Result<AgentInfo> {
         let agent_id = new_agent_id();
         let name = AgentName::new(&spec.name)?;
-        let group = spec.group.as_deref().map(str::trim).filter(|g| !g.is_empty()).map(str::to_owned);
+        let group = spec.group.as_deref().and_then(agent_file::group_of);
         let file = AgentFile::new(
             spec.description,
             spec.model.unwrap_or_else(|| self.default_model.clone()),

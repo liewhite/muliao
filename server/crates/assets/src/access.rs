@@ -6,15 +6,16 @@
 //! 的领域输入（[`write_scope`]，#499）：「能不能改某项资源」只由 Grants 换算成资源树里的可写路径。
 
 use muliao_platform::ids::AgentId;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use muliao_platform::fs::{is_within, real};
 
 use crate::access_file::ACCESS_FILE;
 use crate::kinds::{Kind, KindContent, StoredKind};
-use crate::naming::PLATFORM;
+use crate::naming::{AgentName, PLATFORM};
 use crate::rules::{Action, Actions, BASE, Role, Rule, Rules, ToolSpec, pattern_of, permission_of, permits};
-use crate::tree::{Asset, Owner, Snapshot};
+use crate::tree::{Asset, Owner, Snapshot, dir_owner};
 use muliao_platform::errors::{Result, forbidden};
 
 /// 做事的人：用户（界面），或某个 agent（id）。
@@ -199,9 +200,9 @@ pub struct WriteScope {
     pub revoked: Vec<String>,
     /// agent 是 admin：另外还能读写平台的私有文件（配置、备份、推送私钥，#539）
     pub admin: bool,
-    /// 资源树里被拒时补的说明要用的：它自己的目录、别的 agent 的目录名、加载了的资源
+    /// 资源树里被拒时补的说明要用的：它自己的目录、别的 agent（id → 名字）、加载了的资源
     own: Option<PathBuf>,
-    others: Vec<String>,
+    others: BTreeMap<AgentId, AgentName>,
     located: Vec<(PathBuf, String)>,
 }
 
@@ -230,9 +231,10 @@ impl WriteScope {
         }
         let rel = target.strip_prefix(tree.as_path()).ok()?;
         if let Some(first) = rel.iter().next().map(|p| p.to_string_lossy().into_owned())
-            && self.others.contains(&first)
+            && let Some(Owner::Agent(id)) = dir_owner(&self.others, &first)
         {
-            return Some(format!("{rest} {first}/ is agent {first:?}'s directory: ask that agent or an admin.]"));
+            let name = self.others[&id].as_str();
+            return Some(format!("{rest} {first}/ is agent {name:?}'s directory: ask that agent or an admin.]"));
         }
         Some(format!(
             "{rest} The platform's files (roles and permissions in {PLATFORM}/{ACCESS_FILE}, global and shared memories, \
@@ -281,7 +283,7 @@ pub fn write_scope(snapshot: &Snapshot, agent_id: &AgentId) -> WriteScope {
         revoked,
         admin,
         own,
-        others: snapshot.names.iter().filter(|(a, _)| *a != agent_id).map(|(_, n)| n.to_string()).collect(),
+        others: snapshot.names.iter().filter(|(a, _)| *a != agent_id).map(|(a, n)| (a.clone(), n.clone())).collect(),
         located,
     }
 }

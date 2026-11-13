@@ -3,7 +3,7 @@ import { asAgentId, type CatalogAsset } from './api'
 import { filterAssets, ruleCandidates } from './rules'
 
 const a = asAgentId('agent-a')
-const common = (name: string, owner: CatalogAsset['owner']) => ({ name, owner, description: '', roles: [], shared: false })
+const common = (name: string, owner: CatalogAsset['owner']) => ({ name, owner, description: '', roles: [], shared: false, deletable: true })
 const AT = '2026-10-27T00:00:00Z'
 const ASSETS: CatalogAsset[] = [
   { kind: 'tool', access: 'write', admin: false, updated_at: null, path: null, ...common('run_shell', null) },

@@ -82,6 +82,8 @@ pub struct CatalogAssetOut {
     pub updated_at: Option<DateTime<Utc>>,
     /// 文件（skill 是目录）的位置；内置工具为 null
     pub path: Option<String>,
+    /// 用户能在界面上删它（内置工具、全局记忆、私有记忆不能）
+    pub deletable: bool,
     #[serde(flatten)]
     pub detail: CatalogDetail,
 }
@@ -146,6 +148,7 @@ fn catalog_out(e: CatalogAsset) -> CatalogAssetOut {
         shared: e.shared,
         updated_at: e.updated_at,
         path: e.path.map(|p| p.display().to_string()),
+        deletable: e.deletable,
         detail,
     }
 }

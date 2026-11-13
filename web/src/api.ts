@@ -29,10 +29,7 @@ export type SessionListItem = Schemas['SessionListItem']
 /** 一条通知（不叫 Notification：那是浏览器的全局对象） */
 export type AppNotification = Schemas['Notification']
 
-// 下面两个值与两个路由（sessionRoute、issues.ts 的 issueRoute）前后端各写一份，server/crates/muliao/tests/frontend_contract.rs 核对
-
-/** 全局记忆的名字（与后端 assets 的 rules::GLOBAL_MEMORY 一致）：base 固定收录，不能删 */
-export const GLOBAL_MEMORY = 'global'
+// 下面这个值与两个路由（sessionRoute、issues.ts 的 issueRoute）前后端各写一份，server/crates/muliao/tests/frontend_contract.rs 核对
 
 /** 引用文件的地址前缀（与后端 files 的 FILES_PATH 一致）：回答里只有指向这里的图片会被渲染 */
 export const FILES_PATH = '/api/files'

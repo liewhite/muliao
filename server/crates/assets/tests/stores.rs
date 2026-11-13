@@ -160,6 +160,10 @@ async fn catalog_transfer_and_roles() {
     assert_eq!(s.roles, vec!["team".to_owned()]);
     assert!(!s.shared, "a role held by nobody does not share it");
     assert!(matches!(all[0].detail, Detail::Tool(_)));
+    // 能不能删和删除入口是同一条规则：skill 能删；内置工具、全局记忆、私有记忆不能
+    assert!(s.deletable && !all[0].deletable);
+    let memories: Vec<_> = all.iter().filter(|c| c.kind() == Kind::Memory).collect();
+    assert!(memories.iter().any(|m| m.name == "global") && memories.iter().all(|m| !m.deletable));
     assert!(roles.delete("base").await.is_err());
     let w2 = w.service.clone();
     w2.update(&a, muliao_assets::service::AgentPatch { roles: Some(vec!["team".into()]), ..Default::default() })

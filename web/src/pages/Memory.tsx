@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Button, Card, toast } from '@heroui/react'
 import { ChevronDown, ChevronRight, Trash2 } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { GLOBAL_MEMORY, api, type AgentId, type AssetOf, type Memory } from '../api'
+import { api, type AgentId, type AssetOf, type Memory } from '../api'
 import { useDraft } from '../drafts'
 import { AssetAccess } from './assetParts'
 import {
@@ -136,7 +136,7 @@ function MemoryItem({ item }: { item: AssetOf<'memory'> }) {
               {item.updated_at && <> · {formatTime(item.updated_at)}</>}
             </div>
           </div>
-          {item.owner === null && item.name !== GLOBAL_MEMORY && (
+          {item.deletable && (
             <Button isIconOnly size="sm" variant="ghost" aria-label={`删除 ${item.name}`} onPress={() => void remove()}>
               <Trash2 className="size-4" />
             </Button>

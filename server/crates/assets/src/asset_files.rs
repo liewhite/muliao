@@ -13,8 +13,7 @@ use crate::formats::agent_file::{self, AgentFile};
 use crate::formats::{Draft, read_lossy};
 use crate::kinds::ASSETS_SKILL;
 use crate::kinds::{Section, StoredKind};
-use crate::naming::{AgentName, PLATFORM};
-use crate::tree::{Owner, Place, Snapshot, place_of};
+use crate::tree::{Owner, Place, Snapshot, dir_owner, place_of};
 use muliao_platform::errors::{Result, invalid};
 
 /// agent.toml 写的模型在当前配置下能不能运行；不能时的原因（运行端口给，[`crate::source::ModelCheck`]）。
@@ -49,12 +48,7 @@ pub(crate) fn vet(
         return Ok(text.to_owned());
     }
     let head = &rel[0];
-    let owner = if head == PLATFORM {
-        Some(Owner::Platform)
-    } else {
-        let name = AgentName::parse(head).ok();
-        snapshot.names.iter().find(|(_, n)| Some(*n) == name.as_ref()).map(|(id, _)| Owner::Agent(id.clone()))
-    };
+    let owner = dir_owner(&snapshot.names, head);
     let whose = match &owner {
         Some(Owner::Platform) => "the platform's".to_owned(),
         Some(Owner::Agent(_)) => format!("agent {head:?}'s"),

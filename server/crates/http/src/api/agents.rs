@@ -562,7 +562,6 @@ async fn get_private_memory(
     State(s): State<AppState>,
     Path(agent_id): Path<AgentId>,
 ) -> ApiResult<axum::Json<MemoryOut>> {
-    s.services.agents.get_active(&agent_id).await?;
     let m = &s.services.memory;
     Ok(axum::Json(MemoryOut::of(m.read_private(&agent_id).await?, m.max_chars())))
 }

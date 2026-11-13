@@ -40,7 +40,6 @@ fn the_committed_openapi_snapshot_matches_the_api() {
 #[test]
 fn frontend_constants_match_the_backend() {
     assert_eq!(constant("api.ts", "FILES_PATH"), muliao_files::FILES_PATH);
-    assert_eq!(constant("api.ts", "GLOBAL_MEMORY"), muliao_assets::rules::GLOBAL_MEMORY);
 }
 
 #[test]
