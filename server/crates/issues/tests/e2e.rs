@@ -19,10 +19,12 @@ use muliao_assets::skills::SkillStore;
 use muliao_assets::source::AssetSource;
 use muliao_files::FileStore;
 use muliao_issues::activity::Happening;
-use muliao_issues::{Assignee, Board, By, IssueNotice, NewIssue, NotifyIn, Status};
+use muliao_issues::{Assignee, Board, By, NewIssue, Status};
+use muliao_notifications::{Notifications, Push, VapidKeys};
 use muliao_platform::bus::Bus;
 use muliao_platform::config::Settings;
 use muliao_platform::db::{Database, migrate};
+use muliao_platform::retry::Retry;
 use muliao_platform::tooling::{RunScope, ToolTraits, builtin};
 use muliao_platform::vault::Vault;
 use muliao_runtime::mcp::{Confine, McpConnector};
@@ -126,7 +128,7 @@ struct World {
     _actors: Actors,
     me: String,
     other: String,
-    notices: Arc<Mutex<Vec<IssueNotice>>>,
+    notifications: Notifications,
 }
 
 async fn world() -> World {
@@ -142,6 +144,7 @@ async fn world() -> World {
             muliao_files::MIGRATION,
             muliao_usage::MIGRATION,
             muliao_sessions::MIGRATION,
+            muliao_notifications::MIGRATION,
             muliao_issues::MIGRATION,
         ],
     )
@@ -168,13 +171,10 @@ async fn world() -> World {
     let tz = chrono_tz::Asia::Shanghai;
     let (waker, wakes) = Waker::channel();
     let stopper = Stopper::default();
-    let notices = Arc::new(Mutex::new(Vec::new()));
-    let n = notices.clone();
-    let notify: NotifyIn = Arc::new(move |_tx, notice| {
-        n.lock().unwrap().push(notice);
-        Ok(())
-    });
-    let board = Board::new(db.clone(), SenderInbox::new(waker.clone()), notify, stopper.clone(), tz);
+    let keys = VapidKeys::load_or_create(&dir.path().join("vapid.pem")).unwrap();
+    let push = Push::new(db.clone(), keys, "mailto:t@example.com".into(), reqwest::Client::new(), Retry::default());
+    let notifications = Notifications::new(db.clone(), Arc::new(Bus::new(16)), Arc::new(push));
+    let board = Board::new(db.clone(), SenderInbox::new(waker.clone()), notifications.clone(), stopper.clone(), tz);
     let mut tools = muliao_sessions::tools::tools(db.clone(), waker.clone(), stopper.clone(), tz);
     tools.extend(muliao_issues::tools::tools(board.clone()));
     tools.push(builtin(Slow, ToolTraits::read()));
@@ -224,7 +224,7 @@ async fn world() -> World {
     let actors = Actors::start(core, wakes);
     stopper.bind(actors.clone());
     actors.resume().await.unwrap();
-    World { _dir: dir, db, script, _server: server, board, _actors: actors, me, other, notices }
+    World { _dir: dir, db, script, _server: server, board, _actors: actors, me, other, notifications }
 }
 
 impl World {
@@ -290,7 +290,7 @@ async fn an_agent_that_stops_without_settling_is_asked_until_it_hands_the_issue_
     );
     let issue = w.board.get(i.id).await.unwrap().issue;
     assert_eq!((issue.status, issue.assignee), (Status::InReview, Some(Assignee::User)));
-    let notices = w.notices.lock().unwrap().clone();
+    let notices = w.notifications.list(10).await.unwrap();
     assert_eq!(notices.len(), 1);
     assert_eq!(notices[0].session_id.as_deref(), Some(s.as_str()), "the notice points at the issue session");
 }

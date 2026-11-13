@@ -1927,6 +1927,7 @@ dependencies = [
  "futures",
  "muliao-assets",
  "muliao-files",
+ "muliao-notifications",
  "muliao-platform",
  "muliao-runtime",
  "muliao-sessions",

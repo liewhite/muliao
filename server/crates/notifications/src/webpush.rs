@@ -104,9 +104,10 @@ fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     f.sync_all()
 }
 
-/// 一台设备的推送订阅（浏览器给的三样）。endpoint 的完整路径即订阅凭据，不进日志。
+/// 一台设备的推送订阅原文（浏览器给的三样，库里也存这三样）。用前 [`Subscription::parse`] 成 [`Device`]。endpoint 的完整
+/// 路径即订阅凭据，不进日志。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Device {
+pub struct Subscription {
     pub endpoint: String,
     /// 设备的 P-256 公钥（未压缩，base64url）
     pub p256dh: String,
@@ -118,23 +119,10 @@ pub struct Device {
 #[error("invalid push subscription: {0}")]
 pub struct InvalidDevice(pub String);
 
-/// 设备给的密钥解码后的形态
-struct DeviceKeys {
-    public: PublicKey,
-    auth: Vec<u8>,
-}
-
-impl Device {
-    /// 订阅时核对一次：推送地址是 https，两把密钥解得开（坏订阅当场报给界面，而不是每次推送时失败）
-    pub fn check(&self) -> Result<(), InvalidDevice> {
+impl Subscription {
+    /// 解析：endpoint 是 URL，两把密钥解得开。订阅时解析一次（坏订阅当场报给界面），推送前从库里读出时再解析。
+    pub fn parse(&self) -> Result<Device, InvalidDevice> {
         let url = reqwest::Url::parse(&self.endpoint).map_err(|e| InvalidDevice(format!("endpoint: {e}")))?;
-        if url.scheme() != "https" {
-            return Err(InvalidDevice("endpoint must be an https URL".into()));
-        }
-        self.keys().map(drop)
-    }
-
-    fn keys(&self) -> Result<DeviceKeys, InvalidDevice> {
         let point = B64
             .decode(self.p256dh.trim_end_matches('='))
             .map_err(|e| InvalidDevice(format!("p256dh is not base64url: {e}")))?;
@@ -143,15 +131,34 @@ impl Device {
         let auth = B64
             .decode(self.auth.trim_end_matches('='))
             .map_err(|e| InvalidDevice(format!("auth is not base64url: {e}")))?;
-        if auth.len() != 16 {
-            return Err(InvalidDevice(format!("auth must be 16 bytes, got {}", auth.len())));
-        }
-        Ok(DeviceKeys { public, auth })
+        let auth: [u8; 16] =
+            auth.try_into().map_err(|a: Vec<u8>| InvalidDevice(format!("auth must be 16 bytes, got {}", a.len())))?;
+        Ok(Device { endpoint: self.endpoint.clone(), url, keys: DeviceKeys { public, auth } })
+    }
+}
+
+/// 解析好的一台设备（不派生 Debug：endpoint 的完整路径是订阅凭据）。
+pub struct Device {
+    /// 订阅原文里的 endpoint（库里按它找这台设备）
+    pub endpoint: String,
+    url: reqwest::Url,
+    keys: DeviceKeys,
+}
+
+/// 设备给的密钥解码后的形态
+struct DeviceKeys {
+    public: PublicKey,
+    auth: [u8; 16],
+}
+
+impl Device {
+    pub fn is_https(&self) -> bool {
+        self.url.scheme() == "https"
     }
 
     /// 推送服务的主机（日志里只记它）
-    pub fn host(&self) -> String {
-        reqwest::Url::parse(&self.endpoint).ok().and_then(|u| u.host_str().map(str::to_owned)).unwrap_or_default()
+    pub fn host(&self) -> &str {
+        self.url.host_str().unwrap_or_default()
     }
 }
 
@@ -166,7 +173,7 @@ fn encrypt_with(device: &DeviceKeys, sender: &SecretKey, salt: &[u8; 16], payloa
     key_info.extend_from_slice(ua_public.as_bytes());
     key_info.extend_from_slice(as_public.as_bytes());
     let mut ikm = [0u8; 32];
-    Hkdf::<Sha256>::new(Some(&device.auth), shared.raw_secret_bytes())
+    Hkdf::<Sha256>::new(Some(device.auth.as_slice()), shared.raw_secret_bytes())
         .expand(&key_info, &mut ikm)
         .expect("32 bytes is a valid HKDF-SHA256 output length");
 
@@ -205,26 +212,19 @@ pub enum Sent {
 }
 
 /// 把载荷加密后推到一台设备。
-pub async fn send(
-    client: &reqwest::Client,
-    keys: &VapidKeys,
-    subject: &str,
-    device: &Device,
-    payload: &[u8],
-) -> Result<Sent, InvalidDevice> {
-    let url = reqwest::Url::parse(&device.endpoint).map_err(|e| InvalidDevice(format!("endpoint: {e}")))?;
+pub async fn send(client: &reqwest::Client, keys: &VapidKeys, subject: &str, device: &Device, payload: &[u8]) -> Sent {
     let mut salt = [0u8; 16];
     OsRng.fill_bytes(&mut salt);
-    let body = encrypt_with(&device.keys()?, &SecretKey::random(&mut OsRng), &salt, payload);
+    let body = encrypt_with(&device.keys, &SecretKey::random(&mut OsRng), &salt, payload);
     let request = client
-        .post(url.clone())
+        .post(device.url.clone())
         .timeout(REQUEST_TIMEOUT)
         .header("TTL", TTL_SECONDS.to_string())
         .header("Content-Encoding", "aes128gcm")
         .header("Content-Type", "application/octet-stream")
-        .header("Authorization", keys.authorization(&url, subject))
+        .header("Authorization", keys.authorization(&device.url, subject))
         .body(body);
-    Ok(match request.send().await {
+    match request.send().await {
         // 不记错误原文：它带着 endpoint 的完整路径，即订阅凭据
         Err(e) => Sent::Transient(format!("no response from the push service ({})", transport_kind(&e))),
         Ok(response) => {
@@ -242,7 +242,7 @@ pub async fn send(
                 }
             }
         }
-    })
+    }
 }
 
 fn transport_kind(e: &reqwest::Error) -> &'static str {
@@ -271,15 +271,16 @@ mod tests {
     /// RFC 8291 第 5 节的例子：同样的密钥与盐得到逐字节相同的请求体
     #[test]
     fn encrypts_the_rfc_8291_example() {
-        let device = Device {
+        let device = Subscription {
             endpoint: "https://push.example.net/push/JzLQ3raZJfFBR0aqvOMsLrt54w4rJUsV".into(),
             p256dh: "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4".into(),
             auth: "BTBZMqHH6r4Tts7J_aSIgg".into(),
-        };
-        device.check().unwrap();
+        }
+        .parse()
+        .unwrap();
         let sender = SecretKey::from_slice(&b64("yfWPiYE-n46HLnH0KqZOF1fJJU3MYrct3AELtAQ-oRw")).unwrap();
         let salt: [u8; 16] = b64("DGv6ra1nlYgDCS1FRnbzlw").try_into().unwrap();
-        let body = encrypt_with(&device.keys().unwrap(), &sender, &salt, b"When I grow up, I want to be a watermelon");
+        let body = encrypt_with(&device.keys, &sender, &salt, b"When I grow up, I want to be a watermelon");
         let expected = "DGv6ra1nlYgDCS1FRnbzlwAAEABBBP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27ml\
                         mlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A_yl95bQpu6cVPT\
                         pK4Mqgkf1CXztLVBSt2Ks3oZwbuwXPXLWyouBWLVWGNWQexSgSxsj_Qulcy4a-fN";
@@ -321,18 +322,19 @@ mod tests {
 
     #[test]
     fn rejects_bad_subscriptions() {
-        let good = Device {
+        let good = Subscription {
             endpoint: "https://fcm.googleapis.com/fcm/send/x".into(),
             p256dh: "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4".into(),
             auth: "BTBZMqHH6r4Tts7J_aSIgg".into(),
         };
-        assert_eq!(good.check(), Ok(()));
-        assert_eq!(good.host(), "fcm.googleapis.com");
-        let http = Device { endpoint: "http://x/y".into(), ..good.clone() };
-        assert!(http.check().is_err());
-        let short_auth = Device { auth: "AAAA".into(), ..good.clone() };
-        assert!(short_auth.check().unwrap_err().0.contains("16 bytes"));
-        let bad_key = Device { p256dh: B64.encode([4u8; 65]), ..good };
-        assert!(bad_key.check().is_err());
+        let parsed = good.parse().unwrap();
+        assert!(parsed.is_https());
+        assert_eq!(parsed.host(), "fcm.googleapis.com");
+        assert!(!Subscription { endpoint: "http://x/y".into(), ..good.clone() }.parse().unwrap().is_https());
+        assert!(Subscription { endpoint: "not a url".into(), ..good.clone() }.parse().is_err());
+        let short_auth = Subscription { auth: "AAAA".into(), ..good.clone() };
+        assert!(short_auth.parse().err().unwrap().0.contains("16 bytes"));
+        let bad_key = Subscription { p256dh: B64.encode([4u8; 65]), ..good };
+        assert!(bad_key.parse().is_err());
     }
 }

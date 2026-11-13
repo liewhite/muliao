@@ -1,9 +1,12 @@
 //! 看板的测试：真库（agents、sessions、issues 的表），来信经会话领域真的收信入口（信进信箱，不跑 actor）；会话事件像会话
 //! 领域那样在一个事务里发布给订阅者。
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
+use muliao_notifications::{Notification, Notifications, Push, VapidKeys};
+use muliao_platform::bus::Bus;
 use muliao_platform::db::{Database, migrate};
+use muliao_platform::retry::Retry;
 use muliao_sessions::actor::Waker;
 use muliao_sessions::events::{RunEnded, RunFailed, SessionDeleted, Subscribers};
 use muliao_sessions::inbound::SenderInbox;
@@ -24,7 +27,7 @@ struct World {
     _dir: tempfile::TempDir,
     db: Arc<Database>,
     board: Board,
-    notices: Arc<Mutex<Vec<IssueNotice>>>,
+    notifications: Notifications,
     subscribers: Subscribers,
     _wakes: tokio::sync::mpsc::UnboundedReceiver<String>,
 }
@@ -32,8 +35,17 @@ struct World {
 async fn world() -> World {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("t.db");
-    migrate(&path, &[muliao_assets::agents::MIGRATION, muliao_files::MIGRATION, muliao_sessions::MIGRATION, MIGRATION])
-        .unwrap();
+    migrate(
+        &path,
+        &[
+            muliao_assets::agents::MIGRATION,
+            muliao_files::MIGRATION,
+            muliao_sessions::MIGRATION,
+            muliao_notifications::MIGRATION,
+            MIGRATION,
+        ],
+    )
+    .unwrap();
     let db = Arc::new(Database::open(&path, Arc::new(|| {})).unwrap());
     db.write(|tx| {
         for (id, name, archived) in [(A, "alpha", false), (B, "beta", false), (C, "gamma", true)] {
@@ -47,16 +59,19 @@ async fn world() -> World {
     .await
     .unwrap();
     let (waker, wakes) = Waker::channel();
-    let notices = Arc::new(Mutex::new(Vec::new()));
-    let n = notices.clone();
-    let notify: NotifyIn = Arc::new(move |_tx, notice| {
-        n.lock().unwrap().push(notice);
-        Ok(())
-    });
-    let board = Board::new(db.clone(), SenderInbox::new(waker), notify, Stopper::default(), chrono_tz::Asia::Shanghai);
+    let keys = VapidKeys::load_or_create(&dir.path().join("vapid.pem")).unwrap();
+    let push = Push::new(db.clone(), keys, "mailto:t@example.com".into(), reqwest::Client::new(), Retry::default());
+    let notifications = Notifications::new(db.clone(), Arc::new(Bus::new(16)), Arc::new(push));
+    let board = Board::new(
+        db.clone(),
+        SenderInbox::new(waker),
+        notifications.clone(),
+        Stopper::default(),
+        chrono_tz::Asia::Shanghai,
+    );
     let mut subscribers = Subscribers::default();
     board.subscribe(&mut subscribers);
-    World { _dir: dir, db, board, notices, subscribers, _wakes: wakes }
+    World { _dir: dir, db, board, notifications, subscribers, _wakes: wakes }
 }
 
 fn new(owner: &str, title: &str, status: Status, assignee: Option<Assignee>) -> NewIssue {
@@ -68,6 +83,13 @@ fn agent(id: &str) -> Option<Assignee> {
 }
 
 impl World {
+    /// 发给用户的通知，先发的在前
+    async fn notices(&self) -> Vec<Notification> {
+        let mut all = self.notifications.list(100).await.unwrap();
+        all.reverse();
+        all
+    }
+
     async fn create(&self, by: By, item: NewIssue) -> Issue {
         self.board.create_many(by, vec![item]).await.unwrap().remove(0)
     }
@@ -263,7 +285,7 @@ async fn handing_to_the_user_notifies_and_the_user_approves_or_sends_back() {
     let its = w.session(i.id, A).await.unwrap();
     let hand = Patch { status: Some(Status::InReview), assignee: Some(Some(Assignee::User)), ..Patch::default() };
     w.board.update(By::agent(A, &its), i.id, hand.clone()).await.unwrap();
-    let notices = w.notices.lock().unwrap().clone();
+    let notices = w.notices().await;
     assert_eq!(notices.len(), 1);
     assert_eq!(notices[0].title, format!("#{} 指派给你：交审", i.id));
     assert_eq!(notices[0].body, "状态 in_review");
@@ -293,7 +315,7 @@ async fn handing_to_the_user_notifies_and_the_user_approves_or_sends_back() {
     assert!(
         w.board.reject(mine.id, "x".into()).await.unwrap_err().to_string().contains("not handed to you by an agent")
     );
-    assert_eq!(w.notices.lock().unwrap().len(), 2, "the user assigning to themself is not notified");
+    assert_eq!(w.notices().await.len(), 2, "the user assigning to themself is not notified");
 }
 
 #[tokio::test]
@@ -323,9 +345,9 @@ async fn archived_agents_get_nothing_and_the_user_is_told_about_their_own_action
         .await
         .unwrap();
     w.board.comment(By::agent(A, "s"), i.id, "agent 的".into()).await.unwrap();
-    assert!(w.notices.lock().unwrap().is_empty(), "others' activity on an archived agent is only logged");
+    assert!(w.notices().await.is_empty(), "others' activity on an archived agent is only logged");
     w.board.comment(By::user(), i.id, "用户的".into()).await.unwrap();
-    let notices = w.notices.lock().unwrap().clone();
+    let notices = w.notices().await;
     assert_eq!(notices.len(), 1);
     assert_eq!(notices[0].title, format!("#{} 的动态没交给 beta：它已归档", i.id));
     assert_eq!(kinds(&w.timeline(i.id).await), ["created", "comment", "comment"], "activity is still recorded");

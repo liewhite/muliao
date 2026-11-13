@@ -20,11 +20,12 @@ use muliao_assets::source::AssetSource;
 use muliao_files::FileStore;
 use muliao_history::History;
 use muliao_http::{AppState, HttpConfig, Services};
-use muliao_issues::{Board, IssueNotice, NotifyIn};
-use muliao_notifications::{Notifications, Notify, Push, Retry, VapidKeys};
+use muliao_issues::Board;
+use muliao_notifications::{Notifications, Push, VapidKeys};
 use muliao_platform::bus::Bus;
 use muliao_platform::config::Settings;
 use muliao_platform::db::{Database, migrate};
+use muliao_platform::retry::Retry;
 use muliao_platform::vault::Vault;
 use muliao_runtime::mcp::McpConnector;
 use muliao_runtime::models::ModelRegistry;
@@ -149,14 +150,8 @@ pub async fn assemble(settings: Settings, web_dir: PathBuf) -> anyhow::Result<Ap
         Arc::new(Push::new(db.clone(), keys, settings.push.vapid_subject.clone(), client.clone(), Retry::default()));
     let notifications = Notifications::new(db.clone(), bus.clone(), push);
 
-    // ---- issue 看板：发通知的端口接到通知领域（同层，不能直接依赖） ----
-    let n = notifications.clone();
-    let notify: NotifyIn = Arc::new(move |tx, notice: IssueNotice| {
-        let IssueNotice { title, body, session_id, issue_id } = notice;
-        n.notify_in(tx, &Notify { title, body, session_id, issue_id: Some(issue_id) })?;
-        Ok(())
-    });
-    let board = Board::new(db.clone(), SenderInbox::new(waker.clone()), notify, stopper.clone(), tz);
+    // ---- issue 看板 ----
+    let board = Board::new(db.clone(), SenderInbox::new(waker.clone()), notifications.clone(), stopper.clone(), tz);
 
     // ---- 触发器 ----
     let triggers = TriggerDomain::build(TriggerDeps {

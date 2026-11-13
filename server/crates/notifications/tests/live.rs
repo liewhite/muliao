@@ -4,7 +4,7 @@
 //! 用线上的 VAPID 私钥（与 Python 版同一把，设备不用重新订阅）；只读打开线上库（失效的订阅只报告不删）。读私钥走
 //! `load_or_create`：私钥权限过宽时会收回到 0600。
 
-use muliao_notifications::webpush::{Device, Sent, VapidKeys, send};
+use muliao_notifications::webpush::{Sent, Subscription, VapidKeys, send};
 use muliao_platform::config::{DEFAULT_CONFIG_PATH, Settings, expand_home};
 use rusqlite::{Connection, OpenFlags};
 
@@ -14,10 +14,10 @@ async fn live_push_to_current_subscriptions() {
     let settings = Settings::load(&expand_home(DEFAULT_CONFIG_PATH)).expect("the live config parses");
     let keys = VapidKeys::load_or_create(&settings.vapid_key_path()).expect("the live VAPID key loads");
     let db = Connection::open_with_flags(settings.db_path(), OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
-    let devices: Vec<Device> = db
+    let devices: Vec<Subscription> = db
         .prepare("SELECT endpoint, p256dh, auth FROM push_subscriptions")
         .unwrap()
-        .query_map([], |r| Ok(Device { endpoint: r.get(0)?, p256dh: r.get(1)?, auth: r.get(2)? }))
+        .query_map([], |r| Ok(Subscription { endpoint: r.get(0)?, p256dh: r.get(1)?, auth: r.get(2)? }))
         .unwrap()
         .collect::<rusqlite::Result<_>>()
         .unwrap();
@@ -37,8 +37,10 @@ async fn live_push_to_current_subscriptions() {
     let client = muliao_platform::net::client().unwrap();
     let mut delivered = 0;
     let only = std::env::var("MULIAO_PUSH_HOST").ok();
-    for device in devices.iter().filter(|d| only.as_ref().is_none_or(|h| d.host() == *h)) {
-        let sent = send(&client, &keys, &settings.push.vapid_subject, device, payload.as_bytes()).await.unwrap();
+    for device in
+        devices.iter().map(|d| d.parse().unwrap()).filter(|d| only.as_ref().is_none_or(|h| d.host() == h.as_str()))
+    {
+        let sent = send(&client, &keys, &settings.push.vapid_subject, &device, payload.as_bytes()).await;
         eprintln!("{}: {sent:?}", device.host());
         delivered += usize::from(sent == Sent::Delivered);
     }

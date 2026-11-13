@@ -10,37 +10,22 @@
 //!
 //! 闭包返回错误时不结算（事务随之回滚）。一次修改什么都没改（没记动态）时什么都不发。issue 的字段只在本模块赋值。
 
-use std::sync::Arc;
-
 use chrono_tz::Tz;
 use muliao_assets::agents::{agent_names_in, runnable_agent_in};
+use muliao_notifications::{Notifications, Notify};
 use muliao_platform::db::Tx;
-use muliao_sessions::events::BoxError;
 use muliao_sessions::inbound::{Refusal, Refused, SenderInbox};
 use rusqlite::Connection;
 
 use crate::activity::{Activity, Arrival, Change, DependencyChange, Happening, record_in, timeline_in};
 use crate::conversation;
-use crate::error::{Error, Result, invalid};
+use crate::error::{Result, invalid};
 use crate::graph::{Links, downstream_in, links_of_in, set_depends_on_in};
 use crate::model::{Actor, Assignee, By, Issue, Priority, Status, agent_of, issue_in, save_in};
 use crate::render::delivery_message;
 use crate::rules::{Snapshot, finishing, from_outside, handed_to_user, recipient};
 
 const TITLE_MAX: usize = 300;
-
-/// 发给用户的一条通知（关于一个 issue）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IssueNotice {
-    pub title: String,
-    pub body: String,
-    /// 交出 issue 的那个会话（打开会话即已读、会话删除时通知随之删除）；没有时为 None
-    pub session_id: Option<String>,
-    pub issue_id: i64,
-}
-
-/// 在调用方的事务里发通知的端口。通知领域与 issue 同层，不能直接依赖：组合根把它接到通知领域的 `notify_in` 上。
-pub type NotifyIn = Arc<dyn Fn(&mut Tx<'_>, IssueNotice) -> std::result::Result<(), BoxError> + Send + Sync>;
 
 /// 一次修改结算时投给谁。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -255,7 +240,7 @@ impl IssueChange<'_> {
 #[derive(Clone)]
 pub(crate) struct Changes {
     pub inbox: SenderInbox,
-    pub notify: NotifyIn,
+    pub notifications: Notifications,
     pub tz: Tz,
 }
 
@@ -323,13 +308,13 @@ impl Changes {
     ) -> Result<()> {
         if handed_to_user(&by.actor, issue.assignee.as_ref(), happened).is_some() {
             // 点开是 issue（在那里通过或打回）；也带上它交出 issue 的那个会话
-            let notice = IssueNotice {
+            let notice = Notify {
                 title: format!("#{} 指派给你：{}", issue.id, issue.title),
                 body: format!("状态 {}", issue.status),
                 session_id: by.session_id.clone(),
-                issue_id: issue.id,
+                issue_id: Some(issue.id),
             };
-            (self.notify)(tx, notice).map_err(Error::Notify)?;
+            self.notifications.notify_in(tx, &notice)?;
         }
         let links = links_of_in(tx, issue.id)?;
         let to = match to {
@@ -350,13 +335,13 @@ impl Changes {
             Err(Refused { reason: Refusal::Archived, detail }) if by.actor == Actor::User => {
                 // 已有 issue 的指派人或 owner 后来被归档：动态照常记进时间线（不让用户在这类 issue 上的评论、改动报错），不投；
                 // 用户自己的改动、评论没人接要当场告诉他（只有他能取消归档或改指派）
-                let notice = IssueNotice {
+                let notice = Notify {
                     title: format!("#{} 的动态没交给 {}：它已归档", issue.id, names.name(&to)),
                     body: "取消归档后它用 issue_show 能看到这些动态；也可以把 issue 改指派给别的 agent。".into(),
                     session_id: None,
-                    issue_id: issue.id,
+                    issue_id: Some(issue.id),
                 };
-                (self.notify)(tx, notice).map_err(Error::Notify)?;
+                self.notifications.notify_in(tx, &notice)?;
                 tracing::info!(issue_id = issue.id, %detail, "issue activity not delivered");
             }
             // 别人的动态（agent 的）投不进归档的 agent 只记日志：in_progress 的由看板的「停滞」标出。Gone：agent 正在删除，

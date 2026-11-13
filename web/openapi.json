@@ -6003,7 +6003,14 @@
                 "$ref": "#/components/schemas/ScheduleConfig"
               },
               "status": {
-                "$ref": "#/components/schemas/ScheduleStatus"
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/ScheduleStatus"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "kind": {
                 "type": "string",
@@ -6025,7 +6032,14 @@
                 "$ref": "#/components/schemas/OnceConfig"
               },
               "status": {
-                "$ref": "#/components/schemas/OnceStatus"
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/OnceStatus"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "kind": {
                 "type": "string",
@@ -6047,7 +6061,14 @@
                 "$ref": "#/components/schemas/StreamConfig"
               },
               "status": {
-                "$ref": "#/components/schemas/StreamStatus"
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/StreamStatus"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "kind": {
                 "type": "string",
@@ -6058,7 +6079,7 @@
             }
           }
         ],
-        "description": "config 与 status（这种方式自己给出的运行状态，不含凭证；存下的状态坏了时是 `{\"error\": 原因}`）按 kind 区分。"
+        "description": "config 与 status（这种方式自己给出的运行状态，不含凭证；读不出时为 null，原因在 status_error）按 kind 区分。"
       },
       "Link": {
         "type": "object",
@@ -8187,7 +8208,8 @@
               "last_session_id",
               "disabled_reason",
               "faults",
-              "finished_at"
+              "finished_at",
+              "status_error"
             ],
             "properties": {
               "id": {
@@ -8259,6 +8281,13 @@
                 ],
                 "format": "date-time",
                 "description": "结束的时间：不为空表示它不会再触发了（一次性触发器跑完），只能查看与删除"
+              },
+              "status_error": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "存下的运行状态坏了、读不出时的原因（这时 status 为 null）"
               }
             }
           }

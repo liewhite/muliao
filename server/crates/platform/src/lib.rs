@@ -8,7 +8,7 @@
 //!   以哪个 agent 的身份起（注入哪些 secret、能写哪些路径）由工作区领域拼好交进来。
 //! - [`bus`]：推给前端 SSE 的展示事件（只做展示加速，库是唯一事实源）。
 //! - [`tooling`] 与 [`tool_views`]：工具的共同契约（运行上下文、内置工具的声明、错误交还模型的规则）与界面展示块。
-//! - [`net`]：出站 HTTP 的共用客户端（走 macOS 系统代理，含例外列表）。
+//! - [`net`]：出站 HTTP 的共用客户端（走 macOS 系统代理，含例外列表）；[`retry`]：暂时性失败的重试节奏。
 //! - [`ids`]、[`errors`]、[`logging`]、[`text`]、[`time`]（用户写的时刻怎么读）。
 
 pub mod bus;
@@ -19,6 +19,7 @@ pub mod fs;
 pub mod ids;
 pub mod logging;
 pub mod net;
+pub mod retry;
 pub mod sandbox;
 pub mod shell;
 pub mod text;

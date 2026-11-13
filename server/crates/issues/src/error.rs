@@ -15,9 +15,6 @@ pub enum Error {
     Sessions(muliao_sessions::error::Error),
     #[error(transparent)]
     Assets(muliao_assets::error::Error),
-    /// 发通知（组合根注入的端口）出错
-    #[error("notifying the user failed: {0}")]
-    Notify(muliao_sessions::events::BoxError),
 }
 
 impl From<muliao_sessions::error::Error> for Error {

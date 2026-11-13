@@ -9,6 +9,7 @@ utoipa = { workspace = true }
 muliao-platform = { workspace = true }
 muliao-assets = { workspace = true }
 muliao-sessions = { workspace = true }
+muliao-notifications = { workspace = true }
 agenter = { workspace = true }
 chrono = { workspace = true }
 chrono-tz = { workspace = true }

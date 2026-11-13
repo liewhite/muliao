@@ -10,6 +10,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 use hkdf::Hkdf;
 use muliao_platform::bus::Bus;
 use muliao_platform::db::{Database, migrate};
+use muliao_platform::retry::Retry;
 use muliao_sessions::answers::Waiting;
 use muliao_sessions::events::{RunEnded, RunFailed, SessionDeleted, Subscribers};
 use muliao_sessions::origins::SessionOrigin;
@@ -81,7 +82,7 @@ impl Harness {
     }
 
     /// 绕过订阅时的 https 核对，让推送打到本机的 wiremock
-    async fn add_device(&self, d: &Device) {
+    async fn add_device(&self, d: &Subscription) {
         let d = d.clone();
         self.db
             .write(move |tx| {
@@ -247,7 +248,7 @@ async fn subscribing_checks_the_device_and_replaces_keys() {
         h.db.read(|c| c.query_row("SELECT p256dh FROM push_subscriptions", [], |r| r.get(0))).await.unwrap();
     assert_eq!(stored, again.p256dh);
 
-    let http = Device { endpoint: "http://x/y".into(), ..device };
+    let http = Subscription { endpoint: "http://x/y".into(), ..device };
     assert!(h.notifications.push().subscribe(http).await.is_err());
     assert_eq!(h.devices().await, 1);
 }
@@ -255,11 +256,11 @@ async fn subscribing_checks_the_device_and_replaces_keys() {
 // ---- 推送 ----
 
 /// 一台假设备：订阅信息与解密用的私钥
-fn receiver(endpoint: &str) -> (Device, (SecretKey, Vec<u8>)) {
+fn receiver(endpoint: &str) -> (Subscription, (SecretKey, Vec<u8>)) {
     let key = SecretKey::random(&mut OsRng);
     let mut auth = vec![0u8; 16];
     OsRng.fill_bytes(&mut auth);
-    let device = Device {
+    let device = Subscription {
         endpoint: endpoint.into(),
         p256dh: B64.encode(key.public_key().to_encoded_point(false).as_bytes()),
         auth: B64.encode(&auth),

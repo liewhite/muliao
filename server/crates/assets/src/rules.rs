@@ -234,7 +234,8 @@ impl Rules {
     }
 
     /// 这组规则放行这个权限：allow 匹配、deny 没拦。全系统唯一的判断。name 为 None 是规则不按名字指的资产（agent 的
-    /// 私有记忆）：只有不限种类的规则管得到它（[`Rules::allows_every`]）。
+    /// 私有记忆）：只有不限种类的 allow 放行它（[`Rules::allows_every`]），deny 则凡是拦这一种全部的都拦它（如
+    /// `write:memory:*`）。
     pub fn allows(&self, action: Action, kind: Kind, name: Option<&str>) -> bool {
         permits(&self.allow, &self.deny, action, kind, name)
     }
@@ -264,7 +265,11 @@ impl Rules {
 
 /// [`Rules::allows`] 的判断本身：allow 与 deny 可以来自不同的规则（某一来源的 allow 对最终的 deny，[`crate::access::Grants`]）。
 pub fn permits(allow: &[String], deny: &[String], action: Action, kind: Kind, name: Option<&str>) -> bool {
-    let Some(name) = name else { return permits_every(allow, deny, action) };
+    let Some(name) = name else {
+        // 名字写成 `*` 的权限串只被名字部分不限的规则匹配上：`write:memory:*`、`write:*`、`*:*`，不含 `write:memory:a*`
+        let all = permission_of(action, kind, "*");
+        return permits_every(allow, &[], action) && !deny.iter().any(|p| fnmatch(&all, p));
+    };
     let permission = permission_of(action, kind, name);
     allow.iter().any(|p| fnmatch(&permission, p)) && !deny.iter().any(|p| fnmatch(&permission, p))
 }
@@ -400,6 +405,12 @@ mod tests {
         assert!(r.allows_every(Action::Write));
         let denied = Rules::union([&r, &Rules::new(vec![], vec!["*:*".into()])]);
         assert!(!denied.allows_every(Action::Write));
+        // 私有记忆没有名字：拦这一种全部的 deny 管得到它，按名字拦的管不到
+        let no_memory = Rules::union([&r, &Rules::new(vec![], vec!["write:memory:*".into()])]);
+        assert!(!no_memory.allows(Action::Write, Kind::Memory, None));
+        assert!(no_memory.allows(Action::Write, Kind::Skill, Some("x")));
+        let by_name = Rules::union([&r, &Rules::new(vec![], vec!["write:memory:t*".into()])]);
+        assert!(by_name.allows(Action::Write, Kind::Memory, None));
         let p = Rules::new(vec!["write:path:/a".into(), "write:*".into()], vec!["write:path:/a/b".into()]);
         assert_eq!(p.paths(), (vec!["/a".to_owned()], vec!["/a/b".to_owned()]));
     }

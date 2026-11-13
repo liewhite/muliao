@@ -12,10 +12,11 @@
 use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, Mutex, Weak};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use futures::FutureExt;
 use muliao_platform::db::Tx;
+use muliao_platform::retry::Retry;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::activity::{WorkState, work_state_in};
@@ -75,10 +76,6 @@ pub fn should_run(queued: &[Mail], latest: Option<&RunRecord>, at: &Position) ->
     !at.waiting_for_answers()
 }
 
-/// 暂时性失败的重试：第一次失败起这么久之后还不行就算最终失败（中转站与跨境 HTTPS 断过十几到三十分钟）。
-const RETRY_WINDOW: Duration = Duration::from_secs(30 * 60);
-const FIRST_DELAY: Duration = Duration::from_secs(5);
-const MAX_DELAY: Duration = Duration::from_secs(300);
 /// 到点唤醒与委派运行中检查的节拍
 const TICK: Duration = Duration::from_secs(5);
 
@@ -289,9 +286,8 @@ async fn run_with_retries(
     let core = &inner.core;
     // 结束了（成功、最终失败或停止）就不再显示在等重试
     let attempts = core.live.attempts(id);
-    // 重试窗口从第一次失败算起；一次尝试往前推进了（存下了新消息）就重新算
-    let mut first_failure: Option<Instant> = None;
-    let mut delay = FIRST_DELAY;
+    // 暂时性失败按平台的重试节奏重试；一次尝试往前推进了（存下了新消息）就从头算
+    let mut backoff = Retry::default().start();
     loop {
         let before = last_message(core, id).await;
         let partial: PartialSlot = Arc::default();
@@ -338,11 +334,11 @@ async fn run_with_retries(
             }
         };
         if last_message(core, id).await != before {
-            first_failure = None;
-            delay = FIRST_DELAY;
+            backoff.reset();
         }
-        let since = *first_failure.get_or_insert_with(Instant::now);
-        if failure.transient && since.elapsed() < RETRY_WINDOW {
+        if failure.transient
+            && let Some(delay) = backoff.next_delay()
+        {
             tracing::warn!(session_id = id, error = %failure.message, retry_in = ?delay, "run failed transiently; retrying");
             attempts.retrying(&failure.message, delay);
             // 退避期间也能停止（停在两次尝试之间：没有已产生、没保存的部分）
@@ -363,7 +359,6 @@ async fn run_with_retries(
                     }
                 }
             }
-            delay = (delay * 2).min(MAX_DELAY);
             continue;
         }
         return fail(core, id, &failure.message).await;

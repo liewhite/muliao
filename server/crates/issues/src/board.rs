@@ -11,6 +11,7 @@ use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
 use muliao_assets::agents::{agent_names_in, runnable_agent_in};
 use muliao_assets::lifecycle::DeletionHook;
+use muliao_notifications::Notifications;
 use muliao_platform::db::{Database, Tx};
 use muliao_platform::errors::{DomainError, ErrorKind};
 use muliao_platform::text::truncate;
@@ -24,7 +25,7 @@ use rusqlite::Connection;
 use serde::Serialize;
 
 use crate::activity::{self, Activity, timeline_in};
-use crate::change::{Changes, NotifyIn, Patch, Routing, check_assignee, checked_title, snapshot};
+use crate::change::{Changes, Patch, Routing, check_assignee, checked_title, snapshot};
 use crate::conversation;
 use crate::error::{Error, Result, conflict, invalid};
 use crate::graph::{Upstream, batch_label, check_batch, downstream_in, links_in, links_of_in, set_depends_on_in};
@@ -237,9 +238,9 @@ pub struct Board {
 }
 
 impl Board {
-    /// notify：在事务里发通知（组合根接到通知领域）；stopper：停止会话的入口（issue_stop 用）。
-    pub fn new(db: Arc<Database>, inbox: SenderInbox, notify: NotifyIn, stopper: Stopper, tz: Tz) -> Self {
-        Self { db, changes: Changes { inbox, notify, tz }, stopper }
+    /// notifications：issue 交给用户等时在同一事务里发通知；stopper：停止会话的入口（issue_stop 用）。
+    pub fn new(db: Arc<Database>, inbox: SenderInbox, notifications: Notifications, stopper: Stopper, tz: Tz) -> Self {
+        Self { db, changes: Changes { inbox, notifications, tz }, stopper }
     }
 
     pub(crate) fn db(&self) -> &Arc<Database> {

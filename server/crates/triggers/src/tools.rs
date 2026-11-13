@@ -28,7 +28,7 @@ struct TriggerInfo {
     agent: String,
     prompt: String,
     config: Value,
-    /// 这种方式的运行状态，如下次触发时间
+    /// 这种方式的运行状态，如下次触发时间；存下的状态坏了时是 `{"error": 原因}`
     status: Value,
     enabled: bool,
     precheck: Option<Precheck>,
@@ -49,7 +49,7 @@ fn info(view: TriggerView, names: &AgentNames) -> TriggerInfo {
         kind: t.kind,
         prompt: t.prompt,
         config: t.config,
-        status: view.status,
+        status: status_value(&view.status),
         enabled: t.enabled,
         precheck: t.precheck,
         disabled_reason: t.disabled_reason,
@@ -63,8 +63,15 @@ async fn names(service: &TriggerService) -> Result<AgentNames, Error> {
     service.db().read(|c| Ok::<_, Error>(agent_names_in(c)?)).await
 }
 
+fn status_value(status: &std::result::Result<Value, String>) -> Value {
+    match status {
+        Ok(status) => status.clone(),
+        Err(e) => serde_json::json!({ "error": e }),
+    }
+}
+
 fn status_json(view: &TriggerView) -> String {
-    view.status.to_string()
+    status_value(&view.status).to_string()
 }
 
 #[derive(Deserialize, JsonSchema)]

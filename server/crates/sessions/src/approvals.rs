@@ -11,7 +11,7 @@ use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::answers::{APPROVAL_INTERRUPTED, CallResult};
-use crate::error::Result;
+use crate::error::{Result, broken};
 use crate::mailbox::placeholders;
 
 /// 这些调用停下来等批准了（运行收尾的事务里），连同工具请求批准时定下的 pin。已记过的不再记。
@@ -55,7 +55,8 @@ pub fn take_in(
                     params![Utc::now(), session_id, call_id],
                 )?;
             }
-            None => {}
+            // 提交决定时只收停下来等过批准的调用（requested_among），走到这里是记录被删了或数据对不上
+            None => return Err(broken(format!("approved call {call_id} has no approval request recorded"))),
         }
     }
     Ok(interrupted)

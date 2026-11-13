@@ -142,12 +142,12 @@ enum By {
     Activation,
 }
 
-/// 触发器的读模型（HTTP 层与工具共用）：行、它的方式给出的运行状态（存下的状态坏了时是 `{"error": 原因}`，一行坏数据
-/// 不连累整个列表）、上一次触发开出的、还在的会话。
+/// 触发器的读模型（HTTP 层与工具共用）：行、它的方式给出的运行状态、上一次触发开出的、还在的会话。
 #[derive(Debug, Clone)]
 pub struct TriggerView {
     pub trigger: Trigger,
-    pub status: Value,
+    /// 这种方式给出的运行状态；存下的状态坏了时是读不出的原因（一行坏数据不连累整个列表）
+    pub status: std::result::Result<Value, String>,
     /// 上一次触发开出的会话，已删除时 None（`trigger.last_session_id` 是记下的原值）
     pub live_session_id: Option<String>,
 }
@@ -276,8 +276,8 @@ impl TriggerService {
                     .map(|t| {
                         let alive = t.last_session_id.clone().filter(|id| states.contains_key(id));
                         let status = match kinds.get(&t.kind)?.status(&t) {
-                            Err(Error::Corrupt(e)) => serde_json::json!({ "error": e }),
-                            other => other?,
+                            Err(Error::Corrupt(e)) => Err(e),
+                            other => Ok(other?),
                         };
                         Ok(TriggerView { trigger: t, status, live_session_id: alive })
                     })

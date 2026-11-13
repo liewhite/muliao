@@ -2,7 +2,7 @@
 
 use axum::extract::State;
 use axum::http::StatusCode;
-use muliao_notifications::{Device, Notification};
+use muliao_notifications::{Notification, Subscription};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::router::OpenApiRouter;
@@ -101,7 +101,7 @@ pub struct PushSubscriptionIn {
 #[utoipa::path(post, path = "/api/push/subscriptions", tag = "push", request_body = PushSubscriptionIn,
     responses((status = 204), (status = 422, body = ErrorOut)))]
 async fn subscribe(State(s): State<AppState>, Json(body): Json<PushSubscriptionIn>) -> ApiResult<StatusCode> {
-    let device = Device { endpoint: body.endpoint, p256dh: body.keys.p256dh, auth: body.keys.auth };
+    let device = Subscription { endpoint: body.endpoint, p256dh: body.keys.p256dh, auth: body.keys.auth };
     s.services.notifications.push().subscribe(device).await?;
     Ok(StatusCode::NO_CONTENT)
 }

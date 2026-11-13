@@ -1709,20 +1709,20 @@ export interface components {
             /** @enum {string} */
             kind: "stream";
         };
-        /** @description config 与 status（这种方式自己给出的运行状态，不含凭证；存下的状态坏了时是 `{"error": 原因}`）按 kind 区分。 */
+        /** @description config 与 status（这种方式自己给出的运行状态，不含凭证；读不出时为 null，原因在 status_error）按 kind 区分。 */
         KindOutDoc: {
             config: components["schemas"]["ScheduleConfig"];
-            status: components["schemas"]["ScheduleStatus"];
+            status: components["schemas"]["ScheduleStatus"] | null;
             /** @enum {string} */
             kind: "schedule";
         } | {
             config: components["schemas"]["OnceConfig"];
-            status: components["schemas"]["OnceStatus"];
+            status: components["schemas"]["OnceStatus"] | null;
             /** @enum {string} */
             kind: "once";
         } | {
             config: components["schemas"]["StreamConfig"];
-            status: components["schemas"]["StreamStatus"];
+            status: components["schemas"]["StreamStatus"] | null;
             /** @enum {string} */
             kind: "stream";
         };
@@ -2338,6 +2338,8 @@ export interface components {
              * @description 结束的时间：不为空表示它不会再触发了（一次性触发器跑完），只能查看与删除
              */
             finished_at: string | null;
+            /** @description 存下的运行状态坏了、读不出时的原因（这时 status 为 null） */
+            status_error: string | null;
         };
         /** @description 只修改给出的字段。precheck 给出 null 表示去掉前置检查，不出现表示不变。 */
         TriggerPatch: {

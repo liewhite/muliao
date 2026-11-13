@@ -66,7 +66,7 @@ Cargo workspace，一个领域一个 crate（`server/crates/<领域>`，包名 `
 
 前两条由 Cargo 与 `server/crates/muliao/tests/layers.rs` 检查，其余是约定与装配时的约束：
 - 领域之间只用对方 `pub` 的函数与类型，不写对方表的 SQL。
-- **依赖按层单向**，只能依赖更早一层的 crate：0 `platform` → 1 `assets`、`files`、`usage`、`web`、`speech` → 2 `runtime` → 3 `sessions` → 4 `workspace`、`notifications`、`issues` → 5 `triggers` → 6 `history`（活动概览要读会话与 issue）→ 7 `http` → 8 组合根。Cargo 只拦循环依赖，同层、反向由 `layers.rs` 查（测试用的 dev 依赖不算）；新领域先在它的 `LAYERS` 里定层，没定层的也报错。反向或同层需要的调用由组合根注入函数（如 issue 发通知的 `NotifyIn` 接到通知领域的 `notify_in`）。
+- **依赖按层单向**，只能依赖更早一层的 crate：0 `platform` → 1 `assets`、`files`、`usage`、`web`、`speech` → 2 `runtime` → 3 `sessions` → 4 `workspace`、`notifications` → 5 `issues`、`triggers` → 6 `history`（活动概览要读会话与 issue）→ 7 `http` → 8 组合根。Cargo 只拦循环依赖，同层、反向由 `layers.rs` 查（测试用的 dev 依赖不算）；新领域先在它的 `LAYERS` 里定层，没定层的也报错。反向或同层需要的调用由组合根注入函数。
 - `platform` 不认识领域的词汇（会话、issue、agent 这些词都不出现在里面）；领域不依赖 HTTP 层与组合根；HTTP 层只经各领域给界面的门面（`muliao_http::Services`），业务规则都在领域里，HTTP 层与组合根不另写一份。
 - 工具的错误一律经 `platform::tooling` 的统一映射交还模型（第 6 节）；agenter 的 `Agent` 只在 `runtime` 构造，会话领域按它的 `Step` 驱动、存它的 `Message`（历史的存储形态），各领域的工具实现它的 `Tool` 接口；路径身份（「是不是同一个路径、在不在某目录下」）只在 `platform::fs::real` 算（#570：APFS 不分大小写与正规化形式），「在不在某目录下」与写沙箱只收它给的 `RealPath`。
 - 写事务经 `platform::db::Database::write`：同步闭包，在单写者线程上执行，里面不能 await（第 3.1 节）。
@@ -87,7 +87,7 @@ SQLite 单写者：所有写事务在一个专用线程上串行执行（`Databa
 - **要不要跑只看库**（`should_run`，唯一规则）：信箱里有排着的信，且不是「这些信都已交给过最近一次最终失败的运行」，也不是「停在挂起的调用上、还不能继续」。所以投信只需提交后叫醒（`Waker::wake_on_commit`），叫醒丢了、多叫几次都没关系；工作状态的 running（第 7 节）与删除规则也用同一条。
 - **重启**：服务启动时（`Actors::resume`），有没结束的运行（停在半路）或有排着的信的会话各叫醒一次，按上面的规则接着跑；停在半路的手动压缩不接着做（结果只交回当时发起的用户）。信、历史与运行记录本来就在库里，没有要恢复的队列状态。
 - **并发：运行不设上限，在稀缺资源处限流**：会话各自并发，运行只是协程，不是稀缺资源。稀缺的是模型调用：每个 provider 一个并发上限（`max_concurrency`，所有模型与 agent 共用），在 `ModelRegistry` 构造模型时套上（agenter 的 `Limit`），流式请求整个流期间占一个；运行只在真正请求模型时排队，跑工具、等后台任务不占配额。机器算力交给操作系统。
-- **失败**：暂时性的（模型或外部服务一时不可用：agenter 的 `RunError::is_transient`，含工具报的 `ToolError::Unavailable`）在 actor 里退避重试（5 秒起翻倍、最长 5 分钟一次），从同一个运行接着跑；从第一次失败起约 30 分钟（实际出现过中转站与跨境 HTTPS 断十几到三十分钟）还不行算最终失败，期间存下了新消息就重新计时。其余失败（含运行 panic）当场最终失败。重试只在内存里：退避期间重启，启动时按「没结束的运行」接着跑。最终失败记在运行记录上（会话页显示错误与「重试」按钮，同时推送通知），在同一事务里结清交给它的委派、发布 `RunFailed`；手动重试把它重新算作没结束，同一个运行接着跑。
+- **失败**：暂时性的（模型或外部服务一时不可用：agenter 的 `RunError::is_transient`，含工具报的 `ToolError::Unavailable`）在 actor 里退避重试（与推送共用 `platform::retry::Retry`：5 秒起翻倍、最长 5 分钟一次），从同一个运行接着跑；从第一次失败起约 30 分钟（实际出现过中转站与跨境 HTTPS 断十几到三十分钟）还不行算最终失败，期间存下了新消息就重新计时。其余失败（含运行 panic）当场最终失败。重试只在内存里：退避期间重启，启动时按「没结束的运行」接着跑。最终失败记在运行记录上（会话页显示错误与「重试」按钮，同时推送通知），在同一事务里结清交给它的委派、发布 `RunFailed`；手动重试把它重新算作没结束，同一个运行接着跑。
 - **保留**：运行记录与信件永久保留（信件引用运行）。
 
 ### 3.3 领域事件
@@ -231,7 +231,7 @@ Web / 触发器 / delegate_task / ask_agent        后台任务与委派的结�
 - Python 版旧库到 Rust 版的一次性迁移工具（#688，`server/crates/migrate`）在切换完成后已删除（#775），要看从 git 历史取。
 ## 13. 进化机制
 - **Skill**：agent 在任何运行里都能在自己的资源目录建 `skills/<名>/SKILL.md`，新建的归自己、只有自己用，要给别人用就加进角色。名字全局唯一：与平台同名的只加载平台那份，agent 之间同名的都不加载并报出（#502）。
-- **归属与分发**（#365、#498，规则只在 `assets/src/access.rs`）：每个资源有 owner（所在目录的 agent，或平台）。owner 是隐含的专属角色，对自己的资源有 use 与 write、不可删——否则建资产要隐式改规则、删后规则悬空、同名重建误授权。别人能否 use / write 看规则（base + 角色 + 自己的 allow / deny，deny 只拦规则分来的）；私有记忆只有不限种类的 `write:*` 管得到（#635）。「收录」只有一个定义：规则放行 use。转移 owner（#238）就是把文件挪到新 owner 的目录。agent 直接改文件时能不能写由写沙箱回答（#499，`access::write_scope`）。分发不是安全隔离（第 15 节）。
+- **归属与分发**（#365、#498，规则只在 `assets/src/access.rs`）：每个资源有 owner（所在目录的 agent，或平台）。owner 是隐含的专属角色，对自己的资源有 use 与 write、不可删——否则建资产要隐式改规则、删后规则悬空、同名重建误授权。别人能否 use / write 看规则（base + 角色 + 自己的 allow / deny，deny 只拦规则分来的）；私有记忆只有不限种类的 `write:*` 放行（#635），拦这一种全部的 deny（如 `write:memory:*`）也拦它。「收录」只有一个定义：规则放行 use。转移 owner（#238）就是把文件挪到新 owner 的目录。agent 直接改文件时能不能写由写沙箱回答（#499，`access::write_scope`）。分发不是安全隔离（第 15 节）。
 - **Memory**：记忆是资源目录里的 markdown 文件，同一套归属与分发：能 use 的每块每次运行全文放进 instructions，能 write 的才能改。全局记忆归平台、人人可读、admin 改、不能删；共享记忆由角色分给一组 agent 共用共改（内容相同才合在一起，改出冲突说明该拆开）；私有记忆 `<agent>/memory.md` 只它自己与 admin 改、不分发。每块有字数上限（`memory_max_chars`）：经写入口超长且比原来长才拒绝，用 shell 写超的照常加载并报出要缩短。
 - **自我进化**：平台不在运行之间插入强制反思（#116 删了每 N 步的 reflection）。agent 改记忆与 skill 都在会话里直接改文件，谁、为什么改留在会话记录里（没有版本表，#498）。定期整理由 trigger 驱动、按 base 角色里的 skill 执行（每日 self-evolve，之后 curator 做跨 agent 上提与冲突裁决），不是平台机制。
 ## 14. 触发源与通知

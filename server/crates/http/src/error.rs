@@ -162,7 +162,7 @@ impl Classify for muliao_issues::Error {
             E::Domain(d) => Class::Domain(d),
             E::Sessions(e) => e.class(),
             E::Assets(e) => e.class(),
-            E::Broken(_) | E::Db(_) | E::Notify(_) => Class::Internal,
+            E::Broken(_) | E::Db(_) => Class::Internal,
         }
     }
 }

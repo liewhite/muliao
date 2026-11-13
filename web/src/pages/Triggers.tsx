@@ -271,13 +271,16 @@ function PrecheckSummary({ trigger }: { trigger: Trigger }) {
 
 /** 这种方式自己的运行状态：下次时间、进程等 */
 function KindStatus({ trigger }: { trigger: Trigger }) {
+  if (trigger.status_error !== null) {
+    return <span className="text-danger">运行状态读不出：{trigger.status_error}</span>
+  }
   switch (trigger.kind) {
     case 'schedule':
       return (
         <span>
           <code className="rounded bg-surface-secondary px-1.5 py-0.5 font-mono text-xs">{trigger.config.cron}</code>
-          {trigger.enabled && <> · 下次 {formatTime(trigger.status.next_run_at)}</>}
-          {trigger.status.skipped && (
+          {trigger.enabled && trigger.status && <> · 下次 {formatTime(trigger.status.next_run_at)}</>}
+          {trigger.status?.skipped && (
             <span className="text-warning">
               {' '}
               · 自 {formatTime(trigger.status.skipped.since)} 起已跳过 {trigger.status.skipped.count} 次：上次的会话
@@ -287,16 +290,18 @@ function KindStatus({ trigger }: { trigger: Trigger }) {
         </span>
       )
     case 'once':
-      return <span>计划 {formatTime(trigger.status.run_at)}</span>
+      return trigger.status && <span>计划 {formatTime(trigger.status.run_at)}</span>
     case 'stream':
       return (
         <span className="flex flex-col gap-1">
           <code className="break-all rounded bg-surface-secondary px-1.5 py-0.5 font-mono text-xs">{trigger.config.command}</code>
-          <span>
-            {trigger.status.running_since ? <>运行中，自 {formatTime(trigger.status.running_since)}</> : '未在运行'}
-            {' '}· stderr：<code className="font-mono text-xs">{trigger.status.stderr_log}</code>
-          </span>
-          {trigger.status.failures > 0 && (
+          {trigger.status && (
+            <span>
+              {trigger.status.running_since ? <>运行中，自 {formatTime(trigger.status.running_since)}</> : '未在运行'}
+              {' '}· stderr：<code className="font-mono text-xs">{trigger.status.stderr_log}</code>
+            </span>
+          )}
+          {trigger.status && trigger.status.failures > 0 && (
             <span className="text-warning">连续很快退出 {trigger.status.failures} 次，按退避重启中</span>
           )}
         </span>
@@ -369,9 +374,11 @@ function EnableSwitch({ trigger }: { trigger: Trigger }) {
 function kindSummary(trigger: Trigger): string {
   switch (trigger.kind) {
     case 'schedule':
-      return trigger.enabled ? `${trigger.config.cron} · 下次 ${formatTime(trigger.status.next_run_at)}` : trigger.config.cron
+      return trigger.enabled && trigger.status
+        ? `${trigger.config.cron} · 下次 ${formatTime(trigger.status.next_run_at)}`
+        : trigger.config.cron
     case 'once':
-      return `计划 ${formatTime(trigger.status.run_at)}`
+      return trigger.status ? `计划 ${formatTime(trigger.status.run_at)}` : '计划时间读不出'
     case 'stream':
       return trigger.config.command
   }
@@ -394,11 +401,12 @@ function TriggerFaults({ trigger }: { trigger: Trigger }) {
 function triggerWarning(trigger: Trigger): string | null {
   if (trigger.disabled_reason) return trigger.finished_at ? '触发失败' : '触发失败，已自动停用'
   if (trigger.faults.length) return FAULT_TITLES[trigger.faults[0].source].short
+  if (trigger.status_error !== null) return '运行状态读不出'
   switch (trigger.kind) {
     case 'schedule':
-      return trigger.status.skipped ? `已连续跳过 ${trigger.status.skipped.count} 次` : null
+      return trigger.status?.skipped ? `已连续跳过 ${trigger.status.skipped.count} 次` : null
     case 'stream':
-      return trigger.status.failures ? `连续失败 ${trigger.status.failures} 次` : null
+      return trigger.status?.failures ? `连续失败 ${trigger.status.failures} 次` : null
     case 'once':
       return null
   }

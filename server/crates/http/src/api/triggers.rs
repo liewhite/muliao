@@ -67,6 +67,8 @@ pub struct TriggerOut {
     faults: Vec<TriggerFault>,
     /// 结束的时间：不为空表示它不会再触发了（一次性触发器跑完），只能查看与删除
     finished_at: Option<DateTime<Utc>>,
+    /// 存下的运行状态坏了、读不出时的原因（这时 status 为 null）
+    status_error: Option<String>,
     #[serde(flatten)]
     #[schema(value_type = KindOutDoc)]
     kind: KindOut,
@@ -77,22 +79,26 @@ pub struct TriggerOut {
 struct KindOut {
     kind: String,
     config: Value,
-    status: Value,
+    status: Option<Value>,
 }
 
-/// config 与 status（这种方式自己给出的运行状态，不含凭证；存下的状态坏了时是 `{"error": 原因}`）按 kind 区分。
+/// config 与 status（这种方式自己给出的运行状态，不含凭证；读不出时为 null，原因在 status_error）按 kind 区分。
 #[derive(ToSchema)]
 #[allow(dead_code)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum KindOutDoc {
-    Schedule { config: ScheduleConfig, status: ScheduleStatus },
-    Once { config: OnceConfig, status: OnceStatus },
-    Stream { config: StreamConfig, status: StreamStatus },
+    Schedule { config: ScheduleConfig, status: Option<ScheduleStatus> },
+    Once { config: OnceConfig, status: Option<OnceStatus> },
+    Stream { config: StreamConfig, status: Option<StreamStatus> },
 }
 
 impl TriggerOut {
     fn of(v: TriggerView) -> Self {
         let t = v.trigger;
+        let (status, status_error) = match v.status {
+            Ok(status) => (Some(status), None),
+            Err(e) => (None, Some(e)),
+        };
         TriggerOut {
             id: t.id,
             name: t.name,
@@ -106,7 +112,8 @@ impl TriggerOut {
             disabled_reason: t.disabled_reason,
             faults: t.faults,
             finished_at: t.finished_at,
-            kind: KindOut { kind: t.kind, config: t.config, status: v.status },
+            status_error,
+            kind: KindOut { kind: t.kind, config: t.config, status },
         }
     }
 }

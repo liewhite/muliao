@@ -7,8 +7,7 @@
 //! - [`change`]：变更单元，一次修改的全部后果（记动态、投递、通知、放行下游）只在这里结算。
 //! - [`board`]：门面（查询、命令、对会话事件与删除 agent 的反应）；[`tools`]：issue_* 工具。
 //!
-//! 组合根：`Board::new(db, SenderInbox, notify, stopper, tz)`，其中 notify 接到通知领域的 `notify_in`（同层，不能直接
-//! 依赖）；`board.subscribe` 登记进会话事件的订阅者；`board.deletion_hook()` 交给 `AgentLifecycle`；`tools::tools` 进
+//! 组合根：`Board::new(db, SenderInbox, notifications, stopper, tz)`；`board.subscribe` 登记进会话事件的订阅者；`board.deletion_hook()` 交给 `AgentLifecycle`；`tools::tools` 进
 //! 工具箱；`(Origin::Issue, rules::SESSION_NOTE)` 交给 `OriginNotes`。打开 issue 时 HTTP 层调通知领域的
 //! `mark_issue_read`。
 
@@ -29,7 +28,7 @@ mod tests;
 use muliao_platform::db::Migration;
 
 pub use board::{Board, BoardIssue, Filter, IssueDetail, IssueWork, NewIssue, Stopping, UserActions, user_actions_in};
-pub use change::{IssueNotice, NotifyIn, Patch};
+pub use change::Patch;
 pub use error::{Error, Result};
 pub use model::{Actor, Assignee, By, Issue, Priority, Status};
 

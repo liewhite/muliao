@@ -14,10 +14,11 @@ use muliao_assets::service::{AgentService, AgentSpec};
 use muliao_assets::skills::SkillStore;
 use muliao_assets::source::AssetSource;
 use muliao_files::FileStore;
-use muliao_notifications::{Notifications, Push, Retry, VapidKeys};
+use muliao_notifications::{Notifications, Push, VapidKeys};
 use muliao_platform::bus::Bus;
 use muliao_platform::db::{Database, migrate};
 use muliao_platform::errors::ErrorKind;
+use muliao_platform::retry::Retry;
 use muliao_platform::sandbox::{Mode, sandbox_for};
 use muliao_platform::tooling::{Audience, RunScope};
 use muliao_platform::vault::Vault;
@@ -159,7 +160,7 @@ impl World {
     }
 
     async fn status(&self, id: i64) -> Value {
-        self.svc().view(self.get(id).await).await.unwrap().status
+        self.svc().view(self.get(id).await).await.unwrap().status.unwrap()
     }
 
     /// 这个触发器开出的会话：(id, 标题)，按建立顺序

@@ -10,35 +10,20 @@
 //! 只记 error 日志，由错误监控看见（Python 版是任务页上的失败任务）。
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use chrono::Utc;
 use muliao_platform::db::Database;
+use muliao_platform::retry::Retry;
 use muliao_platform::text::truncate;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
-use tokio::time::Instant;
 
 use crate::inbox::{PushMessage, push_message_in};
-use crate::webpush::{self, Device, InvalidDevice, Sent, VapidKeys};
+use crate::webpush::{self, InvalidDevice, Sent, Subscription, VapidKeys};
 
 /// 推送服务限制载荷约 4KB（加密后），标题、正文截断留足余量（中文一个字三字节）
 const TITLE_MAX_CHARS: usize = 120;
 const BODY_MAX_CHARS: usize = 600;
-
-/// 暂时失败的重试：间隔从 first 起翻倍到 max，从第一次失败起超过 window 就放弃。
-#[derive(Debug, Clone, Copy)]
-pub struct Retry {
-    pub first: Duration,
-    pub max: Duration,
-    pub window: Duration,
-}
-
-impl Default for Retry {
-    fn default() -> Self {
-        Self { first: Duration::from_secs(5), max: Duration::from_secs(300), window: Duration::from_secs(30 * 60) }
-    }
-}
 
 /// 推到设备上的内容（Service Worker 的契约，见 web/public/sw.js）
 #[derive(Serialize)]
@@ -93,15 +78,17 @@ impl Push {
         self.keys.public_key()
     }
 
-    /// 用户在界面上开启推送：记下这台设备（同一个 endpoint 再订阅就换成新的密钥）。
-    pub async fn subscribe(&self, device: Device) -> Result<(), SubscribeError> {
-        device.check()?;
+    /// 用户在界面上开启推送：解析核对（https、密钥解得开）后记下这台设备（同一个 endpoint 再订阅就换成新的密钥）。
+    pub async fn subscribe(&self, sub: Subscription) -> Result<(), SubscribeError> {
+        if !sub.parse()?.is_https() {
+            return Err(InvalidDevice("endpoint must be an https URL".into()).into());
+        }
         self.db
             .write(move |tx| {
                 tx.execute(
                     "INSERT INTO push_subscriptions (endpoint, p256dh, auth, created_at) VALUES (?1, ?2, ?3, ?4)
                      ON CONFLICT (endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth",
-                    params![device.endpoint, device.p256dh, device.auth, Utc::now()],
+                    params![sub.endpoint, sub.p256dh, sub.auth, Utc::now()],
                 )
                 .map(drop)
             })
@@ -132,8 +119,7 @@ impl Push {
 
     /// 推到一台设备，暂时失败按 [`Retry`] 重试；返回最后的结局（测试用）。
     async fn deliver_to(&self, notification_id: i64, endpoint: String) -> Option<Sent> {
-        let mut first_failure: Option<Instant> = None;
-        let mut delay = self.retry.first;
+        let mut backoff = self.retry.start();
         loop {
             let target = endpoint.clone();
             let found = self
@@ -142,7 +128,7 @@ impl Push {
                     Ok(push_message_in(c, notification_id)?.zip(device_in(c, &target)?))
                 })
                 .await;
-            let (message, device) = match found {
+            let (message, sub) = match found {
                 Ok(Some(found)) => found,
                 Ok(None) => {
                     // 通知随会话删了，或设备退订、已失效被删
@@ -157,15 +143,16 @@ impl Push {
                     return None;
                 }
             };
-            let host = device.host();
-            let sent = match webpush::send(&self.client, &self.keys, &self.subject, &device, &payload(&message)).await {
-                Ok(sent) => sent,
+            let device = match sub.parse() {
+                Ok(device) => device,
                 Err(e) => {
-                    // 订阅时核对过，到这里是库里的数据坏了：删不删交给人
-                    tracing::error!(notification_id, push_host = %host, error = %e, "stored push subscription is invalid, not pushing");
+                    // 订阅时解析过，到这里是库里的数据坏了：删不删交给人
+                    tracing::error!(notification_id, error = %e, "stored push subscription is invalid, not pushing");
                     return None;
                 }
             };
+            let host = device.host().to_owned();
+            let sent = webpush::send(&self.client, &self.keys, &self.subject, &device, &payload(&message)).await;
             match &sent {
                 Sent::Delivered => tracing::info!(notification_id, push_host = %host, "web push sent"),
                 Sent::Gone(status) => {
@@ -183,11 +170,9 @@ impl Push {
                     tracing::error!(notification_id, push_host = %host, reason = %why, "push service rejected the message")
                 }
                 Sent::Transient(why) => {
-                    let since = *first_failure.get_or_insert_with(Instant::now);
-                    if since.elapsed() + delay <= self.retry.window {
+                    if let Some(delay) = backoff.next_delay() {
                         tracing::warn!(notification_id, push_host = %host, reason = %why, retry_in = ?delay, "web push failed, will retry");
                         tokio::time::sleep(delay).await;
-                        delay = (delay * 2).min(self.retry.max);
                         continue;
                     }
                     tracing::error!(notification_id, push_host = %host, reason = %why, "web push kept failing, giving up");
@@ -203,9 +188,9 @@ fn endpoints_in(c: &Connection) -> rusqlite::Result<Vec<String>> {
     stmt.query_map([], |r| r.get(0))?.collect()
 }
 
-fn device_in(c: &Connection, endpoint: &str) -> rusqlite::Result<Option<Device>> {
+fn device_in(c: &Connection, endpoint: &str) -> rusqlite::Result<Option<Subscription>> {
     c.query_row("SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE endpoint = ?1", [endpoint], |r| {
-        Ok(Device { endpoint: r.get(0)?, p256dh: r.get(1)?, auth: r.get(2)? })
+        Ok(Subscription { endpoint: r.get(0)?, p256dh: r.get(1)?, auth: r.get(2)? })
     })
     .optional()
 }
