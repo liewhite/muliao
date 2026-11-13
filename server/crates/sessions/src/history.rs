@@ -186,12 +186,6 @@ pub fn spans_between_in(c: &Connection, start: DateTime<Utc>, end: DateTime<Utc>
 pub const SESSIONS_MENTIONING: &str = "SELECT m.session_id FROM messages m JOIN message_texts t ON t.message_id = m.id \
      WHERE t.text LIKE ? ESCAPE '\\'";
 
-/// 关键字按字面匹配的 LIKE 模式（`%` `_` `\` 转义）。
-pub fn like_pattern(keyword: &str) -> String {
-    let escaped = keyword.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
-    format!("%{escaped}%")
-}
-
 // ---- 压缩 ----
 
 #[derive(Debug, Clone, PartialEq)]

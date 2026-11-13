@@ -19,8 +19,8 @@ use agenter::{
 };
 use chrono::Utc;
 use muliao_assets::agents::agent_in;
-use muliao_assets::service::AgentService;
 use muliao_assets::run_assets::RunAssets;
+use muliao_assets::service::AgentService;
 use muliao_files::FileStore;
 use muliao_platform::bus::Bus;
 use muliao_platform::db::{Database, Tx};
@@ -325,26 +325,34 @@ fn settled_end(begun: &Begun) -> Result<RunEnd> {
 
 /// 收尾：记下结局、结清做完的委派、发布 RunEnded（end 为 None 是没事可做的空收尾：只记结局）。
 async fn finish(core: &Core, begun: &Begun, end: Option<RunEnd>) -> Result<()> {
-    let (run_id, session_id, adopted) = (begun.run_id, begun.session.id.clone(), begun.adopted.clone());
+    let finishing = Finishing {
+        run_id: begun.run_id,
+        session_id: begun.session.id.clone(),
+        agent_name: begun.agent_name.clone(),
+        adopted: begun.adopted.clone(),
+    };
     let (waker, events, live) = (core.waker.clone(), core.events.clone(), core.live.clone());
-    let agent_name = begun.agent_name.clone();
-    core.db
-        .write(move |tx| finish_in(tx, &waker, &events, &live, run_id, &session_id, &agent_name, &adopted, end))
-        .await
+    core.db.write(move |tx| finish_in(tx, &waker, &events, &live, &finishing, end)).await
 }
 
-#[allow(clippy::too_many_arguments)]
+/// 收尾要的这次运行的身份（从 [`Begun`] 拷出，交给写线程）。
+struct Finishing {
+    run_id: i64,
+    session_id: String,
+    agent_name: String,
+    adopted: Vec<Mail>,
+}
+
 fn finish_in(
     tx: &mut Tx<'_>,
     waker: &Waker,
     events: &Events,
     live: &Live,
-    run_id: i64,
-    session_id: &str,
-    agent_name: &str,
-    adopted: &[Mail],
+    finishing: &Finishing,
     end: Option<RunEnd>,
 ) -> Result<()> {
+    let Finishing { run_id, session_id, agent_name, adopted } = finishing;
+    let (run_id, session_id) = (*run_id, session_id.as_str());
     runs::end_in(tx, live, run_id, Outcome::Done)?;
     let saved = history::saved_by_in(tx, session_id, run_id)?;
     let Some(end) = end.filter(|_| !saved.is_empty()) else { return Ok(()) };

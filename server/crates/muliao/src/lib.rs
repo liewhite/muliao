@@ -138,10 +138,8 @@ pub async fn assemble(settings: Settings, web_dir: PathBuf) -> anyhow::Result<Ap
         max_output_chars: rt.tool_output_max_chars,
     });
     // MCP 的 stdio server 与 agent 的命令关在同一个写沙箱里
-    let mcp_connector = Arc::new(McpConnector::new(
-        secrets.clone(),
-        muliao_workspace::commands::confine(workspace.confiner.clone()),
-    ));
+    let mcp_connector =
+        Arc::new(McpConnector::new(secrets.clone(), muliao_workspace::commands::confine(workspace.confiner.clone())));
 
     // ---- 通知 ----
     let keys = VapidKeys::load_or_create(&settings.vapid_key_path()).context("the VAPID key")?;

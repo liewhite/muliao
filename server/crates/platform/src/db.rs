@@ -236,10 +236,30 @@ pub fn migrate(path: &Path, domains: &[Migration]) -> Result<(), MigrateError> {
     Ok(())
 }
 
+/// 含有 text（按字面，`%` `_` `\` 转义）的 LIKE 模式；SQL 里写 `LIKE ? ESCAPE '\'`。
+pub fn like_contains(text: &str) -> String {
+    format!("%{}%", escape_like(text))
+}
+
+/// 以 text 开头（按字面）的 LIKE 模式，同 [`like_contains`]。
+pub fn like_prefix(text: &str) -> String {
+    format!("{}%", escape_like(text))
+}
+
+fn escape_like(text: &str) -> String {
+    text.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn like_patterns_match_literally() {
+        assert_eq!(like_contains(r"a%b_c\"), r"%a\%b\_c\\%");
+        assert_eq!(like_prefix("ab_"), r"ab\_%");
+    }
 
     const NOTES: Migration = Migration {
         domain: "notes",

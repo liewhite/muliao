@@ -269,10 +269,16 @@ async fn has_work(core: &Core, id: &str) -> Result<bool> {
         .await
 }
 
-/// 会话最后一条消息（判断一次尝试有没有往前推进）。
+/// 会话最后一条消息（判断一次尝试有没有往前推进）。读不出来时记下错误、当作没有：只影响退避要不要从头算。
 async fn last_message(core: &Core, id: &str) -> Option<i64> {
-    let id = id.to_owned();
-    core.db.read(move |c| crate::history::last_message_id_in(c, &id)).await.ok().flatten()
+    let session_id = id.to_owned();
+    match core.db.read(move |c| crate::history::last_message_id_in(c, &session_id)).await {
+        Ok(last) => last,
+        Err(e) => {
+            tracing::error!(session_id = id, error = %e, "reading the last message of the session failed");
+            None
+        }
+    }
 }
 
 /// 运行一次（失败时按规则重试），其间收到停止就丢掉它、执行停止事务。返回 false：最终失败却没有运行记录可记（开头

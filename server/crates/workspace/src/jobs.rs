@@ -452,10 +452,16 @@ impl JobRunner {
                 // 以进程退出为准：退出后最多再给 DRAIN 读完（脱离进程组的后代可能一直占着管道）
                 read = tokio::time::timeout(DRAIN, &mut recording).await.ok();
             }
-            let code = status.ok().map(|s| {
-                use std::os::unix::process::ExitStatusExt;
-                s.code().unwrap_or_else(|| -s.signal().unwrap_or(0))
-            });
+            let code = match status {
+                Ok(s) => {
+                    use std::os::unix::process::ExitStatusExt;
+                    Some(s.code().unwrap_or_else(|| -s.signal().unwrap_or(0)))
+                }
+                Err(e) => {
+                    tracing::error!(job_id, error = %e, "waiting for a background job failed; its exit code is unknown");
+                    None
+                }
+            };
             (code, read.is_some(), read.unwrap_or(Ok(())), ending)
         };
         let (end, note) = match (recorded, ending) {

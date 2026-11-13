@@ -6,9 +6,10 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, Row, params};
 
-use crate::history::{SESSIONS_MENTIONING, like_pattern};
+use crate::history::SESSIONS_MENTIONING;
 use crate::mailbox::placeholders;
 use crate::origins::{Origin, Sender, SessionOrigin};
+use muliao_platform::db::{like_contains, like_prefix};
 use muliao_platform::errors::Result;
 
 /// 一个会话（读模型）。
@@ -107,8 +108,7 @@ pub fn among_in(c: &Connection, session_ids: &[String]) -> Result<BTreeMap<Strin
 
 /// id 以它开头的会话，至多 limit 个（热历史的工具接受 id 前缀）。
 pub fn with_prefix_in(c: &Connection, prefix: &str, limit: usize) -> Result<Vec<Session>> {
-    let pattern = like_pattern(prefix).trim_start_matches('%').to_owned();
-    query(c, "id LIKE ?1 ESCAPE '\\' ORDER BY id LIMIT ?2", params![pattern, limit as i64])
+    query(c, "id LIKE ?1 ESCAPE '\\' ORDER BY id LIMIT ?2", params![like_prefix(prefix), limit as i64])
 }
 
 /// agent 的全部会话。
@@ -196,8 +196,8 @@ impl Listing {
         }
         if let Some(k) = &self.keyword {
             conditions.push(format!("(title LIKE ? ESCAPE '\\' OR id IN ({SESSIONS_MENTIONING}))"));
-            values.push(like_pattern(k));
-            values.push(like_pattern(k));
+            values.push(like_contains(k));
+            values.push(like_contains(k));
         }
         (conditions.join(" AND "), values)
     }

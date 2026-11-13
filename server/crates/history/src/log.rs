@@ -8,7 +8,7 @@ use std::sync::Arc;
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use chrono_tz::Tz;
 use muliao_platform::db::Database;
-use muliao_sessions::history::like_pattern;
+use muliao_platform::db::like_contains;
 use rusqlite::{Connection, ToSql, params};
 use serde::Serialize;
 
@@ -221,7 +221,7 @@ pub fn search_in(c: &Connection, s: &Search) -> Result<Vec<Record>> {
         }
         Some(terms) => {
             for t in terms {
-                let p = bind(Box::new(like_pattern(t)));
+                let p = bind(Box::new(like_contains(t)));
                 // 引用按 JSON 解码后的值匹配（原文里有括号引号，非 ASCII 字符可能被转义）
                 filters.push(format!(
                     "(h.title LIKE {p} ESCAPE '\\' OR h.summary LIKE {p} ESCAPE '\\' \
