@@ -65,6 +65,11 @@ pub fn line_starts(text: &str) -> Vec<usize> {
     starts
 }
 
+/// 位置 at（字节）所在的行号（1 起算，按 [`lines_of`] 的分法，与 read_file 的行号一致）。
+pub fn line_number_at(text: &str, at: usize) -> usize {
+    line_starts(text).partition_point(|&start| start <= at)
+}
+
 /// 字符数（交给模型的长度都按它算）。
 pub fn chars(text: &str) -> usize {
     text.chars().count()
@@ -124,8 +129,7 @@ pub fn miss(current: &str, old: &str, count: usize, rule: &str) -> String {
         return message;
     }
     if count > 1 {
-        let mut lines: Vec<usize> =
-            occurrences(current, old).into_iter().map(|i| current[..i].matches('\n').count() + 1).collect();
+        let mut lines: Vec<usize> = occurrences(current, old).into_iter().map(|i| line_number_at(current, i)).collect();
         lines.dedup();
         return format!("{message} (at lines {}); include more surrounding text to make it unique", listed(&lines));
     }
@@ -217,5 +221,7 @@ mod tests {
         assert!(miss(text, "a\nb", 0, "r").contains("lines 1-2 match it except for whitespace"));
         assert!(miss(text, "c\nz", 0, "r").contains("its first non-blank line is at line 3"));
         assert_eq!(locate_once("abc", "b", "f").unwrap(), 1);
+        // \r 与 \x0c 也是行尾：报的行号与 read_file 的一致
+        assert!(miss("a\rb\x0cx\nx", "x", 2, "r").contains("(at lines 3, 4)"));
     }
 }
