@@ -187,8 +187,8 @@ pub fn vet(draft: &Draft<'_>) -> Result<String, String> {
 }
 
 /// 界面整体改写 SKILL.md：在 current（已有的全文，新建为 None）的 frontmatter 上设 name 与 description，正文换成 body。
-/// 别的键按原文一字不动地留着（不重新生成 YAML：Python 按 YAML 1.1、这里按 1.2 认类型，重写会改变 `yes` 这类值的
-/// 意思）；name 与 description 写成双引号字符串（JSON 字符串是两个版本都认的字符串）。
+/// 别的键按原文一字不动地留着（不重新生成 YAML，人写的排版与注释不丢）；name 与 description 写成双引号字符串（JSON
+/// 字符串也是合法的 YAML 双引号字符串）。
 pub fn compose(current: Option<&str>, name: &str, description: &str, body: &str) -> Result<String, String> {
     let description = valid_description(description)?;
     let kept = match current {
@@ -199,13 +199,7 @@ pub fn compose(current: Option<&str>, name: &str, description: &str, body: &str)
         }
         None => String::new(),
     };
-    // U+2028/2029 在 YAML 双引号里算换行会被折叠，JSON 不转义它们，这里转义
-    let quote = |s: &str| {
-        serde_json::to_string(s)
-            .expect("a string serializes")
-            .replace('\u{2028}', "\\u2028")
-            .replace('\u{2029}', "\\u2029")
-    };
+    let quote = |s: &str| serde_json::to_string(s).expect("a string serializes");
     let text =
         format!("---\nname: {}\ndescription: {}\n{kept}---\n\n{}\n", quote(name), quote(&description), body.trim());
     parse_frontmatter(&text, name)?;
@@ -259,5 +253,8 @@ mod tests {
         assert!(!text.contains("old"), "{text}");
         assert_eq!(body_of(&text), "body");
         assert!(text.ends_with("body\n"));
+        // 行分隔符 U+2028 原样存回（JSON 不转义它，YAML 双引号里也不折叠）
+        let text = compose(None, "s", "a\u{2028}b", "x").unwrap();
+        assert_eq!(parse_frontmatter(&text, "s").unwrap().description, "a\u{2028}b");
     }
 }

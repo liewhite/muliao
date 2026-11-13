@@ -38,7 +38,7 @@ pub fn modified(path: &Path) -> std::io::Result<DateTime<Utc>> {
     Ok(DateTime::<Utc>::from(std::fs::metadata(path)?.modified()?))
 }
 
-/// 读资源文本文件，换行统一成 `\n`（同 Python 的文本模式读：两版读出的正文、版本号一致）；读不出、不是 UTF-8 时的说明
+/// 读资源文本文件，换行统一成 `\n`；读不出、不是 UTF-8 时的说明
 /// （读树记成问题）。
 pub(crate) fn read(path: &Path) -> Result<String, String> {
     muliao_platform::fs::read_text(path)
