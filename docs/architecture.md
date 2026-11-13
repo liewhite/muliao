@@ -46,7 +46,7 @@ Cargo workspace，一个领域一个 crate（`server/crates/<领域>`，包名 `
   muliao/          组合根（src/lib.rs，只装配，无业务规则）与二进制 `muliao`
 ```
 
-每个领域独占自己的表（各表有唯一读写的模块，模块注释写明「`xxx` 表的唯一读写处」），迁移是自己 crate 里的一串 SQL；领域之间只用不透明的 id 相互引用，没有跨领域外键。会话领域（#804）里各表模块的 SQL 只碰自己的表，要别的表的数据调那张表模块的函数、不联查；对外只开放查询和按角色给的入口（`SenderInbox`、`SessionWork`、`SessionService` 等），写表的函数都是 `pub(crate)`，编译器挡住别的领域绕开会话调度直接改运行和信件；别的领域的测试要造会话数据，用 feature `testing` 下的 `muliao_sessions::testing`（只许在 dev-dependencies 里开，`layers.rs` 查），会话领域自己的端到端测试放在 crate 内（`src/tests/`）。`runtime` 不是业务领域，是会话运行的端口：把 agenter 的逐步运行收在「给历史，返回下一步」后面（`Run::step`），每一步的产物交给会话领域保存，它自己除了用量账目不存库。具体工具各在所属领域，它只按规则组合组合根交来的工具集；工具一律通过领域接口做事，不碰别的领域的表。
+每个领域独占自己的表（各表有唯一读写的模块，模块注释写明「`xxx` 表的唯一读写处」），迁移是自己 crate 里的一串 SQL；领域之间只用不透明的 id 相互引用，没有跨领域外键。会话领域（#804）里各表模块的 SQL 只碰自己的表，要别的表的数据调那张表模块的函数、不联查（例外：会话列表按关键字筛选时嵌入 `history` 给出的子查询 `SESSIONS_MENTIONING`，命中的会话可能成千上万，拆成 `IN (…)` 会撞参数上限）；对外只开放查询和按角色给的入口（`SenderInbox`、`SessionWork`、`SessionService` 等），写表的函数都是 `pub(crate)`，编译器挡住别的领域绕开会话调度直接改运行和信件；别的领域的测试要造会话数据，用 feature `testing` 下的 `muliao_sessions::testing`（只许在 dev-dependencies 里开，`layers.rs` 查），会话领域自己的端到端测试放在 crate 内（`src/tests/`）。`runtime` 不是业务领域，是会话运行的端口：把 agenter 的逐步运行收在「给历史，返回下一步」后面（`Run::step`），每一步的产物交给会话领域保存，它自己除了用量账目不存库。具体工具各在所属领域，它只按规则组合组合根交来的工具集；工具一律通过领域接口做事，不碰别的领域的表。
 
 ### 2.2 领域之间怎么通信
 
