@@ -192,12 +192,6 @@ pub(crate) fn latest_among(c: &Connection, session_ids: &[String]) -> Result<BTr
         .collect())
 }
 
-/// 一次运行。
-pub fn get_in(c: &Connection, run_id: i64) -> Result<Option<RunRecord>> {
-    let row = c.query_row(&format!("SELECT {COLUMNS} FROM runs WHERE id = ?1"), [run_id], raw).optional()?;
-    row.map(record).transpose()
-}
-
 /// 这些会话在 [start, end) 里开始的运行，各自按先后。
 pub(crate) fn started_between_in(
     c: &Connection,

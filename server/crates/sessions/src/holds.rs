@@ -173,7 +173,7 @@ fn insert(c: &Connection, session_id: &str, holder: Option<&str>, of: HoldOf, aw
 }
 
 /// 后台任务或到点唤醒在会话上的占用。
-pub fn get_in(c: &Connection, session_id: &str, outside: &Outside) -> Result<Option<Hold>> {
+pub(crate) fn get_in(c: &Connection, session_id: &str, outside: &Outside) -> Result<Option<Hold>> {
     let holder = outside.holder(session_id);
     Ok(query(c, "session_id = ?1 AND holder = ?2", params![session_id, holder])?.pop())
 }

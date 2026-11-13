@@ -189,8 +189,9 @@ pub(crate) fn spans_between_in(
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
-/// 可搜索文字里提到关键字的会话的 SQL 子查询（一个参数：关键字已转义成 LIKE 模式，转义符 `\`）。
-pub const SESSIONS_MENTIONING: &str = "SELECT m.session_id FROM messages m JOIN message_texts t ON t.message_id = m.id \
+/// 可搜索文字里提到关键字的会话的 SQL 子查询（一个参数：关键字已转义成 LIKE 模式，转义符 `\`）。会话列表按关键字筛选时
+/// 嵌进 sessions 的查询：只碰本模块的表，由本模块给出；不拆成先取 id 再 `IN (…)`，常见词会命中成千上万个会话。
+pub(crate) const SESSIONS_MENTIONING: &str = "SELECT m.session_id FROM messages m JOIN message_texts t ON t.message_id = m.id \
      WHERE t.text LIKE ? ESCAPE '\\'";
 
 // ---- 压缩 ----
