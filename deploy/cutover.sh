@@ -32,7 +32,7 @@ need=$(($(du -k "$DATA/muliao.db" | cut -f1) * 3))
 free=$(df -k "$DATA" | awk 'NR==2 {print $4}')
 [ "$free" -gt "$need" ] || die "not enough disk: ${free}KB free, need ${need}KB"
 rm -f "$NEWDB"
-say "switching to Rust $(cat "$APP/current/COMMIT") ($(readlink "$APP/current"))"
+say "switching to Rust $(cat "$APP/current/COMMIT")"
 
 sleep "${MULIAO_DELAY:-20}"
 mkdir -p "$BACKUPS"

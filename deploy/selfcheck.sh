@@ -2,7 +2,7 @@
 # 部署后的通用自检：用法 deploy/selfcheck.sh <目标 commit>（在仓库里跑；新功能验收不在此，由调用方另做）
 #
 # 逐项打印 PASS/FAIL 和依据，任一失败退出码 1：
-#   1. 重启了：服务进程启动时间晚于安装时间（app/current 这个链接的修改时间，install.sh 装完才改它）
+#   1. 重启了：服务进程启动时间晚于安装时间（app/current 目录的修改时间，换版本时新复制出来的）
 #   2. 已装 commit（app/current/COMMIT）包含目标 commit（后来装了更新的 main 也算对）
 #   3. 日志里本进程的启动行（"muliao is serving ... pid=<pid>"）在，之后没有 ERROR
 #   4. HTTP 端口返回 200
@@ -23,7 +23,7 @@ fail() { echo "FAIL $1: $2"; failed=1; }
 pid=$(svc_pid)
 
 # 1. 重启晚于安装
-if [ ! -L "$APP/current" ]; then
+if [ ! -e "$APP/current/COMMIT" ]; then
   fail restarted "没有 ${APP}/current（没用 deploy/install.sh 装过）"
 elif [ -z "$pid" ]; then
   fail restarted "launchctl 里 ${LABEL} 没有 pid（服务没在跑）"

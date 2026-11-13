@@ -6,7 +6,17 @@
 deploy/install.sh          # 编译并安装 main；也可以指定分支或 tag：deploy/install.sh <引用>
 ```
 
-脚本在常驻的仓库副本 `~/.muliao/build/src`（`MULIAO_BUILD` 可改；保留 Rust 编译缓存和 `node_modules`，第二次起只编改了的部分）检出要装的版本，`cargo build --release --locked` 编出 `muliao` 与 `muliao-migrate`，`npm ci && npm run build` 构建前端，放进新目录 `~/.muliao/app/<时间>-<commit>/`（`muliao`、`muliao-migrate`、`web/`、`COMMIT` 文件写着完整 commit），再把 `~/.muliao/app/current` 指过去。只装不重启：重启服务后才用上新版。保留最近 3 个版本目录；退回上一版就是把 `current` 改指回去再重启：`ln -sfn ~/.muliao/app/<上一版目录> ~/.muliao/app/current`。依赖：rustup 装的 `~/.cargo/bin/cargo`、Homebrew 的 node/npm；锁文件（`Cargo.lock`、`package-lock.json`）定版本。
+脚本在常驻的仓库副本 `~/.muliao/build/src`（`MULIAO_BUILD` 可改；保留 Rust 编译缓存和 `node_modules`，第二次起只编改了的部分）检出要装的版本，`cargo build --release --locked` 编出 `muliao` 与 `muliao-migrate`，`npm ci && npm run build` 构建前端，用固定证书签名 `muliao`（见下「macOS 文件访问授权」），放进新目录 `~/.muliao/app/<时间>-<commit>/`（`muliao`、`muliao-migrate`、`web/`、`COMMIT` 文件写着完整 commit），再把这个目录整个复制成 `~/.muliao/app/current`（真目录，不是链接）。程序要重启服务后才用上；前端装完就是新的（服务从 `current/web` 读），所以装完尽快重启。保留最近 3 个版本目录；退回上一版：`deploy/activate.sh ~/.muliao/app/<上一版目录>` 再重启。依赖：rustup 装的 `~/.cargo/bin/cargo`、`~/.cargo/bin/rcodesign`（`cargo install --locked apple-codesign`）、Homebrew 的 node/npm 与 openssl；锁文件（`Cargo.lock`、`package-lock.json`）定版本。
+
+### macOS 文件访问授权（#715）
+
+agent 的命令是服务起的子进程，macOS 把它们访问受保护位置（iCloud Drive、文稿、桌面、系统授权库等）算在服务程序头上。没授权时会弹窗等人点，命令就一直卡着。在「系统设置 → 隐私与安全性 → 完全磁盘访问」里加 `~/.muliao/app/current/muliao`。
+
+macOS 记授权时记的是程序的真实路径（解开链接后的）加签名要求：编译器自动加的临时签名只认这一份文件的指纹，重编一次就对不上。所以两样都固定：
+- 路径：程序总在 `app/current/muliao`（current 是复制出来的真目录）。
+- 签名：第一次安装时在 `~/.muliao/codesign/` 生成自签证书和私钥，之后每次都用它签，标识写死 `muliao`；签名要求是 `identifier muliao and certificate root = H"…"`，重编的程序也满足。用 rcodesign 签而不是系统的 codesign：codesign 只认钥匙串里受信任的证书，设受信任要在图形界面上输密码。
+
+`~/.muliao/codesign/` 丢了（或退回到 #715 之前装的版本）就要重新授权一次。查当前签名：`codesign -d -r- ~/.muliao/app/current/muliao`。
 
 所有配置（监听地址、登录密码、密钥、LLM provider 与 API key）都在一个 TOML 文件里，模板见仓库根目录 `config.example.toml`，每项都有注释。未知的键启动即报错。程序自身不读环境变量。
 
@@ -21,7 +31,7 @@ cp config.example.toml ~/.muliao/config.toml && chmod 600 ~/.muliao/config.toml 
 
 ## 服务（launchd）
 
-macOS 用 launchd 托管并自动重启，示例见 `deploy/muliao.plist.example`。plist 运行的是**服务入口** `~/.local/bin/muliao`，它是指向 `~/.muliao/app/current/muliao` 的链接（程序先解开链接，再到安装目录里找前端）：
+macOS 用 launchd 托管并自动重启，示例见 `deploy/muliao.plist.example`。plist 运行的是**服务入口** `~/.local/bin/muliao`，它是指向 `~/.muliao/app/current/muliao` 的链接（程序先解开链接，再到它旁边的 `web/` 找前端）：
 
 ```bash
 ln -sfn ~/.muliao/app/current/muliao ~/.local/bin/muliao
@@ -31,9 +41,9 @@ launchctl kickstart -k gui/$(id -u)/com.muliao    # 重启（升级后）
 deploy/selfcheck.sh <commit>                      # 重启后自检（在仓库里跑）
 ```
 
-为什么经过一个链接、换版本不改 plist：从服务里起的进程（agent 的命令和它脱离出去的脚本）执行 `launchctl bootstrap` 一律报「5: Input/output error」（#706 实测，#644 服务停了起不来也是它），只有 `kickstart`、`kill` 能用。所以 plist 装好就不动，换版本只改链接再 `kickstart -k`。`deploy/` 下的切换、回滚脚本也照这个做：要让服务停着换库时，把入口暂时指向 `deploy/hold.sh`（launchd 拉起的只是一个在等的脚本），换好库再把入口指向要跑的程序，hold.sh 随即 exec 过去（见 `deploy/lib.sh`）。改了 plist 本身（环境变量、ExitTimeOut）要在登录的终端里 `launchctl bootout` 再 `bootstrap` 才生效，`kickstart` 不重读。
+为什么经过一个链接、换版本不改 plist：从服务里起的进程（agent 的命令和它脱离出去的脚本）执行 `launchctl bootstrap` 一律报「5: Input/output error」（#706 实测，#644 服务停了起不来也是它），只有 `kickstart`、`kill` 能用。所以 plist 装好就不动，换版本只换 `app/current` 再 `kickstart -k`。`deploy/` 下的切换、回滚脚本也照这个做：要让服务停着换库时，把入口暂时指向 `deploy/hold.sh`（launchd 拉起的只是一个在等的脚本），换好库再把入口指向要跑的程序，hold.sh 随即 exec 过去（见 `deploy/lib.sh`）。改了 plist 本身（环境变量、ExitTimeOut）要在登录的终端里 `launchctl bootout` 再 `bootstrap` 才生效，`kickstart` 不重读。
 
-`deploy/selfcheck.sh` 做部署后的通用检查并逐项打印 PASS/FAIL 和依据：进程启动时间晚于安装时间（`app/current` 链接的修改时间）、已装版本（`app/current/COMMIT`）包含目标 commit、日志里本进程的启动行（`muliao is serving ... pid=<pid>`）之后没有 ERROR、端口返回 200、`launchctl` 的 runs 隔 60 秒（`RUNS_WAIT`）不增长（不增长＝没有循环重启）。任一失败退出码为 1；只报告，不处理。
+`deploy/selfcheck.sh` 做部署后的通用检查并逐项打印 PASS/FAIL 和依据：进程启动时间晚于安装时间（`app/current` 目录的修改时间）、已装版本（`app/current/COMMIT`）包含目标 commit、日志里本进程的启动行（`muliao is serving ... pid=<pid>`）之后没有 ERROR、端口返回 200、`launchctl` 的 runs 隔 60 秒（`RUNS_WAIT`）不增长（不增长＝没有循环重启）。任一失败退出码为 1；只报告，不处理。
 
 重启或停止时服务收到 SIGTERM，按 docs/architecture.md 的关停流程收尾（界面的 SSE 长连接先结束、浏览器稍后自动重连；在跑的运行停在已保存的一步；后台任务的进程组被结束并通知 agent）。示例 plist 设了 `ExitTimeOut` 60：launchd 不设时 `kickstart -k` 约 5 秒就 SIGKILL，后台任务的进程会脱离服务继续运行、无人监督。
 

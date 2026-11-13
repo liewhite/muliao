@@ -2,10 +2,11 @@
 # 编译并安装 Rust 版 muliao：用法 deploy/install.sh [分支或 tag，默认 main]
 #
 # 在 $MULIAO_BUILD/src（默认 ~/.muliao/build/src，常驻的仓库副本，保留编译缓存和 node_modules）检出要装的版本，
-# release 编译 muliao 与 muliao-migrate、构建前端，放进新目录 $MULIAO_HOME/app/<时间>-<commit>/，再把 app/current 指过去。
-# 只装不重启：服务（plist 指向 app/current）重启后才用上新版。保留最近 3 个版本目录，退回上一版：
-#   ln -sfn $MULIAO_HOME/app/<上一版目录> $MULIAO_HOME/app/current，再重启服务。
-# 依赖：~/.cargo/bin/cargo（rustup）、npm（Homebrew）；Cargo.lock 与 package-lock.json 锁定版本（--locked / npm ci）。
+# release 编译 muliao 与 muliao-migrate、构建前端，用固定证书签名 muliao，放进新目录 $MULIAO_HOME/app/<时间>-<commit>/，
+# 再把它复制成 app/current（路径和签名固定，macOS 的文件访问授权才不丢，见 lib.sh 开头）。
+# 重启后才用上新程序（前端装完就是新的）。保留最近 3 个版本目录，退回上一版：deploy/activate.sh <上一版目录>，再重启服务。
+# 依赖：~/.cargo/bin/cargo（rustup）、~/.cargo/bin/rcodesign（cargo install --locked apple-codesign）、npm（Homebrew）；
+# Cargo.lock 与 package-lock.json 锁定版本（--locked / npm ci）。
 set -eu
 . "$(dirname "$0")/lib.sh"
 REF=${1:-main}
@@ -33,15 +34,15 @@ mkdir -p "$APP"
 rm -rf "$dest.tmp"
 mkdir "$dest.tmp"
 cp "$SRC/server/target/release/muliao" "$SRC/server/target/release/muliao-migrate" "$dest.tmp/"
+sign_program "$dest.tmp/muliao" || die "signing $dest.tmp/muliao failed"
 cp -R "$SRC/web/dist" "$dest.tmp/web"
 echo "$sha" > "$dest.tmp/COMMIT"
 mv "$dest.tmp" "$dest"
-prev=$(readlink "$APP/current" 2>/dev/null || true)
-ln -sfn "$dest" "$APP/current"
+prev=$(cat "$APP/current/COMMIT" 2>/dev/null || true)
+activate "$dest" || die "could not activate $dest"
 say "installed $sha into $dest (previous: ${prev:-none}); restart the service to apply"
 
-# 只留最近 3 个版本目录（current 指着的总在其中：它是刚装的）。连装 3 次不重启的话，正在跑的那版目录会被删，
-# 界面要等重启后才回来；罕见，不处理
+# 只留最近 3 个版本目录（服务跑的是 current 里的副本，删版本目录不影响它）
 ls -1d "$APP"/2*-* 2>/dev/null | sort -r | tail -n +4 | while read -r old; do
   rm -rf "$old"
   say "removed old version $old"
