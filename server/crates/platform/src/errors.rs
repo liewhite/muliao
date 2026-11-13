@@ -1,7 +1,8 @@
 //! 各领域共用的错误（[`Error`]），只分三类，调用方按类处理：
 //! - 领域错误（[`DomainError`]）：调用方（用户或模型）给的输入不对、要的东西不存在、和现状冲突等，改了输入就能成。
 //!   HTTP 层按种类映射成 4xx，工具层交还模型修正。
-//! - 外部服务出错（模型接口、转写服务、网页搜索与抓取）：原因给用户看（HTTP 502），暂时性的稍后原样重试可能就成。
+//! - 外部服务（模型接口、转写服务、网页搜索与抓取）出错，按会不会自己好分两种：暂时不可用（[`Error::Unavailable`]，
+//!   稍后原样重试可能就成）与出错（[`Error::Upstream`]，重试也不会好）。原因都给用户看（HTTP 502）。
 //! - 内部错误：库与文件系统出错、系统自己存的数据坏了、程序错误。HTTP 500（原因只进日志），工具里让这次运行失败。
 //!   个别调用方要认出其中某一种（文件系统出错、触发器存下的配置坏了）时用 [`Error::internal_as`] 按类型认，不加变体。
 
@@ -11,8 +12,12 @@ use std::fmt;
 pub enum Error {
     #[error(transparent)]
     Domain(#[from] DomainError),
-    #[error("{message}")]
-    Upstream { message: String, transient: bool },
+    /// 外部服务暂时不可用（网络断、限流、服务端临时故障）
+    #[error("{0}")]
+    Unavailable(String),
+    /// 外部服务出错且不会自己好（拒绝请求、配置不对）
+    #[error("{0}")]
+    Upstream(String),
     #[error(transparent)]
     Internal(Box<dyn std::error::Error + Send + Sync>),
 }
@@ -41,7 +46,7 @@ impl Error {
 
     /// 暂时性的失败（外部服务暂时不可用）：稍后原样重试可能就成。
     pub fn is_transient(&self) -> bool {
-        matches!(self, Error::Upstream { transient: true, .. })
+        matches!(self, Error::Unavailable(_))
     }
 }
 

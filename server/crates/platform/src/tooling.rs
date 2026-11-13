@@ -183,7 +183,7 @@ impl From<Error> for ToolError {
     fn from(e: Error) -> Self {
         match e {
             Error::Domain(d) => d.into(),
-            e @ Error::Upstream { transient: true, .. } => ToolError::Unavailable(Box::new(e)),
+            e @ Error::Unavailable(_) => ToolError::Unavailable(Box::new(e)),
             other => ToolError::Abort(Box::new(other)),
         }
     }

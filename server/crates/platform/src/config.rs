@@ -114,39 +114,65 @@ pub struct PushConfig {
     pub vapid_subject: String,
 }
 
-/// 模型接口的协议（agenter 支持的两种）
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-pub enum ProviderType {
+/// 模型接口的协议（agenter 支持的两种），带着只属于该协议的设置
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Protocol {
+    /// prompt_cache：是否在请求里放 prompt caching 的缓存断点（默认放）
+    Anthropic {
+        prompt_cache: bool,
+    },
+    OpenAiResponses,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(try_from = "RawProvider")]
+pub struct ProviderConfig {
+    pub protocol: Protocol,
+    pub api_key: Secret,
+    /// 为空时用该协议的官方地址；OpenAI 兼容服务填其地址
+    pub base_url: Option<String>,
+    /// 同时进行的模型请求上限（这个 provider 下所有模型、所有 agent 共用；流式请求在整个流期间占一个）
+    pub max_concurrency: usize,
+}
+
+/// 配置文件里 provider 一节的写法：协议名与各协议的设置平铺在一起，读入时解析成 [`ProviderConfig`]
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawProvider {
+    #[serde(rename = "type")]
+    kind: ProviderKind,
+    api_key: Secret,
+    base_url: Option<String>,
+    /// 只属于 anthropic：别的协议下填它多半是误解，所以填了即报错
+    prompt_cache: Option<bool>,
+    #[serde(default = "default_max_concurrency")]
+    max_concurrency: usize,
+}
+
+#[derive(Deserialize)]
+enum ProviderKind {
     #[serde(rename = "anthropic")]
     Anthropic,
     #[serde(rename = "openai-responses")]
     OpenAiResponses,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ProviderConfig {
-    #[serde(rename = "type")]
-    pub kind: ProviderType,
-    pub api_key: Secret,
-    /// 为空时用该协议的官方地址；OpenAI 兼容服务填其地址
-    pub base_url: Option<String>,
-    /// 只对 anthropic 有意义：是否在请求里放 prompt caching 的缓存断点。别的协议下填它多半是误解，所以填了即报错。
-    /// 用 [`ProviderConfig::prompt_cache`] 取值
-    #[serde(rename = "prompt_cache")]
-    prompt_cache_set: Option<bool>,
-    /// 同时进行的模型请求上限（这个 provider 下所有模型、所有 agent 共用；流式请求在整个流期间占一个）
-    #[serde(default = "default_max_concurrency")]
-    pub max_concurrency: usize,
-}
-
 fn default_max_concurrency() -> usize {
     4
 }
 
-impl ProviderConfig {
-    pub fn prompt_cache(&self) -> bool {
-        self.prompt_cache_set.unwrap_or(true)
+impl TryFrom<RawProvider> for ProviderConfig {
+    type Error = String;
+
+    fn try_from(r: RawProvider) -> Result<Self, String> {
+        let protocol = match (r.kind, r.prompt_cache) {
+            (ProviderKind::Anthropic, cache) => Protocol::Anthropic { prompt_cache: cache.unwrap_or(true) },
+            (ProviderKind::OpenAiResponses, None) => Protocol::OpenAiResponses,
+            (ProviderKind::OpenAiResponses, Some(_)) => {
+                return Err("prompt_cache only applies to type = \"anthropic\"".into());
+            }
+        };
+        Ok(Self { protocol, api_key: r.api_key, base_url: r.base_url, max_concurrency: r.max_concurrency })
     }
 }
 
@@ -423,9 +449,6 @@ impl Raw {
         for (name, p) in &self.llm.providers {
             at_least(&mut e, &format!("llm.providers.{name}.api_key length"), p.api_key.0.len(), 1);
             at_least(&mut e, &format!("llm.providers.{name}.max_concurrency"), p.max_concurrency, 1);
-            if p.kind != ProviderType::Anthropic && p.prompt_cache_set.is_some() {
-                e.push(format!("llm.providers.{name}.prompt_cache only applies to type = \"anthropic\""));
-            }
         }
         match split_model(&self.llm.default_model) {
             Ok((provider, _)) if !self.llm.providers.contains_key(provider) => e.push(format!(
@@ -493,7 +516,7 @@ precheck_timeout_seconds = 60
         assert_eq!(s.server.port, 8000);
         assert_eq!(s.runtime.precheck_timeout_seconds, 60.0);
         assert_eq!(s.runtime.compaction_threshold_tokens, 100_000);
-        assert!(s.llm.providers["claude"].prompt_cache());
+        assert_eq!(s.llm.providers["claude"].protocol, Protocol::Anthropic { prompt_cache: true });
         assert!(s.private_files().contains(&PathBuf::from("/home/u/.muliao/config.toml.prev")));
         // 密钥不进 Debug 输出
         assert!(!format!("{s:?}").contains("sk-xyz"));
@@ -510,7 +533,9 @@ precheck_timeout_seconds = 60
         let google = MINIMAL.replace("type = \"anthropic\"", "type = \"google\"");
         assert!(parse(&google).is_err());
         let cache = MINIMAL.replace("type = \"anthropic\"", "type = \"openai-responses\"\nprompt_cache = false");
-        assert!(parse(&cache).unwrap_err().to_string().contains("prompt_cache"));
+        let err = parse(&cache).unwrap_err().to_string();
+        // 报错带行号，指得出是哪个 provider
+        assert!(err.contains("prompt_cache") && err.contains("line 15"), "{err}");
         let numeric = MINIMAL.replace("\"sk-xyz\"", "987654321");
         let err = parse(&numeric).unwrap_err().to_string();
         assert!(err.contains("must be a string") && !err.contains("987654321"), "{err}");

@@ -73,9 +73,8 @@ impl Failure {
     fn into_error(self) -> Error {
         match self.status {
             Some(s) if self.contract && REJECTED_INPUT.contains(&s) => invalid(self.reason),
-            status => {
-                Error::Upstream { transient: status.is_none_or(|s| TRANSIENT.contains(&s)), message: self.reason }
-            }
+            status if status.is_none_or(|s| TRANSIENT.contains(&s)) => Error::Unavailable(self.reason),
+            _ => Error::Upstream(self.reason),
         }
     }
 }

@@ -88,7 +88,7 @@ async fn upstream_failures_carry_the_reason() {
         Mock::given(method("POST")).respond_with(resp).mount(&server).await;
         let err =
             transcriber(&server.uri(), "").transcribe(b"x", &MediaType::parse("audio/ogg").unwrap()).await.unwrap_err();
-        let Error::Upstream { message: reason, .. } = err else { panic!("{err}") };
+        let Error::Upstream(reason) = err else { panic!("{err}") };
         assert!(reason.starts_with("transcription failed (asr): "), "{reason}");
         assert!(reason.contains(want), "{reason}");
     }
@@ -97,5 +97,5 @@ async fn upstream_failures_carry_the_reason() {
         .transcribe(b"x", &MediaType::parse("audio/ogg").unwrap())
         .await
         .unwrap_err();
-    assert!(matches!(err, Error::Upstream { .. }), "{err}");
+    assert!(matches!(err, Error::Upstream(_)), "{err}");
 }

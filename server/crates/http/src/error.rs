@@ -79,7 +79,7 @@ impl From<Error> for ApiError {
         match e {
             Error::Domain(d) => Self::from(d),
             // 原因给已登录的用户看
-            Error::Upstream { message, .. } => Self::new(StatusCode::BAD_GATEWAY, message),
+            Error::Unavailable(message) | Error::Upstream(message) => Self::new(StatusCode::BAD_GATEWAY, message),
             Error::Internal(e) => {
                 tracing::error!(error = %e, "request failed");
                 Self::new(StatusCode::INTERNAL_SERVER_ERROR, "internal server error (see the service log)")

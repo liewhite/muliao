@@ -260,7 +260,11 @@ async fn a_run_from_start_to_finish() {
     assert!(notices.contains("MCP server \"nokey\"") && notices.contains("NOPE"), "{notices}");
     assert!(notices.contains("MCP server \"down\" failed"), "{notices}");
     assert!(notices.contains("MCP server \"local\" failed") && notices.contains("/nonexistent/wrapped"), "{notices}");
-    assert_eq!(*w.confined.lock().unwrap(), std::slice::from_ref(&me), "the stdio server is confined as the agent using it");
+    assert_eq!(
+        *w.confined.lock().unwrap(),
+        std::slice::from_ref(&me),
+        "the stdio server is confined as the agent using it"
+    );
 
     // 用户发来一张图片附件
     let meta = w.files.put("photo.png", MediaType::parse("image/png").unwrap(), PNG).await.unwrap();

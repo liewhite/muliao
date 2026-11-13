@@ -123,7 +123,7 @@ impl DashScope {
 
     fn failed(&self, reason: String, format: &str, size: usize) -> Error {
         tracing::warn!(model = %self.model, format, bytes = size, %reason, "transcription failed");
-        Error::Upstream { message: format!("transcription failed ({}): {reason}", self.model), transient: false }
+        Error::Upstream(format!("transcription failed ({}): {reason}", self.model))
     }
 }
 

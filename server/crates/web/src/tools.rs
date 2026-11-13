@@ -118,7 +118,7 @@ mod tests {
         fn search<'a>(&'a self, query: &'a str, limit: u32) -> BoxFuture<'a, Result<Vec<SearchHit>>> {
             Box::pin(async move {
                 match query {
-                    "down" => Err(Error::Upstream { message: "down".into(), transient: true }),
+                    "down" => Err(Error::Unavailable("down".into())),
                     _ => Ok(vec![SearchHit {
                         title: format!("{query}:{limit}"),
                         url: "u".into(),

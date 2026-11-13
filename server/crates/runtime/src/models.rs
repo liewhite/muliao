@@ -11,23 +11,22 @@ use agenter::anthropic::AnthropicModel;
 use agenter::openai_responses::OpenAIResponsesModel;
 use agenter::{Effort, Limit, Model};
 use muliao_assets::formats::agent_file::Thinking;
-use muliao_platform::config::{LlmConfig, ProviderType, split_model};
+use muliao_platform::config::{LlmConfig, Protocol, split_model};
 use muliao_platform::errors::{DomainError, Error};
 
 /// 各协议的官方地址：配置不写 base_url 时用（永远显式给地址，不让 SDK 读环境变量）。
-fn official_base_url(kind: ProviderType) -> &'static str {
-    match kind {
+fn official_base_url(protocol: Protocol) -> &'static str {
+    match protocol {
         // agenter 的 Anthropic 地址不带 /v1
-        ProviderType::Anthropic => "https://api.anthropic.com",
-        ProviderType::OpenAiResponses => "https://api.openai.com/v1",
+        Protocol::Anthropic { .. } => "https://api.anthropic.com",
+        Protocol::OpenAiResponses => "https://api.openai.com/v1",
     }
 }
 
 struct Provider {
-    kind: ProviderType,
+    protocol: Protocol,
     api_key: String,
     base_url: String,
-    prompt_cache: bool,
     limit: Limit,
 }
 
@@ -56,10 +55,9 @@ impl ModelRegistry {
             .iter()
             .map(|(name, cfg)| {
                 let provider = Provider {
-                    kind: cfg.kind,
+                    protocol: cfg.protocol,
                     api_key: cfg.api_key.expose().to_owned(),
-                    base_url: cfg.base_url.clone().unwrap_or_else(|| official_base_url(cfg.kind).to_owned()),
-                    prompt_cache: cfg.prompt_cache(),
+                    base_url: cfg.base_url.clone().unwrap_or_else(|| official_base_url(cfg.protocol).to_owned()),
                     limit: Limit::new(format!("provider:{name}"), cfg.max_concurrency),
                 };
                 (name.clone(), provider)
@@ -98,11 +96,11 @@ impl ModelRegistry {
     pub fn resolve(&self, model: &str) -> Result<Arc<dyn Model>, DomainError> {
         let (p, name) = self.split(model)?;
         let http = self.http.clone();
-        Ok(match p.kind {
-            ProviderType::Anthropic => Arc::new(
-                p.limit.wrap(AnthropicModel::new(http, &p.base_url, &p.api_key, name).prompt_cache(p.prompt_cache)),
+        Ok(match p.protocol {
+            Protocol::Anthropic { prompt_cache } => Arc::new(
+                p.limit.wrap(AnthropicModel::new(http, &p.base_url, &p.api_key, name).prompt_cache(prompt_cache)),
             ),
-            ProviderType::OpenAiResponses => {
+            Protocol::OpenAiResponses => {
                 Arc::new(p.limit.wrap(OpenAIResponsesModel::new(http, &p.base_url, &p.api_key, name)))
             }
         })
@@ -116,9 +114,9 @@ impl ModelRegistry {
                 self.provider_names()
             ))
         })?;
-        let listed = match p.kind {
-            ProviderType::Anthropic => agenter::anthropic::list_models(&self.http, &p.base_url, &p.api_key).await,
-            ProviderType::OpenAiResponses => {
+        let listed = match p.protocol {
+            Protocol::Anthropic { .. } => agenter::anthropic::list_models(&self.http, &p.base_url, &p.api_key).await,
+            Protocol::OpenAiResponses => {
                 agenter::openai_responses::list_models(&self.http, &p.base_url, &p.api_key).await
             }
         };
@@ -130,10 +128,7 @@ impl ModelRegistry {
             }
             Err(e) => {
                 tracing::warn!(provider = provider_name, error = %e, "listing models failed");
-                Err(Error::Upstream {
-                    message: format!("provider {provider_name:?} failed to list models: {e}"),
-                    transient: false,
-                })
+                Err(Error::Upstream(format!("provider {provider_name:?} failed to list models: {e}")))
             }
         }
     }

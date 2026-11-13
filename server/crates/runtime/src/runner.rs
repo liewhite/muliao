@@ -198,9 +198,9 @@ impl Runtime {
             metadata: None,
         })];
         let meter = Meter::new(self.d.usage.clone(), &dir.id, Some(session_id), dir.file.model(), RunKind::Compaction);
-        let step = agent.step(&(), &history, &HashMap::new(), &mut |_| {}).await.map_err(|e| Error::Upstream {
-            message: format!("summarizing for compaction failed: {e}"),
-            transient: e.is_transient(),
+        let step = agent.step(&(), &history, &HashMap::new(), &mut |_| {}).await.map_err(|e| {
+            let message = format!("summarizing for compaction failed: {e}");
+            if e.is_transient() { Error::Unavailable(message) } else { Error::Upstream(message) }
         })?;
         match step {
             Step::Responded(r) => {

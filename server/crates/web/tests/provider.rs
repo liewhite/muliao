@@ -60,8 +60,8 @@ async fn search_errors_are_classified_by_status_and_contract() {
         let err = provider(&server).await.search("q", 1).await.unwrap_err();
         let got = match &err {
             Error::Domain(_) => "rejected",
-            Error::Upstream { transient: true, .. } => "transient",
-            Error::Upstream { transient: false, .. } => "failed",
+            Error::Unavailable(_) => "transient",
+            Error::Upstream(_) => "failed",
             Error::Internal(_) => "internal",
         };
         assert_eq!(got, want, "{err}");
@@ -174,7 +174,7 @@ async fn fetch_does_not_fall_back_on_bad_input_or_configuration() {
         Mock::given(method("GET")).respond_with(ResponseTemplate::new(200)).expect(0).mount(&server).await;
         let err = provider(&server).await.fetch(&format!("{}/x", server.uri())).await.unwrap_err();
         assert_eq!(matches!(err, Error::Domain(_)), want_rejected, "{status}: {err}");
-        assert_eq!(matches!(err, Error::Upstream { transient: false, .. }), !want_rejected, "{status}: {err}");
+        assert_eq!(matches!(err, Error::Upstream(_)), !want_rejected, "{status}: {err}");
     }
 }
 
