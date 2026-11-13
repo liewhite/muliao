@@ -20,19 +20,16 @@ pub enum McpTransport {
     Http,
 }
 
-/// 一个 MCP server 的连接配置（字段搭配校验过，只能经 [`McpConfig::new`] 或读文件得到）。
+/// 一个 MCP server 的连接配置：每种传输方式只带自己的字段（外部输入经 [`McpConfig::new`] 或读文件在边界解析一次）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct McpConfig {
-    transport: McpTransport,
-    command: Option<String>,
-    args: Vec<String>,
-    url: Option<String>,
-    env: BTreeMap<String, String>,
-    headers: BTreeMap<String, String>,
+#[serde(tag = "transport", rename_all = "lowercase")]
+pub enum McpConfig {
+    Stdio { command: String, args: Vec<String>, env: BTreeMap<String, String> },
+    Http { url: String, headers: BTreeMap<String, String> },
 }
 
 impl McpConfig {
-    /// 调用方（用户、agent）给出的配置；不合传输方式的搭配是输入错误。
+    /// 调用方（用户、agent、文件）按扁平字段给出的配置；不合传输方式的搭配是输入错误。空串与没给一样。
     pub fn new(
         transport: McpTransport,
         command: Option<String>,
@@ -41,54 +38,43 @@ impl McpConfig {
         env: BTreeMap<String, String>,
         headers: BTreeMap<String, String>,
     ) -> Result<Self, String> {
-        let config = Self { transport, command, args, url, env, headers };
-        config.check().map_err(|e| format!("invalid MCP server config: {e}"))?;
-        Ok(config)
-    }
-
-    fn check(&self) -> Result<(), &'static str> {
-        match self.transport {
-            McpTransport::Stdio => {
-                if !set(&self.command) || set(&self.url) || !self.headers.is_empty() {
-                    return Err("stdio MCP server requires 'command' and must not set 'url' or 'headers'");
-                }
+        let bad = |e: &str| format!("invalid MCP server config: {e}");
+        let given = |v: Option<String>| v.filter(|v| !v.is_empty());
+        match (transport, given(command), given(url)) {
+            (McpTransport::Stdio, Some(command), None) if headers.is_empty() => {
+                Ok(McpConfig::Stdio { command, args, env })
             }
-            McpTransport::Http => {
-                let url = self.url.as_deref().unwrap_or("");
-                if url.is_empty() || set(&self.command) || !self.args.is_empty() || !self.env.is_empty() {
-                    return Err("http MCP server requires 'url' and must not set 'command', 'args' or 'env'");
-                }
+            (McpTransport::Stdio, ..) => {
+                Err(bad("stdio MCP server requires 'command' and must not set 'url' or 'headers'"))
+            }
+            (McpTransport::Http, None, Some(url)) if args.is_empty() && env.is_empty() => {
                 if !(url.starts_with("http://") || url.starts_with("https://")) {
-                    return Err("MCP url must start with http:// or https://");
+                    return Err(bad("MCP url must start with http:// or https://"));
                 }
+                Ok(McpConfig::Http { url, headers })
+            }
+            (McpTransport::Http, ..) => {
+                Err(bad("http MCP server requires 'url' and must not set 'command', 'args' or 'env'"))
             }
         }
-        Ok(())
     }
 
     pub fn transport(&self) -> McpTransport {
-        self.transport
+        match self {
+            McpConfig::Stdio { .. } => McpTransport::Stdio,
+            McpConfig::Http { .. } => McpTransport::Http,
+        }
     }
-    pub fn command(&self) -> Option<&str> {
-        self.command.as_deref()
-    }
-    pub fn args(&self) -> &[String] {
-        &self.args
-    }
-    pub fn url(&self) -> Option<&str> {
-        self.url.as_deref()
-    }
-    pub fn env(&self) -> &BTreeMap<String, String> {
-        &self.env
-    }
-    pub fn headers(&self) -> &BTreeMap<String, String> {
-        &self.headers
-    }
-}
 
-/// 字段给了且不是空串（空串与没给一样）。
-fn set(value: &Option<String>) -> bool {
-    value.as_deref().is_some_and(|v| !v.is_empty())
+    /// 可以含 `${vault:KEY}` 的值（args、env、url、headers）。
+    pub fn templates(&self) -> Vec<&str> {
+        match self {
+            McpConfig::Stdio { args, env, .. } => args.iter().chain(env.values()).map(String::as_str).collect(),
+            McpConfig::Http { url, headers } => {
+                std::iter::once(url.as_str()).chain(headers.values().map(String::as_str)).collect()
+            }
+        }
+    }
 }
 
 /// MCP server 的内容：配置与是否启用。

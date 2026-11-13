@@ -16,8 +16,7 @@ use agenter::mcp::{McpConnection, McpServer as Server, McpTransport as Transport
 use futures::future::BoxFuture;
 use muliao_assets::access::Actor;
 use muliao_assets::error::Error as AssetError;
-use muliao_assets::formats::mcp::{McpConfig, McpTransport};
-use muliao_assets::formats::secret::{fill, refs};
+use muliao_assets::formats::mcp::McpConfig;
 use muliao_assets::mcp::{McpRegistry, McpServer};
 use muliao_assets::secrets::Secrets;
 use muliao_platform::errors::DomainError;
@@ -51,23 +50,6 @@ enum BuildError {
     System(BoxError),
 }
 
-fn vault_keys(c: &McpConfig) -> Vec<String> {
-    let templates = c
-        .args()
-        .iter()
-        .chain(c.env().values())
-        .map(String::as_str)
-        .chain(c.url())
-        .chain(c.headers().values().map(String::as_str));
-    let mut keys: Vec<String> = Vec::new();
-    for k in templates.flat_map(refs) {
-        if !keys.iter().any(|x| x == k) {
-            keys.push(k.to_owned());
-        }
-    }
-    keys
-}
-
 impl McpConnector {
     pub fn new(registry: Arc<McpRegistry>, secrets: Arc<Secrets>, confine: Confine) -> Self {
         Self { registry, secrets, confine }
@@ -83,15 +65,14 @@ impl McpConnector {
         cwd: Option<&Path>,
     ) -> Result<(Server, BTreeMap<String, String>), BuildError> {
         let c = &server.config;
-        let secrets = self.secrets.resolve(user, &vault_keys(c), false).await.map_err(|e| match e.domain() {
+        let secrets = self.secrets.resolve_refs(user, &c.templates(), false).await.map_err(|e| match e.domain() {
             Some(d) => BuildError::Skip(format!("MCP server {:?}: {d}", server.name)),
             None => BuildError::System(Box::new(e)),
         })?;
-        let transport = match c.transport() {
-            McpTransport::Stdio => {
-                let command = c.command().expect("a stdio config has a command (checked when it was read)");
+        let transport = match c {
+            McpConfig::Stdio { command, args, env } => {
                 let mut argv: Vec<String> =
-                    std::iter::once(command.to_owned()).chain(c.args().iter().map(|a| fill(a, &secrets))).collect();
+                    std::iter::once(command.to_owned()).chain(args.iter().map(|a| secrets.fill(a))).collect();
                 let confined_as = match user {
                     Actor::Agent(id) => Some(id.clone()),
                     Actor::User => server.owner.agent().map(str::to_owned),
@@ -103,16 +84,16 @@ impl McpConnector {
                 Transport::Stdio {
                     command: argv.next().expect("argv has the command"),
                     args: argv.collect(),
-                    env: c.env().iter().map(|(k, v)| (k.clone(), fill(v, &secrets))).collect(),
+                    env: env.iter().map(|(k, v)| (k.clone(), secrets.fill(v))).collect(),
                     cwd: cwd.map(Path::to_path_buf),
                 }
             }
-            McpTransport::Http => Transport::Http {
-                url: fill(c.url().expect("an http config has a url (checked when it was read)"), &secrets),
-                headers: c.headers().iter().map(|(k, v)| (k.clone(), fill(v, &secrets))).collect(),
+            McpConfig::Http { url, headers } => Transport::Http {
+                url: secrets.fill(url),
+                headers: headers.iter().map(|(k, v)| (k.clone(), secrets.fill(v))).collect(),
             },
         };
-        Ok((Server { name: server.name.clone(), transport }, secrets))
+        Ok((Server { name: server.name.clone(), transport }, secrets.into_values()))
     }
 
     async fn connect_one(

@@ -120,15 +120,12 @@ pub struct McpConfigOut {
 
 impl McpConfigOut {
     fn of(c: &McpConfig, enabled: bool) -> Self {
-        McpConfigOut {
-            transport: c.transport(),
-            command: c.command().map(str::to_owned),
-            args: c.args().to_vec(),
-            url: c.url().map(str::to_owned),
-            env: c.env().clone(),
-            headers: c.headers().clone(),
-            enabled,
-        }
+        let (none, empty) = (None, BTreeMap::new());
+        let (command, args, url, env, headers) = match c {
+            McpConfig::Stdio { command, args, env } => (Some(command.clone()), args.clone(), none, env.clone(), empty),
+            McpConfig::Http { url, headers } => (None, Vec::new(), Some(url.clone()), empty, headers.clone()),
+        };
+        McpConfigOut { transport: c.transport(), command, args, url, env, headers, enabled }
     }
 }
 
