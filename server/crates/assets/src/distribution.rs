@@ -75,11 +75,6 @@ impl Distribution {
 
     // ---- agent 的规则 ----
 
-    /// agent 的最终规则（base + 角色 + 自己的 allow / deny），按角色现在的定义算：运行开放哪些工具。
-    pub async fn rules(&self, agent_id: &str) -> Result<Rules> {
-        Ok(grants_for(&*self.source.snapshot().await?, &Actor::Agent(agent_id.to_owned())).rules().clone())
-    }
-
     /// agent 现在能写哪里（写沙箱用）：资源树按归属，加 `write:path` 授权。
     pub async fn write_scope(&self, agent_id: &str) -> Result<WriteScope> {
         Ok(write_scope(&*self.source.snapshot().await?, agent_id))

@@ -8,13 +8,9 @@ use std::time::Duration;
 
 use agenter::{Message, RequestPart, Tool, ToolCtx, ToolError, ToolOutput};
 use muliao_assets::access::Actor;
-use muliao_assets::distribution::Distribution;
-use muliao_assets::mcp::McpRegistry;
-use muliao_assets::memory::MemoryStore;
 use muliao_assets::rules::ToolTable;
 use muliao_assets::secrets::Secrets;
 use muliao_assets::service::{AgentService, AgentSpec};
-use muliao_assets::skills::SkillStore;
 use muliao_assets::source::AssetSource;
 use muliao_files::FileStore;
 use muliao_platform::bus::Bus;
@@ -235,16 +231,13 @@ async fn world() -> World {
     binder.bind(toolbox.specs());
     let confine: Confine =
         Arc::new(|_agent: String| async { Err(muliao_platform::errors::broken("no MCP in this test")) }.boxed());
-    let mcp = Arc::new(McpConnector::new(Arc::new(McpRegistry::new(source.clone())), secrets, confine));
+    let mcp = Arc::new(McpConnector::new(secrets, confine));
     let runtime = Arc::new(Runtime::new(RuntimeDeps {
         models,
         toolbox: toolbox.clone(),
         mcp,
         source: source.clone(),
         agents: agents.clone(),
-        distribution: Arc::new(Distribution::new(source.clone())),
-        memory: Arc::new(MemoryStore::new(source.clone())),
-        skills: Arc::new(SkillStore::new(source.clone())),
         files: files.clone(),
         usage,
         tz,

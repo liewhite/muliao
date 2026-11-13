@@ -8,7 +8,8 @@
 //!   唯一判断及派生（reach、分发情况、写沙箱的领域输入）；[`distribution`]：角色与 agent 规则的门面。
 //! - [`agents`]：agents 表（别的领域在自己的事务里用 `*_in` 查询）；[`service`]：建、改、默认、查看；[`lifecycle`]：删除与
 //!   归档（各领域的清理与归档前检查由组合根登记）。
-//! - [`memory`]、[`skills`]、[`mcp`]、[`secrets`]、[`catalog`]：各种资源的读写。
+//! - [`memory`]、[`skills`]、[`mcp`]、[`secrets`]、[`catalog`]：各种资源的读写；[`run_assets`]：一次运行要的这个 agent 的
+//!   全部资源（出自同一份快照）。
 //!
 //! - [`tools`]：本领域的工具（list_agents、get_agent、create_agent、delete_agent、vault_set）。
 
@@ -25,6 +26,7 @@ pub mod mcp;
 pub mod memory;
 pub mod naming;
 pub mod rules;
+pub mod run_assets;
 pub mod secrets;
 pub mod service;
 pub mod skills;

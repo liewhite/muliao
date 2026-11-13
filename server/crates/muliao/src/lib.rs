@@ -139,7 +139,6 @@ pub async fn assemble(settings: Settings, web_dir: PathBuf) -> anyhow::Result<Ap
     });
     // MCP 的 stdio server 与 agent 的命令关在同一个写沙箱里
     let mcp_connector = Arc::new(McpConnector::new(
-        mcp.clone(),
         secrets.clone(),
         muliao_workspace::commands::confine(workspace.confiner.clone()),
     ));
@@ -199,9 +198,6 @@ pub async fn assemble(settings: Settings, web_dir: PathBuf) -> anyhow::Result<Ap
         mcp: mcp_connector.clone(),
         source: source.clone(),
         agents: agents.clone(),
-        distribution: distribution.clone(),
-        memory: memory.clone(),
-        skills: skills.clone(),
         files: files.clone(),
         usage: usage.clone(),
         tz,

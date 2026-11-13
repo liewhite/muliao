@@ -92,7 +92,7 @@ pub async fn world(max_output_chars: usize) -> World {
     std::fs::create_dir_all(root.join("platform/memory")).unwrap();
     std::fs::write(root.join("platform/memory/global.md"), "全局记忆\n").unwrap();
     let (table, binder) = ToolTable::pending();
-    let source = Arc::new(AssetSource::new(db.clone(), root.clone(), 4000, Arc::new(|_, _| Ok(())), table.clone()));
+    let source = Arc::new(AssetSource::new(db.clone(), root.clone(), 4000, Arc::new(|_| Ok(())), table.clone()));
     let workspaces = dir.path().join("workspaces");
     let agents = AgentService::new(source.clone(), workspaces.clone(), "claude:m".into());
     let vault = Arc::new(Vault::new("3QOHdQSfwdIhMog5wkCMiIBXFANh4YdV-XA9xY3RmyY=").unwrap());

@@ -50,7 +50,7 @@ pub fn tools() -> Arc<ToolTable> {
 /// 模型只认 `p:` 开头的
 pub fn model_check() -> ModelCheck {
     Arc::new(
-        |model: &str, _| if model.starts_with("p:") { Ok(()) } else { Err(format!("unknown provider in {model:?}")) },
+        |model: &str| if model.starts_with("p:") { Ok(()) } else { Err(format!("unknown provider in {model:?}")) },
     )
 }
 

@@ -12,13 +12,10 @@ use agenter::{
 use chrono::Utc;
 use futures::FutureExt;
 use muliao_assets::access::Actor;
-use muliao_assets::distribution::Distribution;
 use muliao_assets::mcp::McpRegistry;
-use muliao_assets::memory::MemoryStore;
 use muliao_assets::rules::ToolTable;
 use muliao_assets::secrets::Secrets;
 use muliao_assets::service::{AgentService, AgentSpec};
-use muliao_assets::skills::SkillStore;
 use muliao_assets::source::AssetSource;
 use muliao_files::FileStore;
 use muliao_platform::config::Settings;
@@ -203,16 +200,13 @@ base_url = "{}"
         }
         .boxed()
     });
-    let mcp = Arc::new(McpConnector::new(Arc::new(McpRegistry::new(source.clone())), secrets, confine));
+    let mcp = Arc::new(McpConnector::new(secrets, confine));
     let runtime = Runtime::new(RuntimeDeps {
         models,
         toolbox,
         mcp: mcp.clone(),
         source: source.clone(),
         agents: agents.clone(),
-        distribution: Arc::new(Distribution::new(source.clone())),
-        memory: Arc::new(MemoryStore::new(source.clone())),
-        skills: Arc::new(SkillStore::new(source.clone())),
         files: files.clone(),
         usage: usage.clone(),
         tz: chrono_tz::Asia::Shanghai,
@@ -363,7 +357,7 @@ async fn probe_reports_connection_failures_to_the_caller() {
         Arc::new(Database::open(&w._dir.path().join("t.db"), Arc::new(|| {})).unwrap()),
         w.root.clone(),
         4000,
-        Arc::new(|_: &str, _| Ok(())),
+        Arc::new(|_: &str| Ok(())),
         Arc::new(ToolTable::of(vec![])),
     )));
     let shared = registry.get("shared").await.unwrap();

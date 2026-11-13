@@ -16,7 +16,7 @@ use agenter::mcp::{McpConnection, McpServer as Server, McpTransport as Transport
 use futures::future::BoxFuture;
 use muliao_assets::access::Actor;
 use muliao_assets::formats::mcp::McpConfig;
-use muliao_assets::mcp::{McpRegistry, McpServer};
+use muliao_assets::mcp::McpServer;
 use muliao_assets::secrets::Secrets;
 use muliao_platform::errors::DomainError;
 use muliao_platform::errors::Error;
@@ -36,7 +36,6 @@ pub struct Reachable {
 }
 
 pub struct McpConnector {
-    registry: Arc<McpRegistry>,
     secrets: Arc<Secrets>,
     confine: Confine,
 }
@@ -49,8 +48,8 @@ enum BuildError {
 }
 
 impl McpConnector {
-    pub fn new(registry: Arc<McpRegistry>, secrets: Arc<Secrets>, confine: Confine) -> Self {
-        Self { registry, secrets, confine }
+    pub fn new(secrets: Arc<Secrets>, confine: Confine) -> Self {
+        Self { secrets, confine }
     }
 
     /// 按 user（用它的 agent，或界面上的用户）能用的 secret 代入配置，得到连接用的配置与这份明文（脱敏用同一份）。
@@ -100,10 +99,14 @@ impl McpConnector {
         connect(&config, redactor, CONNECT_TIMEOUT).await.map_err(|e| BuildError::Skip(e.to_string()))
     }
 
-    /// agent 这次运行要连接的 server（它能用的、已启用的）都连一遍（同时连）。连不上的跳过并写进 notices；系统出错（读不了
-    /// 资源目录、拼不出写沙箱）让这次运行失败。
-    pub async fn connect_for(&self, agent_id: &str, workspace: &Path) -> Result<Reachable, Error> {
-        let servers = self.registry.index(agent_id).await?;
+    /// 这次运行要连接的 server（[`muliao_assets::run_assets::RunAssets::mcp`]：它能用的、已启用的）都连一遍（同时连）。连不上的跳过并写进 notices；
+    /// 系统出错（读不了资源目录、拼不出写沙箱）让这次运行失败。
+    pub async fn connect_for(
+        &self,
+        agent_id: &str,
+        servers: &[McpServer],
+        workspace: &Path,
+    ) -> Result<Reachable, Error> {
         let user = Actor::Agent(agent_id.to_owned());
         let attempts =
             futures::future::join_all(servers.iter().map(|s| self.connect_one(s, &user, Some(workspace)))).await;

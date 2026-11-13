@@ -14,7 +14,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use agenter::Message;
-use muliao_assets::tree::AgentDir;
+use muliao_assets::run_assets::RunAssets;
 use muliao_platform::db::Database;
 use muliao_runtime::Runtime;
 
@@ -153,7 +153,7 @@ impl Compactor {
 
     /// 用这份 agent 配置（运行中压缩时是运行的快照）的模型压缩到保留窗口之外没有可压缩的为止（每一批一次模型调用）。
     /// 返回压缩的步数；为 0 表示没有可压缩的。模型调用失败时之前批次写下的压缩仍在（每批各自提交）。
-    pub async fn compact(&self, session_id: &str, config: &AgentDir) -> Result<usize> {
+    pub async fn compact(&self, session_id: &str, config: &RunAssets) -> Result<usize> {
         let mut compacted = 0;
         loop {
             let sid = session_id.to_owned();

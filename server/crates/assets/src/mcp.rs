@@ -5,11 +5,11 @@
 use crate::tree::Expect;
 use std::sync::Arc;
 
-use crate::access::{Actor, grants_for, usable};
+use crate::access::{Actor, Grants, grants_for, usable};
 use crate::formats::mcp::{McpConfig, parse, render};
 use crate::kinds::StoredKind;
 use crate::source::AssetSource;
-use crate::tree::{Asset, Owner};
+use crate::tree::{Asset, Owner, Snapshot};
 use muliao_platform::errors::{Result, conflict};
 
 /// 一个已保存的 MCP server。env / headers / args / url 的值可以包含 `${vault:KEY}`，按用它的 agent 能用的 secret 解析。
@@ -26,6 +26,11 @@ pub fn server_of(a: &Asset) -> McpServer {
     McpServer { owner: a.owner.clone(), name: a.name.clone(), config: file.config.clone(), enabled: file.enabled }
 }
 
+/// grants 能用的、已启用的 server，按名称。
+pub(crate) fn servers_of(snapshot: &Snapshot, grants: &Grants) -> Vec<McpServer> {
+    usable(snapshot, StoredKind::Mcp, grants).into_iter().map(server_of).filter(|s| s.enabled).collect()
+}
+
 pub struct McpRegistry {
     source: Arc<AssetSource>,
 }
@@ -38,8 +43,7 @@ impl McpRegistry {
     /// agent 这次运行要连接的 server：它能用的、已启用的，按名称。
     pub async fn index(&self, agent_id: &str) -> Result<Vec<McpServer>> {
         let snapshot = self.source.snapshot().await?;
-        let grants = grants_for(&snapshot, &Actor::Agent(agent_id.to_owned()));
-        Ok(usable(&snapshot, StoredKind::Mcp, &grants).into_iter().map(server_of).filter(|s| s.enabled).collect())
+        Ok(servers_of(&snapshot, &grants_for(&snapshot, &Actor::Agent(agent_id.to_owned()))))
     }
 
     pub async fn get(&self, name: &str) -> Result<McpServer> {

@@ -7,11 +7,25 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 
-use crate::access::{Actor, grants_for, usable};
+use crate::access::{Actor, Grants, grants_for, usable};
 use crate::kinds::StoredKind;
 use crate::source::AssetSource;
-use crate::tree::{Asset, Expect, Owner, version_of};
+use crate::tree::{Asset, Expect, Owner, Snapshot, version_of};
 use muliao_platform::errors::{Result, not_found};
+
+/// 这个 agent（grants 是它的）能用的每一块记忆，按名字。
+pub(crate) fn blocks_of(snapshot: &Snapshot, grants: &Grants, agent_id: &str) -> Vec<MemoryBlock> {
+    usable(snapshot, StoredKind::Memory, grants)
+        .into_iter()
+        .map(|a| MemoryBlock {
+            name: a.name.clone(),
+            content: a.content.memory().text.clone(),
+            editable: grants.writes(a),
+            yours: a.owner.is(agent_id),
+            path: a.path.clone(),
+        })
+        .collect()
+}
 
 /// 一次运行放进指令的一块记忆。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,17 +96,7 @@ impl MemoryStore {
     /// 组装一次运行的指令时读：这个 agent 能用的每一块（自己的与规则分来的），按名字。
     pub async fn for_run(&self, agent_id: &str) -> Result<Vec<MemoryBlock>> {
         let snapshot = self.source.snapshot().await?;
-        let grants = grants_for(&snapshot, &Actor::Agent(agent_id.to_owned()));
-        Ok(usable(&snapshot, StoredKind::Memory, &grants)
-            .into_iter()
-            .map(|a| MemoryBlock {
-                name: a.name.clone(),
-                content: a.content.memory().text.clone(),
-                editable: grants.writes(a),
-                yours: a.owner.is(agent_id),
-                path: a.path.clone(),
-            })
-            .collect())
+        Ok(blocks_of(&snapshot, &grants_for(&snapshot, &Actor::Agent(agent_id.to_owned())), agent_id))
     }
 
     /// 新建或整体改写平台的一块记忆（用户在界面上编辑）。version 是打开编辑时的版本（新建为 None），期间被别处改过就

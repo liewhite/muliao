@@ -13,13 +13,10 @@ use agenter::{
 };
 use chrono::Utc;
 use chrono_tz::Tz;
-use muliao_assets::distribution::Distribution;
 use muliao_assets::kinds::ASSETS_SKILL;
-use muliao_assets::memory::MemoryStore;
 use muliao_assets::service::AgentService;
-use muliao_assets::skills::SkillStore;
 use muliao_assets::source::AssetSource;
-use muliao_assets::tree::AgentDir;
+use muliao_assets::run_assets::RunAssets;
 use muliao_files::FileStore;
 use muliao_platform::errors::Error;
 use muliao_platform::tooling::{Audience, RunScope};
@@ -39,9 +36,6 @@ pub struct RuntimeDeps {
     pub mcp: Arc<McpConnector>,
     pub source: Arc<AssetSource>,
     pub agents: Arc<AgentService>,
-    pub distribution: Arc<Distribution>,
-    pub memory: Arc<MemoryStore>,
-    pub skills: Arc<SkillStore>,
     pub files: Arc<FileStore>,
     pub usage: Arc<UsageLog>,
     /// 告诉 agent 当前本地时间用的时区
@@ -54,8 +48,8 @@ pub struct Runtime {
 
 /// 开始一次运行要的东西（会话领域给）。
 pub struct RunSpec<'a> {
-    /// 这次运行用的配置（[`Runtime::config`] 在运行开头取的一份，整次运行与压缩都用它）
-    pub config: &'a AgentDir,
+    /// 这次运行用的资源（[`Runtime::config`] 在运行开头取的一份，整次运行与压缩都用它）
+    pub config: &'a RunAssets,
     pub session_id: &'a str,
     pub audience: Audience,
     /// 会话来源的说明（会话创建时定下、整个会话不变）
@@ -96,10 +90,10 @@ impl Runtime {
         &self.d.models
     }
 
-    /// agent 现在的配置与资源目录，只认 agent.toml：没加载时 NotFound（带上原因），要它的运行当场失败，不沿用旧值。会话
-    /// 的一次运行在开头取一份，整次运行与压缩都用它。
-    pub async fn config(&self, agent_id: &str) -> Result<AgentDir, Error> {
-        Ok(self.d.source.snapshot().await?.loaded_agent(agent_id)?.clone())
+    /// agent 现在的配置与它能用的资源，出自同一份快照（[`RunAssets`]）：没加载时 NotFound（带上原因），要它的运行当场失败，
+    /// 不沿用旧值。会话的一次运行在开头取一份，整次运行与压缩都用它。
+    pub async fn config(&self, agent_id: &str) -> Result<RunAssets, Error> {
+        RunAssets::of(&*self.d.source.snapshot().await?, agent_id)
     }
 
     /// 这次运行开头交给模型的运行上下文（当前时间、回答交给谁），由会话领域挂到本次新增的第一条请求上；开始运行时发现的
@@ -109,36 +103,34 @@ impl Runtime {
     }
 
     /// 这个 agent 在这个会话里的指令：只由会话级、agent 级的稳定内容组成，同一个会话的两次运行得到同一段文字（缓存前缀）。
-    pub async fn instructions(
-        &self,
-        config: &AgentDir,
-        origin_note: &str,
-        summary: Option<&str>,
-    ) -> Result<String, Error> {
-        let id = config.id.as_str();
-        let memories = self.d.memory.for_run(id).await?;
-        let skills = self.d.skills.index(id).await?;
+    fn instructions(&self, config: &RunAssets, origin_note: &str, summary: Option<&str>) -> String {
+        let agent = &config.agent;
+        let id = agent.id.as_str();
         let workspace = self.d.agents.workspace(id);
-        Ok(build_instructions(&InstructionParts {
+        build_instructions(&InstructionParts {
             agent_id: id,
-            agent_name: config.name.as_str(),
-            agent_description: config.file.description(),
+            agent_name: agent.name.as_str(),
+            agent_description: agent.file.description(),
             workspace: &workspace,
-            asset_dir: &config.path,
+            asset_dir: &agent.path,
             origin_note,
-            memories: &memories,
-            skills: &skills,
-            memory_limit: self.d.memory.max_chars(),
+            memories: &config.memories,
+            skills: &config.skills,
+            memory_limit: self.d.source.memory_max_chars(),
             summary,
-        }))
+        })
     }
 
-    /// 资源目录里与它相关、没加载的文件（读坏、名字冲突），告诉模型去修。
-    async fn asset_problems(&self, agent_id: &str) -> Result<Vec<String>, Error> {
-        let snapshot = self.d.source.snapshot().await?;
-        Ok(snapshot
-            .problems_for(agent_id)
-            .into_iter()
+    /// 组装一次运行：按 agent 现在的规则开放内置工具，连上它的 MCP server（连不上的跳过，写进 notices），组装指令与模型。
+    pub async fn start(&self, spec: RunSpec<'_>) -> Result<Run, Error> {
+        let (config, dir) = (spec.config, &spec.config.agent);
+        let agent_id = dir.id.as_str();
+        let model = self.d.models.resolve(dir.file.model())?;
+        let workspace = self.d.agents.workspace(agent_id);
+        // 资源目录里与它相关、没加载的文件（读坏、名字冲突），告诉模型去修
+        let mut notices: Vec<String> = config
+            .problems
+            .iter()
             .map(|p| {
                 format!(
                     "Asset file not loaded: {}: {}. Fix the file (or tell an admin if you cannot write it); formats \
@@ -147,18 +139,9 @@ impl Runtime {
                     p.reason
                 )
             })
-            .collect())
-    }
-
-    /// 组装一次运行：按 agent 现在的规则开放内置工具，连上它的 MCP server（连不上的跳过，写进 notices），组装指令与模型。
-    pub async fn start(&self, spec: RunSpec<'_>) -> Result<Run, Error> {
-        let config = spec.config;
-        let agent_id = config.id.as_str();
-        let model = self.d.models.resolve(config.file.model())?;
-        let workspace = self.d.agents.workspace(agent_id);
-        let mut notices = self.asset_problems(agent_id).await?;
-        let mut tools = self.d.toolbox.allowed(&self.d.distribution.rules(agent_id).await?);
-        let reachable = self.d.mcp.connect_for(agent_id, &workspace).await?;
+            .collect();
+        let mut tools = self.d.toolbox.allowed(&config.rules);
+        let reachable = self.d.mcp.connect_for(agent_id, &config.mcp, &workspace).await?;
         notices.extend(reachable.notices);
         for connection in reachable.connections {
             let mine = connection.tools::<RunScope>();
@@ -175,14 +158,14 @@ impl Runtime {
             }
             tools.extend(mine);
         }
-        let instructions = self.instructions(config, spec.origin_note, spec.summary).await?;
-        let settings = Settings { thinking: thinking_of(config.file.thinking()), max_tokens: None };
+        let instructions = self.instructions(config, spec.origin_note, spec.summary);
+        let settings = Settings { thinking: thinking_of(dir.file.thinking()), max_tokens: None };
         let agent = Agent::new(model, instructions, settings, tools).expect("tool names were checked to be unique");
         tracing::info!(
             agent = agent_id,
             session_id = spec.session_id,
-            model = config.file.model(),
-            thinking = config.file.thinking().as_str(),
+            model = dir.file.model(),
+            thinking = dir.file.thinking().as_str(),
             tools = agent.tools().len(),
             "agent run started"
         );
@@ -192,18 +175,19 @@ impl Runtime {
             notices,
             redaction: self.d.toolbox.redaction(),
             files: self.d.files.clone(),
-            meter: Meter::new(self.d.usage.clone(), agent_id, Some(spec.session_id), config.file.model(), RunKind::Run),
+            meter: Meter::new(self.d.usage.clone(), agent_id, Some(spec.session_id), dir.file.model(), RunKind::Run),
         })
     }
 
     /// 用这份配置的模型做一次无工具的文本生成（压缩 session_id 这个会话的上下文），用量记为压缩。
     pub async fn summarize(
         &self,
-        config: &AgentDir,
+        config: &RunAssets,
         session_id: &str,
         instructions: &str,
         prompt: &str,
     ) -> Result<String, Error> {
+        let config = &config.agent;
         let model = self.d.models.resolve(config.file.model())?;
         let settings = Settings { thinking: thinking_of(config.file.thinking()), max_tokens: None };
         let agent: Agent<()> = Agent::new(model, instructions, settings, vec![]).expect("no tools");

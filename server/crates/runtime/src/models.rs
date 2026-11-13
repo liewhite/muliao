@@ -87,7 +87,7 @@ impl ModelRegistry {
     /// 交给资源目录的模型检查（组合根装配时用）。
     pub fn model_check(self: &Arc<Self>) -> muliao_assets::source::ModelCheck {
         let models = self.clone();
-        Arc::new(move |model: &str, _thinking| models.check(model).map_err(|e| e.message))
+        Arc::new(move |model: &str| models.check(model).map_err(|e| e.message))
     }
 
     pub fn provider_names(&self) -> Vec<String> {

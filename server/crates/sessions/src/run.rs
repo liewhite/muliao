@@ -20,7 +20,7 @@ use agenter::{
 use chrono::Utc;
 use muliao_assets::agents::agent_in;
 use muliao_assets::service::AgentService;
-use muliao_assets::tree::AgentDir;
+use muliao_assets::run_assets::RunAssets;
 use muliao_files::FileStore;
 use muliao_platform::bus::Bus;
 use muliao_platform::db::{Database, Tx};
@@ -382,7 +382,7 @@ fn finish_in(
 struct Driver<'a> {
     core: &'a Core,
     begun: &'a Begun,
-    config: &'a AgentDir,
+    config: &'a RunAssets,
     audience: Audience,
     partial: SharedPartial,
     /// 发给模型的历史（存储形态）：保存一步就接上这一步，压缩后从库里重新加载。这次运行新增的工具调用不脱敏（库里那份

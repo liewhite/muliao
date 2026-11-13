@@ -9,11 +9,11 @@ use std::sync::Arc;
 use muliao_platform::fs::RealPath;
 use sha2::{Digest, Sha256};
 
-use crate::access::{Actor, grants_for, usable};
+use crate::access::{Actor, Grants, grants_for, usable};
 use crate::formats::skill::{SKILL_FILE, body_of, compose};
 use crate::kinds::StoredKind;
 use crate::source::AssetSource;
-use crate::tree::{Asset, Expect, Owner, version_of};
+use crate::tree::{Asset, Expect, Owner, Snapshot, version_of};
 use muliao_platform::errors::{Result, invalid, not_found};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,6 +23,11 @@ pub struct SkillMeta {
     pub owner: Owner,
     /// SKILL.md 的位置
     pub path: PathBuf,
+}
+
+/// grants 能用的 skill，按名称。
+pub(crate) fn index_of(snapshot: &Snapshot, grants: &Grants) -> Vec<SkillMeta> {
+    usable(snapshot, StoredKind::Skill, grants).into_iter().map(meta).collect()
 }
 
 fn meta(a: &Asset) -> SkillMeta {
@@ -118,8 +123,7 @@ impl SkillStore {
     /// agent 能用的 skill（自己的与分发给它的），按名称：它的 skill 索引。
     pub async fn index(&self, agent_id: &str) -> Result<Vec<SkillMeta>> {
         let snapshot = self.source.snapshot().await?;
-        let grants = grants_for(&snapshot, &Actor::Agent(agent_id.to_owned()));
-        Ok(usable(&snapshot, StoredKind::Skill, &grants).into_iter().map(meta).collect())
+        Ok(index_of(&snapshot, &grants_for(&snapshot, &Actor::Agent(agent_id.to_owned()))))
     }
 
     /// agent 能用的这个 skill 的脚本在哪、哪些要批准（skill_run 用）；不存在或它不能用都是 NotFound。
