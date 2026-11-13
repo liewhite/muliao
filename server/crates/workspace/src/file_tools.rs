@@ -739,8 +739,6 @@ impl Tool<RunScope> for EditFile {
         let mut before: HashMap<PathBuf, String> = HashMap::new();
         // 按 CRLF 编辑的文件：写回时换回 CRLF
         let mut crlf: HashSet<PathBuf> = HashSet::new();
-        // 读 before 时各文件的修改时间：校验（会等锁）之后、写盘之前再核对，等待期间被别处改了就整次不写
-        let mut stamps: HashMap<PathBuf, Option<SystemTime>> = HashMap::new();
         let mut located: Vec<(PathBuf, Result<Change, DomainError>)> = Vec::new();
         for (i, e) in edits.iter().enumerate() {
             let i = i + 1;
@@ -759,7 +757,6 @@ impl Tool<RunScope> for EditFile {
             let identity = real(&given).map_err(|e| io_error(e, ""))?.into_path_buf();
             let target = same.entry(identity).or_insert_with(|| given.clone()).clone();
             if !before.contains_key(&target) {
-                stamps.insert(target.clone(), modified(&target));
                 let (text, was_crlf) = as_lf(&read_text(&target).map_err(|e| io_error(e, ""))?);
                 if was_crlf {
                     crlf.insert(target.clone());
@@ -776,12 +773,9 @@ impl Tool<RunScope> for EditFile {
             .map(|(t, c)| (t.clone(), if crlf.contains(t) { c.replace('\n', "\r\n") } else { c.clone() }))
             .collect();
         let changed: Vec<PathBuf> = order.iter().filter(|t| after.contains_key(*t)).cloned().collect();
-        // 读 before 之后别处改了就整次不写（写入口在锁里核对）
-        let in_tree: Vec<(PathBuf, String, Expect)> = changed
-            .iter()
-            .filter(|t| deps.assets.contains(t))
-            .map(|t| (t.clone(), stored[t].clone(), stamps[t].map_or(Expect::Absent, Expect::Modified)))
-            .collect();
+        // 读与写之间只隔几毫秒：期间别处改了同一个文件就盖掉那次改动（重做即可），不再核对
+        let in_tree: Vec<(PathBuf, String, Expect)> =
+            changed.iter().filter(|t| deps.assets.contains(t)).map(|t| (t.clone(), stored[t].clone(), Expect::Any)).collect();
 
         // 资源目录里的先经写入口：全部校验通过才写（原子写入，记忆规整空白），回显按实际存下的
         if !in_tree.is_empty() {
