@@ -41,7 +41,7 @@ launchctl kickstart -k gui/$(id -u)/com.muliao    # 重启（升级后）
 deploy/selfcheck.sh <commit>                      # 重启后自检（在仓库里跑）
 ```
 
-为什么经过一个链接、换版本不改 plist：从服务里起的进程（agent 的命令和它脱离出去的脚本）执行 `launchctl bootstrap` 一律报「5: Input/output error」（#706 实测，#644 服务停了起不来也是它），只有 `kickstart`、`kill` 能用。所以 plist 装好就不动，换版本只换 `app/current` 再 `kickstart -k`。`deploy/` 下的切换、回滚脚本也照这个做：要让服务停着换库时，把入口暂时指向 `deploy/hold.sh`（launchd 拉起的只是一个在等的脚本），换好库再把入口指向要跑的程序，hold.sh 随即 exec 过去（见 `deploy/lib.sh`）。改了 plist 本身（环境变量、ExitTimeOut）要在登录的终端里 `launchctl bootout` 再 `bootstrap` 才生效，`kickstart` 不重读。
+为什么经过一个链接、换版本不改 plist：从服务里起的进程（agent 的命令和它脱离出去的脚本）执行 `launchctl bootstrap` 一律报「5: Input/output error」（#706 实测，#644 服务停了起不来也是它），只有 `kickstart`、`kill` 能用。所以 plist 装好就不动，换版本只换 `app/current` 再 `kickstart -k`。要让服务停着换库时（如恢复库备份）也照这个做：把入口暂时指向 `deploy/hold.sh`（launchd 拉起的只是一个在等的脚本），换好库再把入口指回程序，hold.sh 随即 exec 过去（见 `deploy/lib.sh` 的 `hold_service` / `release`）。改了 plist 本身（环境变量、ExitTimeOut）要在登录的终端里 `launchctl bootout` 再 `bootstrap` 才生效，`kickstart` 不重读。
 
 `deploy/selfcheck.sh` 做部署后的通用检查并逐项打印 PASS/FAIL 和依据：进程启动时间晚于安装时间（`app/current` 目录的修改时间）、已装版本（`app/current/COMMIT`）包含目标 commit、日志里本进程的启动行（`muliao is serving ... pid=<pid>`）之后没有 ERROR、端口返回 200、`launchctl` 的 runs 隔 60 秒（`RUNS_WAIT`）不增长（不增长＝没有循环重启）。任一失败退出码为 1；只报告，不处理。
 
@@ -50,12 +50,6 @@ deploy/selfcheck.sh <commit>                      # 重启后自检（在仓库�
 日志：配置 `log_file`（和 plist 的 `StandardOutPath` 写同一个文件）后由进程自己按大小轮转（`log_max_mb` 默认 50，留 `log_backups` 默认 4 份 `.1`…`.4`），每次换新文件时把 stdout/stderr 也重定向过去；轮转前起的子进程（stdio MCP 的 stderr 继承 fd 2）仍写旧文件。自检把 `.1` 和当前文件拼起来看。不用 newsyslog：launchd 只在启动时打开 `StandardOutPath`，外部改名轮转后进程仍写旧文件。不设 `log_file` 就只写 stderr，不轮转。
 
 agent 的 shell 与 stdio MCP 只继承服务的 `PATH`（示例 plist 里的那一串），不读 shell 配置：nvm 装的 node 在服务里找不到。agent 常用、要放进这些目录的命令用 Homebrew 装（落在 `/opt/homebrew/bin`）：`brew install ripgrep node@24 coreutils && brew link node@24`——`rg` 是工具说明里指定的搜索方式；`node`/`npm`/`npx` 给前端构建和 `npx` 起的 MCP（node@24 是 keg-only，要 `brew link` 才进 `/opt/homebrew/bin`）；coreutils 补上 macOS 没有的 `timeout`（它只把 macOS 没有的命令不加 `g` 前缀地装进去，`ls`/`sed` 等仍是系统自带的版本）。
-
-## 从 Python 版切换与回滚（#675，一次性）
-
-- `deploy/cutover.sh`：服务停到 hold 上 → 备份库到 `backups/muliao.db.pre-rust.<时间>` → `muliao-migrate` 从备份迁出新库（报告在 `backups/migrate-report.<时间>.md`）→ Python 版的库改名为 `data/muliao.python.db`、新库就位 → 入口改指 Rust 版 → 健康检查（接口有回应、30 秒内进程不换、日志无 ERROR）。任何一步失败自动换回 Python 版的库并放行给 Python 版。
-- `deploy/rollback.sh`：服务停到 hold 上 → Rust 版的库移进 `backups/muliao.rust.<时间>.db` → `muliao.python.db` 改回 `muliao.db` → 入口改指 uv tool 装的 Python 版 → 健康检查。切换后在 Rust 版里新写的数据不带回去。
-- 两个脚本都自己转到后台另起会话运行（从服务里调用也不会被重启打断），输出追加到 `~/.muliao/deploy.log`，最后一行是 `CUTOVER OK/FAILED`、`ROLLBACK OK/FAILED`。路径、服务名都能用环境变量改（`deploy/lib.sh` 开头），演练时指到临时目录。
 
 ## 开发
 

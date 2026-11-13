@@ -1,12 +1,6 @@
-.venv/
-__pycache__/
-*.pyc
 data/
 web/node_modules/
-.pytest_cache/
-.ruff_cache/
 dist/
 
 # 本地配置含密钥，绝不提交
 config.toml
-.alembic-dev.db

@@ -1,4 +1,4 @@
-//! 和 Python 版逐字对齐的证据：fixtures 里是 Python 版对同一批输入算出的结果（生成脚本在同一目录）。
+//! 和 Python 版逐字对齐的证据：fixtures 里是 Python 版对同一批输入算出的结果（Python 版与生成脚本 gen_edits.py 已随 #717 删除，要看从 git 历史取）。
 
 use std::collections::{BTreeMap, HashMap};
 

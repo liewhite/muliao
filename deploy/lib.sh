@@ -1,7 +1,7 @@
 # deploy/ 下各脚本共用的路径与服务操作（被 . 引入，不单独执行）。
 #
-# 服务怎么启动：launchd 的 plist 运行「服务入口」$ENTRY（默认 ~/.local/bin/muliao）--config ...。入口是一个链接：
-#   Rust 版 → $APP/current/muliao（它自己在程序旁边的 web/ 找前端）；Python 版 → uv tool 装的 $PYTHON_MULIAO。
+# 服务怎么启动：launchd 的 plist 运行「服务入口」$ENTRY（默认 ~/.local/bin/muliao）--config ...。入口是一个链接，
+# 指向 $APP/current/muliao（它自己在程序旁边的 web/ 找前端）；只在停服务换库时临时指向 hold.sh。
 # $APP/current 是一个真目录（不是链接），换版本就是把某个版本目录整个复制过来（activate）。为什么：macOS 的文件访问授权
 # （隐私与安全性里的「完全磁盘访问」等）按程序的真实路径加签名记，路径或签名一变就要重新授权（#715）。所以程序的路径
 # 固定为 $APP/current/muliao，签名用 $SIGNING 下固定的自签证书（sign_program），每次重装都被认成同一个程序。
@@ -13,13 +13,11 @@
 #   MULIAO_LABEL  launchd 服务名（默认 com.muliao）
 #   MULIAO_ENTRY  服务入口链接（默认 ~/.local/bin/muliao，须与 plist 的 ProgramArguments 第一项一致）
 #   MULIAO_PORT   服务端口（默认 1080，须与 config.toml 的 server.port 一致），健康检查用
-#   PYTHON_MULIAO Python 版的程序（默认 uv tool 装的 ~/.local/share/uv/tools/muliao/bin/muliao），回滚用
 # 约定：config.toml 里 data_dir、log_file 用默认的相对路径（data、muliao.log），所以库在 $DATA/muliao.db。
 MULIAO_HOME=${MULIAO_HOME:-$HOME/.muliao}
 LABEL=${MULIAO_LABEL:-com.muliao}
 ENTRY=${MULIAO_ENTRY:-$HOME/.local/bin/muliao}
 PORT=${MULIAO_PORT:-1080}
-PYTHON_MULIAO=${PYTHON_MULIAO:-$HOME/.local/share/uv/tools/muliao/bin/muliao}
 SVC=gui/$(id -u)/$LABEL
 CONFIG=$MULIAO_HOME/config.toml
 DATA=$MULIAO_HOME/data
@@ -30,8 +28,6 @@ APP=$MULIAO_HOME/app
 # 代码签名证书与私钥（第一次安装时生成，之后不再换：换了就要重新授权）
 SIGNING=$MULIAO_HOME/codesign
 HOLD=$APP/hold.sh
-# 切换时把 Python 版的库改名留在这里；它在＝已切到 Rust 版、还能回滚
-PYDB=$DATA/muliao.python.db
 
 say() { echo "$(date '+%F %T') $*"; }
 die() { say "ERROR: $*"; exit 1; }
@@ -104,15 +100,11 @@ hold_service() {
   say "service on hold (old process ${old:-none} gone, hold.sh is pid $(svc_pid), ${i}s)"
 }
 
-# 从 hold 放行到 Rust 版或 Python 版：改入口，hold.sh 一秒内发现并 exec 过去（同一个进程，launchd 不重启）。
-release_to() {
+# 从 hold 放行：入口改回 $APP/current/muliao，hold.sh 一秒内发现并 exec 过去（同一个进程，launchd 不重启）。
+release() {
   # 报到只代表「此刻在等的 hold.sh」：exec 过去后 pid 不变，不删的话 on_hold 会把放行后的程序当成还在 hold 上
   rm -f "$HOLD.pid"
-  case $1 in
-    rust) point_entry "$APP/current/muliao" ;;
-    python) point_entry "$PYTHON_MULIAO" ;;
-    *) die "release_to: unknown program $1" ;;
-  esac
+  point_entry "$APP/current/muliao"
 }
 
 log_size() { if [ -f "$LOGFILE" ]; then wc -c < "$LOGFILE" | tr -d ' '; else echo 0; fi; }
@@ -138,25 +130,6 @@ wait_healthy() {
   errors=$(tail -c +"$((from + 1))" "$LOGFILE" | grep ' ERROR ' | head -5 | cut -c1-300)
   [ -z "$errors" ] || { say "unhealthy: ERROR in log since start:"; echo "$errors"; return 1; }
   say "healthy: pid $pid, /api/auth/me $code, no ERROR in log"
-}
-
-# 服务停在 hold 上时，把数据换回 Python 版并放行给它：Rust 版的库（若有）移进 backups，muliao.python.db 改回 muliao.db。
-# 切换失败的自动回退和 deploy/rollback.sh 共用。$1：时间戳（文件名用）。
-restore_python() {
-  ts=$1
-  if [ -e "$PYDB" ]; then
-    # 主文件与 -wal/-shm 同名成对（SQLite 只认「主文件名-wal」）
-    for s in "" -wal -shm; do
-      if [ -e "$DATA/muliao.db$s" ]; then mv "$DATA/muliao.db$s" "$BACKUPS/muliao.rust.$ts.db$s" || return 1; fi
-    done
-    for s in "" -wal -shm; do
-      if [ -e "$PYDB$s" ]; then mv "$PYDB$s" "$DATA/muliao.db$s" || return 1; fi
-    done
-    say "database: Python version's restored as $DATA/muliao.db; Rust version's kept as $BACKUPS/muliao.rust.$ts.db"
-  fi
-  from=$(log_size)
-  release_to python || return 1
-  wait_healthy "$from"
 }
 
 # 自己脱离调用者在后台重跑：重启服务时从服务里起的命令会被打断（后台任务的进程组被杀），所以另起会话（setsid）、
