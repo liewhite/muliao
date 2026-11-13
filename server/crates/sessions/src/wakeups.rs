@@ -12,8 +12,8 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::actor::Waker;
 use crate::error::Result;
-use crate::holds::{self, COLUMN_COUNT, COLUMNS, HoldOf, abandon_in, from_row};
-use crate::work::{Source, deliver_in};
+use crate::holds::{self, COLUMN_COUNT, COLUMNS, Outside, abandon_in, from_row};
+use crate::work::{EventSource, deliver_in};
 
 /// 工具名，也是唤醒信件的事件来源
 pub const WAKE_ME: &str = "wake_me";
@@ -69,7 +69,7 @@ pub fn schedule_in(
     note: &str,
     awaited: bool,
 ) -> Result<Scheduled> {
-    let of = HoldOf::Wake { call_id: call_id.to_owned() };
+    let of = Outside::Wake { call_id: call_id.to_owned() };
     let holder = of.holder(session_id);
     let existing: Option<DateTime<Utc>> =
         c.query_row("SELECT due_at FROM wakeups WHERE holder = ?1", [&holder], |r| r.get(0)).optional()?;
@@ -117,7 +117,7 @@ pub(crate) async fn deliver_due(db: &Database, waker: &Waker, tz: Tz) -> Result<
                 local_time(*created_at, tz),
                 local_time(*due_at, tz)
             );
-            deliver_in(tx, &waker, Some(hold), &Source::Wake, &text, None)?;
+            deliver_in(tx, &waker, Some(hold), &EventSource::Wake, &text, None)?;
         }
         Ok(due.len())
     })

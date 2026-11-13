@@ -21,7 +21,7 @@ use crate::conventions::{
 };
 use crate::error::{Result, broken};
 use crate::pending::{ASK_USER, OpenAsk, OpenAsks};
-use crate::work::{EventSource, parse_source};
+use crate::work::EventSource;
 
 /// 各工具的展示规则（`Toolbox::renders`）；只要文字的投影给空的。
 pub type Renders = HashMap<String, Arc<ToolRender>>;
@@ -314,7 +314,8 @@ fn request_items(request: &Request, renders: &Renders, items: &mut Vec<Item>) ->
                 let (source, content) = parse_event(text)?;
                 items.push(Item::Event(EventItem {
                     text: content.to_owned(),
-                    source: parse_source(source),
+                    source: EventSource::parse(source)
+                        .ok_or_else(|| broken(format!("event segment {i} has an unknown source {source:?}")))?,
                     check_in: check_ins.contains(&i),
                     at: request.timestamp,
                 }));
@@ -437,9 +438,9 @@ pub fn to_text(items: &[Item], max_item_chars: usize) -> String {
             Item::Event(e) => ("EVENT", Some(e.source.raw())),
             Item::Assistant { .. } => ("ASSISTANT", None),
             Item::Thinking { .. } => continue,
-            Item::ToolCall(c) => ("TOOL CALL", Some(c.tool_name.as_str())),
-            Item::ToolResult(r) => ("TOOL RESULT", Some(r.tool_name.as_str())),
-            Item::ToolError(e) => ("TOOL ERROR", Some(e.tool_name.as_str())),
+            Item::ToolCall(c) => ("TOOL CALL", Some(c.tool_name.clone())),
+            Item::ToolResult(r) => ("TOOL RESULT", Some(r.tool_name.clone())),
+            Item::ToolError(e) => ("TOOL ERROR", Some(e.tool_name.clone())),
             Item::Stopped => ("STOPPED BY USER", None),
         };
         let name = name.filter(|n| !n.is_empty()).map(|n| format!(" {n}")).unwrap_or_default();
@@ -545,7 +546,7 @@ mod tests {
             items[2],
             Item::Event(EventItem {
                 text: "done".into(),
-                source: EventSource::Job { raw: "job:7".into(), job_id: 7 },
+                source: EventSource::Job { job_id: 7 },
                 check_in: false,
                 at: ts
             })
@@ -554,7 +555,7 @@ mod tests {
             items[3],
             Item::Event(EventItem {
                 text: "still going".into(),
-                source: EventSource::Thread { raw: "thread:s1".into(), session_id: "s1".into() },
+                source: EventSource::Thread { session_id: "s1".into() },
                 check_in: true,
                 at: ts
             })

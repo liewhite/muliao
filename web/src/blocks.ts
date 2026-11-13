@@ -1,6 +1,6 @@
 // 会话条目（历史与运行中的事件流共用 Item）到展示块的整理，纯函数，与渲染分开。
 
-import { type AskView, type Attachment, type ItemSource, type Item, type ViewBlock } from './api'
+import { sourceKey, type AskView, type Attachment, type ItemSource, type Item, type ViewBlock } from './api'
 
 export interface ToolView {
   name: string
@@ -202,12 +202,12 @@ export function foldCheckIns(views: View[]): View[] {
     if (run !== null && onlyThinking(view) && isFiller(views[i + 1])) continue
     if (view.kind === 'event' && view.checkIn) {
       run ??= new Map()
-      const checks = run.get(view.source.raw)
+      const checks = run.get(sourceKey(view.source))
       const check = { text: view.text, at: view.at }
       if (checks) checks.push(check)
       else {
         const fresh = [check]
-        run.set(view.source.raw, fresh)
+        run.set(sourceKey(view.source), fresh)
         folded.push({ kind: 'checks', source: view.source, checks: fresh })
       }
     } else if (run !== null && isFiller(view)) {

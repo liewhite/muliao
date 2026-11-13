@@ -60,13 +60,30 @@ impl HoldOf {
             HoldOf::Delegation { .. } => "delegation",
         }
     }
+}
 
-    /// 库里的占用者（唯一键）：后台任务与到点唤醒有，委派没有（引用委派行）。
-    pub(crate) fn holder(&self, session_id: &str) -> Option<String> {
+/// 按占用者认的两种（后台任务、到点唤醒）：登记与查找用；委派的占用引用委派行，另由 [`hold_delegation_in`] 登记。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Outside {
+    Job { job_id: i64 },
+    Wake { call_id: String },
+}
+
+impl Outside {
+    /// 库里的占用者（唯一键）。
+    pub(crate) fn holder(&self, session_id: &str) -> String {
         match self {
-            HoldOf::Job { job_id } => Some(format!("job:{job_id}")),
-            HoldOf::Wake { call_id } => Some(format!("wake:{session_id}:{call_id}")),
-            HoldOf::Delegation { .. } => None,
+            Outside::Job { job_id } => format!("job:{job_id}"),
+            Outside::Wake { call_id } => format!("wake:{session_id}:{call_id}"),
+        }
+    }
+}
+
+impl From<Outside> for HoldOf {
+    fn from(o: Outside) -> Self {
+        match o {
+            Outside::Job { job_id } => HoldOf::Job { job_id },
+            Outside::Wake { call_id } => HoldOf::Wake { call_id },
         }
     }
 }
@@ -126,31 +143,53 @@ fn query(c: &Connection, filter: &str, params: impl rusqlite::Params) -> Result<
     rows.into_iter().map(hold).collect()
 }
 
-/// 登记一项工作的占用。后台任务与到点唤醒已经登记过（重放）就返回它。
-pub fn hold_in(c: &Connection, session_id: &str, of: HoldOf, awaited: bool) -> Result<Hold> {
-    if let Some(existing) = get_in(c, session_id, &of)? {
+/// 登记一项后台任务或到点唤醒的占用；已经登记过（重放）就返回它。
+pub fn hold_in(c: &Connection, session_id: &str, outside: Outside, awaited: bool) -> Result<Hold> {
+    if let Some(existing) = get_in(c, session_id, &outside)? {
         assert_eq!(
             existing.awaited, awaited,
-            "hold {of:?} of session {session_id} was registered with another awaited"
+            "hold {outside:?} of session {session_id} was registered with another awaited"
         );
         return Ok(existing);
     }
-    let (row, call_id) = match &of {
-        HoldOf::Delegation { row, call_id } => (*row, call_id.as_deref()),
-        HoldOf::Job { .. } | HoldOf::Wake { .. } => (None, None),
-    };
+    let holder = outside.holder(session_id);
+    insert(c, session_id, Some(&holder), None, None, outside.into(), awaited)
+}
+
+/// 发起方登记一项委派的占用，引用委派行（row）。call_id：结局作为这次挂起调用的结果交回（ask_agent）；并发等待的为 None。
+pub fn hold_delegation_in(
+    c: &Connection,
+    session_id: &str,
+    row: i64,
+    call_id: Option<String>,
+    awaited: bool,
+) -> Result<Hold> {
+    let of = HoldOf::Delegation { row: Some(row), call_id: call_id.clone() };
+    insert(c, session_id, None, Some(row), call_id.as_deref(), of, awaited)
+}
+
+fn insert(
+    c: &Connection,
+    session_id: &str,
+    holder: Option<&str>,
+    row: Option<i64>,
+    call_id: Option<&str>,
+    of: HoldOf,
+    awaited: bool,
+) -> Result<Hold> {
+    let now = Utc::now();
     c.execute(
         "INSERT INTO session_holds (session_id, kind, holder, thread_call_id, call_id, awaited, status, created_at) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'active', ?7)",
-        params![session_id, of.kind(), of.holder(session_id), row, call_id, awaited, Utc::now()],
+        params![session_id, of.kind(), holder, row, call_id, awaited, now],
     )?;
     let id = c.last_insert_rowid();
-    Ok(Hold { id, session_id: session_id.to_owned(), of, awaited, status: HoldStatus::Active, created_at: Utc::now() })
+    Ok(Hold { id, session_id: session_id.to_owned(), of, awaited, status: HoldStatus::Active, created_at: now })
 }
 
-/// 后台任务或到点唤醒在会话上的占用（委派的按委派行认，这里总是 None）。
-pub fn get_in(c: &Connection, session_id: &str, of: &HoldOf) -> Result<Option<Hold>> {
-    let Some(holder) = of.holder(session_id) else { return Ok(None) };
+/// 后台任务或到点唤醒在会话上的占用。
+pub fn get_in(c: &Connection, session_id: &str, outside: &Outside) -> Result<Option<Hold>> {
+    let holder = outside.holder(session_id);
     Ok(query(c, "h.session_id = ?1 AND h.holder = ?2", params![session_id, holder])?.pop())
 }
 

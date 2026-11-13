@@ -41,7 +41,7 @@ pub async fn content_of(files: &FileStore, workspace: &Path, mail: &[Mail]) -> R
                 if *check_in {
                     c.check_ins.push(c.parts.len());
                 }
-                c.parts.push(RequestPart::Text { text: format_event(source, content) });
+                c.parts.push(RequestPart::Text { text: format_event(&source.raw(), content) });
             }
             MailBody::Message { content, attachments, .. } => {
                 let metas = files.referenced(attachments.clone()).await?;

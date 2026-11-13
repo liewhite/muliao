@@ -194,7 +194,9 @@ async fn a_finished_background_job_reports_back_with_its_output() {
     assert_eq!(std::fs::read_to_string(w.ws().join(&info.log_path)).unwrap(), "[secret:TOKEN]\ndone\n");
     let mail = w.queued().await;
     assert_eq!(mail.len(), 1);
-    assert!(matches!(&mail[0].body, MailBody::Event { source, .. } if *source == format!("job:{id}")));
+    assert!(
+        matches!(&mail[0].body, MailBody::Event { source, .. } if *source == muliao_sessions::work::EventSource::Job { job_id: id })
+    );
     let text = mail[0].body.content();
     assert!(
         text.starts_with(&format!("Background job {id} finished with exit code 2 after 0m00s.\nCommand: echo $TOKEN")),

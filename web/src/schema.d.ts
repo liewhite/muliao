@@ -1472,22 +1472,19 @@ export interface components {
              */
             at: string;
         };
-        /** @description 事件来源解析成的种类（界面用，不自己解析字符串）。 */
+        /** @description 事件信件的来源：交给模型时套在事件外面（[`EventSource::raw`]），界面按种类显示。 */
         EventSource: {
-            raw: string;
-            session_id: string;
-            /** @enum {string} */
-            kind: "thread";
-        } | {
-            raw: string;
             /** Format: int64 */
             job_id: number;
             /** @enum {string} */
             kind: "job";
         } | {
-            raw: string;
+            session_id: string;
             /** @enum {string} */
-            kind: "other";
+            kind: "thread";
+        } | {
+            /** @enum {string} */
+            kind: "wake";
         };
         /**
          * @description 哪个脚本出的错。

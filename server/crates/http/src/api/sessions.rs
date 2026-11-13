@@ -14,7 +14,7 @@ use muliao_sessions::mailbox::{Mail, MailBody, MailState};
 use muliao_sessions::origins::{Origin, Sender, SessionOrigin};
 use muliao_sessions::runs::RunRecord;
 use muliao_sessions::transcript::SavedItem;
-use muliao_sessions::work::{EventSource, parse_source};
+use muliao_sessions::work::EventSource;
 use muliao_usage::UsageTotals;
 use muliao_workspace::jobs::JobStatus;
 use serde::{Deserialize, Serialize};
@@ -204,9 +204,7 @@ async fn mail_outs(s: &AppState, mail: Vec<Mail>) -> ApiResult<Vec<MailOut>> {
             let attachments = m.body.attachments().iter().map(|id| files[id].clone()).collect();
             let (content, kind) = match m.body {
                 MailBody::Message { content, .. } => (content, MailKindOut::Message),
-                MailBody::Event { source, content, check_in } => {
-                    (content, MailKindOut::Event { source: parse_source(&source), check_in })
-                }
+                MailBody::Event { source, content, check_in } => (content, MailKindOut::Event { source, check_in }),
                 MailBody::Answer { answers, .. } => (String::new(), MailKindOut::Answer { answers }),
             };
             MailOut { attachments, id: m.id, content, state: m.state, created_at: m.created_at, kind }

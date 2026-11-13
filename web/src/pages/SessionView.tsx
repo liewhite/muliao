@@ -316,8 +316,8 @@ function SourceLabel({ source, ctx }: { source: ItemSource; ctx: SessionContext 
   switch (source.kind) {
     case 'job':
       return <span className="shrink-0 text-foreground">后台任务 #{source.job_id}</span>
-    case 'other':
-      return <span className="shrink-0 font-mono text-foreground">{source.raw}</span>
+    case 'wake':
+      return <span className="shrink-0 text-foreground">到点唤醒</span>
     case 'thread': {
       const thread = ctx.threads.get(source.session_id)
       if (!thread && ctx.view === 'history') return <span className="shrink-0">thread（已删除）</span>

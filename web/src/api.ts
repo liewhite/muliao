@@ -74,6 +74,9 @@ export type MailState = Schemas['MailState']
 export type Mail = Schemas['SessionDetail']['mail'][number]
 /** 条目或事件的来源：后端解析好的 thread、后台任务或其他（raw 是原文，同一来源按它归在一起） */
 export type ItemSource = Schemas['EventSource']
+/** 同一来源的事件归在一起用的键 */
+export const sourceKey = (s: ItemSource): string =>
+  s.kind === 'job' ? `job:${s.job_id}` : s.kind === 'thread' ? `thread:${s.session_id}` : 'wake'
 export type SessionDetail = Omit<Schemas['SessionDetail'], 'session' | 'threads'> & {
   session: Session
   threads: Session[]

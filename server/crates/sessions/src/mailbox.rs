@@ -16,7 +16,7 @@ use crate::actor::Waker;
 use crate::answers::CallResult;
 use crate::error::{Result, broken, not_found};
 use crate::origins::Origin;
-use crate::work::Source;
+use crate::work::EventSource;
 use muliao_platform::db::Tx;
 
 /// 信件的种类与它自己的内容。
@@ -29,7 +29,7 @@ pub enum MailBody {
     /// 结局）
     Answer { answers: BTreeMap<String, CallResult>, from_user: bool },
     /// 后台任务、交回的结果、运行中检查（check_in）：套上来源（如 job:12、thread:<会话 id>）交给模型，界面单独显示
-    Event { source: String, content: String, check_in: bool },
+    Event { source: EventSource, content: String, check_in: bool },
 }
 
 impl MailBody {
@@ -132,8 +132,8 @@ impl NewMail {
     }
 
     /// 事件（后台任务、交回的结果、到点唤醒）；check_in：运行中检查。
-    pub fn event(source: &Source, content: impl Into<String>, check_in: bool, awaited: bool) -> Self {
-        NewMail { body: MailBody::Event { source: source.raw(), content: content.into(), check_in }, awaited }
+    pub fn event(source: EventSource, content: impl Into<String>, check_in: bool, awaited: bool) -> Self {
+        NewMail { body: MailBody::Event { source, content: content.into(), check_in }, awaited }
     }
 
     /// 对挂起调用的回答。from_user：用户的回答（否则是交回的结局）。
@@ -198,7 +198,10 @@ impl RawMail {
                 answers: serde_json::from_str(&self.answers).map_err(|e| bad("answers", e))?,
                 from_user: origin.is_some(),
             },
-            ("event", None, Some(source)) => MailBody::Event { source, content: self.content, check_in: self.check_in },
+            ("event", None, Some(raw)) => match EventSource::parse(&raw) {
+                Some(source) => MailBody::Event { source, content: self.content, check_in: self.check_in },
+                None => return Err(broken(format!("event mail {id} has an unknown source {raw:?}"))),
+            },
             (kind, origin, source) => {
                 return Err(broken(format!("mail {id} of kind {kind:?} has origin {origin:?} and source {source:?}")));
             }
@@ -233,7 +236,7 @@ pub fn post_in(tx: &mut Tx<'_>, waker: &Waker, session_id: &str, mail: NewMail) 
     let (source, check_in, delegation, answers) = match body {
         MailBody::Message { delegation_id, .. } => (None, false, *delegation_id, None),
         MailBody::Answer { answers, .. } => (None, false, None, Some(answers)),
-        MailBody::Event { source, check_in, .. } => (Some(source.as_str()), *check_in, None, None),
+        MailBody::Event { source, check_in, .. } => (Some(source.raw()), *check_in, None, None),
     };
     tx.execute(
         "INSERT INTO mail (session_id, kind, source, origin, content, check_in, attachments, answers, awaited, \
@@ -253,7 +256,7 @@ pub fn post_in(tx: &mut Tx<'_>, waker: &Waker, session_id: &str, mail: NewMail) 
         ],
     )?;
     let id = tx.last_insert_rowid();
-    tracing::info!(session_id, mail_id = id, kind = body.kind(), source, "mail posted");
+    tracing::info!(session_id, mail_id = id, kind = body.kind(), source = source.as_deref(), "mail posted");
     waker.wake_on_commit(tx, session_id);
     Ok(id)
 }

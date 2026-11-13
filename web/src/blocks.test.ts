@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { AskView, Item } from './api'
+import { sourceKey, type AskView, type Item, type ItemSource } from './api'
 import { foldCheckIns, groupSteps, stepAttachments, stepThreads, summarizeSteps, toBlocks, unlinkedThreads, type Step } from './blocks'
 
 type Of<T extends Item['type']> = Extract<Item, { type: T }>
@@ -259,7 +259,9 @@ describe('unlinkedThreads', () => {
   })
 })
 
-const JOB_1 = { kind: 'job', raw: 'job:1', job_id: 1 } as const
+const JOB_1 = { kind: 'job', job_id: 1 } as const
+const src = (raw: string): ItemSource =>
+  raw.startsWith('job:') ? { kind: 'job', job_id: Number(raw.slice(4)) } : { kind: 'thread', session_id: raw.slice(7) }
 
 describe('session events', () => {
   it('become their own block with the source, not part of a user bubble', () => {
@@ -271,8 +273,8 @@ describe('session events', () => {
 })
 
 describe('foldCheckIns', () => {
-  const check = (source: string, text: string, at: string): Item => event({ kind: 'other', raw: source }, text, at, true)
-  const ending = (source: string, text: string): Item => event({ kind: 'other', raw: source }, text)
+  const check = (source: string, text: string, at: string): Item => event(src(source), text, at, true)
+  const ending = (source: string, text: string): Item => event(src(source), text)
   const fold = (items: Item[]) => foldCheckIns(groupSteps(toBlocks(items)))
 
   it('folds consecutive check-ins of a source with the filler replies between them into one line', () => {
@@ -288,14 +290,14 @@ describe('foldCheckIns', () => {
     expect(views).toEqual([
       {
         kind: 'checks',
-        source: { kind: 'other', raw: 'thread:t1' },
+        source: src('thread:t1'),
         checks: [
           { text: 'still working (1 min)', at: '10:01' },
           { text: 'still working (2 min)', at: '10:02' },
           { text: 'still working (3 min)', at: '10:03' },
         ],
       },
-      { kind: 'event', source: { kind: 'other', raw: 'thread:t1' }, text: 'finished your task', checkIn: false, at: '10:00' },
+      { kind: 'event', source: src('thread:t1'), text: 'finished your task', checkIn: false, at: '10:00' },
       { kind: 'assistant', text: '它做完了' },
     ])
   })
@@ -309,7 +311,7 @@ describe('foldCheckIns', () => {
       assistant('日志里有报错，我去看看'),
       check('job:3', 'running', '4'),
     ])
-    expect(views.map((v) => (v.kind === 'checks' ? `${v.source.raw}×${v.checks.length}` : v.kind))).toEqual([
+    expect(views.map((v) => (v.kind === 'checks' ? `${sourceKey(v.source)}×${v.checks.length}` : v.kind))).toEqual([
       'job:3×2',
       'thread:t1×1',
       'assistant',
@@ -326,7 +328,7 @@ describe('foldCheckIns', () => {
       thinking('输出卡住了'),
       assistant('我去看看日志'),
     ])
-    expect(views.map((v) => (v.kind === 'checks' ? `${v.source.raw}×${v.checks.length}` : v.kind))).toEqual([
+    expect(views.map((v) => (v.kind === 'checks' ? `${sourceKey(v.source)}×${v.checks.length}` : v.kind))).toEqual([
       'job:3×2',
       'process',
       'assistant',

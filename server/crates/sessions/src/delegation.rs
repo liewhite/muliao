@@ -25,11 +25,11 @@ use crate::answers::{AgentAnswer, CallResult};
 use crate::directory::{self, Session};
 use crate::error::{Result, broken, invalid};
 use crate::history::latest_answers_among;
-use crate::holds::{HoldOf, hold_in};
+use crate::holds::hold_delegation_in;
 use crate::inbound::{Inbound, Opener, create_session_in, receive_in};
 use crate::runs::{RunRecord, latest_among};
 use crate::thread_calls::{Owed, call_in, owed_in, record_call_in};
-use crate::work::{CheckBeats, Source, deliver_in, post_check_in};
+use crate::work::{CheckBeats, EventSource, deliver_in, post_check_in};
 
 pub const THREAD_MAX: usize = 100;
 
@@ -95,8 +95,7 @@ pub(crate) fn send_in(
         Mode::Plain => Inbound::delegated(parent_id, &child.id, prompt, true, None),
         Mode::ReportBack { awaited, .. } | Mode::Ask { awaited } => {
             let suspends = matches!(mode, Mode::Ask { .. });
-            let of = HoldOf::Delegation { row: Some(call.id), call_id: suspends.then(|| call_id.to_owned()) };
-            hold_in(tx, parent_id, of, awaited)?;
+            hold_delegation_in(tx, parent_id, call.id, suspends.then(|| call_id.to_owned()), awaited)?;
             tracing::info!(session_id = parent_id, thread_session_id = %child.id, delegation = call.id, call_id,
                 "delegation dispatched");
             // 没有人等 thread 的回答：结局交回发起方，由它处理
@@ -153,7 +152,7 @@ pub(crate) fn hand_back_in(
             tx,
             waker,
             Some(&o.hold),
-            &Source::Thread(child.id.clone()),
+            &EventSource::Thread { session_id: child.id.clone() },
             &event_text(name, &agent.name, ending, text),
             Some(answer),
         )?;
@@ -225,7 +224,7 @@ pub(crate) async fn check_threads(db: &Database, waker: &Waker, beats: &Arc<Mute
             })?;
             let agent = agent_in(tx, &child.agent_id)?;
             let text = check_text(child, &agent, states[child_id], runs.get(child_id), now, *interval);
-            if post_check_in(tx, &waker, Some(&o.hold), &Source::Thread(child_id.clone()), &text)? {
+            if post_check_in(tx, &waker, Some(&o.hold), &EventSource::Thread { session_id: child_id.clone() }, &text)? {
                 posted += 1;
             }
         }

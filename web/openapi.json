@@ -5043,37 +5043,12 @@
         "oneOf": [
           {
             "type": "object",
+            "description": "后台任务",
             "required": [
-              "raw",
-              "session_id",
-              "kind"
-            ],
-            "properties": {
-              "raw": {
-                "type": "string"
-              },
-              "session_id": {
-                "type": "string"
-              },
-              "kind": {
-                "type": "string",
-                "enum": [
-                  "thread"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
-            "required": [
-              "raw",
               "job_id",
               "kind"
             ],
             "properties": {
-              "raw": {
-                "type": "string"
-              },
               "job_id": {
                 "type": "integer",
                 "format": "int64"
@@ -5088,24 +5063,40 @@
           },
           {
             "type": "object",
+            "description": "thread 交回的结果或运行中检查",
             "required": [
-              "raw",
+              "session_id",
               "kind"
             ],
             "properties": {
-              "raw": {
+              "session_id": {
                 "type": "string"
               },
               "kind": {
                 "type": "string",
                 "enum": [
-                  "other"
+                  "thread"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "到点唤醒",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "wake"
                 ]
               }
             }
           }
         ],
-        "description": "事件来源解析成的种类（界面用，不自己解析字符串）。"
+        "description": "事件信件的来源：交给模型时套在事件外面（[`EventSource::raw`]），界面按种类显示。"
       },
       "FaultSource": {
         "type": "string",

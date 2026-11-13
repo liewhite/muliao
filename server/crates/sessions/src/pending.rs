@@ -12,7 +12,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use agenter::{Message, Resolution, ToolCall, ToolResult};
+use agenter::{Content, Message, Resolution, ToolCall, ToolResult};
 
 use crate::answers::{CallResult, Question, Waiting, questions_of, skipped};
 use crate::conventions::{is_stopped, unanswered_calls};
@@ -33,7 +33,7 @@ impl Waiting {
         self == Waiting::AskAgent
     }
 
-    /// 用户停止时不补「已停止」，仍挂着等回答；它的回答总是一段普通结果（[`CallResult::resolution`]）。
+    /// 用户停止时不补「已停止」，仍挂着等回答（只有提问，它的回答是 [`CallResult::AskUser`]）。
     fn kept_open_on_stop(self) -> bool {
         self == Waiting::AskUser
     }
@@ -250,13 +250,12 @@ pub fn closing_on_stop(at: &Position) -> StopClosing {
                     closing.stopped.push(pc.call.clone());
                     continue;
                 }
-                let resolution = p.answers.get(&pc.call.id).map(CallResult::resolution);
-                let Some(Resolution::Result { content, is_error }) = resolution else { continue };
+                let Some(CallResult::AskUser(answer)) = p.answers.get(&pc.call.id) else { continue };
                 closing.answered.push(ToolResult {
                     call_id: pc.call.id.clone(),
                     tool_name: pc.call.name.clone(),
-                    content,
-                    is_error,
+                    content: vec![Content::text(answer.text())],
+                    is_error: false,
                     metadata: None,
                 });
             }
@@ -313,10 +312,13 @@ impl OpenAsks {
 }
 
 pub fn open_asks_of(at: &Position, queued: &[Mail]) -> OpenAsks {
+    // 已提交的批准只算还挂着的调用（迟到的不算）；提问的「已提交」不看挂没挂着：运行还没停下时也显示已提交
+    let pending = |id: &str| at.paused().is_some_and(|p| p.pending.iter().any(|pc| pc.call.id == id));
     let submitted: Vec<(String, OpenAsk)> = queued
         .iter()
         .filter_map(|m| m.body.answers())
         .flatten()
+        .filter(|(id, r)| r.kind() != Waiting::Approval || pending(id))
         .map(|(id, r)| (id.clone(), OpenAsk::Submitted(r.kind())))
         .collect();
     let is_submitted = |id: &str| submitted.iter().any(|(k, _)| k == id);
@@ -424,7 +426,14 @@ mod tests {
         let at = position(
             &h,
             &none,
-            &[mail(1, MailBody::Event { source: "job:1".into(), content: String::new(), check_in: false })],
+            &[mail(
+                1,
+                MailBody::Event {
+                    source: crate::work::EventSource::Job { job_id: 1 },
+                    content: String::new(),
+                    check_in: false,
+                },
+            )],
         )
         .unwrap();
         assert!(at.waiting_for_answers(), "events wait with the question");

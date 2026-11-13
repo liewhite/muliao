@@ -204,7 +204,7 @@ impl World {
         let sid = session_id.to_owned();
         self.db
             .write(move |tx| {
-                muliao_sessions::holds::hold_in(tx, &sid, muliao_sessions::holds::HoldOf::Job { job_id: 1 }, false)
+                muliao_sessions::holds::hold_in(tx, &sid, muliao_sessions::holds::Outside::Job { job_id: 1 }, false)
                     .map(drop)
             })
             .await
