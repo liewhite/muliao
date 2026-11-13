@@ -28,9 +28,14 @@ pub fn vet(draft: &Draft<'_>) -> Result<String, String> {
     stored(draft.text, old.as_deref(), draft.memory_max_chars)
 }
 
-/// 文件里的正文：去掉首尾空白（指令里显示的、版本按它算的都是它）。
+/// 文件里的正文（指令里显示的、界面编辑的都是它）。
 pub fn text_of(path: &Path) -> Result<String, String> {
-    Ok(read(path)?.trim().to_owned())
+    Ok(body_of(&read(path)?))
+}
+
+/// 读出的原文对应的正文：去掉首尾空白。
+pub fn body_of(raw: &str) -> String {
+    raw.trim().to_owned()
 }
 
 /// 正文超过上限时的问题说明。

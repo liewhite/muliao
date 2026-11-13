@@ -43,7 +43,7 @@ fn info(a: &Asset) -> Result<MemoryInfo> {
         name: a.name.clone(),
         owner: a.owner.clone(),
         version: version_of(&raw),
-        content: raw.trim().to_owned(),
+        content: crate::formats::memory::body_of(&raw),
         updated_at: a.updated_at,
         path: a.path.clone(),
     })
