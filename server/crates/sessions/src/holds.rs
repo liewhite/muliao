@@ -153,7 +153,7 @@ pub fn hold_in(c: &Connection, session_id: &str, outside: Outside, awaited: bool
         return Ok(existing);
     }
     let holder = outside.holder(session_id);
-    insert(c, session_id, Some(&holder), None, None, outside.into(), awaited)
+    insert(c, session_id, Some(&holder), outside.into(), awaited)
 }
 
 /// 发起方登记一项委派的占用，引用委派行（row）。call_id：结局作为这次挂起调用的结果交回（ask_agent）；并发等待的为 None。
@@ -164,19 +164,15 @@ pub fn hold_delegation_in(
     call_id: Option<String>,
     awaited: bool,
 ) -> Result<Hold> {
-    let of = HoldOf::Delegation { row: Some(row), call_id: call_id.clone() };
-    insert(c, session_id, None, Some(row), call_id.as_deref(), of, awaited)
+    insert(c, session_id, None, HoldOf::Delegation { row: Some(row), call_id }, awaited)
 }
 
-fn insert(
-    c: &Connection,
-    session_id: &str,
-    holder: Option<&str>,
-    row: Option<i64>,
-    call_id: Option<&str>,
-    of: HoldOf,
-    awaited: bool,
-) -> Result<Hold> {
+/// holder：后台任务与到点唤醒的占用者（委派没有）；委派行与挂起调用从 of 展开。
+fn insert(c: &Connection, session_id: &str, holder: Option<&str>, of: HoldOf, awaited: bool) -> Result<Hold> {
+    let (row, call_id) = match &of {
+        HoldOf::Delegation { row, call_id } => (*row, call_id.as_deref()),
+        HoldOf::Job { .. } | HoldOf::Wake { .. } => (None, None),
+    };
     let now = Utc::now();
     c.execute(
         "INSERT INTO session_holds (session_id, kind, holder, thread_call_id, call_id, awaited, status, created_at) \

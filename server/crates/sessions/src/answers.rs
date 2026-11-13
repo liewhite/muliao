@@ -118,6 +118,11 @@ impl AskResult {
     pub fn text(&self) -> String {
         serde_json::to_string(self).expect("ask results serialize")
     }
+
+    /// 作为提问调用的结果交给模型的内容（按时交回与停止时保留的回答共用）。
+    pub fn content(&self) -> Vec<Content> {
+        vec![Content::text(self.text())]
+    }
 }
 
 fn not_answered(note: &str) -> AskResult {
@@ -274,7 +279,7 @@ impl CallResult {
     /// 交给模型的结果。
     pub fn resolution(&self) -> Resolution {
         match self {
-            CallResult::AskUser(r) => text(r.text()),
+            CallResult::AskUser(r) => Resolution::Result { content: r.content(), is_error: false },
             CallResult::AskAgent(a) => {
                 let mut t = a.text.clone();
                 if !a.attachments.is_empty() {

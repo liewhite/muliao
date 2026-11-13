@@ -12,7 +12,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use agenter::{Content, Message, Resolution, ToolCall, ToolResult};
+use agenter::{Message, Resolution, ToolCall, ToolResult};
 
 use crate::answers::{CallResult, Question, Waiting, questions_of, skipped};
 use crate::conventions::{is_stopped, unanswered_calls};
@@ -254,7 +254,7 @@ pub fn closing_on_stop(at: &Position) -> StopClosing {
                 closing.answered.push(ToolResult {
                     call_id: pc.call.id.clone(),
                     tool_name: pc.call.name.clone(),
-                    content: vec![Content::text(answer.text())],
+                    content: answer.content(),
                     is_error: false,
                     metadata: None,
                 });

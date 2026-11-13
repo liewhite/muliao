@@ -72,7 +72,7 @@ export type AskState = Schemas['AskState']
 export type MailState = Schemas['MailState']
 /** 信箱里的一封信：按 kind 区分的联合（用户消息、事件、回答），事件一定带来源 */
 export type Mail = Schemas['SessionDetail']['mail'][number]
-/** 条目或事件的来源：后端解析好的 thread、后台任务或其他（raw 是原文，同一来源按它归在一起） */
+/** 事件的来源：后台任务、thread 或到点唤醒（后端解析好的种类） */
 export type ItemSource = Schemas['EventSource']
 /** 同一来源的事件归在一起用的键 */
 export const sourceKey = (s: ItemSource): string =>
