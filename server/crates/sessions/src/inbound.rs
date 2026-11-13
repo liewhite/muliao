@@ -75,16 +75,13 @@ pub enum UserTarget {
     },
 }
 
-/// 用户在界面上发的一条消息：续写或新建会话，可以带附件、对挂起提问的回答、对等批准调用的决定；用户在等它的回答。
+/// 用户在界面上发来的一件事：一条消息（续写或新建会话，可以带附件）、对一次挂起提问的回答，或对一次等批准调用的决定
+/// （后两种只对已有会话）；用户在等它的回答。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UserMessage {
-    pub content: String,
-    pub session: UserTarget,
-    pub attachments: Vec<String>,
-    /// 提问的调用 id -> 每题的回答
-    pub answers: BTreeMap<String, Vec<QuestionAnswer>>,
-    /// 等批准的调用 id -> 决定
-    pub approvals: BTreeMap<String, Choice>,
+pub enum UserMessage {
+    Message { session: UserTarget, content: String, attachments: Vec<String> },
+    Answer { session_id: SessionId, call_id: String, answers: Vec<QuestionAnswer> },
+    Approval { session_id: SessionId, call_id: String, choice: Choice },
 }
 
 /// 别的领域的来信投不进的原因：目标 agent 收不了信（只有收信入口判断，发送方按原因决定自己怎么反应）。发送方只投新会话
@@ -121,15 +118,26 @@ pub struct Accepted {
 /// 一封来信的内部形式。
 pub(crate) struct Inbound {
     pub from: Party,
-    pub content: String,
+    pub body: Body,
     pub target: Target,
     /// 用户在等它的回答
     pub awaited: bool,
-    pub attachments: Vec<String>,
-    pub answers: BTreeMap<String, Vec<QuestionAnswer>>,
-    pub approvals: BTreeMap<String, Choice>,
     /// 委派来的信件：是哪项委派（thread_calls 的行）
     pub delegation: Option<i64>,
+}
+
+/// 来信的内容：文字与附件，或（只有用户会发的）对一次挂起调用的回复。
+pub(crate) enum Body {
+    Message { content: String, attachments: Vec<String> },
+    Reply { call_id: String, reply: CallReply },
+}
+
+/// 用户对一次挂起调用的回复。
+pub(crate) enum CallReply {
+    /// 提问的每题回答
+    Answer(Vec<QuestionAnswer>),
+    /// 等批准的调用的决定
+    Approval(Choice),
 }
 
 pub(crate) enum Target {
@@ -140,33 +148,33 @@ pub(crate) enum Target {
 
 impl Inbound {
     pub(crate) fn user(m: UserMessage) -> Self {
-        Inbound {
-            from: Party::User,
-            content: m.content,
-            target: match m.session {
-                UserTarget::Existing(id) => Target::Existing(id),
-                UserTarget::NewChat { agent_id } => Target::New { agent_id, title: None },
-            },
-            awaited: true,
-            attachments: m.attachments,
-            answers: m.answers,
-            approvals: m.approvals,
-            delegation: None,
-        }
+        let (target, body) = match m {
+            UserMessage::Message { session, content, attachments } => {
+                let target = match session {
+                    UserTarget::Existing(id) => Target::Existing(id),
+                    UserTarget::NewChat { agent_id } => Target::New { agent_id, title: None },
+                };
+                (target, Body::Message { content, attachments })
+            }
+            UserMessage::Answer { session_id, call_id, answers } => {
+                (Target::Existing(session_id), Body::Reply { call_id, reply: CallReply::Answer(answers) })
+            }
+            UserMessage::Approval { session_id, call_id, choice } => {
+                (Target::Existing(session_id), Body::Reply { call_id, reply: CallReply::Approval(choice) })
+            }
+        };
+        Inbound { from: Party::User, body, target, awaited: true, delegation: None }
     }
 
     fn sender(m: SenderMail) -> Self {
         Inbound {
             from: Party::Sender(m.sender),
-            content: m.content,
+            body: Body::Message { content: m.content, attachments: Vec::new() },
             target: match m.session {
                 SenderTarget::New { agent_id, title } => Target::New { agent_id, title: Some(title) },
                 SenderTarget::Keyed { agent_id, title } => Target::Keyed { agent_id, title },
             },
             awaited: false,
-            attachments: Vec::new(),
-            answers: BTreeMap::new(),
-            approvals: BTreeMap::new(),
             delegation: None,
         }
     }
@@ -181,12 +189,9 @@ impl Inbound {
     ) -> Self {
         Inbound {
             from: Party::Parent(parent_id.to_owned()),
-            content: content.to_owned(),
+            body: Body::Message { content: content.to_owned(), attachments: Vec::new() },
             target: Target::Existing(thread_id.to_owned()),
             awaited,
-            attachments: Vec::new(),
-            answers: BTreeMap::new(),
-            approvals: BTreeMap::new(),
             delegation,
         }
     }
@@ -271,14 +276,13 @@ pub(crate) struct Checked {
 /// 来信的校验规则（只读）：agent 收不了信的是 Refused。续写已有会话时（只有用户与父会话会）会话不在了、发送方不准续写
 /// 直接报领域错误；内容为空、附件不存在是发送方自己的错（只有用户的消息会碰到），也报错。
 pub(crate) fn check_in(c: &Connection, inbound: &Inbound) -> Result<std::result::Result<Checked, Refused>> {
-    if inbound.content.trim().is_empty()
-        && inbound.attachments.is_empty()
-        && inbound.answers.is_empty()
-        && inbound.approvals.is_empty()
-    {
-        return Err(invalid("message must not be empty"));
-    }
-    let attachments = load_metas(c, &inbound.attachments)?;
+    let attachments = match &inbound.body {
+        Body::Message { content, attachments } if content.trim().is_empty() && attachments.is_empty() => {
+            return Err(invalid("message must not be empty"));
+        }
+        Body::Message { attachments, .. } => load_metas(c, attachments)?,
+        Body::Reply { .. } => Vec::new(),
+    };
     let session = match &inbound.target {
         Target::New { agent_id, .. } => {
             return Ok(match agent_refusal_in(c, agent_id)? {
@@ -318,29 +322,24 @@ pub(crate) fn check_in(c: &Connection, inbound: &Inbound) -> Result<std::result:
     })
 }
 
-/// 用户提交的回答与批准决定：每个都对应还在等的提问、等批准的调用。返回回答信件里存的结果。
-fn resolve_answers(
-    c: &Connection,
-    session_id: &SessionId,
-    answers: &BTreeMap<String, Vec<QuestionAnswer>>,
-    approvals: &BTreeMap<String, Choice>,
-) -> Result<BTreeMap<String, CallResult>> {
+/// 用户对一次挂起调用的回复：要对应还在等的提问或等批准的调用。返回回答信件里存的结果。
+fn resolve_reply(c: &Connection, session_id: &SessionId, call_id: &str, reply: &CallReply) -> Result<CallResult> {
     let asks = open_asks_of(&position_in(c, session_id)?, &queued_in(c, session_id)?);
-    let mut resolved = BTreeMap::new();
-    for (call_id, given) in answers {
-        let questions = asks.question(call_id).ok_or_else(|| {
-            conflict(format!("question {call_id:?} is not waiting for an answer in session {session_id}"))
-        })?;
-        resolved.insert(call_id.clone(), CallResult::AskUser(answer_result(questions, given)?));
-    }
-    for (call_id, choice) in approvals {
-        if !asks.can_approve(call_id) {
-            return Err(conflict(format!("call {call_id:?} is not waiting for approval in session {session_id}")));
+    match reply {
+        CallReply::Answer(given) => {
+            let questions = asks.question(call_id).ok_or_else(|| {
+                conflict(format!("question {call_id:?} is not waiting for an answer in session {session_id}"))
+            })?;
+            Ok(CallResult::AskUser(answer_result(questions, given)?))
         }
-        let pin = crate::approvals::pin_in(c, session_id, call_id)?;
-        resolved.insert(call_id.clone(), CallResult::Approval(Decision { choice: *choice, pin }));
+        CallReply::Approval(choice) => {
+            if !asks.can_approve(call_id) {
+                return Err(conflict(format!("call {call_id:?} is not waiting for approval in session {session_id}")));
+            }
+            let pin = crate::approvals::pin_in(c, session_id, call_id)?;
+            Ok(CallResult::Approval(Decision { choice: *choice, pin }))
+        }
     }
-    Ok(resolved)
 }
 
 /// 所有来信的唯一入口：确定会话（继续或新建），把它投进会话的信箱。投不进按原因报领域错误（调用方在等结果的来信用）。
@@ -365,12 +364,12 @@ fn receive_into(tx: &mut Tx<'_>, waker: &Waker, inbound: Inbound, checked: Check
                     (agent_id, t.clone())
                 }
                 Target::New { agent_id, title: None } => {
-                    let title = if inbound.content.trim().is_empty() {
-                        default_title(
+                    let title = match &inbound.body {
+                        Body::Message { content, .. } if !content.trim().is_empty() => default_title(content),
+                        // 只发了文件：用文件名（回复只投给已有会话，走不到这里）
+                        Body::Message { .. } | Body::Reply { .. } => default_title(
                             &checked.attachments.iter().map(|m| m.name.as_str()).collect::<Vec<_>>().join(", "),
-                        )
-                    } else {
-                        default_title(&inbound.content)
+                        ),
                     };
                     (agent_id, title)
                 }
@@ -380,19 +379,17 @@ fn receive_into(tx: &mut Tx<'_>, waker: &Waker, inbound: Inbound, checked: Check
     };
     directory::touch_in(tx, &session.id)?;
     let origin = inbound.from.origin();
-    if !inbound.answers.is_empty() || !inbound.approvals.is_empty() {
-        let answers = resolve_answers(tx, &session.id, &inbound.answers, &inbound.approvals)?;
-        post_in(tx, waker, &session.id, NewMail::answer(answers, origin == Origin::User, inbound.awaited))?;
-    }
-    if !inbound.content.trim().is_empty() || !inbound.attachments.is_empty() {
-        let body = MailBody::Message {
-            origin,
-            content: inbound.content.clone(),
-            attachments: inbound.attachments.clone(),
-            delegation_id: inbound.delegation,
-        };
-        post_in(tx, waker, &session.id, NewMail { body, awaited: inbound.awaited })?;
-    }
+    let mail = match inbound.body {
+        Body::Message { content, attachments } => NewMail {
+            body: MailBody::Message { origin, content, attachments, delegation_id: inbound.delegation },
+            awaited: inbound.awaited,
+        },
+        Body::Reply { call_id, reply } => {
+            let result = resolve_reply(tx, &session.id, &call_id, &reply)?;
+            NewMail::answer(BTreeMap::from([(call_id, result)]), origin == Origin::User, inbound.awaited)
+        }
+    };
+    post_in(tx, waker, &session.id, mail)?;
     tracing::info!(session_id = %session.id, sender = ?inbound.from, "message received");
     Ok(session)
 }

@@ -30,4 +30,7 @@ pub use board::{Board, BoardIssue, Filter, IssueDetail, IssueWork, NewIssue, Sto
 pub use change::Patch;
 pub use model::{Actor, Assignee, By, Issue, Priority, Status};
 
-pub const MIGRATION: Migration = Migration { domain: "issues", steps: &[include_str!("../migrations/001_issues.sql")] };
+pub const MIGRATION: Migration = Migration {
+    domain: "issues",
+    steps: &[include_str!("../migrations/001_issues.sql"), include_str!("../migrations/002_tagged_assignee.sql")],
+};

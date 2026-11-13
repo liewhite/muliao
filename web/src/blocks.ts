@@ -10,25 +10,41 @@ import {
   type ViewBlock,
 } from './api'
 
-export interface ToolView {
-  name: string
+/** 一次工具调用的调用这一半（调用条目给出） */
+export interface ToolCall {
   args: string
-  result: string | null
+  /** 开始执行的时间（由后端给出）；拿不到的为 null */
+  at: string | null
+  /** 参数按工具的展示规则画成的块；null 时显示原文 */
+  view: ViewBlock[] | null
+}
+
+/** 一次工具调用的结果这一半（结果或错误条目给出） */
+export interface ToolOutcome {
+  text: string
   /** 被退回：参数校验失败或工具报了可纠正的错误，已交还模型修正（真正的执行失败会让整轮失败，不在这里） */
   rejected: boolean
   /** 工具结果挂给用户的文件：显示在过程组外，折叠不影响看到它们 */
   attachments: Attachment[]
   /** 工具交回给模型的图片（如浏览器截图）：属于这次调用的过程，显示在调用里，随过程组折叠 */
   images: Attachment[]
-  /** 工具结果关联的子会话 id（委派开出的 thread）：同样显示在过程组外，就在开它的那次调用处 */
-  threads: string[]
-  /** 开始执行、结束的时间（调用与结果条目上的 at，由后端给出）；拿不到的为 null */
-  startedAt: string | null
-  finishedAt: string | null
-  /** 参数、结果按工具的展示规则画成的块（调用、结果条目上的 view，由后端给出）；null 时显示原文 */
-  callView: ViewBlock[] | null
-  resultView: ViewBlock[] | null
+  /** 结束的时间（由后端给出）；拿不到的为 null */
+  at: string | null
+  /** 结果按工具的展示规则画成的块；null 时显示原文 */
+  view: ViewBlock[] | null
 }
+
+/** 有调用的工具：还没有结果（在执行或没做完）时 outcome 为 null */
+export interface CalledTool {
+  name: string
+  /** 调用关联的子会话 id（委派开出的 thread）：显示在过程组外，就在开它的那次调用处 */
+  threads: string[]
+  call: ToolCall
+  outcome: ToolOutcome | null
+}
+
+/** 工具调用的展示：有调用的；或只有结果、没有对应调用的（调用在压缩前或运行中还没保存的那一段里） */
+export type ToolView = CalledTool | { name: string; threads: string[]; call: null; outcome: ToolOutcome }
 
 /** 一次 ask_user 提问：是要用户操作的交互，不收进过程组。状态与内容都由后端给出（条目上的 ask） */
 export interface AskBlock {
@@ -40,7 +56,7 @@ export interface AskBlock {
 export interface ApprovalBlock {
   callId: string
   status: 'pending' | 'submitted'
-  tool: ToolView
+  tool: CalledTool
 }
 
 export type Block =
@@ -69,7 +85,7 @@ export type View =
 /** 把扁平条目整理成展示块：工具调用与其结果（按 tool_call_id）合并为一块。 */
 export function toBlocks(items: Item[]): Block[] {
   const blocks: Block[] = []
-  const tools = new Map<string, ToolView>()
+  const tools = new Map<string, CalledTool>()
   // 提问的调用：结局已经体现在调用的状态里（后端 sessions 的 annotate_asks），结果不再单独成块。被退回的提问后端不给
   // 状态，按普通工具调用展示；运行中还没保存的那一段里它显示为「提问中」，保存后以历史为准
   const asks = new Set<string>()
@@ -94,18 +110,11 @@ export function toBlocks(items: Item[]): Block[] {
           blocks.push({ kind: 'ask', ask: { callId: item.tool_call_id, ask: item.wait } })
           break
         }
-        const tool: ToolView = {
+        const tool: CalledTool = {
           name: item.tool_name,
-          args: item.text,
-          result: null,
-          rejected: false,
-          attachments: [],
-          images: [],
           threads: item.threads,
-          startedAt: item.at,
-          finishedAt: null,
-          callView: item.view,
-          resultView: null,
+          call: { args: item.text, at: item.at, view: item.view },
+          outcome: null,
         }
         tools.set(item.tool_call_id, tool)
         if (item.wait?.kind === 'approval') {
@@ -119,32 +128,20 @@ export function toBlocks(items: Item[]): Block[] {
       case 'tool_error': {
         if (asks.has(item.tool_call_id)) break
         const output = item.type === 'tool_result' ? item : { attachments: [], images: [], view: null }
+        const outcome: ToolOutcome = {
+          text: item.text,
+          rejected: item.type === 'tool_error',
+          attachments: output.attachments,
+          images: output.images,
+          at: item.at,
+          view: output.view,
+        }
         const tool = tools.get(item.tool_call_id)
         if (tool) {
-          tool.result = item.text
-          tool.rejected = item.type === 'tool_error'
-          tool.attachments = output.attachments
-          tool.images = output.images
-          tool.finishedAt = item.at
-          tool.resultView = output.view
+          tool.outcome = outcome
         } else {
           // 没有对应调用的结果（调用在压缩前或运行中还没保存的那一段里）单独展示
-          blocks.push({
-            kind: 'tool',
-            tool: {
-              name: item.tool_name,
-              args: '',
-              result: item.text,
-              rejected: item.type === 'tool_error',
-              attachments: output.attachments,
-              images: output.images,
-              threads: [],
-              startedAt: null,
-              finishedAt: item.at,
-              callView: null,
-              resultView: output.view,
-            },
-          })
+          blocks.push({ kind: 'tool', tool: { name: item.tool_name, threads: [], call: null, outcome } })
         }
         break
       }
@@ -160,8 +157,8 @@ export type ToolStatus = 'running' | 'unfinished' | 'rejected' | 'done'
  * 历史里的（运行在执行它时失败、等重试或续跑）并没有在执行，是未完成
  */
 export function toolStatus(tool: ToolView, live: boolean): ToolStatus {
-  if (tool.result === null) return live ? 'running' : 'unfinished'
-  return tool.rejected ? 'rejected' : 'done'
+  if (tool.outcome === null) return live ? 'running' : 'unfinished'
+  return tool.outcome.rejected ? 'rejected' : 'done'
 }
 
 const isStep = (b: Block): b is Step => b.kind === 'thinking' || b.kind === 'tool'
@@ -244,7 +241,7 @@ export function unlinkedThreads<T extends { id: SessionId }>(items: Item[], thre
 
 /** 一组步骤里工具挂给用户的全部文件，按出现顺序 */
 export function stepAttachments(steps: Step[]): Attachment[] {
-  return steps.flatMap((s) => (s.kind === 'tool' ? s.tool.attachments : []))
+  return steps.flatMap((s) => (s.kind === 'tool' ? (s.tool.outcome?.attachments ?? []) : []))
 }
 
 export interface StepsSummary {

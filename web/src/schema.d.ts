@@ -535,7 +535,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** 在会话里发一条消息（续写），或只回答提问、只批准调用。返回信进的会话。 */
+        /** 在会话里发一条消息（续写）、回答一次提问，或批准一次调用。返回信进的会话。 */
         post: operations["reply"];
         delete?: never;
         options?: never;
@@ -1106,11 +1106,25 @@ export interface components {
             issue_id: number;
             /** Format: date-time */
             created_at: string;
-            /** @description 做这件事的人：agent id；用户为 `user`，系统自己的清理为 `system` */
+            /** @description 做这件事的人：用户、agent，或系统自己的清理 */
             actor: components["schemas"]["Actor"];
             session_id: components["schemas"]["SessionId"] | null;
         };
-        Actor: string;
+        /**
+         * @description 做一件事的人：用户、系统自己的清理（删除 agent），或一个 agent。库里存成 `user`、`system` 或 agent id（只经
+         *     [`Self::as_str`] / [`Self::from_stored`]）；JSON 按种类打标签。
+         */
+        Actor: {
+            /** @enum {string} */
+            kind: "user";
+        } | {
+            /** @enum {string} */
+            kind: "system";
+        } | {
+            agent_id: components["schemas"]["AgentId"];
+            /** @enum {string} */
+            kind: "agent";
+        };
         /**
          * @description 被问的 agent 交回的结局：给发问方模型的文字，它挂给用户的文件（交回时挂到发问方这次调用的结果上，文件就出现在用户
          *     正在看的会话里）。
@@ -1260,7 +1274,19 @@ export interface components {
             roles: string[];
             allow: boolean;
         };
-        Assignee: string;
+        /**
+         * @description 指派人：用户（只有一个），或一个 agent。库里存成 `user` 或 agent id（12 位十六进制，不会与 `user` 相同；agent 名称也
+         *     不能取 `user`，工具里按名称指派时不会混淆），读写库只经 [`Self::as_str`] / [`Self::from_stored`]；JSON（接口与时间线的
+         *     change）按种类打标签。未指派是 `Option::None`。
+         */
+        Assignee: {
+            /** @enum {string} */
+            kind: "user";
+        } | {
+            agent_id: components["schemas"]["AgentId"];
+            /** @enum {string} */
+            kind: "agent";
+        };
         /** @description 一个文件的展示形式（界面用）。 */
         Attachment: {
             /** @description 文件存储的地址（files::file_url）：界面直接用它显示与下载 */
@@ -1363,9 +1389,23 @@ export interface components {
             to: null | string;
         };
         /** @description 属性从什么改成什么（存为 `{"from": ..., "to": ...}`）。 */
-        Change_Option_String: {
-            from: null | string;
-            to: null | string;
+        Change_Option_Assignee: {
+            from: null | ({
+                /** @enum {string} */
+                kind: "user";
+            } | {
+                agent_id: components["schemas"]["AgentId"];
+                /** @enum {string} */
+                kind: "agent";
+            });
+            to: null | ({
+                /** @enum {string} */
+                kind: "user";
+            } | {
+                agent_id: components["schemas"]["AgentId"];
+                /** @enum {string} */
+                kind: "agent";
+            });
         };
         /** @description 属性从什么改成什么（存为 `{"from": ..., "to": ...}`）。 */
         Change_Priority: {
@@ -1442,18 +1482,23 @@ export interface components {
         EnabledIn: {
             enabled: boolean;
         };
+        /** @description 目录里的一项：目录或文件，大小与能否内联只有文件有。 */
         EntryOut: {
             name: string;
-            is_dir: boolean;
-            /**
-             * Format: int64
-             * @description 目录为 null
-             */
-            size: number | null;
             /** Format: date-time */
             modified: string;
+            /** @enum {string} */
+            kind: "dir";
+        } | {
+            name: string;
+            /** Format: date-time */
+            modified: string;
+            /** Format: int64 */
+            size: number;
             /** @description 能内联显示的图片；其余读文件时作为附件返回 */
             inline: boolean;
+            /** @enum {string} */
+            kind: "file";
         };
         /** @description 失败、参数被拒绝交还模型重试的结果。 */
         ErrorItem: {
@@ -1549,7 +1594,7 @@ export interface components {
             /** @enum {string} */
             kind: "priority";
         } | {
-            change: components["schemas"]["Change_Option_String"];
+            change: components["schemas"]["Change_Option_Assignee"];
             /** @enum {string} */
             kind: "assignee";
         } | {
@@ -1615,8 +1660,7 @@ export interface components {
             description?: string;
             status?: components["schemas"]["Status"];
             priority?: components["schemas"]["Priority"];
-            /** @description agent id、`user`，或 null */
-            assignee?: string | null;
+            assignee?: components["schemas"]["Assignee"] | null;
             /** @description 依赖的上游 issue id；不能成环 */
             depends_on?: number[];
         };
@@ -1631,8 +1675,7 @@ export interface components {
             description?: string | null;
             status?: components["schemas"]["Status"] | null;
             priority?: components["schemas"]["Priority"] | null;
-            /** @description agent id、`user`；null 取消指派，不出现不变 */
-            assignee?: string | null;
+            assignee?: components["schemas"]["Assignee"] | null;
             /** @description 依赖的上游 issue id，整体替换（[] 去掉全部）；不出现表示不变 */
             depends_on?: number[] | null;
         };
@@ -1931,10 +1974,10 @@ export interface components {
             /** @description What choosing it means, if not obvious. */
             description: string;
         };
-        /** @description 一份配置能用（use）的内置工具与资产（skill、MCP server、secret、记忆，`kind:name`）。 */
+        /** @description 一份配置能用（use）的内置工具与资产（skill、MCP server、secret、记忆）。 */
         ReachOut: {
             tools: components["schemas"]["ToolOut"][];
-            assets: string[];
+            assets: components["schemas"]["UsableAsset"][];
         };
         /** @description 库里的一件事。 */
         Record: {
@@ -1954,20 +1997,23 @@ export interface components {
             /** @description 打回的理由，记成评论 */
             reason: string;
         };
+        /** @description 用户在会话里发来的一件事，按种类分开。 */
         ReplyIn: {
-            prompt?: string;
+            prompt: string;
+            /** @description 先经 POST /api/files 上传得到的 id */
             attachments?: string[];
-            /** @description 对挂起提问的回答（条目里 ask.status 为 pending 的提问）；只回答时 prompt 可以为空 */
-            answers?: {
-                [key: string]: components["schemas"]["QuestionAnswer"][];
-            };
-            /**
-             * @description 对等批准的调用的决定（条目里 approval 为 pending 的工具调用）：approve 批准、deny 拒绝、always 始终允许（批准，以后
-             *     同样的调用不再问）；只做决定时 prompt 可以为空
-             */
-            approvals?: {
-                [key: string]: components["schemas"]["Choice"];
-            };
+            /** @enum {string} */
+            kind: "message";
+        } | {
+            call_id: string;
+            answers: components["schemas"]["QuestionAnswer"][];
+            /** @enum {string} */
+            kind: "answer";
+        } | {
+            call_id: string;
+            choice: components["schemas"]["Choice"];
+            /** @enum {string} */
+            kind: "approval";
         };
         ResultItem: {
             tool_name: string;
@@ -2208,7 +2254,6 @@ export interface components {
             /** @description 会话的来源与发起方（结构化，前端不认识库里的编号格式） */
             origin: components["schemas"]["SessionOrigin"];
             parent_session_id: components["schemas"]["SessionId"] | null;
-            thread: string | null;
             /** @description 有指向它的未读通知（用户在等的回答、提问、agent 主动通知、运行失败）：未读不另存，从通知派生 */
             unread: boolean;
             /** Format: date-time */
@@ -2279,6 +2324,11 @@ export interface components {
         };
         /** @enum {string} */
         Status: "backlog" | "in_progress" | "in_review" | "blocked" | "done" | "cancelled";
+        /**
+         * @description 存成文件的四种：可以新建、改、删、转移 owner（记忆不转移）。
+         * @enum {string}
+         */
+        StoredKind: "skill" | "mcp" | "secret" | "memory";
         StreamConfig: {
             command: string;
             secrets?: string[];
@@ -2370,6 +2420,11 @@ export interface components {
             /** Format: int64 */
             count: number;
         };
+        /** @description 能用的一项资产（存成文件的那四种）。 */
+        UsableAsset: {
+            kind: components["schemas"]["StoredKind"];
+            name: string;
+        };
         /** @description 一个分组的汇总。没有选中的维度为 None（例如只按模型分组时 agent_id 与 day 都是 None）。 */
         UsageBucket: components["schemas"]["UsageTotals"] & {
             agent_id: components["schemas"]["AgentId"] | null;
@@ -2436,12 +2491,13 @@ export interface components {
             /** @enum {string} */
             kind: "links";
         };
-        /** @description 会话在等的一项东西（会话页列出）。 */
-        Wait: {
+        /** @description 会话在等的一项东西（会话领域的 [`Wait`]）；后台任务另带任务的详情。 */
+        WaitOut: {
             /** Format: int64 */
             job_id: number;
             /** Format: date-time */
             since: string;
+            job: components["schemas"]["JobOut"];
             /** @enum {string} */
             kind: "job";
         } | {
@@ -2470,10 +2526,6 @@ export interface components {
             tool_name: string;
             /** @enum {string} */
             kind: "approval";
-        };
-        /** @description 会话在等的一项东西；后台任务（kind 为 job）带上任务的详情。 */
-        WaitOut: components["schemas"]["Wait"] & {
-            job: components["schemas"]["JobOut"] | null;
         };
         /** @enum {string} */
         WorkState: "running" | "waiting" | "idle";
@@ -4473,7 +4525,7 @@ export interface operations {
             query?: {
                 /** @description 只要这些状态（可以重复给）；不给是全部 */
                 status?: components["schemas"]["Status"][];
-                /** @description agent id 或 `user` */
+                /** @description 指派人：agent id，或 `user` 表示用户 */
                 assignee?: string;
                 /** @description 负责项目的 agent id */
                 owner?: components["schemas"]["AgentId"];

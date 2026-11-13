@@ -163,7 +163,7 @@ mod tests {
     }
 
     fn agent(id: &str) -> Option<Assignee> {
-        Some(Assignee::Agent(AgentId::new(id)))
+        Some(Assignee::Agent { agent_id: AgentId::new(id) })
     }
 
     fn act(actor: Actor, what: Happening) -> Activity {
@@ -225,7 +225,7 @@ mod tests {
 
     #[test]
     fn what_a_change_brings() {
-        let a = Actor::Agent(AgentId::new("a"));
+        let a = Actor::Agent { agent_id: AgentId::new("a") };
         let handed = [act(a.clone(), Happening::Assignee { change: Change::new(None, Some(Assignee::User)) })];
         assert_eq!(handed_to_user(&a, Some(&Assignee::User), &handed).map(AgentId::as_str), Some("a"));
         assert_eq!(handed_to_user(&Actor::User, Some(&Assignee::User), &handed), None);
@@ -242,7 +242,7 @@ mod tests {
         assert!(from_outside(&Actor::User, &comment));
         assert!(!from_outside(&a, &comment));
         // 交给用户的是最近一条指派动态的 actor；没有就是创建者
-        let creator = Actor::Agent(AgentId::new("c"));
+        let creator = Actor::Agent { agent_id: AgentId::new("c") };
         assert_eq!(handed_by(&creator, &[]).map(AgentId::as_str), Some("c"));
         assert_eq!(handed_by(&creator, &handed).map(AgentId::as_str), Some("a"));
         let by_user = [act(Actor::User, Happening::Assignee { change: Change::new(None, Some(Assignee::User)) })];

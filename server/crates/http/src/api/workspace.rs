@@ -9,7 +9,7 @@ use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::Response;
 use chrono::{DateTime, Utc};
 use muliao_platform::ids::{AgentId, SessionId};
-use muliao_workspace::browse::{Entry, WorkspaceFile};
+use muliao_workspace::browse::{Entry, EntryKind, WorkspaceFile};
 use muliao_workspace::grants::GrantInfo;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
@@ -31,20 +31,30 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(kill_job))
 }
 
+/// 目录里的一项：目录或文件，大小与能否内联只有文件有。
 #[derive(Serialize, ToSchema)]
-pub struct EntryOut {
-    pub name: String,
-    pub is_dir: bool,
-    /// 目录为 null
-    pub size: Option<u64>,
-    pub modified: DateTime<Utc>,
-    /// 能内联显示的图片；其余读文件时作为附件返回
-    pub inline: bool,
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum EntryOut {
+    Dir {
+        name: String,
+        modified: DateTime<Utc>,
+    },
+    File {
+        name: String,
+        modified: DateTime<Utc>,
+        size: u64,
+        /// 能内联显示的图片；其余读文件时作为附件返回
+        inline: bool,
+    },
 }
 
 impl EntryOut {
     pub fn of(e: Entry) -> Self {
-        EntryOut { name: e.name, is_dir: e.is_dir, size: e.size, modified: e.modified, inline: e.inline }
+        let Entry { name, modified, kind } = e;
+        match kind {
+            EntryKind::Dir => EntryOut::Dir { name, modified },
+            EntryKind::File { size, inline } => EntryOut::File { name, modified, size, inline },
+        }
     }
 }
 

@@ -2033,7 +2033,7 @@
         "tags": [
           "sessions"
         ],
-        "summary": "在会话里发一条消息（续写），或只回答提问、只批准调用。返回信进的会话。",
+        "summary": "在会话里发一条消息（续写）、回答一次提问，或批准一次调用。返回信进的会话。",
         "operationId": "reply",
         "parameters": [
           {
@@ -2565,7 +2565,7 @@
           {
             "name": "assignee",
             "in": "query",
-            "description": "agent id 或 `user`",
+            "description": "指派人：agent id，或 `user` 表示用户",
             "required": false,
             "schema": {
               "type": "string"
@@ -3731,7 +3731,7 @@
               },
               "actor": {
                 "$ref": "#/components/schemas/Actor",
-                "description": "做这件事的人：agent id；用户为 `user`，系统自己的清理为 `system`"
+                "description": "做这件事的人：用户、agent，或系统自己的清理"
               },
               "session_id": {
                 "oneOf": [
@@ -3750,7 +3750,55 @@
         "description": "时间线上记下的一条：谁、什么时候、在哪个会话里，发生了什么。"
       },
       "Actor": {
-        "type": "string"
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "user"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "system"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "agent_id",
+              "kind"
+            ],
+            "properties": {
+              "agent_id": {
+                "$ref": "#/components/schemas/AgentId"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "agent"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "做一件事的人：用户、系统自己的清理（删除 agent），或一个 agent。库里存成 `user`、`system` 或 agent id（只经\n[`Self::as_str`] / [`Self::from_stored`]）；JSON 按种类打标签。"
       },
       "AgentAnswer": {
         "type": "object",
@@ -4368,7 +4416,41 @@
         }
       },
       "Assignee": {
-        "type": "string"
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "user"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "agent_id",
+              "kind"
+            ],
+            "properties": {
+              "agent_id": {
+                "$ref": "#/components/schemas/AgentId"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "agent"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "指派人：用户（只有一个），或一个 agent。库里存成 `user` 或 agent id（12 位十六进制，不会与 `user` 相同；agent 名称也\n不能取 `user`，工具里按名称指派时不会混淆），读写库只经 [`Self::as_str`] / [`Self::from_stored`]；JSON（接口与时间线的\nchange）按种类打标签。未指派是 `Option::None`。"
       },
       "Attachment": {
         "type": "object",
@@ -4773,7 +4855,7 @@
         },
         "additionalProperties": false
       },
-      "Change_Option_String": {
+      "Change_Option_Assignee": {
         "type": "object",
         "description": "属性从什么改成什么（存为 `{\"from\": ..., \"to\": ...}`）。",
         "required": [
@@ -4787,7 +4869,41 @@
                 "type": "null"
               },
               {
-                "type": "string"
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "kind"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "user"
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "agent_id",
+                      "kind"
+                    ],
+                    "properties": {
+                      "agent_id": {
+                        "$ref": "#/components/schemas/AgentId"
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "agent"
+                        ]
+                      }
+                    }
+                  }
+                ],
+                "description": "指派人：用户（只有一个），或一个 agent。库里存成 `user` 或 agent id（12 位十六进制，不会与 `user` 相同；agent 名称也\n不能取 `user`，工具里按名称指派时不会混淆），读写库只经 [`Self::as_str`] / [`Self::from_stored`]；JSON（接口与时间线的\nchange）按种类打标签。未指派是 `Option::None`。"
               }
             ]
           },
@@ -4797,7 +4913,41 @@
                 "type": "null"
               },
               {
-                "type": "string"
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "kind"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "user"
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "agent_id",
+                      "kind"
+                    ],
+                    "properties": {
+                      "agent_id": {
+                        "$ref": "#/components/schemas/AgentId"
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "agent"
+                        ]
+                      }
+                    }
+                  }
+                ],
+                "description": "指派人：用户（只有一个），或一个 agent。库里存成 `user` 或 agent id（12 位十六进制，不会与 `user` 相同；agent 名称也\n不能取 `user`，工具里按名称指派时不会混淆），读写库只经 [`Self::as_str`] / [`Self::from_stored`]；JSON（接口与时间线的\nchange）按种类打标签。未指派是 `Option::None`。"
               }
             ]
           }
@@ -5006,39 +5156,66 @@
         }
       },
       "EntryOut": {
-        "type": "object",
-        "required": [
-          "name",
-          "is_dir",
-          "size",
-          "modified",
-          "inline"
-        ],
-        "properties": {
-          "name": {
-            "type": "string"
-          },
-          "is_dir": {
-            "type": "boolean"
-          },
-          "size": {
-            "type": [
-              "integer",
-              "null"
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "name",
+              "modified",
+              "kind"
             ],
-            "format": "int64",
-            "description": "目录为 null",
-            "minimum": 0
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "modified": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "dir"
+                ]
+              }
+            }
           },
-          "modified": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "inline": {
-            "type": "boolean",
-            "description": "能内联显示的图片；其余读文件时作为附件返回"
+          {
+            "type": "object",
+            "required": [
+              "name",
+              "modified",
+              "size",
+              "inline",
+              "kind"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "modified": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "size": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "inline": {
+                "type": "boolean",
+                "description": "能内联显示的图片；其余读文件时作为附件返回"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "file"
+                ]
+              }
+            }
           }
-        }
+        ],
+        "description": "目录里的一项：目录或文件，大小与能否内联只有文件有。"
       },
       "ErrorItem": {
         "type": "object",
@@ -5378,14 +5555,14 @@
           },
           {
             "type": "object",
-            "description": "agent id、`user`，或 null（未指派）",
+            "description": "指派人，或 null（未指派）",
             "required": [
               "change",
               "kind"
             ],
             "properties": {
               "change": {
-                "$ref": "#/components/schemas/Change_Option_String"
+                "$ref": "#/components/schemas/Change_Option_Assignee"
               },
               "kind": {
                 "type": "string",
@@ -5628,11 +5805,15 @@
             "$ref": "#/components/schemas/Priority"
           },
           "assignee": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "agent id、`user`，或 null"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Assignee",
+                "description": "指派人；null 不指派"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "depends_on": {
             "type": "array",
@@ -5709,11 +5890,15 @@
             ]
           },
           "assignee": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "agent id、`user`；null 取消指派，不出现不变"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Assignee",
+                "description": "指派人；null 取消指派，不出现不变"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "depends_on": {
             "type": [
@@ -6887,7 +7072,7 @@
       },
       "ReachOut": {
         "type": "object",
-        "description": "一份配置能用（use）的内置工具与资产（skill、MCP server、secret、记忆，`kind:name`）。",
+        "description": "一份配置能用（use）的内置工具与资产（skill、MCP server、secret、记忆）。",
         "required": [
           "tools",
           "assets"
@@ -6902,7 +7087,7 @@
           "assets": {
             "type": "array",
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/UsableAsset"
             }
           }
         }
@@ -6966,41 +7151,84 @@
         }
       },
       "ReplyIn": {
-        "type": "object",
-        "properties": {
-          "prompt": {
-            "type": "string"
-          },
-          "attachments": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "answers": {
+        "oneOf": [
+          {
             "type": "object",
-            "description": "对挂起提问的回答（条目里 ask.status 为 pending 的提问）；只回答时 prompt 可以为空",
-            "additionalProperties": {
-              "type": "array",
-              "items": {
-                "$ref": "#/components/schemas/QuestionAnswer"
+            "description": "一条消息（续写）：文字与附件不能都为空",
+            "required": [
+              "prompt",
+              "kind"
+            ],
+            "properties": {
+              "prompt": {
+                "type": "string"
+              },
+              "attachments": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "先经 POST /api/files 上传得到的 id"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "message"
+                ]
               }
-            },
-            "propertyNames": {
-              "type": "string"
             }
           },
-          "approvals": {
+          {
             "type": "object",
-            "description": "对等批准的调用的决定（条目里 approval 为 pending 的工具调用）：approve 批准、deny 拒绝、always 始终允许（批准，以后\n同样的调用不再问）；只做决定时 prompt 可以为空",
-            "additionalProperties": {
-              "$ref": "#/components/schemas/Choice"
-            },
-            "propertyNames": {
-              "type": "string"
+            "description": "回答一次挂起的提问（条目里 ask.status 为 pending 的提问）：每题一个回答",
+            "required": [
+              "call_id",
+              "answers",
+              "kind"
+            ],
+            "properties": {
+              "call_id": {
+                "type": "string"
+              },
+              "answers": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/QuestionAnswer"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "answer"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "对一次等批准的调用（条目里 approval 为 pending）的决定：approve 批准、deny 拒绝、always 始终允许（批准，以后同样的\n调用不再问）",
+            "required": [
+              "call_id",
+              "choice",
+              "kind"
+            ],
+            "properties": {
+              "call_id": {
+                "type": "string"
+              },
+              "choice": {
+                "$ref": "#/components/schemas/Choice"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "approval"
+                ]
+              }
             }
           }
-        }
+        ],
+        "description": "用户在会话里发来的一件事，按种类分开。"
       },
       "ResultItem": {
         "type": "object",
@@ -7922,7 +8150,6 @@
           "title",
           "origin",
           "parent_session_id",
-          "thread",
           "unread",
           "created_at",
           "updated_at"
@@ -7945,17 +8172,11 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/SessionId",
-                "description": "委派产生的子会话：父会话与 thread 名（thread 名取自 origin，方便界面直接用）"
+                "description": "委派产生的子会话的父会话（thread 名在 origin 里）；别的会话、父会话已删除时为 null"
               },
               {
                 "type": "null"
               }
-            ]
-          },
-          "thread": {
-            "type": [
-              "string",
-              "null"
             ]
           },
           "unread": {
@@ -8175,6 +8396,16 @@
           "blocked",
           "done",
           "cancelled"
+        ]
+      },
+      "StoredKind": {
+        "type": "string",
+        "description": "存成文件的四种：可以新建、改、删、转移 owner（记忆不转移）。",
+        "enum": [
+          "skill",
+          "mcp",
+          "secret",
+          "memory"
         ]
       },
       "StreamConfig": {
@@ -8499,6 +8730,22 @@
           }
         }
       },
+      "UsableAsset": {
+        "type": "object",
+        "description": "能用的一项资产（存成文件的那四种）。",
+        "required": [
+          "kind",
+          "name"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/StoredKind"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "UsageBucket": {
         "allOf": [
           {
@@ -8786,7 +9033,7 @@
         ],
         "description": "一个展示块。输出时字段一律都在（没有就是 null），前端类型与实际输出一致。"
       },
-      "Wait": {
+      "WaitOut": {
         "oneOf": [
           {
             "type": "object",
@@ -8794,6 +9041,7 @@
             "required": [
               "job_id",
               "since",
+              "job",
               "kind"
             ],
             "properties": {
@@ -8804,6 +9052,9 @@
               "since": {
                 "type": "string",
                 "format": "date-time"
+              },
+              "job": {
+                "$ref": "#/components/schemas/JobOut"
               },
               "kind": {
                 "type": "string",
@@ -8924,34 +9175,7 @@
             }
           }
         ],
-        "description": "会话在等的一项东西（会话页列出）。"
-      },
-      "WaitOut": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/Wait"
-          },
-          {
-            "type": "object",
-            "required": [
-              "job"
-            ],
-            "properties": {
-              "job": {
-                "oneOf": [
-                  {
-                    "$ref": "#/components/schemas/JobOut",
-                    "description": "后台任务的详情；别的种类为 null"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              }
-            }
-          }
-        ],
-        "description": "会话在等的一项东西；后台任务（kind 为 job）带上任务的详情。"
+        "description": "会话在等的一项东西（会话领域的 [`Wait`]）；后台任务另带任务的详情。"
       },
       "WorkState": {
         "type": "string",

@@ -41,7 +41,7 @@ async fn agent_id(board: &Board, name: String) -> Result<AgentId> {
 
 /// 指派人：`user` 是用户，其余按 agent 名称找。
 async fn assignee(board: &Board, name: String) -> Result<Assignee> {
-    if name == USER { Ok(Assignee::User) } else { Ok(Assignee::Agent(agent_id(board, name).await?)) }
+    if name == USER { Ok(Assignee::User) } else { Ok(Assignee::Agent { agent_id: agent_id(board, name).await? }) }
 }
 
 async fn names(board: &Board) -> Result<AgentNames> {

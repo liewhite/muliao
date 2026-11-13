@@ -487,7 +487,7 @@ impl Board {
                 .to_owned();
             c.apply(Patch {
                 status: Some(Status::InProgress),
-                assignee: Some(Some(Assignee::Agent(owner))),
+                assignee: Some(Some(Assignee::Agent { agent_id: owner })),
                 ..Patch::default()
             })
         })
@@ -513,7 +513,7 @@ impl Board {
             // 指派时查它还能不能运行：已删除的换成更明白的冲突（归档的本来就是冲突）
             let back = Patch {
                 status: Some(Status::InProgress),
-                assignee: Some(Some(Assignee::Agent(agent))),
+                assignee: Some(Some(Assignee::Agent { agent_id: agent })),
                 ..Patch::default()
             };
             match c.apply(back) {

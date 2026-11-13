@@ -20,18 +20,14 @@ export type Agent = Schemas['AgentOut']
 export type AgentInput = Schemas['AgentDefaults']
 export type Session = Schemas['SessionOut']
 /** 对等批准的调用的决定：批准、拒绝、始终允许 */
-export type ApprovalChoice = NonNullable<Schemas['ReplyIn']['approvals']>[string]
+export type ApprovalChoice = Schemas['Choice']
 export type ScriptGrant = Schemas['ScriptGrantOut']
 // 会话列表里的一行：多一个工作状态 state（在运行 / 在等 / 空闲），不空闲的（在运行、在等）排在最前（接口排序）
 export type SessionListItem = Schemas['SessionListItem']
 /** 一条通知（不叫 Notification：那是浏览器的全局对象） */
 export type AppNotification = Schemas['Notification']
 
-// 下面四个值与两个路由（sessionRoute、issues.ts 的 issueRoute）前后端各写一份，server/crates/muliao/tests/frontend_contract.rs 核对
-/** 指代用户的那个值（与后端 assets 的 naming::USER 一致）：issue 的指派人、资源修改的作者等 */
-export const USER = 'user'
-/** issue 时间线上系统自己的动作（删除 agent 时的清理）的 actor（与后端 issues 的 Actor::System 一致） */
-export const SYSTEM_ACTOR = 'system'
+// 下面两个值与两个路由（sessionRoute、issues.ts 的 issueRoute）前后端各写一份，server/crates/muliao/tests/frontend_contract.rs 核对
 
 /** 全局记忆的名字（与后端 assets 的 rules::GLOBAL_MEMORY 一致）：base 固定收录，不能删 */
 export const GLOBAL_MEMORY = 'global'
@@ -108,13 +104,17 @@ export type AgentAssets = Schemas['AgentAssetsOut']
 export type AgentAsset = Schemas['AssetOut']
 export type IssueStatus = Schemas['Status']
 export type IssuePriority = Schemas['Priority']
-/** assignee：agent id、'user'（用户），或 null（未指派） */
 export type Issue = Schemas['BoardIssue']
+/** issue 的指派人：用户或一个 agent（未指派是 null，不在这个类型里） */
+export type Assignee = Schemas['Assignee']
+/** 时间线上做事的人：用户、agent，或系统自己的清理（删除 agent） */
+export type Actor = Schemas['Actor']
 /** 时间线上的一条，按 kind 区分：收窄后就是这种的内容（body）与变化（change） */
 export type IssueActivity = IssueDetail['activities'][number]
 export type IssueDetail = Schemas['IssueDetail']
-/** agent 工作目录里的一项；目录的 size 为 null */
+/** agent 工作目录里的一项：目录或文件（大小与能否内联只有文件有） */
 export type WorkspaceEntry = Schemas['EntryOut']
+export type WorkspaceFileEntry = Extract<WorkspaceEntry, { kind: 'file' }>
 
 export class ApiError extends Error {
   readonly status: number
@@ -356,12 +356,12 @@ export const api = {
   startSession: (agent_id: AgentId, prompt: string, attachments: string[]) =>
     call('post', '/api/sessions', { body: { agent_id, prompt, attachments } }),
   reply: (session_id: SessionId, prompt: string, attachments: string[]) =>
-    call('post', '/api/sessions/{session_id}/messages', { path: { session_id }, body: { prompt, attachments, answers: {}, approvals: {} } }),
+    call('post', '/api/sessions/{session_id}/messages', { path: { session_id }, body: { kind: 'message', prompt, attachments } }),
   /** 回答挂起的提问：作为这次 ask_user 调用的结果交回模型 */
   answer: (session_id: SessionId, toolCallId: string, answers: QuestionAnswer[]) =>
     call('post', '/api/sessions/{session_id}/messages', {
       path: { session_id },
-      body: { prompt: '', attachments: [], answers: { [toolCallId]: answers }, approvals: {} },
+      body: { kind: 'answer', call_id: toolCallId, answers },
     }),
   /**
    * 批准或拒绝一次等批准的工具调用：批准后按原参数执行，结果交回模型；拒绝时模型收到「用户拒绝」；始终允许：批准，
@@ -370,7 +370,7 @@ export const api = {
   approve: (session_id: SessionId, toolCallId: string, choice: ApprovalChoice) =>
     call('post', '/api/sessions/{session_id}/messages', {
       path: { session_id },
-      body: { prompt: '', attachments: [], answers: {}, approvals: { [toolCallId]: choice } },
+      body: { kind: 'approval', call_id: toolCallId, choice },
     }),
   /** skill 脚本的「始终允许」，新的在前 */
   scriptGrants: () => call('get', '/api/script-grants'),

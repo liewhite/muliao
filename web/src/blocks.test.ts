@@ -103,14 +103,14 @@ describe('stepAttachments', () => {
     const views = groupSteps(toBlocks([call('a', '{}'), { ...result('a', 'page'), images: [shot] }]))
     const group = views[0]
     expect(group.kind === 'process' && stepAttachments(group.steps)).toEqual([])
-    expect(group.kind === 'process' && group.steps[0].kind === 'tool' && group.steps[0].tool.images).toEqual([shot])
+    expect(group.kind === 'process' && group.steps[0].kind === 'tool' && group.steps[0].tool.outcome?.images).toEqual([shot])
   })
 
   it('takes the call view from the call item and the result view from its result', () => {
     const cmd = { kind: 'terminal' as const, command: 'ls', output: null, status: null, failed: false }
     const out = { kind: 'terminal' as const, command: null, output: 'a', status: null, failed: false }
     const [block] = toBlocks([{ ...call('a', '{}'), view: [cmd] }, { ...result('a', 'a'), view: [out] }])
-    expect(block.kind === 'tool' && [block.tool.callView, block.tool.resultView]).toEqual([[cmd], [out]])
+    expect(block.kind === 'tool' && [block.tool.call?.view, block.tool.outcome?.view]).toEqual([[cmd], [out]])
   })
 })
 
@@ -165,7 +165,7 @@ describe('toBlocks times', () => {
       call('a', '{}', '2026-10-22T05:00:00Z'),
       result('a', 'ok', '2026-10-22T05:00:04Z'),
     ])
-    expect(block.kind === 'tool' && [block.tool.startedAt, block.tool.finishedAt]).toEqual([
+    expect(block.kind === 'tool' && [block.tool.call?.at, block.tool.outcome?.at]).toEqual([
       '2026-10-22T05:00:00Z',
       '2026-10-22T05:00:04Z',
     ])
@@ -175,7 +175,12 @@ describe('toBlocks times', () => {
 describe('summarizeSteps', () => {
   const tool = (result: string | null, rejected = false): Step => ({
     kind: 'tool',
-    tool: { name: 'run_shell', args: '', result, rejected, attachments: [], images: [], threads: [], startedAt: null, finishedAt: null, callView: null, resultView: null },
+    tool: {
+      name: 'run_shell',
+      threads: [],
+      call: { args: '', at: null, view: null },
+      outcome: result === null ? null : { text: result, rejected, attachments: [], images: [], at: null, view: null },
+    },
   })
 
   it('counts tool calls, mentions thinking, and reports the running tool and calls returned to the model', () => {
@@ -217,7 +222,7 @@ describe('ask_user blocks', () => {
 
   it('shows a rejected call, which has no ask state, as a rejected tool step', () => {
     const rejected = toBlocks([ask('{"questions": []}', null), refused('too short')])
-    expect(rejected.map((b) => (b.kind === 'tool' ? [b.kind, b.tool.rejected] : [b.kind]))).toEqual([['tool', true]])
+    expect(rejected.map((b) => (b.kind === 'tool' ? [b.kind, b.tool.outcome?.rejected] : [b.kind]))).toEqual([['tool', true]])
   })
 })
 

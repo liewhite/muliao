@@ -286,16 +286,28 @@ pub fn write_scope(snapshot: &Snapshot, agent_id: &AgentId) -> WriteScope {
     }
 }
 
-/// 一份配置能用的：内置工具（按注册顺序）与资产（`kind:name`，按种类、名称）。
+/// 一份配置能用的：内置工具（按注册顺序）与资产（按种类、名称）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Reach {
     pub tools: Vec<ToolSpec>,
-    pub assets: Vec<String>,
+    pub assets: Vec<UsableAsset>,
+}
+
+/// 能用的一项资产（存成文件的那四种）。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+pub struct UsableAsset {
+    pub kind: StoredKind,
+    pub name: String,
 }
 
 impl Reach {
     pub fn tool_names(&self) -> Vec<&str> {
         self.tools.iter().map(|t| t.name.as_str()).collect()
+    }
+
+    /// 资产写成 `kind:name`（给模型看的形式）。
+    pub fn asset_patterns(&self) -> Vec<String> {
+        self.assets.iter().map(|a| pattern_of(a.kind.kind(), &a.name)).collect()
     }
 }
 
@@ -305,7 +317,7 @@ pub fn reach_of(snapshot: &Snapshot, grants: &Grants) -> Reach {
         .into_iter()
         .flat_map(|k| snapshot.of_kind(k))
         .filter(|a| grants.uses(a))
-        .map(|a| pattern_of(a.kind().kind(), &a.name))
+        .map(|a| UsableAsset { kind: a.kind(), name: a.name.clone() })
         .collect();
     let tools =
         snapshot.tools.specs().iter().filter(|t| grants.rules().includes(Kind::Tool, Some(&t.name))).cloned().collect();

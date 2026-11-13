@@ -60,7 +60,8 @@ impl fmt::Display for Kind {
 }
 
 /// 存成文件的四种：可以新建、改、删、转移 owner（记忆不转移）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum StoredKind {
     Skill,
     Mcp,

@@ -89,7 +89,7 @@ fn new(owner: &str, title: &str, status: Status, assignee: Option<Assignee>) -> 
 }
 
 fn agent(id: &str) -> Option<Assignee> {
-    Some(Assignee::Agent(AgentId::new(id)))
+    Some(Assignee::Agent { agent_id: AgentId::new(id) })
 }
 
 impl World {
@@ -388,7 +388,7 @@ async fn a_run_ending_with_the_issue_unsettled_asks_the_agent_to_settle_it() {
     w.publish(run_ended, ended(false, vec![])).await;
     let t = w.timeline(i.id).await;
     assert_eq!(kinds(&t), ["created", "unsettled"]);
-    assert_eq!(t[1].actor, Actor::Agent(AgentId::new(A)));
+    assert_eq!(t[1].actor, Actor::Agent { agent_id: AgentId::new(A) });
     let letters = w.letters(i.id, A).await;
     assert_eq!(letters.len(), 1, "delivered into its own session although recorded there");
     assert!(letters[0].contains("a comment alone does not settle it"), "{}", letters[0]);
@@ -491,8 +491,8 @@ async fn issue_show_lists_and_stop_rules() {
     assert!(w.board.get(i.id).await.unwrap().work.stalled);
     let json = serde_json::to_value(w.board.get(i.id).await.unwrap()).unwrap();
     assert_eq!(
-        (json["assignee"].as_str(), json["status"].as_str(), json["assignee_state"].as_str()),
-        (Some(B), Some("in_progress"), Some("idle"))
+        (&json["assignee"], json["status"].as_str(), json["assignee_state"].as_str()),
+        (&serde_json::json!({"kind": "agent", "agent_id": B}), Some("in_progress"), Some("idle"))
     );
     let by_owner = w.board.list(Filter { owner: Some(AgentId::new(B)), ..Filter::default() }).await.unwrap();
     assert!(by_owner.is_empty());

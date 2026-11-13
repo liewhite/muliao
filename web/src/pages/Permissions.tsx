@@ -15,7 +15,7 @@ import {
 import { Pencil, Trash2 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { agentRoute, api, type AgentId, type Reach, type Role, type RoleInput, type ToolPermission } from '../api'
-import { KIND_LABEL, ruleCandidates, splitRule } from '../rules'
+import { KIND_LABEL, ruleCandidates } from '../rules'
 import {
   ActionButton,
   CollapsibleForm,
@@ -50,21 +50,18 @@ export function ToolLine({ tool }: { tool: ToolPermission }) {
   )
 }
 
-/** 能用的资产（`kind:name`）：按种类成组，点进资产页 */
-function AssetChips({ assets }: { assets: string[] }) {
+/** 能用的资产：按种类成组，点进资产页 */
+function AssetChips({ assets }: { assets: Reach['assets'] }) {
   if (assets.length === 0) return <span className="text-sm text-muted">没有 skill、MCP、secret、记忆</span>
   return (
     <div className="flex flex-wrap gap-1.5">
-      {assets.map((i) => {
-        const { kind, name } = splitRule(i)
-        return (
-          <Link key={i} to={`/ai-assets?kind=${kind}`}>
-            <Chip size="sm" variant="secondary">
-              <span className="text-muted">{KIND_LABEL[kind]}</span> <span className="font-mono">{name}</span>
-            </Chip>
-          </Link>
-        )
-      })}
+      {assets.map(({ kind, name }) => (
+        <Link key={`${kind}:${name}`} to={`/ai-assets?kind=${kind}`}>
+          <Chip size="sm" variant="secondary">
+            <span className="text-muted">{KIND_LABEL[kind]}</span> <span className="font-mono">{name}</span>
+          </Chip>
+        </Link>
+      ))}
     </div>
   )
 }

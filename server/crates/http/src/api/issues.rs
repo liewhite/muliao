@@ -32,7 +32,7 @@ pub struct IssueQuery {
     #[serde(default)]
     #[param(value_type = Option<Vec<Status>>)]
     pub status: Vec<Status>,
-    /// agent id 或 `user`
+    /// 指派人：agent id，或 `user` 表示用户
     pub assignee: Option<String>,
     /// 负责项目的 agent id
     pub owner: Option<AgentId>,
@@ -41,7 +41,7 @@ pub struct IssueQuery {
 #[utoipa::path(get, path = "/api/issues", tag = "issues", params(IssueQuery),
     responses((status = 200, body = Vec<BoardIssue>), (status = 422, body = ErrorOut)))]
 async fn list_issues(State(s): State<AppState>, Query(q): Query<IssueQuery>) -> ApiResult<axum::Json<Vec<BoardIssue>>> {
-    let filter = Filter { statuses: q.status, assignee: q.assignee.map(Assignee::from), owner: q.owner };
+    let filter = Filter { statuses: q.status, assignee: q.assignee.map(Assignee::from_stored), owner: q.owner };
     Ok(axum::Json(s.services.board.list(filter).await?))
 }
 
@@ -56,9 +56,9 @@ pub struct IssueCreate {
     pub status: Status,
     #[serde(default)]
     pub priority: Priority,
-    /// agent id、`user`，或 null
+    /// 指派人；null 不指派
     #[serde(default)]
-    pub assignee: Option<String>,
+    pub assignee: Option<Assignee>,
     /// 依赖的上游 issue id；不能成环
     #[serde(default)]
     pub depends_on: Vec<i64>,
@@ -77,7 +77,7 @@ async fn create_issue(
         description: body.description,
         status: body.status,
         priority: body.priority,
-        assignee: body.assignee.map(Assignee::from),
+        assignee: body.assignee,
         depends_on: body.depends_on.into_iter().map(Upstream::Issue).collect(),
         key: None,
     };
@@ -105,10 +105,10 @@ pub struct IssuePatch {
     pub status: Option<Status>,
     #[serde(default)]
     pub priority: Option<Priority>,
-    /// agent id、`user`；null 取消指派，不出现不变
+    /// 指派人；null 取消指派，不出现不变
     #[serde(default, deserialize_with = "crate::extract::present")]
-    #[schema(value_type = Option<String>)]
-    pub assignee: Option<Option<String>>,
+    #[schema(value_type = Option<Assignee>)]
+    pub assignee: Option<Option<Assignee>>,
     /// 依赖的上游 issue id，整体替换（[] 去掉全部）；不出现表示不变
     #[serde(default)]
     pub depends_on: Option<Vec<i64>>,
@@ -128,7 +128,7 @@ async fn update_issue(
         description: body.description,
         status: body.status,
         priority: body.priority,
-        assignee: body.assignee.map(|a| a.map(Assignee::from)),
+        assignee: body.assignee,
         depends_on: body.depends_on,
     };
     let board = &s.services.board;

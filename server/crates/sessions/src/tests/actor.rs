@@ -3,7 +3,7 @@
 //! ask_agent 委派与交回、最终失败与手动重试、删除忙会话被拒。
 
 use muliao_platform::ids::{AgentId, SessionId};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -308,13 +308,7 @@ use futures::FutureExt;
 
 impl World {
     async fn say(&self, session: UserTarget, text: &str) -> SessionId {
-        let m = UserMessage {
-            content: text.into(),
-            session,
-            attachments: vec![],
-            answers: BTreeMap::new(),
-            approvals: BTreeMap::new(),
-        };
+        let m = UserMessage::Message { content: text.into(), session, attachments: vec![] };
         self.service.receive(m).await.unwrap().id
     }
 
@@ -425,12 +419,10 @@ async fn ask_user_pauses_until_the_user_answers() {
     assert_eq!(view.waits.len(), 1);
     assert!(w.ended.lock().unwrap()[0].answer.contains("哪个？"));
     w.script.text("你选了 a");
-    let answer = UserMessage {
-        content: String::new(),
-        session: UserTarget::Existing(s.clone()),
-        attachments: vec![],
-        answers: BTreeMap::from([("q1".to_owned(), vec![QuestionAnswer { selected: vec!["a".into()], other: None }])]),
-        approvals: BTreeMap::new(),
+    let answer = UserMessage::Answer {
+        session_id: s.clone(),
+        call_id: "q1".to_owned(),
+        answers: vec![QuestionAnswer { selected: vec!["a".into()], other: None }],
     };
     w.service.receive(answer).await.unwrap();
     assert_eq!(w.settled(&s).await, WorkState::Idle);
@@ -638,21 +630,18 @@ async fn a_question_asked_next_to_another_tool_call_resumes_with_both_results() 
     assert_eq!(h.len(), 3);
     assert!(texts(&h[2])[0].contains("echo: 先做"));
     w.script.text("知道了");
-    let answer = UserMessage {
-        content: "顺便说一句".into(),
-        session: UserTarget::Existing(s.clone()),
-        attachments: vec![],
-        answers: BTreeMap::from([("q1".to_owned(), vec![QuestionAnswer { selected: vec!["b".into()], other: None }])]),
-        approvals: BTreeMap::new(),
+    let answer = UserMessage::Answer {
+        session_id: s.clone(),
+        call_id: "q1".to_owned(),
+        answers: vec![QuestionAnswer { selected: vec!["b".into()], other: None }],
     };
     w.service.receive(answer).await.unwrap();
     assert_eq!(w.settled(&s).await, WorkState::Idle);
     let h = w.history(&s).await;
     assert_eq!(texts(h.last().unwrap())[0], "知道了");
-    // 第二次请求模型时两个结果都在、只出现一次，新消息也在
+    // 第二次请求模型时两个结果都在、只出现一次
     let echo_results = h.iter().flat_map(texts).filter(|t| t.contains("echo: 先做")).count();
     assert_eq!(echo_results, 1, "the earlier result is not saved twice");
     let all: Vec<String> = h.iter().flat_map(texts).collect();
     assert!(all.iter().any(|t| t.contains("result q1")), "{all:?}");
-    assert!(all.iter().any(|t| t == "顺便说一句"), "{all:?}");
 }

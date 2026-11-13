@@ -3,11 +3,10 @@ import { Button, Card } from '@heroui/react'
 import { MessageSquare, Pencil, Play, Trash2 } from 'lucide-react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
-  SYSTEM_ACTOR,
-  USER,
   api,
   asAgentId,
   sessionRoute,
+  type Actor,
   type Agent,
   type IssueDetail,
   type SessionId,
@@ -45,9 +44,15 @@ import { useLoad } from '../load'
 import { useDraft } from '../drafts'
 import { OwnerSelect, StatusDot } from './Issues'
 
-function actorName(agents: Agent[] | undefined, actor: string) {
-  if (actor === USER) return '我'
-  return actor === SYSTEM_ACTOR ? '系统' : agentLabel(agents, asAgentId(actor))
+function actorName(agents: Agent[] | undefined, actor: Actor) {
+  switch (actor.kind) {
+    case 'user':
+      return '我'
+    case 'system':
+      return '系统'
+    case 'agent':
+      return agentLabel(agents, actor.agent_id)
+  }
 }
 
 /** 这条动态发生在哪个会话（agent 动手时所在的会话）：点开看过程；用户的操作、会话已删除时没有 */

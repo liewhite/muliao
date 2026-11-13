@@ -23,12 +23,12 @@ export const isRunning = (span: Span | null): boolean => (span?.runningSince.len
  * live：条目是否来自正在进行的运行。历史里没有结果的调用（执行时失败、等重试或续跑）并没有在执行，不计时，只显示开始时间
  */
 export function toolSpan(tool: ToolView, live: boolean): Span | null {
-  if (tool.startedAt === null) return null
-  const start = Date.parse(tool.startedAt)
+  if (tool.call === null || tool.call.at === null) return null
+  const start = Date.parse(tool.call.at)
   if (toolStatus(tool, live) === 'running') return { start, spent: 0, runningSince: [start], endUnknown: false }
-  if (tool.result === null || tool.finishedAt === null) return { start, spent: 0, runningSince: [], endUnknown: true }
+  if (tool.outcome === null || tool.outcome.at === null) return { start, spent: 0, runningSince: [], endUnknown: true }
   // 保存时间与结果时间偶有倒序（10-20 之前一整轮结束才提交，之后偶有毫秒级），耗时不显示负数
-  return { start, spent: Math.max(0, Date.parse(tool.finishedAt) - start), runningSince: [], endUnknown: false }
+  return { start, spent: Math.max(0, Date.parse(tool.outcome.at) - start), runningSince: [], endUnknown: false }
 }
 
 /** 一组步骤：从最早开始的工具算起，耗时为各工具耗时之和，与展开后各行相加一致 */

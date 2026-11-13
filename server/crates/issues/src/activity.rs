@@ -72,9 +72,8 @@ pub enum Happening {
     Priority {
         change: Change<Priority>,
     },
-    /// agent id、`user`，或 null（未指派）
+    /// 指派人，或 null（未指派）
     Assignee {
-        #[schema(value_type = Change<Option<String>>)]
         change: Change<Option<Assignee>>,
     },
     /// agent id，或 null（负责的 agent 已删除）
@@ -152,7 +151,7 @@ pub struct Activity {
     pub id: i64,
     pub issue_id: i64,
     pub created_at: DateTime<Utc>,
-    /// 做这件事的人：agent id；用户为 `user`，系统自己的清理为 `system`
+    /// 做这件事的人：用户、agent，或系统自己的清理
     pub actor: Actor,
     /// 这件事发生在哪个会话；用户在界面上的操作、系统的清理、会话已删除时为 null
     pub session_id: Option<SessionId>,
@@ -174,7 +173,7 @@ fn activity(r: &Row<'_>) -> rusqlite::Result<std::result::Result<Activity, Strin
         id,
         issue_id: r.get(1)?,
         created_at: r.get(2)?,
-        actor: Actor::from(r.get::<_, String>(3)?),
+        actor: Actor::from_stored(r.get::<_, String>(3)?),
         session_id: r.get(7)?,
         what,
     }))
@@ -246,8 +245,10 @@ mod tests {
         }
         let (_, _, change) = Happening::Stopped { change: Arrival { before: (), to: AgentId::new("a") } }.stored();
         assert_eq!(change.unwrap(), r#"{"from":null,"to":"a"}"#);
-        let (_, _, change) = Happening::Assignee { change: Change::new(None, Some(Assignee::User)) }.stored();
-        assert_eq!(change.unwrap(), r#"{"from":null,"to":"user"}"#);
+        let to_agent = Some(Assignee::Agent { agent_id: AgentId::new("a") });
+        let (_, _, change) = Happening::Assignee { change: Change::new(Some(Assignee::User), to_agent) }.stored();
+        let change: Value = serde_json::from_str(&change.unwrap()).unwrap();
+        assert_eq!(change, serde_json::json!({"from": {"kind": "user"}, "to": {"kind": "agent", "agent_id": "a"}}));
         // 形状不符的报出来
         assert!(Happening::parse("comment", None, None).is_err());
         assert!(Happening::parse("title", None, Some(r#"{"from":"a","to":"b","x":1}"#)).is_err());
@@ -267,6 +268,6 @@ mod tests {
         let v = serde_json::to_value(&a).unwrap();
         assert_eq!(v["kind"], "comment");
         assert_eq!(v["body"], "b");
-        assert_eq!(v["actor"], "user");
+        assert_eq!(v["actor"], serde_json::json!({"kind": "user"}));
     }
 }

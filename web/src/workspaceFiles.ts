@@ -22,9 +22,9 @@ const ext = (name: string) => {
 }
 
 /** 预览方式：能内联的图片由后端判定（inline）；其余按大小与扩展名，不认识的先按文本读，读到二进制内容再改为只给下载（isBinary） */
-export function previewKind(entry: { name: string; size: number | null; inline: boolean }): PreviewKind {
+export function previewKind(entry: { name: string; size: number; inline: boolean }): PreviewKind {
   if (entry.inline) return 'image'
-  if ((entry.size ?? 0) > MAX_PREVIEW_BYTES) return 'too-big'
+  if (entry.size > MAX_PREVIEW_BYTES) return 'too-big'
   const e = ext(entry.name)
   return e === 'md' || e === 'markdown' ? 'markdown' : 'text'
 }

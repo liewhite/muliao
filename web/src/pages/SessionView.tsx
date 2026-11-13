@@ -125,9 +125,9 @@ function SpanText({ span }: { span: Span | null }) {
 /** 参数与结果：有展示块的一边按块渲染，否则（或切到原文时）显示原文 */
 function ToolDetail({ tool }: { tool: ToolView }) {
   const [raw, setRaw] = useState(false)
-  const rendered = tool.callView !== null || tool.resultView !== null
-  const callView = raw ? null : tool.callView
-  const resultView = raw ? null : tool.resultView
+  const views = [tool.call?.view ?? null, tool.outcome?.view ?? null]
+  const rendered = views.some((v) => v !== null)
+  const [callView, resultView] = raw ? [null, null] : views
   return (
     <>
       {callView !== null && resultView !== null ? (
@@ -138,12 +138,12 @@ function ToolDetail({ tool }: { tool: ToolView }) {
           {callView !== null ? (
             <ToolViewBlocks blocks={callView} />
           ) : (
-            tool.args && tool.args !== '{}' && <pre className={CODE_BLOCK}>{tool.args}</pre>
+            tool.call && tool.call.args !== '' && tool.call.args !== '{}' && <pre className={CODE_BLOCK}>{tool.call.args}</pre>
           )}
           {resultView !== null ? (
             <ToolViewBlocks blocks={resultView} />
           ) : (
-            tool.result !== null && <pre className={CODE_BLOCK}>{tool.result}</pre>
+            tool.outcome && <pre className={CODE_BLOCK}>{tool.outcome.text}</pre>
           )}
         </>
       )}
@@ -173,7 +173,7 @@ function ToolBlock({ tool, live }: { tool: ToolView; live: boolean }) {
       }
     >
       <ToolDetail tool={tool} />
-      <AttachmentList files={tool.images} />
+      {tool.outcome && <AttachmentList files={tool.outcome.images} />}
     </Collapsible>
   )
 }
@@ -513,11 +513,16 @@ function RunStatus({ run, retrying, onRetry }: { run: RunRecord; retrying: Retry
   )
 }
 
+/** 子会话的 thread 名（在它的来源里）；这里列的子会话都是委派开出的，别的来源没有 thread 名，显示标题 */
+function threadName(s: Session): string {
+  return s.origin.kind === 'delegation' ? s.origin.thread : s.title
+}
+
 /** thread 名与做它的 agent */
 function ThreadName({ thread }: { thread: Session }) {
   return (
     <>
-      {thread.thread}（<AgentName id={thread.agent_id} />）
+      {threadName(thread)}（<AgentName id={thread.agent_id} />）
     </>
   )
 }
@@ -526,7 +531,7 @@ function ThreadRow({ thread }: { thread: Session }) {
   return (
     <Link to={sessionRoute(thread.id)} className="flex items-center gap-2 rounded-lg px-2 py-1 hover:bg-surface-hover">
       <GitBranch className="size-3.5 shrink-0 text-muted" />
-      <span className="truncate font-medium">{thread.thread}</span>
+      <span className="truncate font-medium">{threadName(thread)}</span>
       <span className="truncate text-muted">
         <AgentName id={thread.agent_id} />
       </span>
@@ -575,7 +580,6 @@ function WaitRow({ wait, now, ctx, actions }: { wait: Wait; now: number; ctx: Se
   const detail = <span className="text-muted">{waitDetail(wait, now)}</span>
   switch (wait.kind) {
     case 'job': {
-      // 后台任务一定带详情（job 字段只对别的种类为 null，类型上分不开）
       const job = wait.job
       return (
         <Collapsible
@@ -587,32 +591,30 @@ function WaitRow({ wait, now, ctx, actions }: { wait: Wait; now: number; ctx: Se
           }
           title={
             <span className="flex min-w-0 gap-2">
-              <span className="truncate font-mono">{job?.command.split('\n', 1)[0]}</span>
+              <span className="truncate font-mono">{job.command.split('\n', 1)[0]}</span>
               <span className="shrink-0">{waitDetail(wait, now)}</span>
             </span>
           }
         >
-          {job && (
-            <div className="flex flex-col gap-2">
-              <pre className={CODE_BLOCK}>{job.command}</pre>
-              <div className="text-xs text-muted">日志 {job.log_path}（在 agent 工作目录里）最后几行：</div>
-              <pre className={CODE_BLOCK}>{job.tail || '（还没有输出）'}</pre>
-              {job.status !== 'running' ? (
-                <div className="text-xs text-muted">已结束，等结局交回会话</div>
-              ) : (
-                <Button
-                  size="sm"
-                  variant="danger-soft"
-                  className="self-start"
-                  isDisabled={actions.busy}
-                  onPress={() => actions.run(() => api.killJob(actions.agentId, wait.job_id))}
-                >
-                  <Square className="size-3.5" />
-                  结束任务
-                </Button>
-              )}
-            </div>
-          )}
+          <div className="flex flex-col gap-2">
+            <pre className={CODE_BLOCK}>{job.command}</pre>
+            <div className="text-xs text-muted">日志 {job.log_path}（在 agent 工作目录里）最后几行：</div>
+            <pre className={CODE_BLOCK}>{job.tail || '（还没有输出）'}</pre>
+            {job.status !== 'running' ? (
+              <div className="text-xs text-muted">已结束，等结局交回会话</div>
+            ) : (
+              <Button
+                size="sm"
+                variant="danger-soft"
+                className="self-start"
+                isDisabled={actions.busy}
+                onPress={() => actions.run(() => api.killJob(actions.agentId, wait.job_id))}
+              >
+                <Square className="size-3.5" />
+                结束任务
+              </Button>
+            )}
+          </div>
         </Collapsible>
       )
     }
@@ -1033,10 +1035,10 @@ export default function SessionView() {
                 </Link>
                 <span className="text-xs text-muted">{formatTime(d.session.created_at)}</span>
               </div>
-              {d.session.parent_session_id && (
+              {d.session.parent_session_id && d.session.origin.kind === 'delegation' && (
                 <Link to={parentRoute} className="flex items-center justify-center gap-1 text-xs text-accent">
                   <CornerLeftUp className="size-3.5" />
-                  来自上级会话的 thread「{d.session.thread}」
+                  来自上级会话的 thread「{d.session.origin.thread}」
                 </Link>
               )}
               <History items={d.items} compactions={d.compactions} ctx={ctx} />

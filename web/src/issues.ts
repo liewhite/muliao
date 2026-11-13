@@ -1,7 +1,7 @@
 // issue 看板的纯逻辑：状态与优先级的展示顺序、按状态分列、时间线文字
 
 import { agentLabel, selectableAgents } from './agentGroups'
-import { USER, type Agent, type Issue, type IssueActivity, type IssuePriority, type IssueStatus } from './api'
+import { asAgentId, type Agent, type Assignee, type Issue, type IssueActivity, type IssuePriority, type IssueStatus } from './api'
 
 /** 状态的标签；键的顺序就是看板的列顺序（也是列表视图的分组顺序）：受阻排在进行中和待审核之间 */
 export const STATUS_LABEL: Record<IssueStatus, string> = {
@@ -41,20 +41,29 @@ export const PRIORITIES = Object.keys(PRIORITY_LABEL) as readonly IssuePriority[
 /** issue 页；通知点开的地址由后端 Notification.url 生成，与它一致（server/crates/muliao/tests/frontend_contract.rs） */
 export const issueRoute = (id: number) => `/issues/${id}`
 
-/** 指派人下拉框里「未指派」的 id（选项 id 必须非空） */
+/** 指派人下拉框里「未指派」「我」的选项 id（选项 id 必须非空；agent id 是 12 位十六进制，不会与它们相同） */
 export const UNASSIGNED = '@none'
+const ME = '@me'
 
 /** 指派人选项：未指派、我、各个 agent（id 为 agent id）。归档的 agent 不能被指派，只在它就是当前指派人（current）时留着以便显示 */
-export function assigneeOptions(agents: Agent[] | undefined, current?: string | null) {
+export function assigneeOptions(agents: Agent[] | undefined, current?: Assignee | null) {
+  const keep = current?.kind === 'agent' ? current.agent_id : null
   return [
     { id: UNASSIGNED, label: '未指派' },
-    { id: USER, label: '我' },
-    ...selectableAgents(agents, current).map((a) => ({ id: a.id as string, label: a.name })),
+    { id: ME, label: '我' },
+    ...selectableAgents(agents, keep).map((a) => ({ id: a.id as string, label: a.name })),
   ]
 }
 
-export const assigneeValue = (assignee: string | null) => assignee ?? UNASSIGNED
-export const assigneeOf = (value: string) => (value === UNASSIGNED ? null : value)
+/** 指派人与下拉框选项 id 互换 */
+export function assigneeValue(assignee: Assignee | null): string {
+  if (assignee === null) return UNASSIGNED
+  return assignee.kind === 'user' ? ME : assignee.agent_id
+}
+export function assigneeOf(value: string): Assignee | null {
+  if (value === UNASSIGNED) return null
+  return value === ME ? { kind: 'user' } : { kind: 'agent', agent_id: asAgentId(value) }
+}
 
 /** 负责项目的显示名；负责的 agent 被删除后为 null */
 export function ownerLabel(agents: Agent[] | undefined, owner: string | null): string {
@@ -77,10 +86,9 @@ export function ownerHue(agents: Agent[] | undefined, owner: string | null): num
   return rank === -1 ? null : Math.round((rank * GOLDEN_ANGLE) % 360)
 }
 
-export function assigneeLabel(agents: Agent[] | undefined, assignee: string | null): string {
+export function assigneeLabel(agents: Agent[] | undefined, assignee: Assignee | null): string {
   if (assignee === null) return '未指派'
-  if (assignee === USER) return '我'
-  return agentLabel(agents, assignee)
+  return assignee.kind === 'user' ? '我' : agentLabel(agents, assignee.agent_id)
 }
 
 /** 同一列里：最近更新的在前，刚拖进来的 issue 就排在最上面 */
@@ -148,7 +156,7 @@ export function activityText(agents: Agent[] | undefined, a: IssueActivity): str
     case 'run_failed':
       return `在 issue 会话里的运行失败了：${a.body}`
     case 'stopped':
-      return `停止了 ${assigneeLabel(agents, a.change.to)} 在这个 issue 上的会话`
+      return `停止了 ${agentLabel(agents, a.change.to)} 在这个 issue 上的会话`
     case 'unsettled':
       return '在 issue 会话里的运行结束时 issue 仍是进行中、会话也没在等什么：已请它表态'
     case 'status':

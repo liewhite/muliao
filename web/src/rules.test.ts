@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { asAgentId, type CatalogAsset } from './api'
-import { filterAssets, ruleCandidates, splitRule } from './rules'
+import { filterAssets, ruleCandidates } from './rules'
 
 const a = asAgentId('agent-a')
 const common = (name: string, owner: CatalogAsset['owner']) => ({ name, owner, description: '', roles: [], shared: false })
@@ -10,16 +10,6 @@ const ASSETS: CatalogAsset[] = [
   { kind: 'skill', updated_at: AT, path: '/a/platform/skills/relay-host', ...common('relay-host', null) },
   { kind: 'skill', updated_at: AT, path: '/a/agent-a/skills/mine', ...common('mine', a) },
 ]
-
-describe('splitRule', () => {
-  it('名字里的冒号属于名字', () => {
-    expect(splitRule('secret:A:B')).toEqual({ kind: 'secret', name: 'A:B' })
-  })
-
-  it('不是资产的种类时报错', () => {
-    expect(() => splitRule('agent:x')).toThrow()
-  })
-})
 
 describe('ruleCandidates', () => {
   it('每种的通配符在前，然后是全部资产（存在库里的还有 use + write）', () => {

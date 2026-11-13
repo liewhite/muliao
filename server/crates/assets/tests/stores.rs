@@ -168,7 +168,7 @@ async fn catalog_transfer_and_roles() {
     assert!(roles.delete("team").await.unwrap_err().to_string().contains("used by agents"));
     let view = roles.view("team").await.unwrap();
     assert_eq!(view.holders, vec![a.clone()]);
-    assert_eq!(view.reach.assets, vec!["skill:s".to_owned()]);
+    assert_eq!(view.reach.asset_patterns(), vec!["skill:s".to_owned()]);
     let used = roles.assets(&a).await.unwrap();
     let s_used = used.iter().find(|u| u.name == "s").unwrap();
     assert!(s_used.source.own && s_used.source.roles == vec!["team".to_owned()]);

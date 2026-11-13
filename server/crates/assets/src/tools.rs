@@ -189,7 +189,7 @@ impl Tool<RunScope> for GetAgent {
             allow: texts(&view.rules.allow),
             deny: texts(&view.rules.deny),
             tools: reach.tool_names().into_iter().map(str::to_owned).collect(),
-            assets: reach.assets,
+            assets: reach.asset_patterns(),
             available_roles: self.distribution.list().await?.iter().map(RoleDetail::of).collect(),
             all_tools: self.distribution.tool_names().await?,
         };

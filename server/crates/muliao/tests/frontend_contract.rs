@@ -1,5 +1,5 @@
 //! 前后端各写一份的常量与路由：前端（web/src）的值必须与后端的唯一来源一致。接口里的类型由 OpenAPI 生成，这里管的是
-//! 不在接口类型里的那几个值（指代用户的值、系统 actor、文件地址前缀、全局记忆的名字、通知点开的页面路由）。
+//! 不在接口类型里的那几个值（文件地址前缀、全局记忆的名字、通知点开的页面路由）。
 
 use muliao_platform::ids::SessionId;
 use std::path::PathBuf;
@@ -39,8 +39,6 @@ fn the_committed_openapi_snapshot_matches_the_api() {
 
 #[test]
 fn frontend_constants_match_the_backend() {
-    assert_eq!(constant("api.ts", "USER"), muliao_assets::naming::USER);
-    assert_eq!(constant("api.ts", "SYSTEM_ACTOR"), muliao_issues::Actor::System.as_str());
     assert_eq!(constant("api.ts", "FILES_PATH"), muliao_files::FILES_PATH);
     assert_eq!(constant("api.ts", "GLOBAL_MEMORY"), muliao_assets::rules::GLOBAL_MEMORY);
 }

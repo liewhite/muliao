@@ -46,9 +46,8 @@ pub struct SessionOut {
     pub title: String,
     /// 会话的来源与发起方（结构化，前端不认识库里的编号格式）
     pub origin: SessionOrigin,
-    /// 委派产生的子会话：父会话与 thread 名（thread 名取自 origin，方便界面直接用）
+    /// 委派产生的子会话的父会话（thread 名在 origin 里）；别的会话、父会话已删除时为 null
     pub parent_session_id: Option<SessionId>,
-    pub thread: Option<String>,
     /// 有指向它的未读通知（用户在等的回答、提问、agent 主动通知、运行失败）：未读不另存，从通知派生
     pub unread: bool,
     pub created_at: DateTime<Utc>,
@@ -62,7 +61,6 @@ impl SessionOut {
             id: s.id,
             agent_id: s.agent_id,
             title: s.title,
-            thread: s.origin.thread().map(str::to_owned),
             origin: s.origin,
             parent_session_id: s.parent_session_id,
             created_at: s.created_at,
@@ -153,12 +151,10 @@ async fn start_session(
     let session = s
         .services
         .sessions
-        .receive(UserMessage {
+        .receive(UserMessage::Message {
             content: body.prompt,
             session: UserTarget::NewChat { agent_id: body.agent_id },
             attachments: body.attachments,
-            answers: BTreeMap::new(),
-            approvals: BTreeMap::new(),
         })
         .await?;
     Ok((StatusCode::CREATED, axum::Json(session_out(&s, session).await?)))
@@ -233,32 +229,44 @@ pub struct JobOut {
     pub tail: String,
 }
 
-/// 会话在等的一项东西；后台任务（kind 为 job）带上任务的详情。
+/// 会话在等的一项东西（会话领域的 [`Wait`]）；后台任务另带任务的详情。
 #[derive(Serialize, ToSchema)]
-pub struct WaitOut {
-    #[serde(flatten)]
-    pub wait: Wait,
-    /// 后台任务的详情；别的种类为 null
-    pub job: Option<JobOut>,
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WaitOut {
+    /// 后台任务（run_shell background）
+    Job { job_id: i64, since: DateTime<Utc>, job: JobOut },
+    /// 委派出去的工作（ask_agent，或 delegate_task 带 report_back）
+    Delegation { thread_session_id: SessionId, check_seconds: Option<f64>, since: DateTime<Utc> },
+    /// 自己约的到点唤醒
+    Wake { due_at: DateTime<Utc>, note: String, since: DateTime<Utc> },
+    /// 用户回答提问
+    Ask { call_id: String, headers: Vec<String> },
+    /// 用户批准一次工具调用
+    Approval { call_id: String, tool_name: String },
 }
 
 /// WaitOut 的唯一构造入口：后台任务向工作区领域取命令与日志。
 async fn wait_outs(s: &AppState, agent_id: &AgentId, waits: Vec<Wait>) -> ApiResult<Vec<WaitOut>> {
     let mut out = Vec::with_capacity(waits.len());
     for wait in waits {
-        let job = match &wait {
-            Wait::Job { job_id, .. } => {
-                let info = s.services.jobs.info(*job_id, agent_id).await?;
-                Some(JobOut {
+        out.push(match wait {
+            Wait::Job { job_id, since } => {
+                let info = s.services.jobs.info(job_id, agent_id).await?;
+                let job = JobOut {
                     command: info.command,
                     status: info.state.status(),
                     log_path: info.log_path,
                     tail: info.tail,
-                })
+                };
+                WaitOut::Job { job_id, since, job }
             }
-            _ => None,
-        };
-        out.push(WaitOut { wait, job });
+            Wait::Delegation { thread_session_id, check_seconds, since } => {
+                WaitOut::Delegation { thread_session_id, check_seconds, since }
+            }
+            Wait::Wake { due_at, note, since } => WaitOut::Wake { due_at, note, since },
+            Wait::Ask { call_id, headers } => WaitOut::Ask { call_id, headers },
+            Wait::Approval { call_id, tool_name } => WaitOut::Approval { call_id, tool_name },
+        });
     }
     Ok(out)
 }
@@ -334,22 +342,25 @@ async fn get_session(
     }))
 }
 
+/// 用户在会话里发来的一件事，按种类分开。
 #[derive(Deserialize, ToSchema)]
-pub struct ReplyIn {
-    #[serde(default)]
-    pub prompt: String,
-    #[serde(default)]
-    pub attachments: Vec<String>,
-    /// 对挂起提问的回答（条目里 ask.status 为 pending 的提问）；只回答时 prompt 可以为空
-    #[serde(default)]
-    pub answers: BTreeMap<String, Vec<QuestionAnswer>>,
-    /// 对等批准的调用的决定（条目里 approval 为 pending 的工具调用）：approve 批准、deny 拒绝、always 始终允许（批准，以后
-    /// 同样的调用不再问）；只做决定时 prompt 可以为空
-    #[serde(default)]
-    pub approvals: BTreeMap<String, Choice>,
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ReplyIn {
+    /// 一条消息（续写）：文字与附件不能都为空
+    Message {
+        prompt: String,
+        /// 先经 POST /api/files 上传得到的 id
+        #[serde(default)]
+        attachments: Vec<String>,
+    },
+    /// 回答一次挂起的提问（条目里 ask.status 为 pending 的提问）：每题一个回答
+    Answer { call_id: String, answers: Vec<QuestionAnswer> },
+    /// 对一次等批准的调用（条目里 approval 为 pending）的决定：approve 批准、deny 拒绝、always 始终允许（批准，以后同样的
+    /// 调用不再问）
+    Approval { call_id: String, choice: Choice },
 }
 
-/// 在会话里发一条消息（续写），或只回答提问、只批准调用。返回信进的会话。
+/// 在会话里发一条消息（续写）、回答一次提问，或批准一次调用。返回信进的会话。
 #[utoipa::path(post, path = "/api/sessions/{session_id}/messages", tag = "sessions", request_body = ReplyIn,
     responses((status = 202, body = SessionOut), (status = 404, body = ErrorOut), (status = 409, body = ErrorOut),
         (status = 422, body = ErrorOut)),
@@ -359,17 +370,14 @@ async fn reply(
     Path(session_id): Path<SessionId>,
     Json(body): Json<ReplyIn>,
 ) -> ApiResult<(StatusCode, axum::Json<SessionOut>)> {
-    let session = s
-        .services
-        .sessions
-        .receive(UserMessage {
-            content: body.prompt,
-            session: UserTarget::Existing(session_id),
-            attachments: body.attachments,
-            answers: body.answers,
-            approvals: body.approvals,
-        })
-        .await?;
+    let message = match body {
+        ReplyIn::Message { prompt, attachments } => {
+            UserMessage::Message { session: UserTarget::Existing(session_id), content: prompt, attachments }
+        }
+        ReplyIn::Answer { call_id, answers } => UserMessage::Answer { session_id, call_id, answers },
+        ReplyIn::Approval { call_id, choice } => UserMessage::Approval { session_id, call_id, choice },
+    };
+    let session = s.services.sessions.receive(message).await?;
     Ok((StatusCode::ACCEPTED, axum::Json(session_out(&s, session).await?)))
 }
 

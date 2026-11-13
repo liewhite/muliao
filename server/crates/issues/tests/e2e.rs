@@ -259,7 +259,7 @@ fn work_for_me(w: &World, title: &str) -> NewIssue {
         owner: w.me.clone(),
         title: title.into(),
         status: Status::InProgress,
-        assignee: Some(Assignee::Agent(w.me.clone())),
+        assignee: Some(Assignee::Agent { agent_id: w.me.clone() }),
         description: String::new(),
         priority: Priority::default(),
         depends_on: vec![],

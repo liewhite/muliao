@@ -6,7 +6,7 @@ import { useState } from 'react'
 import { Button, Card } from '@heroui/react'
 import { ChevronRight, Download, File, Folder, RefreshCw } from 'lucide-react'
 import { Button as AriaButton, Tree, TreeItem, TreeItemContent, type Key } from 'react-aria-components'
-import { api, type WorkspaceEntry } from '../api'
+import { api, type WorkspaceEntry, type WorkspaceFileEntry } from '../api'
 import { CODE_BLOCK, EmptyHint, ErrorAlert, Loading, Markdown, formatTime } from '../ui'
 import { errorMessage, never, useLoad } from '../load'
 import {
@@ -81,8 +81,8 @@ export function FileBrowser({ source, label, emptyText }: { source: DirSource; l
           key={path}
           id={path}
           textValue={entry.name}
-          hasChildItems={entry.is_dir}
-          onAction={() => (entry.is_dir ? toggle(path) : setOpened(path))}
+          hasChildItems={entry.kind === 'dir'}
+          onAction={() => (entry.kind === 'dir' ? toggle(path) : setOpened(path))}
           className={({ isFocusVisible }) =>
             `cursor-pointer rounded-md text-sm outline-none ${isFocusVisible ? 'ring-2 ring-accent' : ''} ${
               opened === path ? 'bg-accent-soft text-accent-soft-foreground' : 'hover:bg-surface-secondary'
@@ -92,14 +92,14 @@ export function FileBrowser({ source, label, emptyText }: { source: DirSource; l
           <TreeItemContent>
             {({ level, isExpanded }) => (
               <div className="flex items-center gap-1 py-1 pe-2" style={{ paddingInlineStart: (level - 1) * 14 + 4 }}>
-                {entry.is_dir ? (
+                {entry.kind === 'dir' ? (
                   <AriaButton slot="chevron" className="shrink-0 text-muted outline-none">
                     <ChevronRight className={`size-3.5 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
                   </AriaButton>
                 ) : (
                   <span className="w-3.5 shrink-0" />
                 )}
-                {entry.is_dir ? (
+                {entry.kind === 'dir' ? (
                   <Folder className="size-4 shrink-0 text-muted" />
                 ) : (
                   <File className="size-4 shrink-0 text-muted" />
@@ -108,7 +108,7 @@ export function FileBrowser({ source, label, emptyText }: { source: DirSource; l
               </div>
             )}
           </TreeItemContent>
-          {entry.is_dir && renderLevel(path, dirs[path])}
+          {entry.kind === 'dir' && renderLevel(path, dirs[path])}
         </TreeItem>
       )
     })
@@ -121,6 +121,7 @@ export function FileBrowser({ source, label, emptyText }: { source: DirSource; l
     if (listing === undefined) return null
     const entry = listing.find((e) => e.name === name)
     if (entry === undefined) return <EmptyHint>{path} 已不在{label}里</EmptyHint>
+    if (entry.kind === 'dir') return <EmptyHint>{path} 现在是目录</EmptyHint>
     return <FilePreview key={`${path}-${version}`} url={source.fileUrl(path)} path={path} entry={entry} />
   }
 
@@ -159,8 +160,7 @@ export function FileBrowser({ source, label, emptyText }: { source: DirSource; l
   )
 }
 
-function FilePreview({ url, path, entry }: { url: string; path: string; entry: WorkspaceEntry }) {
-  const size = entry.size ?? 0
+function FilePreview({ url, path, entry }: { url: string; path: string; entry: WorkspaceFileEntry }) {
   const kind = previewKind(entry)
   const text = useLoad(async () => (kind === 'markdown' || kind === 'text' ? (await api.fileBlob(url)).text() : ''),
     [url, kind],
@@ -172,7 +172,7 @@ function FilePreview({ url, path, entry }: { url: string; path: string; entry: W
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <code className="min-w-0 break-all font-mono">{path}</code>
         <span className="text-muted">
-          {formatSize(size)} · {formatTime(entry.modified)}
+          {formatSize(entry.size)} · {formatTime(entry.modified)}
         </span>
         <a href={url} download={entry.name} className="ms-auto inline-flex items-center gap-1 text-accent">
           <Download className="size-4" />

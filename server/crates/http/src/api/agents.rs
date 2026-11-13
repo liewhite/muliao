@@ -4,7 +4,7 @@
 use axum::extract::State;
 use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
-use muliao_assets::access::{Actor, Reach, Source};
+use muliao_assets::access::{Actor, Reach, Source, UsableAsset};
 use muliao_assets::distribution::{RoleSpec, RoleView, UsedAsset};
 use muliao_assets::formats::agent_file::{AgentConfig, Thinking};
 use muliao_assets::formats::mcp::McpTransport;
@@ -153,11 +153,11 @@ impl Access {
     }
 }
 
-/// 一份配置能用（use）的内置工具与资产（skill、MCP server、secret、记忆，`kind:name`）。
+/// 一份配置能用（use）的内置工具与资产（skill、MCP server、secret、记忆）。
 #[derive(Serialize, ToSchema)]
 pub struct ReachOut {
     pub tools: Vec<ToolOut>,
-    pub assets: Vec<String>,
+    pub assets: Vec<UsableAsset>,
 }
 
 impl ReachOut {

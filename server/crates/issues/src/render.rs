@@ -12,7 +12,7 @@ use crate::model::{Actor, Assignee, Issue};
 /// 做事的人的展示名：用户是 `user`，系统是 `system`，agent 按 id 换成名字。
 pub fn actor_name(actor: &Actor, names: &AgentNames) -> String {
     match actor {
-        Actor::Agent(id) => names.name(id),
+        Actor::Agent { agent_id } => names.name(agent_id),
         other => other.as_str().to_owned(),
     }
 }
@@ -22,7 +22,7 @@ pub fn assignee_name(assignee: Option<&Assignee>, names: &AgentNames) -> String 
     match assignee {
         None => "unassigned".into(),
         Some(Assignee::User) => Assignee::User.as_str().to_owned(),
-        Some(Assignee::Agent(id)) => names.name(id),
+        Some(Assignee::Agent { agent_id }) => names.name(agent_id),
     }
 }
 

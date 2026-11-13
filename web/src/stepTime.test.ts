@@ -2,18 +2,13 @@ import { describe, expect, it } from 'vitest'
 import type { Step, ToolView } from './blocks'
 import { formatClock, formatDuration, groupSpan, spanLabel, toolSpan, type Span } from './stepTime'
 
+/** 有调用的工具；result 为 null 时还没有结果 */
 const tool = (startedAt: string | null, finishedAt: string | null, result: string | null = 'ok'): ToolView => ({
   name: 'run_shell',
-  args: '{}',
-  result,
-  rejected: false,
-  attachments: [],
-  images: [],
   threads: [],
-  startedAt,
-  callView: null,
-  resultView: null,
-  finishedAt,
+  call: { args: '{}', at: startedAt, view: null },
+  outcome:
+    result === null ? null : { text: result, rejected: false, attachments: [], images: [], at: finishedAt, view: null },
 })
 const step = (t: ToolView): Step => ({ kind: 'tool', tool: t })
 const T0 = '2026-10-22T05:00:00Z'

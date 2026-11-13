@@ -18,14 +18,6 @@ export function isKind(value: string | null): value is AssetKind {
   return (KINDS as readonly string[]).includes(value ?? '')
 }
 
-/** `kind:name`（服务端给出的能用的资产，kind 必然合法）拆成两半 */
-export function splitRule(rule: string): { kind: AssetKind; name: string } {
-  const sep = rule.indexOf(':')
-  const kind = rule.slice(0, sep)
-  if (!isKind(kind)) throw new Error(`not a kind:name asset: ${rule}`)
-  return { kind, name: rule.slice(sep + 1) }
-}
-
 /** 规则补全的候选：每种的 `use:kind:*` 在前，然后是每项资产的 `use:kind:name`（按服务端给的顺序）；存在库里的资产还有
  * `*:kind:name`（能用也能改；工具只有 use） */
 export function ruleCandidates(assets: CatalogAsset[]): string[] {

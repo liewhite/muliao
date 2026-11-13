@@ -247,8 +247,14 @@ async fn a_conversation_over_http_with_live_events() {
 
     // 续写、重试（没失败的不能重试）、标已读、压缩（后台做）
     w.script.text("第二句");
-    let r =
-        w.call(Method::POST, &format!("/api/sessions/{id}/messages"), Some(json!({"prompt": "再说一句"})), 202).await;
+    let r = w
+        .call(
+            Method::POST,
+            &format!("/api/sessions/{id}/messages"),
+            Some(json!({"kind": "message", "prompt": "再说一句"})),
+            202,
+        )
+        .await;
     assert_eq!(r["id"], json!(id));
     let detail = w.idle(&id).await;
     assert_eq!(detail["items"].as_array().unwrap().len(), 4);
@@ -425,7 +431,7 @@ async fn files_workspace_pages_and_the_web_ui() {
     std::fs::write(site.join("index.html"), "<title>看板</title><p>hi</p>").unwrap();
     std::fs::write(site.join("data.json"), "{}").unwrap();
     let listing = w.get(&format!("/api/agents/{id}/workspace")).await;
-    assert!(listing.as_array().unwrap().iter().any(|e| e["name"] == "site" && e["is_dir"] == true));
+    assert!(listing.as_array().unwrap().iter().any(|e| e["name"] == "site" && e["kind"] == "dir"));
     let read = w.send(Method::GET, &format!("/api/agents/{id}/workspace/file?path=site/dash/data.json"), None).await;
     assert_eq!(read.headers()[header::CACHE_CONTROL], "no-cache");
     let pages = w.get("/api/pages").await;
@@ -466,27 +472,25 @@ async fn issues_triggers_notifications_usage_and_history() {
     let id = w.agent("worker").await;
 
     let issue = w.call(Method::POST, "/api/issues", Some(json!({"title": "整理", "owner": id})), 201).await;
-    assert_eq!((issue["status"].as_str(), issue["creator"].as_str()), (Some("backlog"), Some("user")));
+    let user = json!({"kind": "user"});
+    assert_eq!((issue["status"].as_str(), &issue["creator"]), (Some("backlog"), &user));
     assert_eq!(issue["startable"], true);
     let n = issue["id"].as_i64().unwrap();
     let patched = w
-        .call(Method::PATCH, &format!("/api/issues/{n}"), Some(json!({"assignee": "user", "priority": "high"})), 200)
+        .call(Method::PATCH, &format!("/api/issues/{n}"), Some(json!({"assignee": user, "priority": "high"})), 200)
         .await;
-    assert_eq!((patched["assignee"].as_str(), patched["reviewable"].as_bool()), (Some("user"), Some(true)));
+    assert_eq!((&patched["assignee"], patched["reviewable"].as_bool()), (&user, Some(true)));
     let cleared = w.call(Method::PATCH, &format!("/api/issues/{n}"), Some(json!({"assignee": null})), 200).await;
     assert_eq!(cleared["assignee"], Value::Null);
     let unchanged = w.call(Method::PATCH, &format!("/api/issues/{n}"), Some(json!({"title": "整理一下"})), 200).await;
     assert_eq!((unchanged["priority"].as_str(), unchanged["title"].as_str()), (Some("high"), Some("整理一下")));
     let c = w.call(Method::POST, &format!("/api/issues/{n}/comments"), Some(json!({"body": "看一下"})), 201).await;
-    assert_eq!(
-        (c["kind"].as_str(), c["body"].as_str(), c["actor"].as_str()),
-        (Some("comment"), Some("看一下"), Some("user"))
-    );
+    assert_eq!((c["kind"].as_str(), c["body"].as_str(), &c["actor"]), (Some("comment"), Some("看一下"), &user));
     let detail = w.get(&format!("/api/issues/{n}")).await;
     let kinds: Vec<&str> =
         detail["activities"].as_array().unwrap().iter().map(|a| a["kind"].as_str().unwrap()).collect();
     assert_eq!(kinds, ["created", "priority", "assignee", "assignee", "title", "comment"]);
-    assert_eq!(detail["activities"][2]["change"], json!({"from": null, "to": "user"}));
+    assert_eq!(detail["activities"][2]["change"], json!({"from": null, "to": user}));
     w.call(Method::POST, &format!("/api/issues/{n}/approve"), None, 409).await;
     let listed = w.get("/api/issues?status=backlog&status=in_progress").await;
     assert_eq!(listed.as_array().unwrap().len(), 1);

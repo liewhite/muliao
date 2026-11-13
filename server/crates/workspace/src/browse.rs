@@ -10,19 +10,25 @@ use chrono::{DateTime, Utc};
 use muliao_assets::service::workspace_of;
 use muliao_platform::errors::DomainError;
 use muliao_platform::fs::{RealPath, is_within, real, resolve_within};
-use serde::Serialize;
 
 use crate::file_tools::media_type_of;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
     pub name: String,
-    pub is_dir: bool,
-    /// 目录为 None
-    pub size: Option<u64>,
     pub modified: DateTime<Utc>,
-    /// 能内联显示的图片，与读文件时的响应一致
-    pub inline: bool,
+    pub kind: EntryKind,
+}
+
+/// 目录里的一项是目录还是文件：大小与能否内联只有文件有。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EntryKind {
+    Dir,
+    File {
+        size: u64,
+        /// 能内联显示的图片，与读文件时的响应一致
+        inline: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,16 +75,15 @@ pub fn list_dir(root: &Path, path: &str) -> Result<Vec<Entry>, DomainError> {
         }
         let Ok(st) = std::fs::metadata(&child) else { continue };
         let name = child.file_name().unwrap_or_default().to_string_lossy().into_owned();
-        let is_dir = st.is_dir();
-        entries.push(Entry {
-            inline: !is_dir && media_type_of(&name).is_inline_image(),
-            name,
-            is_dir,
-            size: (!is_dir).then_some(st.len()),
-            modified: st.modified().map(DateTime::<Utc>::from).unwrap_or_default(),
-        });
+        let kind = if st.is_dir() {
+            EntryKind::Dir
+        } else {
+            EntryKind::File { size: st.len(), inline: media_type_of(&name).is_inline_image() }
+        };
+        entries.push(Entry { name, modified: st.modified().map(DateTime::<Utc>::from).unwrap_or_default(), kind });
     }
-    entries.sort_by(|a, b| (!a.is_dir, &a.name).cmp(&(!b.is_dir, &b.name)));
+    let files_last = |e: &Entry| matches!(e.kind, EntryKind::File { .. });
+    entries.sort_by(|a, b| (files_last(a), &a.name).cmp(&(files_last(b), &b.name)));
     Ok(entries)
 }
 
@@ -134,14 +139,14 @@ mod tests {
         std::fs::write(dir.path().join("secret"), b"x").unwrap();
         std::os::unix::fs::symlink(dir.path().join("secret"), root.join("out")).unwrap();
         std::os::unix::fs::symlink(root.join("nowhere"), root.join("broken")).unwrap();
-        let names: Vec<(String, bool, Option<u64>, bool)> =
-            list_dir(&root, "").unwrap().into_iter().map(|e| (e.name, e.is_dir, e.size, e.inline)).collect();
+        let names: Vec<(String, EntryKind)> =
+            list_dir(&root, "").unwrap().into_iter().map(|e| (e.name, e.kind)).collect();
         assert_eq!(
             names,
             [
-                ("sub".into(), true, None, false),
-                ("a.txt".into(), false, Some(5), false),
-                ("b.png".into(), false, Some(1), true)
+                ("sub".into(), EntryKind::Dir),
+                ("a.txt".into(), EntryKind::File { size: 5, inline: false }),
+                ("b.png".into(), EntryKind::File { size: 1, inline: true })
             ]
         );
         assert_eq!(file_in(&root, "a.txt").unwrap().media_type, MediaType::parse("text/plain").unwrap());

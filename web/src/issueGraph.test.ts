@@ -10,7 +10,7 @@ const issue = (id: number, over: Partial<Issue> = {}): Issue => ({
   priority: 'none',
   owner: null,
   assignee: null,
-  creator: 'user',
+  creator: { kind: 'user' },
   sessions: {},
   assignee_state: null,
   stalled: false,

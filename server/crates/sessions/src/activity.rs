@@ -139,8 +139,7 @@ pub(crate) fn blocks_agent_in(c: &Connection, agent_id: &AgentId) -> Result<bool
 }
 
 /// 会话在等的一项东西（会话页列出）。
-#[derive(Debug, Clone, PartialEq, Serialize, utoipa::ToSchema)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Wait {
     /// 后台任务（run_shell background）
     Job { job_id: i64, since: DateTime<Utc> },

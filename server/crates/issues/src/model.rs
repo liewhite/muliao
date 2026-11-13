@@ -164,67 +164,53 @@ impl rusqlite::types::FromSql for Priority {
     }
 }
 
-/// 指派人：用户（只有一个），或一个 agent。存成 `user` 或 agent id（12 位十六进制，不会与 `user` 相同；agent 名称也不能取
-/// `user`，工具里按名称指派时不会混淆）。未指派是 `Option::None`。
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(from = "String", into = "String")]
+/// 指派人：用户（只有一个），或一个 agent。库里存成 `user` 或 agent id（12 位十六进制，不会与 `user` 相同；agent 名称也
+/// 不能取 `user`，工具里按名称指派时不会混淆），读写库只经 [`Self::as_str`] / [`Self::from_stored`]；JSON（接口与时间线的
+/// change）按种类打标签。未指派是 `Option::None`。
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Assignee {
     User,
-    Agent(AgentId),
+    Agent { agent_id: AgentId },
 }
 
 impl Assignee {
     pub fn as_str(&self) -> &str {
         match self {
             Assignee::User => USER,
-            Assignee::Agent(id) => id.as_str(),
+            Assignee::Agent { agent_id } => agent_id.as_str(),
         }
+    }
+
+    /// 库里存的形式（[`Self::as_str`]）读回来。
+    pub fn from_stored(s: String) -> Self {
+        if s == USER { Assignee::User } else { Assignee::Agent { agent_id: AgentId::new(s) } }
     }
 
     pub fn agent(&self) -> Option<&AgentId> {
         match self {
             Assignee::User => None,
-            Assignee::Agent(id) => Some(id),
+            Assignee::Agent { agent_id } => Some(agent_id),
         }
     }
 }
 
-impl From<String> for Assignee {
-    fn from(s: String) -> Self {
-        if s == USER { Assignee::User } else { Assignee::Agent(AgentId::new(s)) }
-    }
-}
-
-impl From<Assignee> for String {
-    fn from(a: Assignee) -> Self {
-        a.as_str().to_owned()
-    }
-}
-
 /// 指派给 agent 时是它的 id；未指派或指派给用户为 None。
-// 在接口描述里就是一个字符串（`user` 或 agent id）
-impl utoipa::PartialSchema for Assignee {
-    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
-        <String as utoipa::PartialSchema>::schema()
-    }
-}
-impl utoipa::ToSchema for Assignee {}
-
 pub fn agent_of(assignee: Option<&Assignee>) -> Option<&AgentId> {
     assignee.and_then(Assignee::agent)
 }
 
-/// 时间线上「系统」做的动作（删除 agent 时清理指派人、负责人）的存储形式：不是 12 位十六进制，不会与 agent id 相同。名为
-/// "system" 的 agent 在展示上会与它同名，只影响展示（没有按 actor 名称做的操作），所以不像 `user` 那样保留这个名称。
+/// 时间线上「系统」做的动作（删除 agent 时清理指派人、负责人）在库里的形式：不是 12 位十六进制，不会与 agent id 相同。
 const SYSTEM: &str = "system";
 
-/// 做一件事的人：用户、系统自己的清理（删除 agent），或一个 agent。存成 `user`、`system` 或 agent id。
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(from = "String", into = "String")]
+/// 做一件事的人：用户、系统自己的清理（删除 agent），或一个 agent。库里存成 `user`、`system` 或 agent id（只经
+/// [`Self::as_str`] / [`Self::from_stored`]）；JSON 按种类打标签。
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, utoipa::ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Actor {
     User,
     System,
-    Agent(AgentId),
+    Agent { agent_id: AgentId },
 }
 
 impl Actor {
@@ -232,43 +218,28 @@ impl Actor {
         match self {
             Actor::User => USER,
             Actor::System => SYSTEM,
-            Actor::Agent(id) => id.as_str(),
+            Actor::Agent { agent_id } => agent_id.as_str(),
+        }
+    }
+
+    /// 库里存的形式（[`Self::as_str`]）读回来。
+    pub fn from_stored(s: String) -> Self {
+        match s.as_str() {
+            USER => Actor::User,
+            SYSTEM => Actor::System,
+            _ => Actor::Agent { agent_id: AgentId::new(s) },
         }
     }
 
     pub fn agent(&self) -> Option<&AgentId> {
         match self {
-            Actor::Agent(id) => Some(id),
+            Actor::Agent { agent_id } => Some(agent_id),
             Actor::User | Actor::System => None,
         }
     }
 }
 
-impl From<String> for Actor {
-    fn from(s: String) -> Self {
-        match s.as_str() {
-            USER => Actor::User,
-            SYSTEM => Actor::System,
-            _ => Actor::Agent(AgentId::new(s)),
-        }
-    }
-}
-
-impl From<Actor> for String {
-    fn from(a: Actor) -> Self {
-        a.as_str().to_owned()
-    }
-}
-
 /// 一次修改是谁、在哪个会话里做的：agent 用工具时所在的会话；用户在界面上的操作、系统的清理没有会话。
-// 在接口描述里就是一个字符串（`user`、`system` 或 agent id）
-impl utoipa::PartialSchema for Actor {
-    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
-        <String as utoipa::PartialSchema>::schema()
-    }
-}
-impl utoipa::ToSchema for Actor {}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct By {
     pub actor: Actor,
@@ -285,7 +256,7 @@ impl By {
     }
 
     pub fn agent(agent_id: &AgentId, session_id: &SessionId) -> Self {
-        By { actor: Actor::Agent(agent_id.clone()), session_id: Some(session_id.clone()) }
+        By { actor: Actor::Agent { agent_id: agent_id.clone() }, session_id: Some(session_id.clone()) }
     }
 }
 
@@ -318,8 +289,8 @@ pub(crate) fn issue(r: &Row<'_>) -> rusqlite::Result<Issue> {
         status: r.get(3)?,
         priority: r.get(4)?,
         owner: r.get(5)?,
-        assignee: r.get::<_, Option<String>>(6)?.map(Assignee::from),
-        creator: Actor::from(r.get::<_, String>(7)?),
+        assignee: r.get::<_, Option<String>>(6)?.map(Assignee::from_stored),
+        creator: Actor::from_stored(r.get::<_, String>(7)?),
         created_at: r.get(8)?,
         updated_at: r.get(9)?,
     })
