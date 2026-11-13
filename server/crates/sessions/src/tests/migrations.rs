@@ -219,12 +219,12 @@ fn approval_booleans_become_a_choice() {
         "c5": { "tool": "ask_agent", "result": { "text": "done" } },
     });
     db.mail(run, "answer", Some("user"), "", "[]", &answers.to_string());
-    let decision = |choice, pin: Option<&str>| CallResult::Approval(Decision { choice, pin: pin.map(Into::into) });
+    let decision = |choice, pin: &str| CallResult::Approval(Decision { choice, pin: pin.into() });
     let expected = BTreeMap::from([
-        ("c1".to_owned(), decision(Choice::Always, Some("p1"))),
-        ("c2".to_owned(), decision(Choice::Approve, None)),
-        ("c3".to_owned(), decision(Choice::Deny, None)),
-        ("c4".to_owned(), decision(Choice::Deny, None)),
+        ("c1".to_owned(), decision(Choice::Always, "p1")),
+        ("c2".to_owned(), decision(Choice::Approve, "")),
+        ("c3".to_owned(), decision(Choice::Deny, "")),
+        ("c4".to_owned(), decision(Choice::Deny, "")),
         ("c5".to_owned(), CallResult::AskAgent(AgentAnswer { text: "done".into(), attachments: vec![] })),
     ]);
     db.upgrade_to(3);
@@ -343,7 +343,7 @@ fn shared_files_keep_only_ids() {
                         attachments: vec![shared("f3", "x.txt", "text/plain")]
                     })
                 ),
-                ("c2".to_owned(), CallResult::Approval(Decision { choice: Choice::Approve, pin: None })),
+                ("c2".to_owned(), CallResult::Approval(Decision { choice: Choice::Approve, pin: String::new() })),
             ])
         );
     };

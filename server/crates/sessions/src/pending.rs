@@ -121,20 +121,40 @@ pub enum Position {
     },
     Paused(Paused),
     /// 被打断：最后的回复里有没出结果、也不在挂起的调用（执行工具时被打断）。它们不重新执行，先补上「被中断」的结果再看
-    /// after（只会是 Resend 或 Paused）。只要有一个不能重放，整步都补
+    /// after。只要有一个不能重放，整步都补
     Interrupted {
         calls: Vec<ToolCall>,
-        after: Box<Position>,
+        after: AfterInterrupted,
     },
+}
+
+/// 被打断的那一步补完「被中断」的结果之后停在哪。
+#[derive(Debug, Clone, PartialEq)]
+pub enum AfterInterrupted {
+    /// 没有挂起的调用：把补上的结果发给模型
+    Resend,
+    /// 同一条回复里还有挂起的调用
+    Paused(Paused),
+}
+
+impl From<AfterInterrupted> for Position {
+    fn from(after: AfterInterrupted) -> Self {
+        match after {
+            AfterInterrupted::Resend => Position::Resend { replays: Vec::new() },
+            AfterInterrupted::Paused(p) => Position::Paused(p),
+        }
+    }
 }
 
 impl Position {
     /// 挂着的调用（被打断时是补完结果之后仍挂着的）。
     pub(crate) fn paused(&self) -> Option<&Paused> {
         match self {
-            Position::Paused(p) => Some(p),
-            Position::Interrupted { after, .. } => after.paused(),
-            _ => None,
+            Position::Paused(p) | Position::Interrupted { after: AfterInterrupted::Paused(p), .. } => Some(p),
+            Position::Interrupted { after: AfterInterrupted::Resend, .. }
+            | Position::Idle
+            | Position::Fresh
+            | Position::Resend { .. } => None,
         }
     }
 
@@ -179,10 +199,10 @@ pub(crate) fn position(history: &[Message], handed: &HandedOut, queued: &[Mail])
     };
     if !interrupted.is_empty() {
         let after = match waiting {
-            Some(p) => Position::Paused(p),
-            None => Position::Resend { replays: Vec::new() },
+            Some(p) => AfterInterrupted::Paused(p),
+            None => AfterInterrupted::Resend,
         };
-        return Ok(Position::Interrupted { calls: interrupted, after: Box::new(after) });
+        return Ok(Position::Interrupted { calls: interrupted, after });
     }
     if let Some(p) = waiting {
         return Ok(Position::Paused(p));
@@ -238,40 +258,45 @@ pub struct StopClosing {
 pub(crate) fn closing_on_stop(at: &Position) -> StopClosing {
     match at {
         Position::Interrupted { calls, after } => {
-            let mut rest = closing_on_stop(after);
+            let mut rest = match after {
+                AfterInterrupted::Resend => StopClosing::default(),
+                AfterInterrupted::Paused(p) => closing_paused(p),
+            };
             let mut stopped = calls.clone();
             stopped.append(&mut rest.stopped);
             StopClosing { stopped, ..rest }
         }
         Position::Resend { replays } => StopClosing { stopped: replays.clone(), ..Default::default() },
-        Position::Paused(p) => {
-            let mut closing = StopClosing { stopped: p.replays.clone(), ..Default::default() };
-            for pc in &p.pending {
-                if !pc.kind.kept_open_on_stop() {
-                    closing.stopped.push(pc.call.clone());
-                    continue;
-                }
-                let Some(CallResult::AskUser(answer)) = p.answers.get(&pc.call.id) else { continue };
-                closing.answered.push(ToolResult {
-                    call_id: pc.call.id.clone(),
-                    tool_name: pc.call.name.clone(),
-                    content: answer.content(),
-                    is_error: false,
-                    metadata: None,
-                });
-            }
-            // 整封信记为已处理：同一封里对等批准调用的决定也算处理了（那个调用已补「已停止」）
-            let answered: HashSet<&str> = closing.answered.iter().map(|r| r.call_id.as_str()).collect();
-            closing.used = p
-                .answer_mail
-                .iter()
-                .filter(|(_, calls)| calls.iter().any(|c| answered.contains(c.as_str())))
-                .map(|(id, _)| *id)
-                .collect();
-            closing
-        }
+        Position::Paused(p) => closing_paused(p),
         Position::Idle | Position::Fresh => StopClosing::default(),
     }
+}
+
+fn closing_paused(p: &Paused) -> StopClosing {
+    let mut closing = StopClosing { stopped: p.replays.clone(), ..Default::default() };
+    for pc in &p.pending {
+        if !pc.kind.kept_open_on_stop() {
+            closing.stopped.push(pc.call.clone());
+            continue;
+        }
+        let Some(CallResult::AskUser(answer)) = p.answers.get(&pc.call.id) else { continue };
+        closing.answered.push(ToolResult {
+            call_id: pc.call.id.clone(),
+            tool_name: pc.call.name.clone(),
+            content: answer.content(),
+            is_error: false,
+            metadata: None,
+        });
+    }
+    // 整封信记为已处理：同一封里对等批准调用的决定也算处理了（那个调用已补「已停止」）
+    let answered: HashSet<&str> = closing.answered.iter().map(|r| r.call_id.as_str()).collect();
+    closing.used = p
+        .answer_mail
+        .iter()
+        .filter(|(_, calls)| calls.iter().any(|c| answered.contains(c.as_str())))
+        .map(|(id, _)| *id)
+        .collect();
+    closing
 }
 
 /// 一次还没有结果、等用户的挂起调用现在怎样。
@@ -402,10 +427,7 @@ mod tests {
     }
 
     fn answered(id: &str) -> BTreeMap<String, CallResult> {
-        BTreeMap::from([(
-            id.to_owned(),
-            CallResult::AskUser(AskResult { answered: true, answers: vec![], note: None }),
-        )])
+        BTreeMap::from([(id.to_owned(), CallResult::AskUser(AskResult::Answered(vec![])))])
     }
 
     #[test]
@@ -464,7 +486,7 @@ mod tests {
         let mixed = [response(vec![call("a1", ASK_AGENT, "{}"), call("c1", "run_shell", "{}")])];
         let Position::Interrupted { calls, after } = position(&mixed, &none, &[]).unwrap() else { panic!() };
         assert_eq!(calls.len(), 2);
-        assert_eq!(*after, Position::Resend { replays: vec![] });
+        assert_eq!(after, AfterInterrupted::Resend);
         // 等批准的按记录认
         let gated = [response(vec![call("c1", "skill_run", "{}")])];
         let approvals = HandedOut { delegated: Default::default(), approvals: ["c1".to_owned()].into() };

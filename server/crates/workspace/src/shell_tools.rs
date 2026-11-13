@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use agenter::{Tool, ToolCtx, ToolError, ToolOutput};
+use muliao_assets::secrets::SecretUse;
 use muliao_assets::skills::{SkillScripts, SkillStore};
 use muliao_platform::errors::DomainError;
 use muliao_platform::fs::{real, resolve_within};
@@ -167,8 +168,8 @@ struct Execution<'a> {
     secrets: &'a [String],
     background: bool,
     heartbeat_seconds: Option<f64>,
-    /// command 是 agent 自己写的（决定能不能注入 allow_shell = false 的 secret）
-    shell: bool,
+    /// command 是 agent 自己写的还是封装好的 skill 脚本调用（决定能不能注入 allow_shell = false 的 secret）
+    secret_use: SecretUse,
     /// 给了就在参数校验通过后先停下等用户批准（批准的是这一份），不去问一个参数就不对的调用
     approval_pin: Option<String>,
 }
@@ -196,7 +197,7 @@ impl ShellTools {
             if let Some(pin) = e.approval_pin {
                 return Err(ToolError::NeedsApproval { pin });
             }
-            return self.run_foreground(scope, &e.command, timeout, e.secrets, e.shell).await;
+            return self.run_foreground(scope, &e.command, timeout, e.secrets, e.secret_use).await;
         }
         if e.timeout.is_some() {
             return Err(ToolError::Retry(
@@ -209,10 +210,7 @@ impl ShellTools {
         if let Some(pin) = e.approval_pin {
             return Err(ToolError::NeedsApproval { pin });
         }
-        let job = self
-            .jobs
-            .start(&scope.session_id, &scope.agent_id, &e.command, e.secrets, e.shell, scope.user_waits(), check)
-            .await?;
+        let job = self.jobs.start(scope, &e.command, e.secrets, e.secret_use, check).await?;
         Ok(format!(
             "{STARTED} {}; output goes to {}.\nYou will get a check-in event every {} seconds while it runs and an \
              event when it finishes; keep working or end your reply.",
@@ -226,9 +224,9 @@ impl ShellTools {
         command: &str,
         timeout: f64,
         secrets: &[String],
-        shell: bool,
+        secret_use: SecretUse,
     ) -> Result<String, ToolError> {
-        let agent_shell = self.commands.prepare(&scope.agent_id, secrets, shell).await?;
+        let agent_shell = self.commands.prepare(&scope.agent_id, secrets, secret_use).await?;
         let limit = Duration::try_from_secs_f64(timeout).unwrap_or(Duration::MAX);
         let run = agent_shell
             .run(command, limit, Options { merge_stderr: true, ..Options::default() })
@@ -299,7 +297,7 @@ impl Tool<RunScope> for RunShell {
             secrets: &a.secrets,
             background: a.background,
             heartbeat_seconds: a.heartbeat_seconds,
-            shell: true,
+            secret_use: SecretUse::AgentCommand,
             approval_pin: None,
         };
         Ok(agenter::tool::text(self.deps.execute(ctx.deps, e).await?))
@@ -443,7 +441,7 @@ impl Tool<RunScope> for SkillRun {
             secrets: &a.secrets,
             background: a.background,
             heartbeat_seconds: a.heartbeat_seconds,
-            shell: false,
+            secret_use: SecretUse::Wrapped,
             approval_pin: pin,
         };
         let result = deps.execute(scope, e).await?;

@@ -17,7 +17,7 @@ use muliao_assets::mcp::McpRegistry;
 use muliao_assets::memory::MemoryStore;
 use muliao_assets::rules::{AgentRules, Rules};
 use muliao_assets::run_assets::RunAssets;
-use muliao_assets::secrets::Secrets;
+use muliao_assets::secrets::{SecretUse, Secrets};
 use muliao_assets::skills::SkillStore;
 use muliao_assets::tree::Owner;
 use muliao_platform::vault::Vault;
@@ -126,14 +126,16 @@ async fn secrets_set_and_resolve() {
     assert!(!secrets.set("K", "v2", "d", &alice, &Owner::Platform, None).await.unwrap());
     assert_eq!(secrets.get("K").await.unwrap().owner, Owner::Agent(a.clone()), "the owner stays");
     let keys = vec!["K".to_owned()];
-    assert_eq!(secrets.resolve(&alice, &keys, false).await.unwrap()["K"], "v2");
-    assert!(secrets.resolve(&alice, &keys, true).await.unwrap_err().to_string().contains("allow_shell"));
+    assert_eq!(secrets.resolve(&alice, &keys, SecretUse::Wrapped).await.unwrap()["K"], "v2");
+    assert!(
+        secrets.resolve(&alice, &keys, SecretUse::AgentCommand).await.unwrap_err().to_string().contains("allow_shell")
+    );
     let bob = Actor::Agent(b.clone());
-    assert!(secrets.resolve(&bob, &keys, false).await.is_err());
+    assert!(secrets.resolve(&bob, &keys, SecretUse::Wrapped).await.is_err());
     assert!(
         secrets.set("K", "x", "d", &bob, &Owner::Agent(b), None).await.unwrap_err().to_string().contains("belongs to")
     );
-    assert_eq!(secrets.resolve(&Actor::User, &keys, false).await.unwrap()["K"], "v2");
+    assert_eq!(secrets.resolve(&Actor::User, &keys, SecretUse::Wrapped).await.unwrap()["K"], "v2");
     let text = std::fs::read_to_string(w.root().join("alice/secrets/K.toml")).unwrap();
     assert!(!text.contains("v2"));
 }

@@ -105,12 +105,56 @@ pub struct AnsweredQuestion {
     pub other: Option<String>,
 }
 
-/// 一次提问交给模型的结果（也是界面展示已回答提问的来源）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct AskResult {
-    pub answered: bool,
-    pub answers: Vec<AnsweredQuestion>,
-    pub note: Option<String>,
+/// 一次提问交给模型的结果（也是界面展示已回答提问的来源）。存下、交给模型、接口里的形状是扁平的
+/// `{answered, answers, note}`（[`AskResultJson`]），读入时解析成这两种之一。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(into = "AskResultJson", try_from = "AskResultJson")]
+pub enum AskResult {
+    /// 每题的回答
+    Answered(Vec<AnsweredQuestion>),
+    /// 用户没回答（发了新消息或只回答了别的提问）：交给模型的说明
+    NotAnswered(String),
+}
+
+/// 一次提问交给模型的结果的存下形状（模型看到的、库里的历史与回答信件、接口里的都是它）：answered 为假时 note 是说明。
+#[derive(Serialize, Deserialize, utoipa::ToSchema)]
+struct AskResultJson {
+    answered: bool,
+    answers: Vec<AnsweredQuestion>,
+    note: Option<String>,
+}
+
+impl From<AskResult> for AskResultJson {
+    fn from(r: AskResult) -> Self {
+        match r {
+            AskResult::Answered(answers) => AskResultJson { answered: true, answers, note: None },
+            AskResult::NotAnswered(note) => AskResultJson { answered: false, answers: Vec::new(), note: Some(note) },
+        }
+    }
+}
+
+impl TryFrom<AskResultJson> for AskResult {
+    type Error = &'static str;
+
+    fn try_from(j: AskResultJson) -> std::result::Result<Self, Self::Error> {
+        match (j.answered, j.note) {
+            (true, _) => Ok(AskResult::Answered(j.answers)),
+            (false, Some(note)) => Ok(AskResult::NotAnswered(note)),
+            (false, None) => Err("an unanswered ask result must carry a note"),
+        }
+    }
+}
+
+// 接口里就是存下的形状
+impl utoipa::PartialSchema for AskResult {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        <AskResultJson as utoipa::PartialSchema>::schema()
+    }
+}
+impl utoipa::ToSchema for AskResult {
+    fn schemas(schemas: &mut Vec<(String, utoipa::openapi::RefOr<utoipa::openapi::schema::Schema>)>) {
+        <AskResultJson as utoipa::ToSchema>::schemas(schemas)
+    }
 }
 
 impl AskResult {
@@ -123,10 +167,6 @@ impl AskResult {
     pub(crate) fn content(&self) -> Vec<Content> {
         vec![Content::text(self.text())]
     }
-}
-
-fn not_answered(note: &str) -> AskResult {
-    AskResult { answered: false, answers: Vec::new(), note: Some(note.to_owned()) }
 }
 
 const NOT_ANSWERED: &str = "The user did not answer these questions and sent a new message instead.";
@@ -161,7 +201,7 @@ pub(crate) fn answer_result(questions: &[Question], answers: &[QuestionAnswer]) 
             other: (!other.is_empty()).then(|| other.to_owned()),
         });
     }
-    Ok(AskResult { answered: true, answers: out, note: None })
+    Ok(AskResult::Answered(out))
 }
 
 /// 运行停在提问上时给用户的通知正文。
@@ -206,12 +246,18 @@ pub enum Choice {
 }
 
 /// 用户对一次等批准的调用的决定。pin：用户批准的是哪一份（请求批准时工具定下、记在 approval_requests 的指纹），批准时
-/// 交回工具比对（迁移来的旧信件可能没有，工具当作对不上）。
+/// 交回工具比对。迁移来的旧信件没有它或为 null（都已处理，不会再交给运行），读入时当作空指纹：工具给的指纹不会是空的，
+/// 比对对不上。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Decision {
     pub choice: Choice,
-    #[serde(default)]
-    pub pin: Option<String>,
+    #[serde(default, deserialize_with = "old_pin")]
+    pub pin: String,
+}
+
+/// 旧信件的 pin（缺省或 null）读成空指纹，见 [`Decision`]。
+fn old_pin<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<String, D::Error> {
+    Ok(Option::<String>::deserialize(d)?.unwrap_or_default())
 }
 
 impl Decision {
@@ -250,7 +296,10 @@ impl Waiting {
 pub(crate) fn answer_lines(asked: &[&AskResult]) -> Vec<String> {
     asked
         .iter()
-        .flat_map(|r| &r.answers)
+        .flat_map(|r| match r {
+            AskResult::Answered(answers) => answers.as_slice(),
+            AskResult::NotAnswered(_) => &[],
+        })
         .map(|a| {
             let given: Vec<&str> = a.selected.iter().map(String::as_str).chain(a.other.as_deref()).collect();
             format!("- {}: {}", a.question, given.join("; "))
@@ -291,10 +340,9 @@ impl CallResult {
                 }
                 text(t)
             }
-            CallResult::Approval(d) if d.approved() => Resolution::Approved(Approval {
-                always: d.choice == Choice::Always,
-                pin: d.pin.clone().unwrap_or_default(),
-            }),
+            CallResult::Approval(d) if d.approved() => {
+                Resolution::Approved(Approval { always: d.choice == Choice::Always, pin: d.pin.clone() })
+            }
             CallResult::Approval(_) => Resolution::Denied(DENIED.to_owned()),
         }
     }
@@ -332,7 +380,7 @@ pub(crate) fn skipped(kind: Waiting, given: &[&CallResult]) -> Resolution {
     match kind {
         Waiting::AskUser => {
             let answered_other = given.iter().any(|r| matches!(r, CallResult::AskUser(_)));
-            let r = not_answered(if answered_other { SKIPPED } else { NOT_ANSWERED });
+            let r = AskResult::NotAnswered(if answered_other { SKIPPED } else { NOT_ANSWERED }.to_owned());
             text(r.text())
         }
         Waiting::AskAgent => text(STILL_WORKING.to_owned()),
@@ -363,7 +411,7 @@ mod tests {
     #[test]
     fn answers_are_checked_against_the_questions() {
         let ok = answer_result(&[q(false)], &[QuestionAnswer { selected: vec!["a".into()], other: None }]).unwrap();
-        assert!(ok.answered);
+        assert!(matches!(ok, AskResult::Answered(_)));
         for bad in [
             QuestionAnswer { selected: vec!["c".into()], other: None },
             QuestionAnswer { selected: vec!["a".into(), "b".into()], other: None },
@@ -379,12 +427,24 @@ mod tests {
 
     #[test]
     fn stored_shape() {
-        let r = CallResult::Approval(Decision { choice: Choice::Always, pin: Some("p".into()) });
+        let r = CallResult::Approval(Decision { choice: Choice::Always, pin: "p".into() });
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v, serde_json::json!({"tool": "approval", "result": {"choice": "always", "pin": "p"}}));
         let back: CallResult =
             serde_json::from_value(serde_json::json!({"tool": "ask_agent", "result": {"text": "x"}})).unwrap();
         assert_eq!(back, CallResult::AskAgent(AgentAnswer { text: "x".into(), attachments: vec![] }));
+        // 提问的结果存成扁平的 {answered, answers, note}，模型看到的也是它
+        let skipped = AskResult::NotAnswered("n".into());
+        let flat = serde_json::json!({"answered": false, "answers": [], "note": "n"});
+        assert_eq!(serde_json::to_value(&skipped).unwrap(), flat);
+        assert_eq!(serde_json::from_value::<AskResult>(flat).unwrap(), skipped);
+        let answered = serde_json::json!({"answered": true, "answers": [], "note": null});
+        assert_eq!(serde_json::from_value::<AskResult>(answered).unwrap(), AskResult::Answered(vec![]));
+        // 旧信件里的决定没有 pin
+        let old: Decision = serde_json::from_value(serde_json::json!({"choice": "approve"})).unwrap();
+        assert_eq!(old.pin, "");
+        let old: Decision = serde_json::from_value(serde_json::json!({"choice": "approve", "pin": null})).unwrap();
+        assert_eq!(old.pin, "");
     }
 
     #[test]

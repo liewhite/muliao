@@ -87,17 +87,16 @@ pub(crate) fn requested_among(
     Ok(found)
 }
 
-/// 这些等批准的调用请求批准时记下的 pin（用户提交决定时记进决定）。
-pub(crate) fn pins_in(
-    c: &Connection,
-    session_id: &SessionId,
-    call_ids: &[String],
-) -> Result<HashMap<String, Option<String>>> {
+/// 这些等批准的调用请求批准时记下的 pin（用户提交决定时记进决定）。迁移来的旧行没有 pin，读成空指纹（同 [`Decision`] 的旧信件）：
+/// 工具给的指纹不会是空的，批准后比对对不上、不执行。
+///
+/// [`Decision`]: crate::answers::Decision
+pub(crate) fn pins_in(c: &Connection, session_id: &SessionId, call_ids: &[String]) -> Result<HashMap<String, String>> {
     let mut pins = HashMap::new();
     for id in call_ids {
-        let pin: Option<Option<String>> = c
+        let pin: Option<String> = c
             .query_row(
-                "SELECT pin FROM approval_requests WHERE session_id = ?1 AND call_id = ?2",
+                "SELECT COALESCE(pin, '') FROM approval_requests WHERE session_id = ?1 AND call_id = ?2",
                 params![session_id, id],
                 |r| r.get(0),
             )

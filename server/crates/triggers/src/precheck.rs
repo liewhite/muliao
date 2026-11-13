@@ -16,6 +16,7 @@ use muliao_platform::ids::AgentId;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
+use muliao_assets::secrets::SecretUse;
 use muliao_platform::db::Tx;
 use muliao_workspace::commands::{AgentCommands, Options};
 use schemars::JsonSchema;
@@ -211,7 +212,7 @@ impl PrecheckRunner {
         p: &Precheck,
         payload: Option<&str>,
     ) -> Result<std::result::Result<String, Failed>> {
-        let shell = match self.commands.prepare(agent_id, &p.secrets, true).await {
+        let shell = match self.commands.prepare(agent_id, &p.secrets, SecretUse::AgentCommand).await {
             Ok(shell) => shell,
             Err(Error::Domain(e)) => return Ok(Err(Failed(format!("precheck could not start: {e}")))),
             Err(e) => return Err(e),

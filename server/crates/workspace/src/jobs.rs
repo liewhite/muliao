@@ -21,8 +21,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use muliao_assets::secrets::SecretUse;
 use muliao_platform::db::{Database, Tx};
 use muliao_platform::shell::{DRAIN, LEFT_RUNNING_NOTE, Spawned, kill_group};
+use muliao_platform::tooling::RunScope;
 use muliao_sessions::events::SessionStopped;
 use muliao_sessions::holds::HoldOf;
 use muliao_sessions::work::{CheckBeats, SessionWork};
@@ -322,24 +324,22 @@ impl JobRunner {
         self.commands.workspace(&job.agent_id).join(log_path(job.id))
     }
 
-    /// 起一个后台任务。awaited：发起它的那次运行里用户是否在等回答（完成通知随它推送）。check_seconds：运行中检查的间隔。
-    /// shell：command 是 agent 自己写的（run_shell），不是 skill_run 拼出的 skill 脚本调用（决定能不能注入
+    /// 在这次运行里起一个后台任务（完成通知推不推送看这次运行里用户是否在等回答）。check_seconds：运行中检查的间隔。
+    /// secret_use：command 是 agent 自己写的（run_shell）还是 skill_run 拼出的 skill 脚本调用（决定能不能注入
     /// allow_shell = false 的 secret）。
-    #[allow(clippy::too_many_arguments)]
     pub async fn start(
         self: &Arc<Self>,
-        session_id: &SessionId,
-        agent_id: &AgentId,
+        scope: &RunScope,
         command: &str,
         secrets: &[String],
-        shell: bool,
-        awaited: bool,
+        secret_use: SecretUse,
         check_seconds: f64,
     ) -> Result<JobStarted> {
         // secret 不可用时什么都还没起
-        let agent_shell = self.commands.prepare(agent_id, secrets, shell).await?;
+        let agent_shell = self.commands.prepare(&scope.agent_id, secrets, secret_use).await?;
         let this = self.clone();
-        let (session_id, agent_id, command) = (session_id.to_owned(), agent_id.to_owned(), command.to_owned());
+        let (session_id, agent_id, command) = (scope.session_id.clone(), scope.agent_id.clone(), command.to_owned());
+        let awaited = scope.user_waits();
         // 一气做完：发起它的运行被停止（这个 future 被丢掉）也不会留下没人管的进程或任务行
         let launch = tokio::spawn(async move {
             this.launch(agent_shell, session_id, agent_id, command, awaited, check_seconds).await

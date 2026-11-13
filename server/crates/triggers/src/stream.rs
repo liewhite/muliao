@@ -25,6 +25,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use muliao_assets::secrets::SecretUse;
 use muliao_notifications::{Notifications, Notify};
 use muliao_platform::shell::{DRAIN, KillOnDrop, Output, Spawned, kill_group, redact};
 use muliao_workspace::commands::{AgentCommands, Options};
@@ -439,7 +440,7 @@ impl StreamRunner {
 
     /// 起一次进程并跑到它退出，返回 (退出的原因, 是否稳定运行过)。
     async fn run_once(&self, spec: &Spec, config: &StreamConfig, pending: &Pending) -> (String, bool) {
-        let shell = match self.commands.prepare(&spec.agent_id, &config.secrets, true).await {
+        let shell = match self.commands.prepare(&spec.agent_id, &config.secrets, SecretUse::AgentCommand).await {
             Ok(shell) => shell,
             Err(e) => return (format!("stream could not start: {e}"), false),
         };

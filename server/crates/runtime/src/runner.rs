@@ -1,6 +1,8 @@
-//! 会话运行的端口：组装一次运行（指令、模型、按规则开放的内置工具、连上的 MCP），然后由会话领域一步步驱动
-//! （[`Run::step`]：给历史、返回下一步，库不管存库）。每一步里运行端口做三件事：发给模型前把附件展开成模型形态，模型回复后
-//! 记一笔用量，工具执行完把交回的图片存进文件存储、把工具挂上的附加数据并进结果——所以会话领域拿到、存下的总是存储形态。
+//! 会话运行的端口：组装一次运行（指令、模型、按规则开放的内置工具、连上的 MCP），然后由会话领域一步步驱动，每步是两种之一
+//! （给历史、返回这一步的产物，库不管存库）：[`Run::respond`] 请求模型，[`Run::run_tools`] 执行最后一条回复里的工具调用。
+//! 下一步做哪种由会话领域按历史定；agenter 的 `Step` 到这两种产物的映射只在本模块。每一步里运行端口做三件事：发给模型前
+//! 把附件展开成模型形态，模型回复后记一笔用量，工具执行完把交回的图片存进文件存储、把工具挂上的附加数据并进结果——所以
+//! 会话领域拿到、存下的总是存储形态。
 //!
 //! 一次运行（[`Run`]）从会话的一次运行开始到结束或挂起：工具组（含 MCP 连接）与这次的 [`RunScope`] 都跟着它，丢掉它就
 //! 断开 MCP。压缩（[`Runtime::summarize`]）是另一个入口：无工具的一次文本生成。
@@ -10,7 +12,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use agenter::{
-    Agent, Message, Request, RequestPart, Resolution, RunError, RunEvent, Settings, Step, ToolDef, ToolResult,
+    Agent, Message, Request, RequestPart, Resolution, Response, RunError, RunEvent, Settings, Step, ToolCall, ToolDef,
+    ToolResult,
 };
 use chrono::Utc;
 use chrono_tz::Tz;
@@ -75,6 +78,33 @@ impl StepError {
             StepError::Run(e) => e.is_transient(),
             StepError::Platform(e) => e.is_transient(),
         }
+    }
+}
+
+/// 执行一条回复里的工具调用之后（[`Run::run_tools`]）。结果都是存储形态，按调用在回复里的顺序。
+#[derive(Debug)]
+pub enum ToolsDone {
+    /// 每个调用都有了结果。
+    Results(Vec<ToolResult>),
+    /// 停在挂起或要批准的调用上：已经有结果的在 results 里（调用方先存着，继续时连同结局交回，它们不再执行）。
+    Paused {
+        results: Vec<ToolResult>,
+        deferred: Vec<ToolCall>,
+        /// 要批准的调用和工具给的指纹（批准时随 [`Resolution::Approved`] 交回）
+        approvals: Vec<(ToolCall, String)>,
+    },
+}
+
+/// 请求模型（历史末尾是用户一方的消息）：agenter 对这样的历史只会回一条回复，Step 到回复的映射只在这里。
+async fn respond_with<C: Sync>(
+    agent: &Agent<C>,
+    deps: &C,
+    history: &[Message],
+    on_event: &mut (dyn FnMut(RunEvent<'_>) + Send),
+) -> Result<Response, RunError> {
+    match agent.step(deps, history, &HashMap::new(), on_event).await? {
+        Step::Responded(r) => Ok(r),
+        other => unreachable!("a history ending with a request is answered by the model, got {other:?}"),
     }
 }
 
@@ -198,17 +228,12 @@ impl Runtime {
             metadata: None,
         })];
         let meter = Meter::new(self.d.usage.clone(), &dir.id, Some(session_id), dir.file.model(), RunKind::Compaction);
-        let step = agent.step(&(), &history, &HashMap::new(), &mut |_| {}).await.map_err(|e| {
+        let response = respond_with(&agent, &(), &history, &mut |_| {}).await.map_err(|e| {
             let message = format!("summarizing for compaction failed: {e}");
             if e.is_transient() { Error::Unavailable(message) } else { Error::Upstream(message) }
         })?;
-        match step {
-            Step::Responded(r) => {
-                meter.bill(r.usage).await;
-                Ok(r.text())
-            }
-            other => unreachable!("a request without tools ends with a response, got {other:?}"),
-        }
+        meter.bill(response.usage).await;
+        Ok(response.text())
     }
 }
 
@@ -237,51 +262,57 @@ impl Run {
         self.agent.tools()
     }
 
-    /// 走一步（agenter 的 [`Agent::step`]）：history 是存储形态的完整历史，返回的也是存储形态，由调用方保存。
-    /// - 末尾是用户一方的消息：附件展开后请求模型，回复后记一笔用量；
-    /// - 末尾是带工具调用的回复：执行工具；交回的结果里能内联的图片存进文件存储换成引用，工具挂上的附加数据并进结果。
+    /// 请求模型：history 是存储形态的完整历史，末尾是用户一方的消息；附件展开后发给模型，回复后记一笔用量。返回的回复
+    /// 没有脱敏，由调用方脱敏后保存。
     ///
-    /// on_event 是给界面的实时预览，工具调用的参数已经脱敏（[`Redaction::preview`]）；其中 `ToolFinished` 的结果还是工具
-    /// 交回的原样（图片是内容、没有附加数据），保存的以返回值为准（返回的回复没有脱敏，保存前由会话领域脱敏）。
-    pub async fn step(
+    /// on_event 是给界面的实时预览（两种步骤都一样）。
+    pub async fn respond(
+        &self,
+        history: &[Message],
+        on_event: &mut (dyn FnMut(RunEvent<'_>) + Send),
+    ) -> Result<Response, StepError> {
+        let sent = for_model(&self.files, history).await?;
+        let mut preview = self.redaction.preview(on_event);
+        let response = respond_with(&self.agent, &self.scope, &sent, &mut preview).await?;
+        self.meter.bill(response.usage).await;
+        Ok(response)
+    }
+
+    /// 执行工具：history 是存储形态的历史，末尾是带工具调用的回复；resolved 是挂起调用的结局与挂起前已有的结果（按调用
+    /// id，它们不再执行），不是从挂起处继续时为空。交回的结果里能内联的图片存进文件存储换成引用，工具挂上的附加数据并进
+    /// 结果。
+    ///
+    /// on_event 里工具调用的参数已经脱敏（[`Redaction::preview`]）；`ToolFinished` 的结果还是工具交回的原样（图片是内容、
+    /// 没有附加数据），保存的以返回值为准。
+    pub async fn run_tools(
         &self,
         history: &[Message],
         resolved: &HashMap<String, Resolution>,
         on_event: &mut (dyn FnMut(RunEvent<'_>) + Send),
-    ) -> Result<Step, StepError> {
-        let expanded;
-        let sent = if matches!(history.last(), Some(Message::User(_))) {
-            expanded = for_model(&self.files, history).await?;
-            &expanded[..]
-        } else {
-            history
-        };
+    ) -> Result<ToolsDone, StepError> {
         let mut preview = self.redaction.preview(on_event);
-        let step = self.agent.step(&self.scope, sent, resolved, &mut preview).await?;
-        Ok(match step {
-            Step::Responded(r) => {
-                self.meter.bill(r.usage).await;
-                Step::Responded(r)
-            }
-            Step::Results(mut req) => {
-                for p in &mut req.parts {
-                    if let RequestPart::ToolResult(t) = p {
-                        self.settle(t).await?;
+        match self.agent.step(&self.scope, history, resolved, &mut preview).await? {
+            Step::Results(req) => {
+                let mut results = Vec::new();
+                for p in req.parts {
+                    if let RequestPart::ToolResult(mut t) = p {
+                        self.settle(&mut t).await?;
+                        results.push(t);
                     }
                 }
-                Step::Results(req)
+                Ok(ToolsDone::Results(results))
             }
             Step::Paused { mut results, deferred, approvals } => {
                 for t in &mut results {
                     self.settle(t).await?;
                 }
-                Step::Paused { results, deferred, approvals }
+                Ok(ToolsDone::Paused { results, deferred, approvals })
             }
-            Step::Finished => Step::Finished,
-        })
+            other => unreachable!("a history ending with tool calls runs them, got {other:?}"),
+        }
     }
 
-    /// 一步没走完就被停下时，已经做完的工具结果（取自 `ToolFinished` 事件）变成存储形态（同 [`Run::step`] 交回的）。
+    /// 一步没走完就被停下时，已经做完的工具结果（取自 `ToolFinished` 事件）变成存储形态（同 [`Run::run_tools`] 交回的）。
     pub async fn settled(&self, mut result: ToolResult) -> Result<ToolResult, Error> {
         self.settle(&mut result).await?;
         Ok(result)

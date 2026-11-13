@@ -340,7 +340,8 @@ fn resolve_answers(
             if !asks.can_approve(call_id) {
                 return Err(conflict(format!("call {call_id:?} is not waiting for approval in session {session_id}")));
             }
-            let pin = pins.get(call_id).cloned().flatten();
+            // 能批准的调用就是记过请求的（等批准按记录认），同一个连接里读的
+            let pin = pins.get(call_id).cloned().expect("a call waiting for approval has its request recorded");
             resolved.insert(call_id.clone(), CallResult::Approval(Decision { choice: *choice, pin }));
         }
     }

@@ -7,7 +7,7 @@
 //!   用的工具表、界面展示规则、脱敏，按 agent 的规则开放。
 //! - [`mcp`]：按配置与 secret 连 MCP server，关进使用者的写沙箱，失败只影响它自己并告诉模型。
 //! - [`attachments`]、[`images`]、[`conventions`]：附件与工具交回的图片。
-//! - [`runner`]：组装一次运行（[`runner::Runtime::start`]）与逐步驱动（[`runner::Run::step`]），压缩用的文本生成。
+//! - [`runner`]：组装一次运行（[`runner::Runtime::start`]）与逐步驱动（[`runner::Run::respond`] 请求模型、[`runner::Run::run_tools`] 执行工具），压缩用的文本生成。
 
 pub mod attachments;
 pub mod conventions;
@@ -18,4 +18,4 @@ pub mod models;
 pub mod runner;
 pub mod toolbox;
 
-pub use runner::{Run, RunSpec, Runtime, RuntimeDeps, StepError};
+pub use runner::{Run, RunSpec, Runtime, RuntimeDeps, StepError, ToolsDone};

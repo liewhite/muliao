@@ -1217,7 +1217,7 @@ export interface components {
             from: unknown;
             to: components["schemas"]["AgentId"];
         };
-        /** @description 一次提问交给模型的结果（也是界面展示已回答提问的来源）。 */
+        /** @description 一次提问交给模型的结果的存下形状（模型看到的、库里的历史与回答信件、接口里的都是它）：answered 为假时 note 是说明。 */
         AskResult: {
             answered: boolean;
             answers: components["schemas"]["AnsweredQuestion"][];
@@ -1238,7 +1238,7 @@ export interface components {
             /** @enum {string} */
             status: "answered";
         } | {
-            note: string | null;
+            note: string;
             /** @enum {string} */
             status: "not_answered";
         };
@@ -1420,11 +1420,12 @@ export interface components {
         };
         /**
          * @description 用户对一次等批准的调用的决定。pin：用户批准的是哪一份（请求批准时工具定下、记在 approval_requests 的指纹），批准时
-         *     交回工具比对（迁移来的旧信件可能没有，工具当作对不上）。
+         *     交回工具比对。迁移来的旧信件没有它或为 null（都已处理，不会再交给运行），读入时当作空指纹：工具给的指纹不会是空的，
+         *     比对对不上。
          */
         Decision: {
             choice: components["schemas"]["Choice"];
-            pin: string | null;
+            pin: string;
         };
         /** @enum {string} */
         DeltaType: "assistant" | "thinking";

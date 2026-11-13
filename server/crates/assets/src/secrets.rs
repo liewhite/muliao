@@ -4,7 +4,7 @@
 //! 对外只有不含值的 [`SecretInfo`]，与按使用者解析出的明文（[`Secrets::resolve`]）。引用按使用者能用的 secret 解析
 //! （自己的与分发给它的）：agent 运行的命令与它连接的 MCP server 都用该 agent；用户（如界面上新增 MCP 时的探测）能用全部。
 //! allow_shell 为假的（#528）不给 agent 自己写的命令（run_shell、触发器的 precheck 与 stream），只给 skill 里封装好的脚本
-//! 与 MCP 配置；哪些入口算 shell 由调用方说。
+//! 与 MCP 配置；明文交给哪种由调用方说（[`SecretUse`]）。
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -19,6 +19,15 @@ use crate::kinds::StoredKind;
 use crate::source::AssetSource;
 use crate::tree::{Asset, Owner};
 use muliao_platform::errors::{Result, invalid, not_found};
+
+/// secret 的明文交给哪种使用方：决定 allow_shell 为假的能不能给。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecretUse {
+    /// agent 自己写的命令（run_shell、触发器的 precheck 与 stream）：allow_shell 为假的不给
+    AgentCommand,
+    /// 封装好的操作（skill_run 拼出的 skill 脚本调用、MCP 配置）
+    Wrapped,
+}
 
 /// 一个 secret 的信息，不含值。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,13 +100,13 @@ impl Secrets {
                 keys.push(k.to_owned());
             }
         }
-        let values = self.resolve(user, &keys, false).await?;
+        let values = self.resolve(user, &keys, SecretUse::Wrapped).await?;
         Ok((config.map_templates(|t| fill(t, &values)), values))
     }
 
-    /// 取 user 能用的 secret 的明文；任一 key 不能用或解不开即报错。shell：明文要交给 agent 自己写的命令，这时 allow_shell
-    /// 为假的也报错。
-    pub async fn resolve(&self, user: &Actor, keys: &[String], shell: bool) -> Result<BTreeMap<String, String>> {
+    /// 取 user 能用的 secret 的明文；任一 key 不能用或解不开即报错。明文要交给 agent 自己写的命令时，allow_shell 为假的也
+    /// 报错。
+    pub async fn resolve(&self, user: &Actor, keys: &[String], usage: SecretUse) -> Result<BTreeMap<String, String>> {
         if keys.is_empty() {
             return Ok(BTreeMap::new());
         }
@@ -112,7 +121,7 @@ impl Secrets {
                  your roles or your own allow rules)"
             )));
         }
-        if shell {
+        if usage == SecretUse::AgentCommand {
             let denied: Vec<&String> = keys.iter().filter(|k| !found[k.as_str()].1.allow_shell).collect();
             if !denied.is_empty() {
                 return Err(invalid(format!(

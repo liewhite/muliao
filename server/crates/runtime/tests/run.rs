@@ -7,9 +7,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use agenter::{
-    Content, FileSource, Message, Request, RequestPart, Resolution, Step, Tool, ToolCtx, ToolError, ToolOutput,
-};
+use agenter::{Content, FileSource, Message, Request, RequestPart, Resolution, Tool, ToolCtx, ToolError, ToolOutput};
 use chrono::Utc;
 use futures::FutureExt;
 use muliao_assets::access::Actor;
@@ -28,7 +26,7 @@ use muliao_runtime::conventions::{SharedFile, TOOL_ATTACHMENTS, attach, tool_att
 use muliao_runtime::mcp::{Confine, McpConnector};
 use muliao_runtime::models::ModelRegistry;
 use muliao_runtime::toolbox::Toolbox;
-use muliao_runtime::{RunSpec, Runtime, RuntimeDeps};
+use muliao_runtime::{RunSpec, Runtime, RuntimeDeps, ToolsDone};
 use muliao_usage::UsageLog;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -287,7 +285,7 @@ async fn a_run_from_start_to_finish() {
         .await;
     let resolved = HashMap::<String, Resolution>::new();
     let mut events = 0;
-    let Step::Responded(r) = run.step(&history, &resolved, &mut |_| events += 1).await.unwrap() else { panic!() };
+    let r = run.respond(&history, &mut |_| events += 1).await.unwrap();
     assert!(events > 0);
     history.push(Message::Assistant(r));
 
@@ -318,14 +316,18 @@ async fn a_run_from_start_to_finish() {
     );
 
     // 执行工具：图片存成引用，附件并进结果
-    let Step::Results(req) = run.step(&history, &resolved, &mut |_| {}).await.unwrap() else { panic!() };
-    let RequestPart::ToolResult(t) = &req.parts[0] else { panic!() };
+    let ToolsDone::Results(results) = run.run_tools(&history, &resolved, &mut |_| {}).await.unwrap() else { panic!() };
+    let t = &results[0];
     let Content::File(f) = &t.content[1] else { panic!("{t:?}") };
     let FileSource::Url(url) = &f.source else { panic!("the image is stored, not kept inline") };
     assert!(url.starts_with("/api/files/") && url.ends_with("/snap.png"), "{url}");
     assert_eq!(tool_attachments(t).unwrap()[0].name, "report.pdf");
     assert!(t.metadata.as_ref().unwrap().get(TOOL_ATTACHMENTS).is_some());
-    history.push(Message::User(req));
+    history.push(Message::User(Request {
+        parts: results.into_iter().map(RequestPart::ToolResult).collect(),
+        timestamp: Utc::now(),
+        metadata: None,
+    }));
 
     // 第二次请求：工具结果里的图片换回内容
     Mock::given(method("POST"))
@@ -338,13 +340,12 @@ async fn a_run_from_start_to_finish() {
         )))
         .mount(&server)
         .await;
-    let Step::Responded(r) = run.step(&history, &resolved, &mut |_| {}).await.unwrap() else { panic!() };
+    let r = run.respond(&history, &mut |_| {}).await.unwrap();
     assert_eq!(r.text(), "好了");
     let second = server.received_requests().await.unwrap()[1].body_json::<serde_json::Value>().unwrap().to_string();
     assert!(!second.contains("/api/files/"), "{second}");
     assert_eq!(second.matches("\"type\":\"image\"").count(), 2, "the attachment and the tool's picture");
     history.push(Message::Assistant(r));
-    assert!(matches!(run.step(&history, &resolved, &mut |_| {}).await.unwrap(), Step::Finished));
 
     let totals = w.usage.session_totals(&SessionId::new("s1")).await.unwrap();
     assert_eq!((totals.requests, totals.input_tokens, totals.output_tokens), (2, 300, 15));

@@ -1,6 +1,6 @@
 //! 以 agent 身份跑命令（#618）：run_shell 前台与后台任务、skill_run、触发器的前置检查与 stream 都经这里起 agent 的命令。
 //!
-//! 一条命令以谁的身份跑由三件事一起决定，只在这里拼：注入哪些 secret（`Secrets::resolve`，shell 决定能不能注入
+//! 一条命令以谁的身份跑由三件事一起决定，只在这里拼：注入哪些 secret（`Secrets::resolve`，[`SecretUse`] 决定能不能注入
 //! allow_shell = false 的）、在哪个目录（agent 的工作目录）、关在什么写沙箱里（[`Confiner::of`]）。命令失败时被沙箱拒绝的
 //! 写补什么说明也只在这里定（[`AgentShell::refusal`]，按同一份沙箱）：跑到结束的命令随结果给出（[`CommandResult::refusal`]），
 //! 起了不等的由调用方在它结束时拿退出码与输出来问；调用方只负责把说明拼在自己的报错后面。怎么起进程、读输出、杀进程组是
@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use futures::FutureExt;
 use muliao_assets::access::Actor;
-use muliao_assets::secrets::Secrets;
+use muliao_assets::secrets::{SecretUse, Secrets};
 use muliao_assets::service::workspace_of;
 use muliao_platform::sandbox::Confinement;
 use muliao_platform::shell::{Command, ShellResult, Spawned, run_bash, spawn_bash};
@@ -98,15 +98,15 @@ impl AgentCommands {
         workspace_of(&self.workspaces_dir, agent_id)
     }
 
-    /// agent 起命令的环境。shell：命令是 agent 自己写的（run_shell、触发器），不是 skill_run 拼出的脚本调用。secret 不存在
+    /// agent 起命令的环境。usage：命令是 agent 自己写的（run_shell、触发器），还是 skill_run 拼出的脚本调用。secret 不存在
     /// 或不能交给这条命令时报领域错误，什么都还没起。
     pub async fn prepare(
         &self,
         agent_id: &AgentId,
         secret_keys: &[String],
-        shell: bool,
+        usage: SecretUse,
     ) -> muliao_platform::errors::Result<AgentShell> {
-        let secrets = self.secrets.resolve(&Actor::Agent(agent_id.to_owned()), secret_keys, shell).await?;
+        let secrets = self.secrets.resolve(&Actor::Agent(agent_id.to_owned()), secret_keys, usage).await?;
         Ok(AgentShell { cwd: self.workspace(agent_id), secrets, confinement: self.confiner.of(agent_id).await? })
     }
 }

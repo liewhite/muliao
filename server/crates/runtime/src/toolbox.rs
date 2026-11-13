@@ -70,7 +70,7 @@ impl Toolbox {
 pub const REDACTED: &str = "[redacted]";
 
 /// 工具调用参数里的 secret 脱敏。两处用：会话领域保存消息前（[`Redaction::messages`]）；运行中的实时预览在运行端口
-/// 交出事件前就已脱敏（[`Redaction::preview`]，[`crate::Run::step`] 套上），消费方不用记得做。只能防止明文进入保存的
+/// 交出事件前就已脱敏（[`Redaction::preview`]，[`crate::Run::respond`]、[`crate::Run::run_tools`] 套上），消费方不用记得做。只能防止明文进入保存的
 /// 对话记录与界面；同一次运行中模型已经看到过明文。参数解析失败时交还模型的「请重试」不带参数的值（agenter 保证），不用处理。
 #[derive(Debug, Clone, Default)]
 pub struct Redaction {

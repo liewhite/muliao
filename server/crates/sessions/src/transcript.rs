@@ -39,7 +39,7 @@ pub enum AskState {
     /// 每题的回答
     Answered { answers: Vec<AnsweredQuestion> },
     /// 用户没回答（发了新消息或只回答了别的提问）；note 是交给模型的说明
-    NotAnswered { note: Option<String> },
+    NotAnswered { note: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
@@ -418,10 +418,9 @@ pub(crate) fn annotate_asks(items: &mut [Item], open: &OpenAsks) -> Result<()> {
             Some(Some(text)) => {
                 let parsed: AskResult = serde_json::from_str(text)
                     .map_err(|e| broken(format!("result of ask_user call {id} is not an ask result: {e}")))?;
-                ask.state = if parsed.answered {
-                    AskState::Answered { answers: parsed.answers }
-                } else {
-                    AskState::NotAnswered { note: parsed.note }
+                ask.state = match parsed {
+                    AskResult::Answered(answers) => AskState::Answered { answers },
+                    AskResult::NotAnswered(note) => AskState::NotAnswered { note },
                 };
             }
             None => match open.get(id) {
@@ -701,13 +700,13 @@ mod tests {
         .to_string()
     }
 
+    /// 存下的形状（与改成枚举之前存的一样）
     fn ask_result(answered: bool) -> String {
-        serde_json::to_string(&AskResult {
-            answered,
-            answers: if answered { answered_a() } else { vec![] },
-            note: (!answered).then(|| "skipped".into()),
-        })
-        .unwrap()
+        if answered {
+            r#"{"answered":true,"answers":[{"question":"Which?","selected":["a"],"other":null}],"note":null}"#.into()
+        } else {
+            r#"{"answered":false,"answers":[],"note":"skipped"}"#.into()
+        }
     }
 
     fn answered_a() -> Vec<AnsweredQuestion> {
@@ -744,7 +743,7 @@ mod tests {
         assert_eq!(state("pending"), Some(AskState::Pending));
         assert_eq!(state("submitted"), Some(AskState::Submitted));
         assert_eq!(state("answered"), Some(AskState::Answered { answers: answered_a() }));
-        assert_eq!(state("not"), Some(AskState::NotAnswered { note: Some("skipped".into()) }));
+        assert_eq!(state("not"), Some(AskState::NotAnswered { note: "skipped".into() }));
         assert_eq!(state("refused"), None);
         let Some(CallWait::Ask(not)) = call_of(&items, "not").wait else { panic!() };
         assert_eq!(

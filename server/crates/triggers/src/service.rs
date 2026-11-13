@@ -18,6 +18,7 @@ use chrono::Utc;
 use chrono_tz::Tz;
 use muliao_assets::agents::runnable_agent_in;
 use muliao_assets::lifecycle::DeletionHook;
+use muliao_assets::secrets::SecretUse;
 use muliao_platform::db::{Database, Tx};
 use muliao_sessions::activity::{WorkState, states_of_in};
 use muliao_sessions::inbound::{Refusal, Refused, SenderInbox, SenderMail, SenderTarget};
@@ -298,7 +299,7 @@ impl TriggerService {
     /// 前置检查与流式命令都是 agent 自己写的命令：建或改时就确认这些 secret 能交给它的命令（含 allow_shell），配置错误在第一
     /// 现场报出。与运行时起命令是同一步（`AgentCommands::prepare`），核对与实际不会分叉。
     async fn check_secrets(&self, agent_id: &AgentId, keys: &[String]) -> Result<()> {
-        self.0.commands.prepare(agent_id, keys, true).await?;
+        self.0.commands.prepare(agent_id, keys, SecretUse::AgentCommand).await?;
         Ok(())
     }
 

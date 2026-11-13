@@ -15,8 +15,8 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use agenter::{
-    DeltaKind, Event, Message, Request, RequestPart, Resolution, ResponseBuilder, ResponsePart, RunEvent, Step,
-    ToolCall, ToolResult,
+    DeltaKind, Event, Message, Request, RequestPart, Resolution, ResponseBuilder, ResponsePart, RunEvent, ToolCall,
+    ToolResult,
 };
 use chrono::Utc;
 use muliao_assets::agents::agent_in;
@@ -30,7 +30,7 @@ use muliao_platform::tooling::Audience;
 use muliao_runtime::conventions::{attach, shared_attachments};
 use muliao_runtime::instructions::with_notices;
 use muliao_runtime::toolbox::Redaction;
-use muliao_runtime::{Run, RunSpec, Runtime};
+use muliao_runtime::{Run, RunSpec, Runtime, ToolsDone};
 use rusqlite::Connection;
 
 use crate::actor::Waker;
@@ -244,7 +244,7 @@ async fn begin(core: &Core, session_id: &SessionId) -> Result<Begun> {
                 let results = calls.iter().map(|c| made_up_result(c, MadeUp::Interrupted)).collect();
                 let request = results_request(results).expect("interrupted calls exist");
                 history::append_in(tx, &session_id, run_id, &[Message::User(request)])?;
-                at = *after;
+                at = after.into();
             }
             let resuming = matches!(at, Position::Resend { .. });
             let adopted = if resuming { adopted_in(tx, &session_id, run_id)? } else { Vec::new() };
@@ -516,10 +516,7 @@ impl Driver<'_> {
     async fn request(&mut self, run: &Run) -> std::result::Result<Next, Failure> {
         self.partial.lock().expect("partial lock").streaming = Some(ResponseBuilder::new());
         let mut on_event = self.on_event();
-        let step = run.step(&self.history, &HashMap::new(), &mut on_event).await?;
-        let Step::Responded(response) = step else {
-            return Err(broken(format!("a request step did not respond: {step:?}")).into());
-        };
+        let response = run.respond(&self.history, &mut on_event).await?;
         self.save(vec![Message::Assistant(response)], Vec::new(), Clear::Streaming).await?;
         Ok(Next::Continue)
     }
@@ -558,7 +555,7 @@ impl Driver<'_> {
             p.finished_at.clear();
         }
         let mut on_event = self.on_event();
-        let step = run.step(&self.history[..cut], &resolved, &mut on_event).await?;
+        let done = run.run_tools(&self.history[..cut], &resolved, &mut on_event).await?;
         let finished_at = std::mem::take(&mut self.partial.lock().expect("partial lock").finished_at);
         let fresh = |results: Vec<ToolResult>| -> Vec<ToolResult> {
             results
@@ -571,16 +568,8 @@ impl Driver<'_> {
                 })
                 .collect()
         };
-        match step {
-            Step::Results(req) => {
-                let results: Vec<ToolResult> = req
-                    .parts
-                    .into_iter()
-                    .filter_map(|p| match p {
-                        RequestPart::ToolResult(t) => Some(t),
-                        _ => None,
-                    })
-                    .collect();
+        match done {
+            ToolsDone::Results(results) => {
                 let results = fresh(results);
                 {
                     // 整理好的结果换掉事件里的原样：保存之前被停止时停止事务存的就是它们
@@ -603,7 +592,7 @@ impl Driver<'_> {
                 self.save_request(request, mail, notices).await?;
                 Ok(Next::Continue)
             }
-            Step::Paused { results, deferred, approvals } => {
+            ToolsDone::Paused { results, deferred, approvals } => {
                 // 停在挂起的调用上：已做完的结果与这次新请求批准的调用同一个事务记下（分开提交时，进程在两者之间退出会留下
                 // 一个没有结果、又不算在等批准的调用）
                 let requested: Vec<(String, String)> =
@@ -632,7 +621,6 @@ impl Driver<'_> {
                 .await?;
                 Ok(Next::End(paused_end(&pending)))
             }
-            other => Err(broken(format!("a tools step returned {other:?}")).into()),
         }
     }
 
