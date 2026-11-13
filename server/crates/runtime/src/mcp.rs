@@ -42,7 +42,7 @@ pub struct McpConnector {
 }
 
 /// 连一个 server 的失败：Skip 是这个 server 的问题（secret 不在或解不开、连不上、列不出工具），跳过它，原因里带着 server
-/// 名、已脱敏；System 是系统出错。
+/// 名、已脱敏；System 是别的失败（让整次运行失败）。
 enum BuildError {
     Skip(String),
     System(Error),

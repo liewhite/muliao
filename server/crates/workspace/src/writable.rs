@@ -17,7 +17,6 @@ use std::time::Duration;
 
 use muliao_assets::distribution::Distribution;
 use muliao_assets::service::workspace_of;
-use muliao_platform::errors::Result as AssetsResult;
 use muliao_platform::errors::{DomainError, ErrorKind};
 use muliao_platform::fs::RealPath;
 use muliao_platform::sandbox::{Category, Confinement, Sandbox, WritablePaths, covers, expand, real_forms};
@@ -84,7 +83,7 @@ impl Confiner {
         self.resolving.lock().expect("resolving lock").entry(agent_id.to_owned()).or_default().clone()
     }
 
-    pub async fn of(&self, agent_id: &str) -> AssetsResult<Confinement> {
+    pub async fn of(&self, agent_id: &str) -> muliao_platform::errors::Result<Confinement> {
         let scope = Arc::new(self.distribution.write_scope(agent_id).await?);
         let private = if scope.admin { Vec::new() } else { self.private.clone() };
         // 规则的形式已在读入时校验：绝对路径或 ~/ 开头

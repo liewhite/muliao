@@ -18,7 +18,6 @@ use futures::FutureExt;
 use muliao_assets::access::Actor;
 use muliao_assets::secrets::Secrets;
 use muliao_assets::service::workspace_of;
-use muliao_platform::errors::Result as AssetsResult;
 use muliao_platform::sandbox::Confinement;
 use muliao_platform::shell::{Command, ShellResult, Spawned, run_bash, spawn_bash};
 
@@ -100,7 +99,12 @@ impl AgentCommands {
 
     /// agent 起命令的环境。shell：命令是 agent 自己写的（run_shell、触发器），不是 skill_run 拼出的脚本调用。secret 不存在
     /// 或不能交给这条命令时报领域错误，什么都还没起。
-    pub async fn prepare(&self, agent_id: &str, secret_keys: &[String], shell: bool) -> AssetsResult<AgentShell> {
+    pub async fn prepare(
+        &self,
+        agent_id: &str,
+        secret_keys: &[String],
+        shell: bool,
+    ) -> muliao_platform::errors::Result<AgentShell> {
         let secrets = self.secrets.resolve(&Actor::Agent(agent_id.to_owned()), secret_keys, shell).await?;
         Ok(AgentShell { cwd: self.workspace(agent_id), secrets, confinement: self.confiner.of(agent_id).await? })
     }
