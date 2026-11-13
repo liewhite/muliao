@@ -3,7 +3,7 @@
 //! 一段从一次模型请求保存之后开始，包括模型的回复与它调用的工具，到下一次请求保存（或运行结束）为止。每保存一次请求就换一段
 //! （[`Live::step`]），发 `saved` 让前端重新拉取历史；回复在工具执行前就已保存，但这一段的事件已经在展示它，会话接口不在
 //! 历史里重复显示（after_message_id）。事件带这一段的 segment_id 与递增的 seq，前端据此把快照与之后的 SSE 事件合并、发现缺口。
-//! 生命周期只由运行管（begin / step / end）。
+//! 生命周期只由运行管：开始时拿一个守卫（[`Live::begin`]），丢掉它就结束；[`Live::step`] 换段。
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -68,11 +68,17 @@ pub struct Retrying {
     pub next_at: DateTime<Utc>,
 }
 
+/// 一个会话在内存里的运行状态：正在展示的这一段、在等的重试。两样都没有时不留记录。
+#[derive(Default)]
+struct State {
+    segment: Option<LiveSegment>,
+    retrying: Option<Retrying>,
+}
+
 #[derive(Clone)]
 pub struct Live {
     bus: Arc<Bus>,
-    segments: Arc<Mutex<HashMap<String, LiveSegment>>>,
-    retrying: Arc<Mutex<HashMap<String, Retrying>>>,
+    states: Arc<Mutex<HashMap<String, State>>>,
 }
 
 fn publish_saved(bus: &Bus, session_id: &str) {
@@ -84,42 +90,77 @@ fn new_segment(after: Option<i64>) -> LiveSegment {
     LiveSegment { segment_id: uuid::Uuid::new_v4().simple().to_string(), after_message_id: after, events: Vec::new() }
 }
 
-impl Live {
-    pub fn new(bus: Arc<Bus>) -> Self {
-        Self { bus, segments: Arc::default(), retrying: Arc::default() }
-    }
+/// 一次运行的实时展示：拿着它期间这个会话有正在展示的一段，丢掉（运行返回、被停止时丢掉、panic）就结束。
+pub(crate) struct LiveRun {
+    live: Live,
+    session_id: String,
+}
 
+impl Drop for LiveRun {
+    fn drop(&mut self) {
+        self.live.update(&self.session_id, |s| s.segment = None);
+    }
+}
+
+/// 一次运行连同它的重试：拿着它期间显示的重试状态，丢掉（结束了：成功、最终失败或停止）就清掉。两次尝试之间不清：下一次
+/// 尝试进行中仍显示上次的错误。
+pub(crate) struct Attempts {
+    live: Live,
+    session_id: String,
+}
+
+impl Attempts {
     /// 这次尝试暂时性地失败了，`delay` 之后再试。
-    pub(crate) fn retrying(&self, session_id: &str, error: &str, delay: std::time::Duration) {
+    pub(crate) fn retrying(&self, error: &str, delay: std::time::Duration) {
         let next_at = Utc::now() + chrono::Duration::from_std(delay).expect("retry delays are minutes");
         let state = Retrying { error: error.to_owned(), next_at };
-        self.retrying.lock().expect("live lock").insert(session_id.to_owned(), state);
-        publish_saved(&self.bus, session_id);
+        self.live.update(&self.session_id, |s| s.retrying = Some(state));
+        publish_saved(&self.live.bus, &self.session_id);
+    }
+}
+
+impl Drop for Attempts {
+    fn drop(&mut self) {
+        if self.live.update(&self.session_id, |s| s.retrying.take()).is_some() {
+            publish_saved(&self.live.bus, &self.session_id);
+        }
+    }
+}
+
+impl Live {
+    pub fn new(bus: Arc<Bus>) -> Self {
+        Self { bus, states: Arc::default() }
     }
 
-    /// 这次运行结束了（成功、最终失败或停止），不再在重试。两次尝试之间不清：下一次尝试进行中仍显示上次的错误。
-    pub(crate) fn retried(&self, session_id: &str) {
-        if self.retrying.lock().expect("live lock").remove(session_id).is_some() {
-            publish_saved(&self.bus, session_id);
+    /// 改一个会话的状态；改完两样都没有就去掉记录。
+    fn update<R>(&self, session_id: &str, f: impl FnOnce(&mut State) -> R) -> R {
+        let mut all = self.states.lock().expect("live lock");
+        let state = all.entry(session_id.to_owned()).or_default();
+        let r = f(state);
+        if state.segment.is_none() && state.retrying.is_none() {
+            all.remove(session_id);
         }
+        r
+    }
+
+    /// 一次运行（连同重试）开始。
+    pub(crate) fn attempts(&self, session_id: &str) -> Attempts {
+        Attempts { live: self.clone(), session_id: session_id.to_owned() }
     }
 
     pub fn retry_state(&self, session_id: &str) -> Option<Retrying> {
-        self.retrying.lock().expect("live lock").get(session_id).cloned()
+        self.states.lock().expect("live lock").get(session_id).and_then(|s| s.retrying.clone())
     }
 
-    pub(crate) fn begin(&self, session_id: &str, after_message_id: Option<i64>) {
-        let mut all = self.segments.lock().expect("live lock");
-        // 同一会话同时只有一次运行；已有记录说明上一次漏了 end
-        assert!(
-            all.insert(session_id.to_owned(), new_segment(after_message_id)).is_none(),
-            "session {session_id} already has a live run"
-        );
+    /// 一次运行开始实时展示。同一会话同时只有一次运行（actor 保证）。
+    pub(crate) fn begin(&self, session_id: &str, after_message_id: Option<i64>) -> LiveRun {
+        self.update(session_id, |s| s.segment = Some(new_segment(after_message_id)));
+        LiveRun { live: self.clone(), session_id: session_id.to_owned() }
     }
 
     /// 一次请求已经保存（事务已提交）：之后的事件属于新的一段。
     pub(crate) fn step(&self, session_id: &str, after_message_id: i64) {
-        self.segments.lock().expect("live lock").insert(session_id.to_owned(), new_segment(Some(after_message_id)));
+        self.update(session_id, |s| s.segment = Some(new_segment(Some(after_message_id))));
         publish_saved(&self.bus, session_id);
     }
 
@@ -127,10 +168,6 @@ impl Live {
     pub(crate) fn saved_on_commit(&self, tx: &mut Tx<'_>, session_id: &str) {
         let (bus, session_id) = (self.bus.clone(), session_id.to_owned());
         tx.on_commit(move || publish_saved(&bus, &session_id));
-    }
-
-    pub(crate) fn end(&self, session_id: &str) {
-        self.segments.lock().expect("live lock").remove(session_id);
     }
 
     pub(crate) fn item(&self, session_id: &str, agent: &str, item: Item) {
@@ -145,9 +182,9 @@ impl Live {
 
     fn publish(&self, session_id: &str, agent: &str, event: RunEvent) {
         let envelope = {
-            let mut all = self.segments.lock().expect("live lock");
+            let mut all = self.states.lock().expect("live lock");
             // 运行结束后才到的事件（不会有：事件都在运行里发出）不展示
-            let Some(segment) = all.get_mut(session_id) else { return };
+            let Some(segment) = all.get_mut(session_id).and_then(|s| s.segment.as_mut()) else { return };
             let envelope = RunEventEnvelope {
                 session_id: session_id.to_owned(),
                 agent: agent.to_owned(),
@@ -163,6 +200,6 @@ impl Live {
     }
 
     pub fn snapshot(&self, session_id: &str) -> Option<LiveSegment> {
-        self.segments.lock().expect("live lock").get(session_id).cloned()
+        self.states.lock().expect("live lock").get(session_id).and_then(|s| s.segment.clone())
     }
 }

@@ -25,7 +25,7 @@ use crate::events::RunFailed;
 use crate::halt::{Halted, StopThread, halt};
 use crate::mailbox::Mail;
 use crate::pending::Position;
-use crate::run::{Core, Partial, SharedPartial, execute, unsaved_of};
+use crate::run::{Core, PartialSlot, execute, unsaved_of};
 use crate::runs::{self, Outcome, RunKind, RunRecord};
 use crate::settlement::settle_failure_in;
 use crate::work::CheckBeats;
@@ -226,8 +226,6 @@ async fn actor(inner: Arc<Inner>, id: String, mut rx: mpsc::UnboundedReceiver<Co
         match has_work(&inner.core, &id).await {
             Ok(true) => {
                 let recorded = run_with_retries(&inner, &id, &mut rx, &mut compactions).await;
-                // 结束了（成功、最终失败或停止）：不再在等重试
-                inner.core.live.retried(&id);
                 if !recorded {
                     // 失败得连运行记录都没留下（开头的事务就出错）：不原地重来，等下一次叫醒；有排着的命令就回到主循环处理
                     // （处理完会再试一次，命令总会处理完，不会空转）
@@ -268,7 +266,7 @@ async fn idle_command(
     match cmd {
         Command::Wake => {}
         Command::Stop(reply) => {
-            let halted = halt(&inner.core, id, (None, Vec::new()), Actors::stop_thread(Arc::downgrade(inner))).await;
+            let halted = halt(&inner.core, id, None, Actors::stop_thread(Arc::downgrade(inner))).await;
             let _ = reply.send(halted);
         }
         Command::Compact(reply) => compactions.push(reply),
@@ -306,12 +304,14 @@ async fn run_with_retries(
     compactions: &mut Vec<oneshot::Sender<Result<usize>>>,
 ) -> bool {
     let core = &inner.core;
+    // 结束了（成功、最终失败或停止）就不再显示在等重试
+    let attempts = core.live.attempts(id);
     // 重试窗口从第一次失败算起；一次尝试往前推进了（存下了新消息）就重新算
     let mut first_failure: Option<Instant> = None;
     let mut delay = FIRST_DELAY;
     loop {
         let before = last_message(core, id).await;
-        let partial: SharedPartial = Arc::new(Mutex::new(Partial::default()));
+        let partial: PartialSlot = Arc::default();
         let outcome = {
             let run = AssertUnwindSafe(execute(core, id, &partial)).catch_unwind();
             tokio::pin!(run);
@@ -330,7 +330,6 @@ async fn run_with_retries(
         };
         let failure = match outcome {
             Err(reply) => {
-                core.live.end(id);
                 // 等排在前面的写事务做完（写线程先进先出）：被丢掉的运行如果正等着保存一步，那一步先提交并取走对应的已产生
                 // 部分，这里才取剩下的，不会存两遍
                 if let Err(e) = core.db.write(|_| Ok::<_, rusqlite::Error>(())).await {
@@ -347,7 +346,6 @@ async fn run_with_retries(
             Ok(Ok(Ok(()))) => return true,
             Ok(Ok(Err(f))) => f,
             Ok(Err(panic)) => {
-                core.live.end(id);
                 let message = panic
                     .downcast_ref::<String>()
                     .cloned()
@@ -363,7 +361,7 @@ async fn run_with_retries(
         let since = *first_failure.get_or_insert_with(Instant::now);
         if failure.transient && since.elapsed() < RETRY_WINDOW {
             tracing::warn!(session_id = id, error = %failure.message, retry_in = ?delay, "run failed transiently; retrying");
-            core.live.retrying(id, &failure.message, delay);
+            attempts.retrying(&failure.message, delay);
             // 退避期间也能停止（停在两次尝试之间：没有已产生、没保存的部分）
             let sleep = tokio::time::sleep(delay);
             tokio::pin!(sleep);
@@ -372,7 +370,7 @@ async fn run_with_retries(
                     _ = &mut sleep => break,
                     cmd = rx.recv() => match cmd {
                         Some(Command::Stop(reply)) => {
-                            let halted = halt(core, id, (None, Vec::new()), Actors::stop_thread(Arc::downgrade(inner))).await;
+                            let halted = halt(core, id, None, Actors::stop_thread(Arc::downgrade(inner))).await;
                             let _ = reply.send(halted);
                             return true;
                         }

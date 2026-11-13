@@ -71,11 +71,10 @@ pub struct Core {
 }
 
 /// 一次运行已产生、还没保存的部分（被停止时由停止事务保存）。保存一步的事务在写线程上取走它对应的部分，所以停止事务（排在
-/// 后面）不会再存一遍。
-#[derive(Default)]
+/// 后面）不会再存一遍。运行记录建好之后才有（[`PartialSlot`]）。
 pub(crate) struct Partial {
     /// 这次运行（被停止时，停止事务把补的结果记在它名下）
-    pub run_id: Option<i64>,
+    run_id: i64,
     /// 生成到一半的回复
     pub streaming: Option<ResponseBuilder>,
     /// 这一步里已经做完的工具调用（原样）
@@ -87,6 +86,15 @@ pub(crate) struct Partial {
 }
 
 pub(crate) type SharedPartial = Arc<Mutex<Partial>>;
+
+/// 一次尝试的已产生部分的登记处（actor 停止时从这里取）：开头的事务建好运行记录才登记，没登记的尝试没有要保存的。
+pub(crate) type PartialSlot = Arc<Mutex<Option<SharedPartial>>>;
+
+/// 被停止时这次运行已产生、还没保存的部分（存储形态）：记在哪次运行名下、哪些消息。
+pub(crate) struct Unsaved {
+    pub run_id: i64,
+    pub messages: Vec<Message>,
+}
 
 /// 运行失败：暂时性的（模型或外部服务一时不可用）由 actor 退避重试，其余最终失败。
 #[derive(Debug)]
@@ -183,13 +191,16 @@ struct Begun {
 }
 
 /// 一次运行（或从上次的尝试接着跑）：返回时运行已经收尾（结局已记下）。Err 是失败，由 actor 决定重试还是最终失败。
-pub(crate) async fn execute(
-    core: &Core,
-    session_id: &str,
-    partial: &SharedPartial,
-) -> std::result::Result<(), Failure> {
+pub(crate) async fn execute(core: &Core, session_id: &str, slot: &PartialSlot) -> std::result::Result<(), Failure> {
     let begun = begin(core, session_id).await?;
-    partial.lock().expect("partial lock").run_id = Some(begun.run_id);
+    let partial: SharedPartial = Arc::new(Mutex::new(Partial {
+        run_id: begun.run_id,
+        streaming: None,
+        finished: Vec::new(),
+        finished_at: HashMap::new(),
+        run: None,
+    }));
+    *slot.lock().expect("partial slot lock") = Some(partial.clone());
     let opening = opening(core, &begun).await?;
     let resend = matches!(begun.at, Position::Resend { .. });
     if opening.is_none() && !resend {
@@ -205,7 +216,7 @@ pub(crate) async fn execute(
         begun: &begun,
         config: &config,
         audience,
-        partial: partial.clone(),
+        partial,
         history: begun.context.messages.clone(),
         summary: begun.context.summary.clone(),
         stale_responses: begun.context.stale_responses,
@@ -434,10 +445,9 @@ impl Driver<'_> {
         let mut notices: Vec<String> = run.notices().to_vec();
         let session_id = self.session_id().to_owned();
         let last = self.core.db.read(move |c| history::last_message_id_in(c, &session_id)).await?;
-        self.core.live.begin(self.session_id(), last);
-        let result = self.steps(&mut run, &mut notices, opening).await;
-        self.core.live.end(self.session_id());
-        result
+        // 实时展示随这个守卫结束：运行返回、被停止时丢掉、panic 时都一样
+        let _live = self.core.live.begin(self.session_id(), last);
+        self.steps(&mut run, &mut notices, opening).await
     }
 
     async fn steps(
@@ -797,8 +807,9 @@ enum Clear {
     Finished,
 }
 
-/// 被停止时这次运行已产生、还没保存的部分（存储形态），由停止事务保存在最前面。
-pub(crate) async fn unsaved_of(partial: &SharedPartial) -> Result<(Option<i64>, Vec<Message>)> {
+/// 被停止时这次尝试已产生、还没保存的部分（存储形态），由停止事务保存在最前面；还没建好运行记录的尝试没有。
+pub(crate) async fn unsaved_of(slot: &PartialSlot) -> Result<Option<Unsaved>> {
+    let Some(partial) = slot.lock().expect("partial slot lock").clone() else { return Ok(None) };
     let (run_id, streaming, finished, finished_at, run) = {
         let mut p = partial.lock().expect("partial lock");
         (
@@ -828,5 +839,5 @@ pub(crate) async fn unsaved_of(partial: &SharedPartial) -> Result<(Option<i64>, 
         }
         messages.extend(results_request(results).map(Message::User));
     }
-    Ok((run_id, messages))
+    Ok(Some(Unsaved { run_id, messages }))
 }

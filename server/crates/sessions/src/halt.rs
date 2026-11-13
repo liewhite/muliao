@@ -24,7 +24,7 @@ use crate::history::{self, since_last_response};
 use crate::holds::{HoldOf, clear_in};
 use crate::mailbox::consume_in;
 use crate::pending::closing_on_stop;
-use crate::run::Core;
+use crate::run::{Core, Unsaved};
 use crate::runs;
 use crate::settlement::settle_stopped_in;
 use crate::thread_calls::delegations_among;
@@ -45,10 +45,10 @@ pub(crate) type StopThread = Arc<dyn Fn(String) + Send + Sync>;
 pub(crate) async fn halt(
     core: &Core,
     session_id: &str,
-    unsaved: (Option<i64>, Vec<Message>),
+    unsaved: Option<Unsaved>,
     stop_thread: StopThread,
 ) -> Result<Halted> {
-    let (run_id, mut messages) = unsaved;
+    let (run_id, mut messages) = unsaved.map_or((None, Vec::new()), |u| (Some(u.run_id), u.messages));
     core.redaction.messages(&mut messages);
     let (session_id, waker, events, live) =
         (session_id.to_owned(), core.waker.clone(), core.events.clone(), core.live.clone());
@@ -58,9 +58,7 @@ pub(crate) async fn halt(
                 tracing::info!(session_id, "stopping a deleted session: nothing to do");
                 return Ok(Halted::Gone);
             };
-            if !messages.is_empty() {
-                let run_id =
-                    run_id.ok_or_else(|| broken(format!("session {session_id} has unsaved messages but no run")))?;
+            if let (Some(run_id), false) = (run_id, messages.is_empty()) {
                 history::append_in(tx, &session_id, run_id, &messages)?;
             }
             close_history_in(tx, &session_id, run_id)?;
