@@ -532,7 +532,10 @@ where
 #[tokio::test(flavor = "multi_thread")]
 async fn stream_lines_are_debounced_into_one_firing_and_queue_while_busy() {
     let w = world().await;
-    let config = json!({"command": "echo a; echo; echo b; sleep 0.5; echo c; sleep 60", "debounce_seconds": 0.2});
+    // 时长带上本测试进程的 pid：pgrep 是全机范围的，别的进程（并行跑的另一份测试、agent 的轮询）里的「sleep 60」不能算进来
+    let sleep = format!("sleep 60.{}", std::process::id());
+    let config =
+        json!({"command": format!("echo a; echo; echo b; sleep 0.5; echo c; {sleep}"), "debounce_seconds": 0.2});
     let t = w.create("s", "stream", config, None).await;
     w.triggers.start();
     eventually("the first batch", || async { w.sessions(t.id).await.len() == 1 }).await;
@@ -550,7 +553,7 @@ async fn stream_lines_are_debounced_into_one_firing_and_queue_while_busy() {
     // 停用：进程组被杀
     w.svc().update(t.id, Update { enabled: Some(false), ..Update::default() }).await.unwrap();
     eventually("the process to be killed", || async {
-        let out = std::process::Command::new("pgrep").args(["-f", "[s]leep 60"]).output().unwrap();
+        let out = std::process::Command::new("pgrep").args(["-f", &format!("[s]{}", &sleep[1..])]).output().unwrap();
         out.stdout.is_empty()
     })
     .await;
