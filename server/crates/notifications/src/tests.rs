@@ -129,7 +129,7 @@ impl Harness {
 }
 
 type HandlerOf<E> =
-    Arc<dyn Fn(&mut muliao_platform::db::Tx<'_>, &E) -> Result<(), muliao_sessions::events::BoxError> + Send + Sync>;
+    Arc<dyn Fn(&mut muliao_platform::db::Tx<'_>, &E) -> Result<(), muliao_platform::errors::Error> + Send + Sync>;
 
 fn ended(waiting_on: Vec<Waiting>, awaited: bool, stopped: bool) -> RunEnded {
     RunEnded {

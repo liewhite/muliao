@@ -56,8 +56,7 @@ pub struct SessionDeleted {
     pub agent_id: String,
 }
 
-pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
-type Handler<E> = Arc<dyn Fn(&mut Tx<'_>, &E) -> Result<(), BoxError> + Send + Sync>;
+type Handler<E> = Arc<dyn Fn(&mut Tx<'_>, &E) -> muliao_platform::errors::Result<()> + Send + Sync>;
 
 /// 各领域登记的订阅者。
 #[derive(Default, Clone)]
@@ -69,24 +68,27 @@ pub struct Subscribers {
 }
 
 impl Subscribers {
-    pub fn on_run_ended(&mut self, f: impl Fn(&mut Tx<'_>, &RunEnded) -> Result<(), BoxError> + Send + Sync + 'static) {
+    pub fn on_run_ended(
+        &mut self,
+        f: impl Fn(&mut Tx<'_>, &RunEnded) -> muliao_platform::errors::Result<()> + Send + Sync + 'static,
+    ) {
         self.run_ended.push(Arc::new(f));
     }
     pub fn on_run_failed(
         &mut self,
-        f: impl Fn(&mut Tx<'_>, &RunFailed) -> Result<(), BoxError> + Send + Sync + 'static,
+        f: impl Fn(&mut Tx<'_>, &RunFailed) -> muliao_platform::errors::Result<()> + Send + Sync + 'static,
     ) {
         self.run_failed.push(Arc::new(f));
     }
     pub fn on_session_stopped(
         &mut self,
-        f: impl Fn(&mut Tx<'_>, &SessionStopped) -> Result<(), BoxError> + Send + Sync + 'static,
+        f: impl Fn(&mut Tx<'_>, &SessionStopped) -> muliao_platform::errors::Result<()> + Send + Sync + 'static,
     ) {
         self.session_stopped.push(Arc::new(f));
     }
     pub fn on_session_deleted(
         &mut self,
-        f: impl Fn(&mut Tx<'_>, &SessionDeleted) -> Result<(), BoxError> + Send + Sync + 'static,
+        f: impl Fn(&mut Tx<'_>, &SessionDeleted) -> muliao_platform::errors::Result<()> + Send + Sync + 'static,
     ) {
         self.session_deleted.push(Arc::new(f));
     }
@@ -124,7 +126,7 @@ impl Events {
 
 fn publish<E>(tx: &mut Tx<'_>, handlers: &[Handler<E>], event: &E) -> muliao_platform::errors::Result<()> {
     for h in handlers {
-        h(tx, event).map_err(muliao_platform::errors::Error::Internal)?;
+        h(tx, event)?;
     }
     Ok(())
 }

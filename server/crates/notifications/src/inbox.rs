@@ -13,9 +13,10 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use muliao_platform::bus::{Bus, ServerEvent};
 use muliao_platform::db::{Database, Tx};
+use muliao_platform::errors::broken;
 use muliao_platform::text::truncate;
 use muliao_sessions::answers::Waiting;
-use muliao_sessions::events::{BoxError, RunEnded, RunFailed, SessionDeleted, Subscribers};
+use muliao_sessions::events::{RunEnded, RunFailed, SessionDeleted, Subscribers};
 use rusqlite::{Connection, OptionalExtension, Row, params, params_from_iter};
 use serde::Serialize;
 use utoipa::ToSchema;
@@ -201,7 +202,7 @@ impl Notifications {
         subscribers.on_session_deleted(on_session_deleted);
     }
 
-    fn on_run_ended(&self, tx: &mut Tx<'_>, e: &RunEnded) -> Result<(), BoxError> {
+    fn on_run_ended(&self, tx: &mut Tx<'_>, e: &RunEnded) -> muliao_platform::errors::Result<()> {
         if !worth_pushing(e) {
             return Ok(());
         }
@@ -216,9 +217,10 @@ impl Notifications {
     }
 
     /// 运行最终失败：通知用户，点开是那个会话；运行中途的工具报错不走这里。
-    fn on_run_failed(&self, tx: &mut Tx<'_>, e: &RunFailed) -> Result<(), BoxError> {
-        let session = muliao_sessions::directory::get_in(tx, &e.session_id)?
-            .ok_or_else(|| format!("run {} failed in session {}, which does not exist", e.run_id, e.session_id))?;
+    fn on_run_failed(&self, tx: &mut Tx<'_>, e: &RunFailed) -> muliao_platform::errors::Result<()> {
+        let session = muliao_sessions::directory::get_in(tx, &e.session_id)?.ok_or_else(|| {
+            broken(format!("run {} failed in session {}, which does not exist", e.run_id, e.session_id))
+        })?;
         let n = Notify {
             title: format!("{} · {} 运行失败", e.agent_name, session.title),
             body: truncate(e.error.trim(), FAILURE_BODY_MAX),
@@ -273,7 +275,7 @@ impl Notifications {
 }
 
 /// 指向被删会话的通知随它删除。
-fn on_session_deleted(tx: &mut Tx<'_>, e: &SessionDeleted) -> Result<(), BoxError> {
+fn on_session_deleted(tx: &mut Tx<'_>, e: &SessionDeleted) -> muliao_platform::errors::Result<()> {
     tx.execute("DELETE FROM notifications WHERE session_id = ?1", [&e.session_id])?;
     Ok(())
 }

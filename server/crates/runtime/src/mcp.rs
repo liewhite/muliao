@@ -26,10 +26,8 @@ use muliao_platform::shell::redact;
 /// 连上 server 并列出工具最多等多久
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
-pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
-
 /// 一个 agent 的命令在什么限制下跑（agent id → 它的写沙箱）。由工作区领域拼装，组合根注入。
-pub type Confine = Arc<dyn Fn(String) -> BoxFuture<'static, Result<Confinement, BoxError>> + Send + Sync>;
+pub type Confine = Arc<dyn Fn(String) -> BoxFuture<'static, Result<Confinement, Error>> + Send + Sync>;
 
 /// 一次运行连上的 server，和没连上的那些要告诉模型的话。
 pub struct Reachable {
@@ -47,7 +45,7 @@ pub struct McpConnector {
 /// 名、已脱敏；System 是系统出错。
 enum BuildError {
     Skip(String),
-    System(BoxError),
+    System(Error),
 }
 
 impl McpConnector {
@@ -66,7 +64,7 @@ impl McpConnector {
     ) -> Result<(Server, BTreeMap<String, String>), BuildError> {
         let (filled, secrets) = self.secrets.fill_mcp(user, &server.config).await.map_err(|e| match e.domain() {
             Some(d) => BuildError::Skip(format!("MCP server {:?}: {d}", server.name)),
-            None => BuildError::System(Box::new(e)),
+            None => BuildError::System(e),
         })?;
         let transport = match filled {
             McpConfig::Stdio { command, args, env } => {
@@ -104,7 +102,7 @@ impl McpConnector {
 
     /// agent 这次运行要连接的 server（它能用的、已启用的）都连一遍（同时连）。连不上的跳过并写进 notices；系统出错（读不了
     /// 资源目录、拼不出写沙箱）让这次运行失败。
-    pub async fn connect_for(&self, agent_id: &str, workspace: &Path) -> Result<Reachable, BoxError> {
+    pub async fn connect_for(&self, agent_id: &str, workspace: &Path) -> Result<Reachable, Error> {
         let servers = self.registry.index(agent_id).await?;
         let user = Actor::Agent(agent_id.to_owned());
         let attempts =
@@ -129,7 +127,7 @@ impl McpConnector {
                 tracing::info!(mcp = %server.name, error = %reason, "mcp probe failed");
                 return Err(DomainError::invalid(format!("could not connect: {reason}")).into());
             }
-            Err(BuildError::System(e)) => return Err(std::io::Error::other(e).into()),
+            Err(BuildError::System(e)) => return Err(e),
         };
         let prefix = format!("{}_", server.name);
         Ok(connection

@@ -20,7 +20,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 
 use crate::inbox::{PushMessage, push_message_in};
-use crate::webpush::{self, InvalidDevice, Sent, Subscription, VapidKeys};
+use crate::webpush::{self, Sent, Subscription, VapidKeys};
 
 /// 推送服务限制载荷约 4KB（加密后），标题、正文截断留足余量（中文一个字三字节）
 const TITLE_MAX_CHARS: usize = 120;
@@ -74,7 +74,7 @@ impl Push {
     /// 用户在界面上开启推送：解析核对（https、密钥解得开）后记下这台设备（同一个 endpoint 再订阅就换成新的密钥）。
     pub async fn subscribe(&self, sub: Subscription) -> Result<(), Error> {
         if !sub.parse().map_err(|e| invalid(e.to_string()))?.is_https() {
-            return Err(invalid(InvalidDevice("endpoint must be an https URL".into()).to_string()));
+            return Err(invalid("invalid push subscription: endpoint must be an https URL"));
         }
         self.db
             .write(move |tx| {

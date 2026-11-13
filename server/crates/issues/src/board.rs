@@ -16,7 +16,7 @@ use muliao_platform::db::{Database, Tx};
 use muliao_platform::errors::{DomainError, ErrorKind};
 use muliao_platform::text::truncate;
 use muliao_sessions::activity::WorkState;
-use muliao_sessions::events::{BoxError, RunEnded, RunFailed, SessionDeleted, Subscribers};
+use muliao_sessions::events::{RunEnded, RunFailed, SessionDeleted, Subscribers};
 use muliao_sessions::halt::Halted;
 use muliao_sessions::inbound::SenderInbox;
 use muliao_sessions::origins::SessionOrigin;
@@ -252,12 +252,10 @@ impl Board {
     /// 登记对会话事件的订阅：运行结束时请停滞的 agent 表态、最终失败记进时间线、会话删除时时间线不再指向它。
     pub fn subscribe(&self, subscribers: &mut Subscribers) {
         let this = self.clone();
-        subscribers.on_run_ended(move |tx, e| this.on_run_ended(tx, e).map_err(BoxError::from));
+        subscribers.on_run_ended(move |tx, e| this.on_run_ended(tx, e));
         let this = self.clone();
-        subscribers.on_run_failed(move |tx, e| this.on_run_failed(tx, e).map_err(BoxError::from));
-        subscribers.on_session_deleted(|tx, e: &SessionDeleted| {
-            activity::forget_session_in(tx, &e.session_id).map_err(BoxError::from)
-        });
+        subscribers.on_run_failed(move |tx, e| this.on_run_failed(tx, e));
+        subscribers.on_session_deleted(|tx, e: &SessionDeleted| activity::forget_session_in(tx, &e.session_id));
     }
 
     /// issue 会话里的一次运行结束了：issue 指派给这个 agent、却因此停滞（还是 in_progress，会话空闲）时，以它的名义记一条

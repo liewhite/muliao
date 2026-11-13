@@ -21,7 +21,6 @@ use muliao_assets::skills::SkillStore;
 use muliao_assets::source::AssetSource;
 use muliao_assets::tree::AgentDir;
 use muliao_files::FileStore;
-use muliao_platform::errors::DomainError;
 use muliao_platform::errors::Error;
 use muliao_platform::tooling::{Audience, RunScope};
 use muliao_usage::{RunKind, UsageEntry, UsageLog, UsageTotals};
@@ -29,7 +28,7 @@ use serde_json::Value;
 
 use crate::attachments::{for_model, store_tool_images};
 use crate::instructions::{InstructionParts, build_instructions, run_context};
-use crate::mcp::{BoxError, McpConnector, skip};
+use crate::mcp::{McpConnector, skip};
 use crate::models::{ModelRegistry, thinking_of};
 use crate::toolbox::{Redaction, Toolbox};
 
@@ -66,30 +65,21 @@ pub struct RunSpec<'a> {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum StartError {
-    #[error(transparent)]
-    Assets(#[from] Error),
-    /// agent.toml 里的模型在当前配置下不能运行
-    #[error(transparent)]
-    Model(#[from] DomainError),
-    /// 连 MCP 时系统出错（读不了资源目录、拼不出写沙箱）
-    #[error("connecting MCP servers failed: {0}")]
-    Mcp(BoxError),
-}
-
-#[derive(Debug, thiserror::Error)]
 pub enum StepError {
     #[error(transparent)]
     Run(#[from] RunError),
-    /// 读附件、存工具交回的图片失败
+    /// 读附件、存工具交回的图片等平台自己的步骤失败
     #[error(transparent)]
-    Files(#[from] Error),
+    Platform(#[from] Error),
 }
 
 impl StepError {
     /// 暂时性的失败（模型或工具报的）：稍后从同一份历史原样再走这一步。
     pub fn is_transient(&self) -> bool {
-        matches!(self, StepError::Run(e) if e.is_transient())
+        match self {
+            StepError::Run(e) => e.is_transient(),
+            StepError::Platform(e) => e.is_transient(),
+        }
     }
 }
 
@@ -161,14 +151,14 @@ impl Runtime {
     }
 
     /// 组装一次运行：按 agent 现在的规则开放内置工具，连上它的 MCP server（连不上的跳过，写进 notices），组装指令与模型。
-    pub async fn start(&self, spec: RunSpec<'_>) -> Result<Run, StartError> {
+    pub async fn start(&self, spec: RunSpec<'_>) -> Result<Run, Error> {
         let config = spec.config;
         let agent_id = config.id.as_str();
         let model = self.d.models.resolve(config.file.model())?;
         let workspace = self.d.agents.workspace(agent_id);
         let mut notices = self.asset_problems(agent_id).await?;
         let mut tools = self.d.toolbox.allowed(&self.d.distribution.rules(agent_id).await?);
-        let reachable = self.d.mcp.connect_for(agent_id, &workspace).await.map_err(StartError::Mcp)?;
+        let reachable = self.d.mcp.connect_for(agent_id, &workspace).await?;
         notices.extend(reachable.notices);
         for connection in reachable.connections {
             let mine = connection.tools::<RunScope>();

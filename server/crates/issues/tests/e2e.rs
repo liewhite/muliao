@@ -180,7 +180,8 @@ async fn world() -> World {
     tools.push(builtin(Slow, ToolTraits::read()));
     let toolbox = Arc::new(Toolbox::new(tools));
     binder.bind(toolbox.specs());
-    let confine: Confine = Arc::new(|_agent: String| async { Err("no MCP in this test".into()) }.boxed());
+    let confine: Confine =
+        Arc::new(|_agent: String| async { Err(muliao_platform::errors::broken("no MCP in this test")) }.boxed());
     let mcp = Arc::new(McpConnector::new(Arc::new(McpRegistry::new(source.clone())), secrets, confine));
     let runtime = Arc::new(Runtime::new(RuntimeDeps {
         models,

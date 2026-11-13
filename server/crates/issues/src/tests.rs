@@ -136,7 +136,7 @@ impl World {
 }
 
 type HandlerOf<E> = Arc<
-    dyn Fn(&mut muliao_platform::db::Tx<'_>, &E) -> std::result::Result<(), muliao_sessions::events::BoxError>
+    dyn Fn(&mut muliao_platform::db::Tx<'_>, &E) -> std::result::Result<(), muliao_platform::errors::Error>
         + Send
         + Sync,
 >;

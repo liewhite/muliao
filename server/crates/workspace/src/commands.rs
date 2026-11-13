@@ -110,6 +110,6 @@ impl AgentCommands {
 pub fn confine(confiner: Arc<Confiner>) -> muliao_runtime::mcp::Confine {
     Arc::new(move |agent: String| {
         let confiner = confiner.clone();
-        async move { confiner.of(&agent).await.map_err(|e| Box::new(e) as muliao_runtime::mcp::BoxError) }.boxed()
+        async move { confiner.of(&agent).await }.boxed()
     })
 }
