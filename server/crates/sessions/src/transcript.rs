@@ -16,9 +16,7 @@ use serde::Serialize;
 
 use crate::answers::Waiting;
 use crate::answers::{AnsweredQuestion, AskResult, Question, questions_of};
-use crate::conventions::{
-    check_in_indices, event_indices, finished_at, is_stopped, made_up, parse_event, run_context_index,
-};
+use crate::conventions::{event_content, event_marks, finished_at, is_stopped, made_up, run_context_index};
 use crate::error::{Result, broken};
 use crate::pending::{ASK_USER, OpenAsk, OpenAsks};
 use crate::work::EventSource;
@@ -292,39 +290,30 @@ fn attachment(file: &File) -> Result<Attachment> {
 /// 一条请求展示成的条目：工具结果各自成条；运行上下文那一段不展示（它是我们加给模型的，不是用户说的话；它仍在消息里
 /// 原样重放，这里只是不投影）；会话事件（其中运行中检查另标）各自成条；其余连续的文字与附件合成一条用户消息。
 fn request_items(request: &Request, renders: &Renders, items: &mut Vec<Item>) -> Result<()> {
-    let events = event_indices(request);
-    let check_ins = check_in_indices(request);
-    if let Some(i) = check_ins.iter().find(|i| !events.contains(i)) {
-        return Err(broken(format!("check-in segment {i} of a request is not an event (events {events:?})")));
-    }
+    let events = event_marks(request)?;
     let context = run_context_index(request);
     let mut own = UserContent::default();
     for (i, part) in request.parts.iter().enumerate() {
         if Some(i) == context {
             continue;
         }
-        let is_event = events.contains(&i);
-        match part {
-            RequestPart::ToolResult(r) => {
+        let event = events.iter().find(|e| e.part == i);
+        match (part, event) {
+            (RequestPart::ToolResult(r), _) => {
                 own.flush_into(items);
                 items.push(result_item(r, renders));
             }
-            RequestPart::Text { text } if is_event => {
+            (RequestPart::Text { text }, Some(e)) => {
                 own.flush_into(items);
-                let (source, content) = parse_event(text)?;
                 items.push(Item::Event(EventItem {
-                    text: content.to_owned(),
-                    source: EventSource::parse(source)
-                        .ok_or_else(|| broken(format!("event segment {i} has an unknown source {source:?}")))?,
-                    check_in: check_ins.contains(&i),
+                    text: event_content(text, &e.source).to_owned(),
+                    source: e.source.clone(),
+                    check_in: e.check_in,
                     at: request.timestamp,
                 }));
             }
-            RequestPart::File(_) if is_event => {
-                return Err(broken(format!("event segment {i} of a request is not text")));
-            }
-            RequestPart::Text { text } => own.texts.push(text.clone()),
-            RequestPart::File(f) => own.attachments.push(attachment(f)?),
+            (RequestPart::Text { text }, None) => own.texts.push(text.clone()),
+            (RequestPart::File(f), _) => own.attachments.push(attachment(f)?),
         }
     }
     own.flush_into(items);
@@ -460,8 +449,17 @@ mod tests {
     use super::*;
     use crate::answers::QuestionOption;
     use crate::conventions::{
-        MadeUp, attach_run_context, format_event, made_up_result, mark_events, mark_stopped, set_finished_at,
+        EventMark, MadeUp, attach_run_context, format_event, made_up_result, mark_events, mark_stopped,
+        set_finished_at,
     };
+
+    fn job7() -> EventSource {
+        EventSource::Job { job_id: 7 }
+    }
+
+    fn thread_s1() -> EventSource {
+        EventSource::Thread { session_id: "s1".into() }
+    }
 
     fn at(s: &str) -> DateTime<Utc> {
         DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
@@ -528,12 +526,19 @@ mod tests {
             RequestPart::ToolResult(result("c1", "t", vec![Content::text("ok")], false)),
             RequestPart::Text { text: "hi".into() },
             RequestPart::File(file("/api/files/abc/pic.png")),
-            RequestPart::Text { text: format_event("job:7", "done") },
-            RequestPart::Text { text: format_event("thread:s1", "still going") },
+            RequestPart::Text { text: format_event(&job7(), "done") },
+            RequestPart::Text { text: format_event(&thread_s1(), "still going") },
             RequestPart::Text { text: "tail".into() },
         ]);
-        mark_events(&mut r, &[3, 4], &[4]);
-        attach_run_context(&mut r, "now is 10:00");
+        mark_events(
+            &mut r,
+            vec![
+                EventMark { part: 3, source: job7(), check_in: false },
+                EventMark { part: 4, source: thread_s1(), check_in: true },
+            ],
+        )
+        .unwrap();
+        attach_run_context(&mut r, "now is 10:00").unwrap();
         let items = to_items([&Message::User(r)], &Renders::new(), None).unwrap();
         assert_eq!(kinds(&items), ["tool_result", "user", "event", "event", "user"]);
         let Item::User(user) = &items[1] else { panic!() };
@@ -566,8 +571,8 @@ mod tests {
 
     #[test]
     fn broken_requests_are_reported() {
-        let mut r = request(vec![RequestPart::Text { text: "not an event".into() }]);
-        mark_events(&mut r, &[0], &[]);
+        let mut r = request(vec![RequestPart::Text { text: "x".into() }]);
+        r.metadata = Some(serde_json::json!({ crate::conventions::RUN_EVENTS: [{ "part": 0, "source": "nope" }] }));
         assert!(to_items([&Message::User(r)], &Renders::new(), None).is_err());
         let r = request(vec![RequestPart::File(file("https://elsewhere/x.png"))]);
         assert!(to_items([&Message::User(r)], &Renders::new(), None).is_err());
@@ -723,10 +728,10 @@ mod tests {
         let r = request(vec![
             RequestPart::Text { text: "look".into() },
             RequestPart::File(file("/api/files/abc/pic.png")),
-            RequestPart::Text { text: format_event("job:7", "done") },
+            RequestPart::Text { text: format_event(&job7(), "done") },
         ]);
         let mut r = r;
-        mark_events(&mut r, &[2], &[]);
+        mark_events(&mut r, vec![EventMark { part: 2, source: job7(), check_in: false }]).unwrap();
         let m = response(vec![
             ResponsePart::Thinking { text: "secret thought".into(), meta: None },
             ResponsePart::ToolCall(call("c1", "t", "{\"q\":\"0123456789\"}")),

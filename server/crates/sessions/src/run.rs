@@ -589,7 +589,7 @@ impl Driver<'_> {
                 });
                 let mail = match first {
                     Some((content, mail)) => {
-                        append_content(&mut request, content);
+                        append_content(&mut request, content)?;
                         mail
                     }
                     None => Vec::new(),
@@ -612,7 +612,7 @@ impl Driver<'_> {
                             timestamp: Utc::now(),
                             metadata: None,
                         });
-                        append_content(r, content);
+                        append_content(r, content)?;
                         mail
                     }
                     None => Vec::new(),
@@ -643,7 +643,7 @@ impl Driver<'_> {
         if !arrived.is_empty() {
             let workspace = self.core.agents.workspace(&self.begun.session.agent_id);
             // 运行中途没有挂起的调用（调用只在运行结束时挂起），这时到达的回答都是迟到的
-            append_content(&mut request, content_of(&self.core.files, &workspace, &arrived).await?);
+            append_content(&mut request, content_of(&self.core.files, &workspace, &arrived).await?)?;
             mail.extend(arrived.iter().map(|m| m.id));
         }
         let attaching = self.run_context_row.is_none();
@@ -651,7 +651,7 @@ impl Driver<'_> {
         let context = with_notices(&run_context, notices);
         if !context.is_empty() {
             // 只挂在本次运行新增的第一条请求上（重发的那条已经在库里，不改它）；运行上下文已经挂出去了时，notices 单独挂
-            attach_run_context(&mut request, &context);
+            attach_run_context(&mut request, &context)?;
         }
         let ids = self.save(vec![Message::User(request)], mail, Clear::Finished).await?;
         let id = *ids.last().expect("one request saved");

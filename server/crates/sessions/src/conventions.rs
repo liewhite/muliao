@@ -9,7 +9,7 @@
 //! | [`RUN_STOPPED`]：运行被用户停止 | 停止时最后那条消息的 metadata | 停止（halt） | 会话条目（「已停止」）、续跑（不重发标了它的请求） |
 //! | [`INTERRUPTED`]：生成到一半被停的回复 | 回复的 metadata | 停止 | 会话条目；压缩判断（[`measured_responses`]） |
 //! | [`MADE_UP`]：事后补的结果（停止、中断时没出结果的调用） | 工具结果的 metadata（`stopped` / `interrupted`） | 停止、续跑 | 模型看结果文字；会话条目（没有结束时间） |
-//! | [`RUN_EVENTS`] / [`RUN_CHECK_INS`]：这条请求里哪些段是事件、其中哪些是运行中检查 | 请求的 metadata（`parts` 的下标） | 交出信件时 | 会话条目 |
+//! | [`RUN_EVENTS`]：这条请求里哪些段是事件，各自的来源、是不是运行中检查（[`EventMark`]） | 请求的 metadata | 交出信件时 | 会话条目 |
 //! | [`RUN_CONTEXT`]：这次运行的运行上下文（当前时间等） | 单独一段文字，请求的 metadata 记下标 | 每步保存 | 模型；会话条目不展示 |
 //! | [`FINISHED_AT`]：工具调用结束的时刻 | 工具结果的 metadata（RFC3339） | 每步保存 | 会话条目（结果的时间） |
 //! | 「调用是否已有结果」 | 工具结果；没结果的只可能在最后一条回复里 | — | [`unanswered_calls`] |
@@ -21,12 +21,12 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use serde_json::{Map, Value};
 
 use crate::error::{Result, broken};
+use crate::work::EventSource;
 
 pub const RUN_STOPPED: &str = "muliao_stopped";
 pub const INTERRUPTED: &str = "muliao_interrupted";
 pub const MADE_UP: &str = "muliao_made_up";
 pub const RUN_EVENTS: &str = "muliao_events";
-pub const RUN_CHECK_INS: &str = "muliao_check_ins";
 pub const RUN_CONTEXT: &str = "muliao_run_context";
 pub const FINISHED_AT: &str = "muliao_finished_at";
 
@@ -168,78 +168,91 @@ pub fn results_request(results: Vec<ToolResult>) -> Option<Request> {
     })
 }
 
-/// 交给模型的一条事件。source 是发送方（如 `job:12`），不含引号（投信时校验）。
-pub fn format_event(source: &str, content: &str) -> String {
-    format!("<event source=\"{source}\">\n{content}\n</event>")
+/// 请求里的一段事件：第几段（`parts` 的下标）、来源、是不是运行中检查。事件的事实只存在这里，交给模型的文字
+/// （[`format_event`]）是由它派生的写法，读时不反解析。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EventMark {
+    pub part: usize,
+    pub source: EventSource,
+    pub check_in: bool,
 }
 
-/// [`format_event`] 的逆运算；对不上是数据与代码不一致。
-pub fn parse_event(text: &str) -> Result<(&str, &str)> {
-    let bad = || {
-        broken(format!(
-            "stored event does not follow the event format: {:?}",
-            text.chars().take(200).collect::<String>()
-        ))
-    };
-    let rest = text.strip_prefix("<event source=\"").ok_or_else(bad)?;
-    let (source, rest) = rest.split_once("\">\n").ok_or_else(bad)?;
-    let content = rest.strip_suffix("\n</event>").ok_or_else(bad)?;
-    if source.contains('"') {
-        return Err(bad());
+impl EventMark {
+    fn to_json(&self) -> Value {
+        serde_json::json!({ "part": self.part, "source": self.source.raw(), "check_in": self.check_in })
     }
-    Ok((source, content))
-}
 
-fn indices(metadata: &Option<Value>, key: &str) -> Vec<usize> {
-    meta_of(metadata)
-        .and_then(|m| m.get(key))
-        .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(Value::as_u64).map(|i| i as usize).collect())
-        .unwrap_or_default()
-}
-
-/// 这条请求里哪些段（`parts` 的下标）是会话事件。
-pub fn event_indices(request: &Request) -> Vec<usize> {
-    indices(&request.metadata, RUN_EVENTS)
-}
-
-/// 其中哪些是运行中检查。
-pub fn check_in_indices(request: &Request) -> Vec<usize> {
-    indices(&request.metadata, RUN_CHECK_INS)
-}
-
-/// 记下这条请求里哪些段是事件、哪些是检查（交出信件时）。
-pub fn mark_events(request: &mut Request, events: &[usize], check_ins: &[usize]) {
-    if events.is_empty() {
-        return;
+    fn from_json(v: &Value) -> Option<Self> {
+        Some(EventMark {
+            part: v.get("part")?.as_u64()? as usize,
+            source: EventSource::parse(v.get("source")?.as_str()?)?,
+            check_in: v.get("check_in")?.as_bool()?,
+        })
     }
-    let m = meta_mut(&mut request.metadata);
-    let mut all = indices(&Some(Value::Object(m.clone())), RUN_EVENTS);
-    all.extend_from_slice(events);
-    let mut checks = indices(&Some(Value::Object(m.clone())), RUN_CHECK_INS);
-    checks.extend_from_slice(check_ins);
-    m.insert(RUN_EVENTS.into(), Value::from(all));
-    if !checks.is_empty() {
-        m.insert(RUN_CHECK_INS.into(), Value::from(checks));
+}
+
+const EVENT_END: &str = "\n</event>";
+
+fn event_head(source: &EventSource) -> String {
+    format!("<event source=\"{}\">\n", source.raw())
+}
+
+/// 交给模型的一条事件。
+pub fn format_event(source: &EventSource, content: &str) -> String {
+    format!("{}{content}{EVENT_END}", event_head(source))
+}
+
+/// 事件段里的事件内容（去掉 [`format_event`] 套的外壳）；只用于展示，外壳对不上时整段原样展示。
+pub fn event_content<'a>(text: &'a str, source: &EventSource) -> &'a str {
+    text.strip_prefix(event_head(source).as_str()).and_then(|t| t.strip_suffix(EVENT_END)).unwrap_or(text)
+}
+
+/// 这条请求里的事件段，按记下的顺序。读库边界：形状不对是数据与代码不一致。
+pub fn event_marks(request: &Request) -> Result<Vec<EventMark>> {
+    let Some(v) = meta_of(&request.metadata).and_then(|m| m.get(RUN_EVENTS)) else { return Ok(Vec::new()) };
+    v.as_array()
+        .and_then(|a| a.iter().map(EventMark::from_json).collect::<Option<Vec<_>>>())
+        .ok_or_else(|| broken(format!("bad {RUN_EVENTS} in request metadata: {v}")))
+}
+
+/// 整条请求的事件段换成这些（新建请求时）。
+pub fn set_event_marks(request: &mut Request, marks: &[EventMark]) {
+    if marks.is_empty() {
+        if let Some(Value::Object(m)) = &mut request.metadata {
+            m.remove(RUN_EVENTS);
+        }
+    } else {
+        meta_mut(&mut request.metadata)
+            .insert(RUN_EVENTS.into(), Value::Array(marks.iter().map(EventMark::to_json).collect()));
     }
+}
+
+/// 接在请求末尾的这些事件段记下来（交出信件时；part 已是在整条请求里的下标）。
+pub fn mark_events(request: &mut Request, marks: Vec<EventMark>) -> Result<()> {
+    if marks.is_empty() {
+        return Ok(());
+    }
+    let mut all = event_marks(request)?;
+    all.extend(marks);
+    set_event_marks(request, &all);
+    Ok(())
 }
 
 /// 把运行上下文作为独立的一段文字放进这条请求，并记下它的下标。放在工具结果之后、别的内容之前：模型先看到「现在
 /// 几点」再看这次要处理的内容。已有的事件下标随之后移。
-pub fn attach_run_context(request: &mut Request, text: &str) {
+pub fn attach_run_context(request: &mut Request, text: &str) -> Result<()> {
     assert!(run_context_index(request).is_none(), "request already carries a run context");
     let at = request.parts.iter().position(|p| !matches!(p, RequestPart::ToolResult(_))).unwrap_or(request.parts.len());
+    let mut marks = event_marks(request)?;
     request.parts.insert(at, RequestPart::Text { text: text.to_owned() });
-    let shift = |v: Vec<usize>| -> Vec<usize> { v.into_iter().map(|i| if i >= at { i + 1 } else { i }).collect() };
-    let (events, checks) = (shift(event_indices(request)), shift(check_in_indices(request)));
-    let m = meta_mut(&mut request.metadata);
-    if !events.is_empty() {
-        m.insert(RUN_EVENTS.into(), Value::from(events));
+    for mark in &mut marks {
+        if mark.part >= at {
+            mark.part += 1;
+        }
     }
-    if !checks.is_empty() {
-        m.insert(RUN_CHECK_INS.into(), Value::from(checks));
-    }
-    m.insert(RUN_CONTEXT.into(), Value::from(at));
+    set_event_marks(request, &marks);
+    meta_mut(&mut request.metadata).insert(RUN_CONTEXT.into(), Value::from(at));
+    Ok(())
 }
 
 /// 这条请求里哪一段是运行上下文。
@@ -395,20 +408,20 @@ mod tests {
 
     #[test]
     fn events_round_trip_and_run_context_shifts_indices() {
-        let e = format_event("job:1", "done\nok");
-        assert_eq!(parse_event(&e).unwrap(), ("job:1", "done\nok"));
-        assert!(parse_event("<event>x</event>").is_err());
+        let job = EventSource::Job { job_id: 1 };
+        let e = format_event(&job, "done\nok");
+        assert_eq!(event_content(&e, &job), "done\nok");
+        assert_eq!(event_content("<event>x</event>", &job), "<event>x</event>");
 
         let mut r = Request {
             parts: vec![RequestPart::Text { text: "hi".into() }, RequestPart::Text { text: e.clone() }],
             timestamp: chrono::Utc::now(),
             metadata: None,
         };
-        mark_events(&mut r, &[1], &[1]);
-        attach_run_context(&mut r, "now");
+        mark_events(&mut r, vec![EventMark { part: 1, source: job.clone(), check_in: true }]).unwrap();
+        attach_run_context(&mut r, "now").unwrap();
         assert_eq!(run_context_index(&r), Some(0));
-        assert_eq!(event_indices(&r), [2]);
-        assert_eq!(check_in_indices(&r), [2]);
+        assert_eq!(event_marks(&r).unwrap(), [EventMark { part: 2, source: job, check_in: true }]);
         assert_eq!(searchable_text(&Message::User(r)), format!("hi\n{e}"));
     }
 

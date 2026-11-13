@@ -82,7 +82,7 @@ fn kind_of(e: Error) -> ErrorKind {
 fn user_text(text: &str) -> Message {
     let mut request =
         Request { parts: vec![RequestPart::Text { text: text.into() }], timestamp: Utc::now(), metadata: None };
-    attach_run_context(&mut request, "Current local time: now");
+    attach_run_context(&mut request, "Current local time: now").unwrap();
     Message::User(request)
 }
 
