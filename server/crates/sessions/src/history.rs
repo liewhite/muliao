@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::conventions::{CONTINUATION, answer_text, mark_stopped, measured_responses, searchable_text};
-use crate::mailbox::placeholders;
+use muliao_platform::db::placeholders;
 use muliao_platform::errors::{Result, broken};
 
 /// 一条存下的消息。
@@ -37,7 +37,7 @@ fn stored(c: &Connection, filter: &str, params: impl rusqlite::Params) -> Result
 }
 
 /// 把这些消息接在会话历史末尾（run_id：保存它们的运行），同一事务写可搜索文字。返回写下的消息 id。
-pub fn append_in(c: &Connection, session_id: &str, run_id: i64, messages: &[Message]) -> Result<Vec<i64>> {
+pub(crate) fn append_in(c: &Connection, session_id: &str, run_id: i64, messages: &[Message]) -> Result<Vec<i64>> {
     let now = Utc::now();
     let mut ids = Vec::new();
     for m in messages {
@@ -56,7 +56,7 @@ pub fn append_in(c: &Connection, session_id: &str, run_id: i64, messages: &[Mess
 }
 
 /// 给历史最后一条消息标上停止。
-pub fn mark_last_stopped_in(c: &Connection, session_id: &str) -> Result<()> {
+pub(crate) fn mark_last_stopped_in(c: &Connection, session_id: &str) -> Result<()> {
     let last = stored(c, "session_id = ?1 ORDER BY id DESC LIMIT 1", [session_id])?
         .pop()
         .ok_or_else(|| broken(format!("session {session_id} has history but no message rows")))?;
@@ -69,12 +69,12 @@ pub fn mark_last_stopped_in(c: &Connection, session_id: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn last_message_id_in(c: &Connection, session_id: &str) -> Result<Option<i64>> {
+pub(crate) fn last_message_id_in(c: &Connection, session_id: &str) -> Result<Option<i64>> {
     Ok(c.query_row("SELECT max(id) FROM messages WHERE session_id = ?1", [session_id], |r| r.get(0))?)
 }
 
 /// 保存历史最后一条消息的运行（续跑接管时看停下的部分是谁保存的）。
-pub fn last_saved_by_in(c: &Connection, session_id: &str) -> Result<Option<i64>> {
+pub(crate) fn last_saved_by_in(c: &Connection, session_id: &str) -> Result<Option<i64>> {
     Ok(c.query_row("SELECT run_id FROM messages WHERE session_id = ?1 ORDER BY id DESC LIMIT 1", [session_id], |r| {
         r.get(0)
     })
@@ -82,23 +82,23 @@ pub fn last_saved_by_in(c: &Connection, session_id: &str) -> Result<Option<i64>>
 }
 
 /// 这次运行（含之前几次尝试）保存的消息，按顺序。
-pub fn saved_by_in(c: &Connection, session_id: &str, run_id: i64) -> Result<Vec<Stored>> {
+pub(crate) fn saved_by_in(c: &Connection, session_id: &str, run_id: i64) -> Result<Vec<Stored>> {
     stored(c, "session_id = ?1 AND run_id = ?2 ORDER BY id", params![session_id, run_id])
 }
 
 /// 完整原始历史（不受压缩影响）；since 只取这之后保存的。
-pub fn transcript_in(c: &Connection, session_id: &str, since: Option<DateTime<Utc>>) -> Result<Vec<Stored>> {
+pub(crate) fn transcript_in(c: &Connection, session_id: &str, since: Option<DateTime<Utc>>) -> Result<Vec<Stored>> {
     stored(c, "session_id = ?1 AND (?2 IS NULL OR created_at >= ?2) ORDER BY id", params![session_id, since])
 }
 
 /// id 大于 after 的消息，按顺序。
-pub fn rows_after(c: &Connection, session_id: &str, after: i64) -> Result<Vec<Stored>> {
+pub(crate) fn rows_after(c: &Connection, session_id: &str, after: i64) -> Result<Vec<Stored>> {
     stored(c, "session_id = ?1 AND id > ?2 ORDER BY id", params![session_id, after])
 }
 
 /// 从最后一条模型回复起的消息（还没有回复时是全部）。之前每条回复的调用在下一条回复之前都已有结果，所以还没有结果的
 /// 调用只可能在这一段里：查它们不必加载整段上下文。
-pub fn since_last_response(c: &Connection, session_id: &str) -> Result<Vec<Message>> {
+pub(crate) fn since_last_response(c: &Connection, session_id: &str) -> Result<Vec<Message>> {
     let mut tail: Vec<Message> = Vec::new();
     let mut before = i64::MAX;
     loop {
@@ -122,7 +122,10 @@ pub fn since_last_response(c: &Connection, session_id: &str) -> Result<Vec<Messa
 }
 
 /// since_last_response 的批量版本：先一次取各会话的最后一条，多数停在一条回复上就是它；停在请求上的再逐个往回读。
-pub fn since_last_response_among(c: &Connection, session_ids: &[String]) -> Result<BTreeMap<String, Vec<Message>>> {
+pub(crate) fn since_last_response_among(
+    c: &Connection,
+    session_ids: &[String],
+) -> Result<BTreeMap<String, Vec<Message>>> {
     let mut tails: BTreeMap<String, Vec<Message>> = session_ids.iter().map(|s| (s.clone(), Vec::new())).collect();
     if session_ids.is_empty() {
         return Ok(tails);
@@ -148,11 +151,11 @@ pub fn since_last_response_among(c: &Connection, session_ids: &[String]) -> Resu
 }
 
 /// 会话最近的回答：最后一条回复的文字；还没有回复时为空。
-pub fn latest_answer(c: &Connection, session_id: &str) -> Result<String> {
+pub(crate) fn latest_answer(c: &Connection, session_id: &str) -> Result<String> {
     Ok(answer_of(&since_last_response(c, session_id)?))
 }
 
-pub fn latest_answers_among(c: &Connection, session_ids: &[String]) -> Result<BTreeMap<String, String>> {
+pub(crate) fn latest_answers_among(c: &Connection, session_ids: &[String]) -> Result<BTreeMap<String, String>> {
     Ok(since_last_response_among(c, session_ids)?.into_iter().map(|(k, t)| (k, answer_of(&t))).collect())
 }
 
@@ -171,7 +174,11 @@ pub struct Span {
     pub last_at: DateTime<Utc>,
 }
 
-pub fn spans_between_in(c: &Connection, start: DateTime<Utc>, end: DateTime<Utc>) -> Result<BTreeMap<String, Span>> {
+pub(crate) fn spans_between_in(
+    c: &Connection,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+) -> Result<BTreeMap<String, Span>> {
     let mut stmt = c.prepare(
         "SELECT session_id, count(*), min(created_at), max(created_at) FROM messages \
          WHERE created_at >= ?1 AND created_at < ?2 GROUP BY session_id",
@@ -215,16 +222,21 @@ fn compactions(c: &Connection, filter: &str, session_id: &str) -> Result<Vec<Com
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
-pub fn compactions_in(c: &Connection, session_id: &str) -> Result<Vec<Compaction>> {
+pub(crate) fn compactions_in(c: &Connection, session_id: &str) -> Result<Vec<Compaction>> {
     compactions(c, "ORDER BY id", session_id)
 }
 
-pub fn latest_compaction(c: &Connection, session_id: &str) -> Result<Option<Compaction>> {
+pub(crate) fn latest_compaction(c: &Connection, session_id: &str) -> Result<Option<Compaction>> {
     Ok(compactions(c, "ORDER BY id DESC LIMIT 1", session_id)?.pop())
 }
 
 /// 记下一次压缩：through_message_id 及之前的消息由摘要代替发给模型。
-pub fn add_compaction_in(c: &Connection, session_id: &str, through_message_id: i64, summary: &str) -> Result<()> {
+pub(crate) fn add_compaction_in(
+    c: &Connection,
+    session_id: &str,
+    through_message_id: i64,
+    summary: &str,
+) -> Result<()> {
     let at = last_message_id_in(c, session_id)?
         .ok_or_else(|| broken(format!("compacting session {session_id} without messages")))?;
     c.execute(
@@ -246,7 +258,7 @@ pub struct SessionContext {
 
 /// 发给模型的上下文，由最近一次压缩与原始历史（切点之前的可有可无）推导，唯一规则：运行加载上下文与会话页算上下文大小
 /// 都经这里。切点落在一条回复之前时补一条接续的用户消息（提供方要求对话从用户消息开始）。
-pub fn context_of(compaction: Option<&Compaction>, saved: &[Stored]) -> SessionContext {
+pub(crate) fn context_of(compaction: Option<&Compaction>, saved: &[Stored]) -> SessionContext {
     let after = compaction.map_or(0, |c| c.through_message_id);
     let kept: Vec<&Stored> = saved.iter().filter(|s| s.id > after).collect();
     let mut messages: Vec<Message> = kept.iter().map(|s| s.message.clone()).collect();
@@ -267,7 +279,7 @@ pub fn context_of(compaction: Option<&Compaction>, saved: &[Stored]) -> SessionC
     SessionContext { summary: compaction.map(|c| c.summary.clone()), messages, stale_responses: stale }
 }
 
-pub fn load_context(c: &Connection, session_id: &str) -> Result<SessionContext> {
+pub(crate) fn load_context(c: &Connection, session_id: &str) -> Result<SessionContext> {
     let compaction = latest_compaction(c, session_id)?;
     let rows = rows_after(c, session_id, compaction.as_ref().map_or(0, |x| x.through_message_id))?;
     Ok(context_of(compaction.as_ref(), &rows))

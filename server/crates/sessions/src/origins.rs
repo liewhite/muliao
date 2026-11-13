@@ -32,12 +32,12 @@ impl Origin {
         }
     }
 
-    pub fn parse(s: &str) -> Result<Self> {
+    pub(crate) fn parse(s: &str) -> Result<Self> {
         Origin::ALL.into_iter().find(|o| o.as_str() == s).ok_or_else(|| broken(format!("unknown origin {s:?}")))
     }
 
     /// 续写规则只在这里：用户能在任何会话里续写；其余来源只续写自己发起的。
-    pub fn writes_anywhere(self) -> bool {
+    pub(crate) fn writes_anywhere(self) -> bool {
         matches!(self, Origin::User)
     }
 }
@@ -51,7 +51,7 @@ pub enum Sender {
 }
 
 impl Sender {
-    pub fn origin(self) -> Origin {
+    pub(crate) fn origin(self) -> Origin {
         match self {
             Sender::Trigger { .. } => Origin::Trigger,
             Sender::Issue { .. } => Origin::Issue,
@@ -59,7 +59,7 @@ impl Sender {
     }
 
     /// 在库里的编号（`origin_ref`）
-    pub fn reference(self) -> String {
+    pub(crate) fn reference(self) -> String {
         match self {
             Sender::Trigger { trigger_id: id } | Sender::Issue { issue_id: id } => id.to_string(),
         }
@@ -87,7 +87,7 @@ impl SessionOrigin {
         }
     }
 
-    pub fn sender(&self) -> Option<Sender> {
+    pub(crate) fn sender(&self) -> Option<Sender> {
         match *self {
             SessionOrigin::Trigger { trigger_id } => Some(Sender::Trigger { trigger_id }),
             SessionOrigin::Issue { issue_id } => Some(Sender::Issue { issue_id }),
@@ -96,7 +96,7 @@ impl SessionOrigin {
     }
 
     /// 存下的三列（来源、发起方编号、thread 名）的唯一解析；不合格式是数据坏了。
-    pub fn parse(origin: &str, reference: Option<&str>, thread: Option<String>) -> Result<Self> {
+    pub(crate) fn parse(origin: &str, reference: Option<&str>, thread: Option<String>) -> Result<Self> {
         let origin = Origin::parse(origin)?;
         let number = || -> Result<i64> {
             reference
@@ -160,7 +160,7 @@ impl OriginNotes {
         Self(all)
     }
 
-    pub fn of(&self, origin: Origin) -> &str {
+    pub(crate) fn of(&self, origin: Origin) -> &str {
         &self.0[&origin]
     }
 }

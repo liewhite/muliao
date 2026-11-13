@@ -8,8 +8,8 @@ use std::collections::BTreeMap;
 
 use rusqlite::{Connection, Row, params};
 
-use crate::holds::{COLUMN_COUNT, COLUMNS as HOLD_COLUMNS, Hold, from_row, hold};
-use crate::mailbox::placeholders;
+use crate::holds::{Hold, HoldOf, active_delegations_in};
+use muliao_platform::db::placeholders;
 use muliao_platform::errors::Result;
 
 /// 一次开出或续写 thread 的调用；发起方有引用它的占用时就是一项委派。
@@ -50,7 +50,7 @@ fn query(c: &Connection, filter: &str, params: impl rusqlite::Params) -> Result<
 }
 
 /// 记下这次调用开出或续写了这个 thread，返回这一行。同一次调用只记一次（调用方先查过 [`call_in`]，表上还有唯一索引）。
-pub fn record_call_in(
+pub(crate) fn record_call_in(
     c: &Connection,
     parent_id: &str,
     call_id: &str,
@@ -65,17 +65,17 @@ pub fn record_call_in(
 }
 
 /// 这次调用记下的那一行（还没记过、或 thread 已删除时为 None）。
-pub fn call_in(c: &Connection, parent_id: &str, call_id: &str) -> Result<Option<CallRecord>> {
+pub(crate) fn call_in(c: &Connection, parent_id: &str, call_id: &str) -> Result<Option<CallRecord>> {
     Ok(query(c, "parent_session_id = ?1 AND call_id = ?2", params![parent_id, call_id])?.pop())
 }
 
 /// 这个会话里每次开出或续写 thread 的调用 → 那个 thread。
-pub fn call_threads_in(c: &Connection, parent_id: &str) -> Result<BTreeMap<String, String>> {
+pub(crate) fn call_threads_in(c: &Connection, parent_id: &str) -> Result<BTreeMap<String, String>> {
     Ok(query(c, "parent_session_id = ?1", [parent_id])?.into_iter().map(|r| (r.call_id, r.thread_id)).collect())
 }
 
 /// 这些委派行（thread 已删除的不在结果里）。
-pub fn delegations_among(c: &Connection, ids: &[i64]) -> Result<BTreeMap<i64, CallRecord>> {
+pub(crate) fn delegations_among(c: &Connection, ids: &[i64]) -> Result<BTreeMap<i64, CallRecord>> {
     if ids.is_empty() {
         return Ok(BTreeMap::new());
     }
@@ -84,38 +84,17 @@ pub fn delegations_among(c: &Connection, ids: &[i64]) -> Result<BTreeMap<i64, Ca
 }
 
 /// 还没结清的委派（发起方引用它的占用还 active），按占用登记先后；给了 ids 只看这些委派；session_id：只看这个会话发起的。
-pub fn owed_in(c: &Connection, ids: Option<&[i64]>, session_id: Option<&str>) -> Result<Vec<Owed>> {
-    let mut filter = vec!["h.status = 'active'".to_owned()];
-    let mut values: Vec<&dyn rusqlite::ToSql> = Vec::new();
-    match ids {
-        None => {}
-        Some([]) => return Ok(Vec::new()),
-        Some(ids) => {
-            filter.push(format!("t.id IN ({})", placeholders(ids.len())));
-            values.extend(ids.iter().map(|i| i as &dyn rusqlite::ToSql));
-        }
-    }
-    if let Some(s) = &session_id {
-        filter.push(format!("h.session_id = ?{}", values.len() + 1));
-        values.push(s);
-    }
-    let sql = format!(
-        "SELECT {HOLD_COLUMNS}, t.id, t.parent_session_id, t.call_id, t.thread_session_id, t.check_seconds \
-         FROM session_holds h JOIN thread_calls t ON t.id = h.thread_call_id WHERE {} ORDER BY h.id",
-        filter.join(" AND ")
-    );
-    let mut stmt = c.prepare(&sql)?;
-    let rows = stmt
-        .query_map(rusqlite::params_from_iter(values), |r| {
-            let delegation = CallRecord {
-                id: r.get(COLUMN_COUNT)?,
-                parent_id: r.get(COLUMN_COUNT + 1)?,
-                call_id: r.get(COLUMN_COUNT + 2)?,
-                thread_id: r.get(COLUMN_COUNT + 3)?,
-                check_seconds: r.get(COLUMN_COUNT + 4)?,
-            };
-            Ok((from_row(r)?, delegation))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    rows.into_iter().map(|(raw, delegation)| Ok(Owed { hold: hold(raw)?, delegation })).collect()
+/// thread 已删除（占用引用已置空）的不在结果里。
+pub(crate) fn owed_in(c: &Connection, ids: Option<&[i64]>, session_id: Option<&str>) -> Result<Vec<Owed>> {
+    let held: Vec<(i64, Hold)> = active_delegations_in(c, session_id)?
+        .into_iter()
+        .filter_map(|h| match h.of {
+            HoldOf::Delegation { row: Some(row), .. } => Some((row, h)),
+            _ => None,
+        })
+        .filter(|(row, _)| ids.is_none_or(|ids| ids.contains(row)))
+        .collect();
+    let rows: Vec<i64> = held.iter().map(|(row, _)| *row).collect();
+    let mut records = delegations_among(c, &rows)?;
+    Ok(held.into_iter().filter_map(|(row, hold)| Some(Owed { delegation: records.remove(&row)?, hold })).collect())
 }

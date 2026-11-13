@@ -11,11 +11,11 @@ use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::answers::{APPROVAL_INTERRUPTED, CallResult};
-use crate::mailbox::placeholders;
+use muliao_platform::db::placeholders;
 use muliao_platform::errors::{Result, broken};
 
 /// 这些调用停下来等批准了（运行收尾的事务里），连同工具请求批准时定下的 pin。已记过的不再记。
-pub fn record_in(c: &Connection, session_id: &str, calls: &[(String, String)]) -> Result<()> {
+pub(crate) fn record_in(c: &Connection, session_id: &str, calls: &[(String, String)]) -> Result<()> {
     for (call_id, pin) in calls {
         c.execute(
             "INSERT OR IGNORE INTO approval_requests (session_id, call_id, pin, created_at) VALUES (?1, ?2, ?3, ?4)",
@@ -27,7 +27,7 @@ pub fn record_in(c: &Connection, session_id: &str, calls: &[(String, String)]) -
 
 /// 交给运行的回答里被批准的调用要去执行了（运行开头取走信件的事务里）：没交过的记下时间。之前已经交过的，那次运行可能在
 /// 执行中被打断，不能再执行一遍：返回它们的结果「被中断」，代替批准交给模型。
-pub fn take_in(
+pub(crate) fn take_in(
     c: &Connection,
     session_id: &str,
     answers: &HashMap<String, CallResult>,
@@ -63,7 +63,7 @@ pub fn take_in(
 }
 
 /// 这些会话里停下来等过批准的调用 id（不论现在有没有结果），每个会话都在结果里。
-pub fn requested_among(c: &Connection, session_ids: &[String]) -> Result<BTreeMap<String, HashSet<String>>> {
+pub(crate) fn requested_among(c: &Connection, session_ids: &[String]) -> Result<BTreeMap<String, HashSet<String>>> {
     let mut found: BTreeMap<String, HashSet<String>> =
         session_ids.iter().map(|s| (s.clone(), HashSet::new())).collect();
     if session_ids.is_empty() {
@@ -82,7 +82,11 @@ pub fn requested_among(c: &Connection, session_ids: &[String]) -> Result<BTreeMa
 }
 
 /// 这些等批准的调用请求批准时记下的 pin（用户提交决定时记进决定）。
-pub fn pins_in(c: &Connection, session_id: &str, call_ids: &[String]) -> Result<HashMap<String, Option<String>>> {
+pub(crate) fn pins_in(
+    c: &Connection,
+    session_id: &str,
+    call_ids: &[String],
+) -> Result<HashMap<String, Option<String>>> {
     let mut pins = HashMap::new();
     for id in call_ids {
         let pin: Option<Option<String>> = c

@@ -24,7 +24,8 @@ use muliao_platform::tooling::{Audience, RunScope};
 use muliao_platform::vault::Vault;
 use muliao_sessions::actor::Waker;
 use muliao_sessions::inbound::SenderInbox;
-use muliao_sessions::mailbox::{discard_in, queued_in};
+use muliao_sessions::mailbox::queued_in;
+use muliao_sessions::testing::discard_queued_in;
 use muliao_sessions::work::SessionWork;
 use muliao_workspace::{Workspace, WorkspaceDeps};
 use serde_json::{Value, json};
@@ -190,26 +191,14 @@ impl World {
     /// 让会话空闲：丢掉排着的信
     async fn idle(&self, session_id: &str) {
         let sid = session_id.to_owned();
-        self.db
-            .write(move |tx| {
-                let ids: Vec<i64> = queued_in(tx, &sid)?.into_iter().map(|m| m.id).collect();
-                discard_in(tx, &sid, &ids).map(drop)
-            })
-            .await
-            .unwrap();
+        self.db.write(move |tx| discard_queued_in(tx, &sid)).await.unwrap();
     }
 
     /// 让会话在等：丢掉排着的信，登记一项占用（像后台任务）
     async fn waiting(&self, session_id: &str) {
         self.idle(session_id).await;
         let sid = session_id.to_owned();
-        self.db
-            .write(move |tx| {
-                muliao_sessions::holds::hold_in(tx, &sid, muliao_sessions::holds::Outside::Job { job_id: 1 }, false)
-                    .map(drop)
-            })
-            .await
-            .unwrap();
+        self.db.write(move |tx| SessionWork::new(Waker::channel().0).hold_in(tx, &sid, 1, false)).await.unwrap();
     }
 
     async fn notifications(&self) -> Vec<(String, Option<String>)> {

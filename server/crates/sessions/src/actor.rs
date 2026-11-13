@@ -23,7 +23,7 @@ use crate::activity::{WorkState, work_state_in};
 use crate::delegation::check_threads;
 use crate::events::RunFailed;
 use crate::halt::{Halted, StopThread, halt};
-use crate::mailbox::Mail;
+use crate::mailbox::{self, Mail};
 use crate::pending::Position;
 use crate::run::{Core, PartialSlot, execute, unsaved_of};
 use crate::runs::{self, Outcome, RunRecord};
@@ -46,14 +46,8 @@ impl Waker {
         (Self { tx }, rx)
     }
 
-    /// 现在叫醒。
-    pub fn wake(&self, session_id: &str) {
-        // 接收端不在了：服务在关停
-        let _ = self.tx.send(session_id.to_owned());
-    }
-
     /// 这个事务提交后叫醒（回滚就不叫）。
-    pub fn wake_on_commit(&self, tx: &mut Tx<'_>, session_id: &str) {
+    pub(crate) fn wake_on_commit(&self, tx: &mut Tx<'_>, session_id: &str) {
         let (sender, id) = (self.tx.clone(), session_id.to_owned());
         tx.on_commit(move || {
             let _ = sender.send(id);
@@ -64,7 +58,7 @@ impl Waker {
 /// 唤醒规则（唯一一处）：会话没有没结束的运行时，要不要开始一次。信箱里有排着的信，并且不是这两种情况：
 /// - 排着的信都已经交给过最近一次最终失败的运行：由它被手动重试、或之后新到的信唤醒的运行处理，不因同一批信反复失败；
 /// - 停在挂起的调用上、还不能继续：等回答或新消息，事件等它们一起交给模型。
-pub fn should_run(queued: &[Mail], latest: Option<&RunRecord>, at: &Position) -> bool {
+pub(crate) fn should_run(queued: &[Mail], latest: Option<&RunRecord>, at: &Position) -> bool {
     if queued.is_empty() {
         return false;
     }
@@ -134,9 +128,7 @@ impl Actors {
             .db
             .read(|c| {
                 let mut ids = runs::sessions_unfinished_in(c)?;
-                let mut stmt = c.prepare("SELECT DISTINCT session_id FROM mail WHERE state = 'queued'")?;
-                let queued: Vec<String> = stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
-                ids.extend(queued);
+                ids.extend(mailbox::sessions_with_queued_in(c)?);
                 ids.sort();
                 ids.dedup();
                 Ok::<_, Error>(ids)
@@ -150,21 +142,21 @@ impl Actors {
     }
 
     /// 停止会话：返回时停止事务已提交（之后投进来的信照常唤醒会话，不会被清掉）。
-    pub async fn stop(&self, session_id: &str) -> Result<Halted> {
+    pub(crate) async fn stop(&self, session_id: &str) -> Result<Halted> {
         let (tx, rx) = oneshot::channel();
         self.send(session_id, Command::Stop(tx));
         rx.await.map_err(|_| broken("the session actor went away while stopping"))?
     }
 
     /// 手动压缩：排在当前运行之后。返回压缩的步数（0 是保留窗口之外没有可压缩的）。
-    pub async fn compact(&self, session_id: &str) -> Result<usize> {
+    pub(crate) async fn compact(&self, session_id: &str) -> Result<usize> {
         let (tx, rx) = oneshot::channel();
         self.send(session_id, Command::Compact(tx));
         rx.await.map_err(|_| broken("the session actor went away while compacting"))?
     }
 
     /// 重试最近一次最终失败的运行（同一个运行接着跑）。会话在跑、或最近一次运行没有失败时 Conflict。
-    pub async fn retry(&self, session_id: &str) -> Result<()> {
+    pub(crate) async fn retry(&self, session_id: &str) -> Result<()> {
         let (tx, rx) = oneshot::channel();
         self.send(session_id, Command::Retry(tx));
         rx.await.map_err(|_| broken("the session actor went away while retrying"))?

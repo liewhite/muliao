@@ -6,6 +6,21 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::activity::{WorkState, work_state_in};
+use crate::actor::{Actors, Waker};
+use crate::answers::QuestionAnswer;
+use crate::compaction::Compactor;
+use crate::conventions::{STOPPED_TOOL_RESULT, is_stopped};
+use crate::events::{Events, RunEnded, RunFailed, Subscribers};
+use crate::history;
+use crate::inbound::{UserMessage, UserTarget};
+use crate::live::Live;
+use crate::origins::OriginNotes;
+use crate::run::Core;
+use crate::runs::{self, RunState};
+use crate::service::SessionService;
+use crate::tools::Stopper;
+use crate::transcript::Item;
 use agenter::{Message, RequestPart, Tool, ToolCtx, ToolError, ToolOutput};
 use muliao_assets::access::Actor;
 use muliao_assets::rules::ToolTable;
@@ -22,21 +37,6 @@ use muliao_runtime::mcp::{Confine, McpConnector};
 use muliao_runtime::models::ModelRegistry;
 use muliao_runtime::toolbox::Toolbox;
 use muliao_runtime::{Runtime, RuntimeDeps};
-use muliao_sessions::activity::{WorkState, work_state_in};
-use muliao_sessions::actor::{Actors, Waker};
-use muliao_sessions::answers::QuestionAnswer;
-use muliao_sessions::compaction::Compactor;
-use muliao_sessions::conventions::{STOPPED_TOOL_RESULT, is_stopped};
-use muliao_sessions::events::{Events, RunEnded, RunFailed, Subscribers};
-use muliao_sessions::history;
-use muliao_sessions::inbound::{UserMessage, UserTarget};
-use muliao_sessions::live::Live;
-use muliao_sessions::origins::OriginNotes;
-use muliao_sessions::run::Core;
-use muliao_sessions::runs::{self, RunState};
-use muliao_sessions::service::SessionService;
-use muliao_sessions::tools::Stopper;
-use muliao_sessions::transcript::Item;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -189,12 +189,7 @@ async fn world() -> World {
     let db_path = dir.path().join("t.db");
     migrate(
         &db_path,
-        &[
-            muliao_assets::agents::MIGRATION,
-            muliao_files::MIGRATION,
-            muliao_usage::MIGRATION,
-            muliao_sessions::MIGRATION,
-        ],
+        &[muliao_assets::agents::MIGRATION, muliao_files::MIGRATION, muliao_usage::MIGRATION, crate::MIGRATION],
     )
     .unwrap();
     let db = Arc::new(Database::open(&db_path, Arc::new(|| {})).unwrap());
@@ -220,7 +215,7 @@ async fn world() -> World {
     let (waker, wakes) = Waker::channel();
     let stopper = Stopper::default();
     let release = Arc::new(tokio::sync::Notify::new());
-    let mut tools = muliao_sessions::tools::tools(db.clone(), waker.clone(), stopper.clone(), tz);
+    let mut tools = crate::tools::tools(db.clone(), waker.clone(), stopper.clone(), tz);
     tools.push(builtin(Slow(release.clone()), ToolTraits::read()));
     tools.push(builtin(Echo, ToolTraits::read()));
     let flaky_calls = Arc::new(Mutex::new(0));
@@ -276,8 +271,8 @@ async fn world() -> World {
         live: live.clone(),
         events: events.clone(),
         notes: OriginNotes::new([
-            (muliao_sessions::origins::Origin::Trigger, "A trigger started this.".to_owned()),
-            (muliao_sessions::origins::Origin::Issue, "An issue started this.".to_owned()),
+            (crate::origins::Origin::Trigger, "A trigger started this.".to_owned()),
+            (crate::origins::Origin::Issue, "An issue started this.".to_owned()),
         ]),
         waker: waker.clone(),
         compactor: Compactor { db: db.clone(), runtime, threshold_tokens: 1_000_000, keep_steps: 10 },
@@ -385,7 +380,7 @@ async fn a_chat_with_a_tool_call_is_saved_step_by_step() {
     assert!(texts(&h[2])[0].contains("echo: hi"));
     let Message::User(r) = &h[2] else { panic!() };
     let RequestPart::ToolResult(t) = &r.parts[0] else { panic!() };
-    assert!(muliao_sessions::conventions::finished_at(t).is_some(), "tool results carry their end time");
+    assert!(crate::conventions::finished_at(t).is_some(), "tool results carry their end time");
     assert_eq!(h[3], h[3].clone());
     let ended = w.ended.lock().unwrap().clone();
     assert_eq!(ended.len(), 1);

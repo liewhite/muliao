@@ -39,7 +39,7 @@ Output only the summary.";
 ///
 /// stale_responses（[`crate::history::SessionContext::stale_responses`]）：最近一次压缩写入之前就有的回复条数（没压缩过为
 /// None），它们报告的是压缩前的大小，不算；压缩之后还没有新回复时结果也是 None。压缩判断与会话页显示的上下文大小都按这一条。
-pub fn context_tokens(history: &[Message], stale_responses: Option<usize>) -> Option<u64> {
+pub(crate) fn context_tokens(history: &[Message], stale_responses: Option<usize>) -> Option<u64> {
     let measured = measured_responses(history);
     (measured.len() > stale_responses.unwrap_or(0)).then(|| measured.last().expect("non-empty").usage.input_tokens)
 }
@@ -47,7 +47,7 @@ pub fn context_tokens(history: &[Message], stale_responses: Option<usize>) -> Op
 /// 按步分组，保持时间顺序。之前的消息里没有悬空调用的地方开始新的一步：工具调用与其结果、挂起的调用与之后的回答总在
 /// 同一组里，切点落在组与组之间，留下的结果一定找得到它的调用。留下的部分可能从一条模型回复开始，发给模型时补一条接续的
 /// 用户消息（[`crate::history::context_of`]）。
-pub fn steps_of(rows: &[Stored]) -> Vec<Vec<&Stored>> {
+pub(crate) fn steps_of(rows: &[Stored]) -> Vec<Vec<&Stored>> {
     let mut steps: Vec<Vec<&Stored>> = Vec::new();
     // 到目前为止还没有结果的调用 id（与 conventions::unanswered_calls 同一个定义，逐条维护）
     let mut open: HashSet<&str> = HashSet::new();
@@ -71,7 +71,7 @@ fn step_text(step: &[&Stored]) -> Result<String> {
 
 /// 从最早的可压缩步（最近 keep_steps 步之前的）开始，取文字记录总长不超过 max_chars 的若干步（至少一步）。不截断内容：
 /// 超出的下一次再压缩。返回 (这次压缩的步, 是否还有可压缩的留给下一次)。
-pub fn select_steps<'a, 'r>(
+pub(crate) fn select_steps<'a, 'r>(
     steps: &'a [Vec<&'r Stored>],
     keep_steps: usize,
     max_chars: usize,
@@ -92,7 +92,7 @@ pub fn select_steps<'a, 'r>(
 }
 
 /// 交给模型总结的内容：上一份摘要（有的话）与这些步的文字记录。
-pub fn compaction_prompt(previous_summary: Option<&str>, steps: &[Vec<&Stored>]) -> Result<String> {
+pub(crate) fn compaction_prompt(previous_summary: Option<&str>, steps: &[Vec<&Stored>]) -> Result<String> {
     let transcript = steps.iter().map(|s| step_text(s)).collect::<Result<Vec<_>>>()?.join("\n");
     let previous = previous_summary
         .filter(|s| !s.is_empty())
@@ -147,13 +147,13 @@ pub struct Compactor {
 
 impl Compactor {
     /// 该不该压缩（规则见 [`verdict`]），按这个压缩器的阈值。
-    pub fn verdict(&self, session_id: &str, history: &[Message], stale_responses: Option<usize>) -> Verdict {
+    pub(crate) fn verdict(&self, session_id: &str, history: &[Message], stale_responses: Option<usize>) -> Verdict {
         verdict(self.threshold_tokens, session_id, history, stale_responses)
     }
 
     /// 用这份资源（运行中压缩时是运行开头取的那份）里的模型压缩到保留窗口之外没有可压缩的为止（每一批一次模型调用）。
     /// 返回压缩的步数；为 0 表示没有可压缩的。模型调用失败时之前批次写下的压缩仍在（每批各自提交）。
-    pub async fn compact(&self, session_id: &str, assets: &RunAssets) -> Result<usize> {
+    pub(crate) async fn compact(&self, session_id: &str, assets: &RunAssets) -> Result<usize> {
         let mut compacted = 0;
         loop {
             let sid = session_id.to_owned();

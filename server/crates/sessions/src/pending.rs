@@ -41,7 +41,7 @@ impl Waiting {
 
 /// 这次调用若挂起，是哪一种：记过等批准的是等批准，否则按工具名认。提问的参数不合法（没有问题）时为 None：这样的
 /// 调用没执行过，不是在等用户回答，停止与续跑都按普通调用补结果。
-pub fn kind_of(call: &ToolCall, approvals: &HashSet<String>) -> Option<Waiting> {
+pub(crate) fn kind_of(call: &ToolCall, approvals: &HashSet<String>) -> Option<Waiting> {
     if approvals.contains(&call.id) {
         return Some(Waiting::Approval);
     }
@@ -54,7 +54,7 @@ pub fn kind_of(call: &ToolCall, approvals: &HashSet<String>) -> Option<Waiting> 
 
 /// 一步停在挂起的调用上时（agenter 的 `Step::Paused`）各调用是哪一种，同 [`kind_of`]：挂起的只能是 ask_user、ask_agent，
 /// 请求批准的不能是它们（按工具名认的与按记录认的会认不清）。不符合是工具与这里的约定不一致。
-pub fn paused_calls(deferred: Vec<ToolCall>, approvals: Vec<ToolCall>) -> Result<Vec<PendingCall>> {
+pub(crate) fn paused_calls(deferred: Vec<ToolCall>, approvals: Vec<ToolCall>) -> Result<Vec<PendingCall>> {
     let none = HashSet::new();
     let mut out = Vec::new();
     for call in deferred {
@@ -101,7 +101,7 @@ pub struct Paused {
 }
 
 impl Paused {
-    pub fn get(&self, call_id: &str) -> Option<&PendingCall> {
+    pub(crate) fn get(&self, call_id: &str) -> Option<&PendingCall> {
         self.pending.iter().find(|p| p.call.id == call_id)
     }
 }
@@ -129,7 +129,7 @@ pub enum Position {
 
 impl Position {
     /// 挂着的调用（被打断时是补完结果之后仍挂着的）。
-    pub fn paused(&self) -> Option<&Paused> {
+    pub(crate) fn paused(&self) -> Option<&Paused> {
         match self {
             Position::Paused(p) => Some(p),
             Position::Interrupted { after, .. } => after.paused(),
@@ -138,14 +138,14 @@ impl Position {
     }
 
     /// 停在挂起的调用上、还不能继续：等回答或新消息，事件等它们一起交给模型（唤醒据此不跑）。
-    pub fn waiting_for_answers(&self) -> bool {
+    pub(crate) fn waiting_for_answers(&self) -> bool {
         self.paused().is_some_and(|p| !p.ready)
     }
 }
 
 /// 会话现在停在哪（纯函数）。history 至少要含最后一条回复起的那一段；handed 是交出去的永久事实；queued 是信箱里排着的
 /// 信件。
-pub fn position(history: &[Message], handed: &HandedOut, queued: &[Mail]) -> Result<Position> {
+pub(crate) fn position(history: &[Message], handed: &HandedOut, queued: &[Mail]) -> Result<Position> {
     let unanswered = unanswered_calls(history)?;
     let mut pending: Vec<PendingCall> = Vec::new();
     let mut others: Vec<ToolCall> = Vec::new();
@@ -194,13 +194,13 @@ pub fn position(history: &[Message], handed: &HandedOut, queued: &[Mail]) -> Res
 }
 
 /// 这封回答信件针对的调用都还挂着：它的回答作为那些调用的结果交回（返回这些回答）。否则它是迟到的，作为文字交给模型。
-pub fn on_time_answers<'a>(mail: &'a Mail, pending: &HashSet<&str>) -> Option<&'a BTreeMap<String, CallResult>> {
+pub(crate) fn on_time_answers<'a>(mail: &'a Mail, pending: &HashSet<&str>) -> Option<&'a BTreeMap<String, CallResult>> {
     mail.body.answers().filter(|a| a.keys().all(|k| pending.contains(k.as_str())))
 }
 
 /// 交给运行的挂起调用结果。有回答的用回答（replaced 里另有结果的用那个，如批准之前已交过运行、不再执行的「被中断」）；
 /// 其余（来了新消息，或这次只回答了一部分）用那一种自己的「跳过」结果。
-pub fn deferred_results(
+pub(crate) fn deferred_results(
     paused: &Paused,
     replaced: &HashMap<String, Resolution>,
 ) -> Result<HashMap<String, Resolution>> {
@@ -234,7 +234,7 @@ pub struct StopClosing {
     pub used: Vec<i64>,
 }
 
-pub fn closing_on_stop(at: &Position) -> StopClosing {
+pub(crate) fn closing_on_stop(at: &Position) -> StopClosing {
     match at {
         Position::Interrupted { calls, after } => {
             let mut rest = closing_on_stop(after);
@@ -290,28 +290,28 @@ pub enum OpenAsk {
 pub struct OpenAsks(pub Vec<(String, OpenAsk)>);
 
 impl OpenAsks {
-    pub fn get(&self, call_id: &str) -> Option<&OpenAsk> {
+    pub(crate) fn get(&self, call_id: &str) -> Option<&OpenAsk> {
         self.0.iter().find(|(k, _)| k == call_id).map(|(_, a)| a)
     }
 
-    pub fn question(&self, call_id: &str) -> Option<&[Question]> {
+    pub(crate) fn question(&self, call_id: &str) -> Option<&[Question]> {
         match self.get(call_id)? {
             OpenAsk::Question(q) => Some(q),
             _ => None,
         }
     }
 
-    pub fn can_approve(&self, call_id: &str) -> bool {
+    pub(crate) fn can_approve(&self, call_id: &str) -> bool {
         matches!(self.get(call_id), Some(OpenAsk::Approval(_)))
     }
 
     /// 有等用户现在操作的（能回答或能批准的）。
-    pub fn any_open(&self) -> bool {
+    pub(crate) fn any_open(&self) -> bool {
         self.0.iter().any(|(_, a)| !matches!(a, OpenAsk::Submitted(_)))
     }
 }
 
-pub fn open_asks_of(at: &Position, queued: &[Mail]) -> OpenAsks {
+pub(crate) fn open_asks_of(at: &Position, queued: &[Mail]) -> OpenAsks {
     // 已提交的批准只算还挂着的调用（迟到的不算）；提问的「已提交」不看挂没挂着：运行还没停下时也显示已提交
     let pending = |id: &str| at.paused().is_some_and(|p| p.pending.iter().any(|pc| pc.call.id == id));
     let submitted: Vec<(String, OpenAsk)> = queued

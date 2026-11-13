@@ -148,7 +148,7 @@ impl Live {
         Attempts { live: self.clone(), session_id: session_id.to_owned() }
     }
 
-    pub fn retry_state(&self, session_id: &str) -> Option<Retrying> {
+    pub(crate) fn retry_state(&self, session_id: &str) -> Option<Retrying> {
         self.states.lock().expect("live lock").get(session_id).and_then(|s| s.retrying.clone())
     }
 
@@ -199,7 +199,7 @@ impl Live {
             .publish(ServerEvent { kind: "run", data: serde_json::to_value(envelope).expect("run events serialize") });
     }
 
-    pub fn snapshot(&self, session_id: &str) -> Option<LiveSegment> {
+    pub(crate) fn snapshot(&self, session_id: &str) -> Option<LiveSegment> {
         self.states.lock().expect("live lock").get(session_id).and_then(|s| s.segment.clone())
     }
 }

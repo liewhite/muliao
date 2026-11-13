@@ -55,7 +55,7 @@ pub struct Waiting {
 }
 
 impl Waiting {
-    pub fn any(&self) -> bool {
+    pub(crate) fn any(&self) -> bool {
         !self.holds.is_empty() || self.asks.any_open()
     }
 }
@@ -66,7 +66,7 @@ pub struct Status {
     pub waiting: Waiting,
 }
 
-pub fn statuses_in(c: &Connection, session_ids: &[String]) -> Result<BTreeMap<String, Status>> {
+pub(crate) fn statuses_in(c: &Connection, session_ids: &[String]) -> Result<BTreeMap<String, Status>> {
     let unfinished: BTreeSet<String> = unfinished_among(c, session_ids)?.into_iter().collect();
     let mut queued = queued_among(c, session_ids)?;
     let mut tails = since_last_response_among(c, session_ids)?;
@@ -96,7 +96,7 @@ pub fn statuses_in(c: &Connection, session_ids: &[String]) -> Result<BTreeMap<St
 }
 
 /// 一批会话的工作状态。
-pub fn work_states_in(c: &Connection, session_ids: &[String]) -> Result<BTreeMap<String, WorkState>> {
+pub(crate) fn work_states_in(c: &Connection, session_ids: &[String]) -> Result<BTreeMap<String, WorkState>> {
     Ok(statuses_in(c, session_ids)?.into_iter().map(|(k, s)| (k, s.state)).collect())
 }
 
@@ -123,7 +123,7 @@ pub fn keyed_states_in(
 }
 
 /// 其中忙、因而不能删除的会话：有没结束的运行或要处理的信，或有人替它在外面做事。挂起的提问不挡删除。
-pub fn blocking_deletion_in(c: &Connection, session_ids: &[String]) -> Result<Vec<String>> {
+pub(crate) fn blocking_deletion_in(c: &Connection, session_ids: &[String]) -> Result<Vec<String>> {
     Ok(statuses_in(c, session_ids)?
         .into_iter()
         .filter(|(_, s)| s.state == WorkState::Running || !s.waiting.holds.is_empty())
@@ -132,7 +132,7 @@ pub fn blocking_deletion_in(c: &Connection, session_ids: &[String]) -> Result<Ve
 }
 
 /// 归档前的检查：它的会话里有忙的（与删除 agent 时的判断同一条规则）。
-pub fn blocks_agent_in(c: &Connection, agent_id: &str) -> Result<bool> {
+pub(crate) fn blocks_agent_in(c: &Connection, agent_id: &str) -> Result<bool> {
     let ids: Vec<String> = directory::of_agent_in(c, agent_id)?.into_iter().map(|s| s.id).collect();
     Ok(!blocking_deletion_in(c, &ids)?.is_empty())
 }
@@ -154,7 +154,7 @@ pub enum Wait {
 }
 
 /// 会话在等的东西逐项展开：占用按登记先后，然后是提问、等批准的调用。
-pub fn waits_of_in(c: &Connection, session_id: &str, waiting: &Waiting) -> Result<Vec<Wait>> {
+pub(crate) fn waits_of_in(c: &Connection, session_id: &str, waiting: &Waiting) -> Result<Vec<Wait>> {
     // (占用 id, 等待项)：委派与唤醒的详情各自和占用联查，后台任务的占用本身就够
     let mut held: Vec<(i64, Wait)> = waiting
         .holds

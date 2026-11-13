@@ -24,6 +24,10 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
 
+[features]
+# 别的领域的测试造会话数据（muliao_sessions::testing）；只在 dev-dependencies 里开
+testing = []
+
 [dev-dependencies]
 reqwest = { workspace = true }
 tempfile = { workspace = true }

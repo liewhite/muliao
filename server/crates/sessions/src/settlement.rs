@@ -32,7 +32,7 @@ fn owed_by(c: &Connection, mail: &[Mail]) -> Result<Vec<Owed>> {
 }
 
 /// 会话有委派来、还没结清的工作（排着的或已交给模型的委派信件，发起方的占用还 active）：回答交给谁据此定。
-pub fn delegated_in(c: &Connection, session_id: &str) -> Result<bool> {
+pub(crate) fn delegated_in(c: &Connection, session_id: &str) -> Result<bool> {
     Ok(!owed_by(c, &delegated_mail_in(c, session_id, &LIVE)?)?.is_empty())
 }
 
@@ -57,7 +57,7 @@ fn settle_in(
 
 /// 运行正常结束且工作做完：已交给模型、还没结清的委派以「完成」结清，带上回答与附件。委派可能跨几次运行：停在挂起的调用
 /// 上、或还有工作没做完时，由之后那次做完的运行结清。
-pub fn settle_finished_in(
+pub(crate) fn settle_finished_in(
     tx: &mut Tx<'_>,
     waker: &Waker,
     session: &Session,
@@ -69,7 +69,7 @@ pub fn settle_finished_in(
 }
 
 /// 用户停止：交给这个会话、还没结清的委派以「停止」结清，带上最近的回答；然后清空信箱。返回结清的委派与丢弃的信件。
-pub fn settle_stopped_in(
+pub(crate) fn settle_stopped_in(
     tx: &mut Tx<'_>,
     waker: &Waker,
     session: &Session,
@@ -82,7 +82,7 @@ pub fn settle_stopped_in(
 }
 
 /// 会话被删除：交给它、还没结清的委派以「被删除」结清。
-pub fn settle_deleted_in(tx: &mut Tx<'_>, waker: &Waker, session: &Session) -> Result<Vec<i64>> {
+pub(crate) fn settle_deleted_in(tx: &mut Tx<'_>, waker: &Waker, session: &Session) -> Result<Vec<i64>> {
     let mail = delegated_mail_in(tx, &session.id, &LIVE)?;
     settle_in(tx, waker, session, &mail, Ending::Deleted, "", &[])
 }
@@ -90,7 +90,7 @@ pub fn settle_deleted_in(tx: &mut Tx<'_>, waker: &Waker, session: &Session) -> R
 /// 运行最终失败：交给这个会话、没能做完的委派以「失败」结清（发起方不会一直等）。按会话范围：已交给模型、还没结清的全部，
 /// 加上交给过这次运行、还排着的（运行在第一次保存之前就失败时，交给它的信一直排着，也不会再有运行因为它们被唤醒）；
 /// 它们随结清一起退出信箱。运行开始之后才到的不动：它们会唤醒新的运行。
-pub fn settle_failure_in(
+pub(crate) fn settle_failure_in(
     tx: &mut Tx<'_>,
     waker: &Waker,
     session: &Session,

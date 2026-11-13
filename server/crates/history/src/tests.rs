@@ -11,11 +11,9 @@ use muliao_platform::db::{Database, migrate};
 use muliao_platform::errors::{Error, ErrorKind};
 use muliao_platform::tooling::{Audience, RunScope};
 use muliao_sessions::actor::Waker;
-use muliao_sessions::conventions::{PartKind, PartMark, attach_run_context, mark_parts};
-use muliao_sessions::history::append_in;
-use muliao_sessions::mailbox::{NewMail, consume_in, give_in, post_in};
 use muliao_sessions::origins::Origin;
-use muliao_sessions::runs::{Outcome, current_or_start_in, end_in};
+use muliao_sessions::runs::Outcome;
+use muliao_sessions::testing::{record_run_in, user_request};
 use serde_json::{Value, json};
 
 use crate::*;
@@ -85,15 +83,7 @@ fn user_text(text: &str) -> Message {
 
 /// 一条请求：每段文字记下它所在信件的发送方（交出信件时就这样记）。
 fn user_texts(texts: &[(Origin, &str)]) -> Message {
-    let parts = texts.iter().map(|(_, t)| RequestPart::Text { text: (*t).into() }).collect();
-    let mut request = Request { parts, timestamp: Utc::now(), metadata: None };
-    let marks = texts
-        .iter()
-        .enumerate()
-        .map(|(part, (origin, _))| PartMark { part, kind: PartKind::Message { origin: *origin } });
-    mark_parts(&mut request, marks.collect()).unwrap();
-    attach_run_context(&mut request, "Current local time: now").unwrap();
-    Message::User(request)
+    user_request(texts, "Current local time: now").unwrap()
 }
 
 fn reply(text: &str, calls: &[(&str, &str, &str)]) -> Message {
@@ -153,23 +143,7 @@ impl World {
         let (session, waker) = (session.to_owned(), self.waker.clone());
         let live = muliao_sessions::live::Live::new(std::sync::Arc::new(muliao_platform::bus::Bus::new(16)));
         let from = from.map(|(o, t)| (o, t.to_owned()));
-        self.db
-            .write(move |tx| {
-                let mail =
-                    from.map(|(o, t)| post_in(tx, &waker, &session, NewMail::message(o, t, true))).transpose()?;
-                let run = current_or_start_in(tx, &live, &session)?;
-                if let Some(m) = mail {
-                    give_in(tx, &[m], run)?;
-                    consume_in(tx, &[m], run)?;
-                }
-                append_in(tx, &session, run, &messages)?;
-                if let Some(o) = outcome {
-                    end_in(tx, &live, run, o)?;
-                }
-                Ok::<_, muliao_platform::errors::Error>(())
-            })
-            .await
-            .unwrap();
+        self.db.write(move |tx| record_run_in(tx, &waker, &live, &session, from, &messages, outcome)).await.unwrap();
     }
 
     async fn call(&self, me: &str, name: &str, args: Value, max_chars: usize) -> Result<String, String> {

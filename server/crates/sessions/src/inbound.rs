@@ -202,7 +202,7 @@ fn shorten(text: &str, limit: usize) -> String {
 }
 
 /// 没给标题的新会话的标题：内容的第一行，过长时截断。
-pub fn default_title(text: &str) -> String {
+pub(crate) fn default_title(text: &str) -> String {
     shorten(text.trim().lines().next().unwrap_or(""), TITLE_MAX)
 }
 

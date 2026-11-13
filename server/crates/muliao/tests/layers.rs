@@ -42,9 +42,15 @@ fn domain_crates_only_depend_on_earlier_layers() {
             continue;
         };
         for dep in package["dependencies"].as_array().unwrap() {
-            // 测试里用别的领域造数据可以
+            // 测试里用别的领域造数据可以；造数据的入口（feature testing）只许测试开
             if dep["kind"].as_str() == Some("dev") {
                 continue;
+            }
+            if dep["features"].as_array().unwrap().iter().any(|f| f == "testing") {
+                problems.push(format!(
+                    "{name} enables the testing feature of {} outside dev-dependencies",
+                    dep["name"].as_str().unwrap()
+                ));
             }
             let Some(dep_short) = dep["name"].as_str().unwrap().strip_prefix("muliao-") else { continue };
             match layers.get(dep_short) {

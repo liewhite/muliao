@@ -4,11 +4,11 @@
 pub mod activity;
 pub mod actor;
 pub mod answers;
-pub mod approvals;
+mod approvals;
 pub mod compaction;
-pub mod content;
+mod content;
 pub mod conventions;
-pub mod delegation;
+mod delegation;
 pub mod deletion;
 pub mod directory;
 pub mod events;
@@ -19,17 +19,22 @@ pub mod inbound;
 pub mod live;
 pub mod mailbox;
 pub mod origins;
-pub mod pending;
+mod pending;
 pub mod recall;
 pub mod run;
 pub mod runs;
 pub mod service;
-pub mod settlement;
-pub mod thread_calls;
+mod settlement;
+mod thread_calls;
 pub mod tools;
 pub mod transcript;
-pub mod wakeups;
+mod wakeups;
 pub mod work;
+
+#[cfg(feature = "testing")]
+pub mod testing;
+#[cfg(test)]
+mod tests;
 
 use muliao_platform::db::Migration;
 

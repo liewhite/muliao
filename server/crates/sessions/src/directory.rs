@@ -7,8 +7,8 @@ use chrono::{DateTime, Utc};
 use rusqlite::{Connection, Row, params};
 
 use crate::history::SESSIONS_MENTIONING;
-use crate::mailbox::placeholders;
 use crate::origins::{Origin, Sender, SessionOrigin};
+use muliao_platform::db::placeholders;
 use muliao_platform::db::{like_contains, like_prefix};
 use muliao_platform::errors::Result;
 
@@ -23,12 +23,6 @@ pub struct Session {
     pub parent_session_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-}
-
-impl Session {
-    pub fn is_thread(&self) -> bool {
-        self.origin.thread().is_some()
-    }
 }
 
 const COLUMNS: &str = "id, agent_id, title, origin, origin_ref, parent_session_id, thread, created_at, updated_at";
@@ -98,7 +92,7 @@ pub(crate) fn touch_in(c: &Connection, session_id: &str) -> Result<()> {
 }
 
 /// 这些会话（已删除的不在结果里），一次查询。
-pub fn among_in(c: &Connection, session_ids: &[String]) -> Result<BTreeMap<String, Session>> {
+pub(crate) fn among_in(c: &Connection, session_ids: &[String]) -> Result<BTreeMap<String, Session>> {
     if session_ids.is_empty() {
         return Ok(BTreeMap::new());
     }
@@ -107,12 +101,12 @@ pub fn among_in(c: &Connection, session_ids: &[String]) -> Result<BTreeMap<Strin
 }
 
 /// id 以它开头的会话，至多 limit 个（热历史的工具接受 id 前缀）。
-pub fn with_prefix_in(c: &Connection, prefix: &str, limit: usize) -> Result<Vec<Session>> {
+pub(crate) fn with_prefix_in(c: &Connection, prefix: &str, limit: usize) -> Result<Vec<Session>> {
     query(c, "id LIKE ?1 ESCAPE '\\' ORDER BY id LIMIT ?2", params![like_prefix(prefix), limit as i64])
 }
 
 /// agent 的全部会话。
-pub fn of_agent_in(c: &Connection, agent_id: &str) -> Result<Vec<Session>> {
+pub(crate) fn of_agent_in(c: &Connection, agent_id: &str) -> Result<Vec<Session>> {
     query(c, "agent_id = ?1", [agent_id])
 }
 
@@ -149,18 +143,18 @@ pub fn keyed_among(
 }
 
 /// 父会话开出的 thread，按创建顺序。
-pub fn threads_of(c: &Connection, parent_id: &str) -> Result<Vec<Session>> {
+pub(crate) fn threads_of(c: &Connection, parent_id: &str) -> Result<Vec<Session>> {
     query(c, "parent_session_id = ?1 ORDER BY created_at, id", [parent_id])
 }
 
 /// thread 由（父会话, agent, 名字）确定。
-pub fn thread_in(c: &Connection, parent_id: &str, agent_id: &str, thread: &str) -> Result<Option<Session>> {
+pub(crate) fn thread_in(c: &Connection, parent_id: &str, agent_id: &str, thread: &str) -> Result<Option<Session>> {
     Ok(query(c, "parent_session_id = ?1 AND agent_id = ?2 AND thread = ?3", params![parent_id, agent_id, thread])?
         .pop())
 }
 
 /// 父会话里叫这个名字的 thread（每个 agent 至多一个），按创建顺序。
-pub fn threads_named_in(c: &Connection, parent_id: &str, thread: &str) -> Result<Vec<Session>> {
+pub(crate) fn threads_named_in(c: &Connection, parent_id: &str, thread: &str) -> Result<Vec<Session>> {
     query(c, "parent_session_id = ?1 AND thread = ?2 ORDER BY created_at, id", params![parent_id, thread])
 }
 
@@ -204,14 +198,14 @@ impl Listing {
 }
 
 /// 符合筛选的全部会话 id。
-pub fn listed_ids_in(c: &Connection, listing: &Listing) -> Result<Vec<String>> {
+pub(crate) fn listed_ids_in(c: &Connection, listing: &Listing) -> Result<Vec<String>> {
     let (filter, values) = listing.filter();
     let mut stmt = c.prepare(&format!("SELECT id FROM sessions WHERE {filter}"))?;
     Ok(stmt.query_map(rusqlite::params_from_iter(&values), |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)
 }
 
 /// 列表的一页：first 里的会话置顶，其余按最近更新排序。
-pub fn listed_page_in(
+pub(crate) fn listed_page_in(
     c: &Connection,
     listing: &Listing,
     first: &[String],

@@ -183,20 +183,6 @@ impl AsRef<UserItem> for UserItem {
 }
 
 impl Item {
-    /// 用户消息条目换成 f 给出的（其余原样）。
-    pub fn map_user<V>(self, f: impl FnOnce(UserItem) -> V) -> Item<V> {
-        match self {
-            Item::User(u) => Item::User(f(u)),
-            Item::Event(e) => Item::Event(e),
-            Item::Assistant { text } => Item::Assistant { text },
-            Item::Thinking { text } => Item::Thinking { text },
-            Item::ToolCall(c) => Item::ToolCall(c),
-            Item::ToolResult(r) => Item::ToolResult(r),
-            Item::ToolError(e) => Item::ToolError(e),
-            Item::Stopped => Item::Stopped,
-        }
-    }
-
     /// 实时展示的预览：正文与展示块截到 max_chars 个字符。
     pub(crate) fn preview(mut self, max_chars: usize) -> Self {
         match &mut self {
@@ -217,7 +203,7 @@ impl Item {
 
 /// 一次工具调用的条目。started_at：调用开始执行的时间（回复在执行工具之前保存，所以历史里是回复那一行的保存时间，运行中
 /// 是收到调用事件的时间）。
-pub fn call_item(call: &ToolCall, started_at: Option<DateTime<Utc>>, renders: &Renders) -> Item {
+pub(crate) fn call_item(call: &ToolCall, started_at: Option<DateTime<Utc>>, renders: &Renders) -> Item {
     call_entry(call, started_at, renders)
 }
 
@@ -250,7 +236,7 @@ fn result_text(result: &ToolResult) -> String {
 
 /// 工具结果，或失败、参数被拒绝交还模型重试的结果（is_error）。事后补的结果没有结束时间。展示规则只用于工具交回的文本
 /// 结果（内容只有一段文字）。挂上的文件记录形状不对时报数据损坏。
-pub fn result_item(result: &ToolResult, renders: &Renders) -> Result<Item> {
+pub(crate) fn result_item(result: &ToolResult, renders: &Renders) -> Result<Item> {
     result_entry(result, renders)
 }
 
@@ -368,7 +354,7 @@ fn request_items<U>(
 
 /// saved_at：这些消息保存的时间，即其中工具调用开始执行的时间（见 [`call_item`]）；不需要时间的投影（压缩的文字记录）
 /// 不给。存下的消息与约定对不上（各段的记录、附件引用）时报数据损坏。
-pub fn to_items<'a>(
+pub(crate) fn to_items<'a>(
     messages: impl IntoIterator<Item = &'a Message>,
     renders: &Renders,
     saved_at: Option<DateTime<Utc>>,
@@ -377,7 +363,7 @@ pub fn to_items<'a>(
 }
 
 /// 同 [`to_items`]，用户消息条目由 user 按条目与它记下的发送方（没记的为 None）给出。
-pub fn to_items_with<'a, U>(
+pub(crate) fn to_items_with<'a, U>(
     messages: impl IntoIterator<Item = &'a Message>,
     renders: &Renders,
     saved_at: Option<DateTime<Utc>>,
@@ -413,7 +399,7 @@ pub fn to_items_with<'a, U>(
 /// - 被退回（结果是 tool_error，如这次运行不提供提问）：不是提问，按普通工具调用加错误展示（wait 为 None）；
 /// - 有结果的按结果（[`AskResult`]）：answered / not_answered；
 /// - 没有结果的：现在能回答是 pending，回答已提交、还排着是 submitted，否则运行还没停下（asking）。
-pub fn annotate_asks(items: &mut [Item], open: &OpenAsks) -> Result<()> {
+pub(crate) fn annotate_asks(items: &mut [Item], open: &OpenAsks) -> Result<()> {
     let results: HashMap<String, Option<String>> = items
         .iter()
         .filter_map(|i| match i {
@@ -449,7 +435,7 @@ pub fn annotate_asks(items: &mut [Item], open: &OpenAsks) -> Result<()> {
 
 /// 给等批准的工具调用填上状态：现在能批准是 pending，决定已提交、还排着是 submitted。两者都只含还没有结果的调用
 /// （[`crate::pending::open_asks_of`]），所以不看结果条目。
-pub fn annotate_approvals(items: &mut [Item], open: &OpenAsks) {
+pub(crate) fn annotate_approvals(items: &mut [Item], open: &OpenAsks) {
     for item in items.iter_mut() {
         let Item::ToolCall(call) = item else { continue };
         let id = &call.tool_call_id;
@@ -464,7 +450,7 @@ pub fn annotate_approvals(items: &mut [Item], open: &OpenAsks) {
 
 /// 工具调用挂上它开出或续写的 thread（call_threads：调用 id → thread，见 [`crate::thread_calls::call_threads_in`]），界面
 /// 据此把 thread 显示在这次调用处。只看调用 id，不看调用有没有结果、结果是谁补的。
-pub fn annotate_threads(items: &mut [Item], call_threads: &BTreeMap<String, String>) {
+pub(crate) fn annotate_threads(items: &mut [Item], call_threads: &BTreeMap<String, String>) {
     for item in items.iter_mut() {
         if let Item::ToolCall(call) = item
             && let Some(thread) = call_threads.get(&call.tool_call_id)
@@ -475,7 +461,7 @@ pub fn annotate_threads(items: &mut [Item], call_threads: &BTreeMap<String, Stri
 }
 
 /// 条目的文字记录（压缩交给模型总结的原文）：思考不进，每条截到 max_item_chars 个字符。
-pub fn to_text(items: &[Item], max_item_chars: usize) -> String {
+pub(crate) fn to_text(items: &[Item], max_item_chars: usize) -> String {
     let mut lines = Vec::new();
     for item in items {
         let (label, name) = match item {

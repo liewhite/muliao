@@ -29,7 +29,7 @@ pub fn check_interval(heartbeat_seconds: Option<f64>) -> Result<f64, String> {
 }
 
 /// 会话现在停在哪（规则在 [`position`]）。没出结果的调用只可能在最后一条回复里，不加载整段上下文。
-pub fn position_in(c: &Connection, session_id: &str) -> Result<Position> {
+pub(crate) fn position_in(c: &Connection, session_id: &str) -> Result<Position> {
     let ids = [session_id.to_owned()];
     let handed = HandedOut {
         delegated: holds::called_among(c, &ids)?.remove(session_id).unwrap_or_default(),
@@ -53,7 +53,7 @@ pub enum Delivered {
 
 /// 交回这项占用的结局并释放它，唯一出口。hold 为 None：会话已删除。会话还停在这项占用对应的挂起调用上、且给了 answer
 /// 时作为那次调用的结果；否则作为事件信件（「迟到的回答改为事件」只在这里）。已经释放过的再交回是 bug，当场报错。
-pub fn deliver_in(
+pub(crate) fn deliver_in(
     tx: &mut Tx<'_>,
     waker: &Waker,
     hold: Option<&Hold>,
@@ -99,7 +99,7 @@ pub fn deliver_in(
 
 /// 运行中检查：给这项工作的会话投一封检查信件（不推送）。这个来源已有信件排着时不投（不堆积）；占用已不是 active 或会话
 /// 已删除时也不投。返回是否投了。
-pub fn post_check_in(
+pub(crate) fn post_check_in(
     tx: &mut Tx<'_>,
     waker: &Waker,
     hold: Option<&Hold>,
@@ -115,7 +115,7 @@ pub fn post_check_in(
 }
 
 /// 后台任务或到点唤醒在会话上的占用（交回结局与运行中检查用）：会话已删除时 None；会话还在而占用从未登记过是 bug。
-pub fn hold_of_in(c: &Connection, session_id: &str, of: &Outside) -> Result<Option<Hold>> {
+pub(crate) fn hold_of_in(c: &Connection, session_id: &str, of: &Outside) -> Result<Option<Hold>> {
     let hold = holds::get_in(c, session_id, of)?;
     if hold.is_none() && directory::get_in(c, session_id)?.is_some() {
         return Err(broken(format!("session {session_id} has no hold {of:?}")));
@@ -146,7 +146,7 @@ impl EventSource {
     }
 
     /// [`EventSource::raw`] 的逆运算（读库边界用）；不是三种写法之一为 None。
-    pub fn parse(raw: &str) -> Option<Self> {
+    pub(crate) fn parse(raw: &str) -> Option<Self> {
         if raw == crate::wakeups::WAKE_ME {
             return Some(EventSource::Wake);
         }

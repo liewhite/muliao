@@ -33,7 +33,7 @@ use muliao_platform::errors::{Result, invalid};
 
 pub const THREAD_MAX: usize = 100;
 
-pub fn validate_thread(name: &str) -> Result<String> {
+pub(crate) fn validate_thread(name: &str) -> Result<String> {
     let name = name.trim();
     if name.is_empty() || name.chars().count() > THREAD_MAX {
         return Err(invalid(format!("thread name must be 1-{THREAD_MAX} characters")));
@@ -41,7 +41,7 @@ pub fn validate_thread(name: &str) -> Result<String> {
     Ok(name.to_owned())
 }
 
-pub fn thread_name(child: &Session) -> &str {
+pub(crate) fn thread_name(child: &Session) -> &str {
     child.origin.thread().unwrap_or_else(|| panic!("session {} is a thread without a name", child.id))
 }
 
@@ -114,7 +114,7 @@ pub enum Ending {
     Deleted,
 }
 
-pub fn event_text(thread: &str, agent: &str, ending: Ending, text: &str) -> String {
+pub(crate) fn event_text(thread: &str, agent: &str, ending: Ending, text: &str) -> String {
     let who = format!("Thread {thread:?} ({agent})");
     match ending {
         Ending::Finished => format!("{who} finished your task. Its answer:\n{text}"),
@@ -177,7 +177,7 @@ pub struct ThreadView {
     pub answer: String,
 }
 
-pub fn threads_in(c: &Connection, parent_id: &str) -> Result<Vec<ThreadView>> {
+pub(crate) fn threads_in(c: &Connection, parent_id: &str) -> Result<Vec<ThreadView>> {
     let children = directory::threads_of(c, parent_id)?;
     let ids: Vec<String> = children.iter().map(|s| s.id.clone()).collect();
     let states = work_states_in(c, &ids)?;
@@ -235,7 +235,7 @@ pub(crate) async fn check_threads(db: &Database, waker: &Waker, beats: &Arc<Mute
 }
 
 /// 还没结清的委派的检查信件，按 thread 的工作状态说；run 是它最近一次运行，只用来补充细节。
-pub fn check_text(
+pub(crate) fn check_text(
     child: &Session,
     agent: &AgentInfo,
     state: WorkState,

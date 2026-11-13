@@ -10,7 +10,7 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 use muliao_platform::db::Tx;
 
 use crate::live::Live;
-use crate::mailbox::placeholders;
+use muliao_platform::db::placeholders;
 use muliao_platform::errors::{Result, broken};
 
 /// 一次运行的结局（[`end_in`] 记下）：失败的自带说明。
@@ -66,12 +66,12 @@ pub struct RunRecord {
 }
 
 impl RunRecord {
-    pub fn unfinished(&self) -> bool {
+    pub(crate) fn unfinished(&self) -> bool {
         self.state == RunState::Unfinished
     }
 
     /// 最终失败的说明；没失败的为 None。
-    pub fn failure(&self) -> Option<&str> {
+    pub(crate) fn failure(&self) -> Option<&str> {
         match &self.state {
             RunState::Failed { error, .. } => Some(error),
             _ => None,
@@ -107,7 +107,7 @@ fn query(c: &Connection, filter: &str, params: impl rusqlite::Params) -> Result<
 }
 
 /// 会话没结束的那次运行（续跑）的编号；没有就开始一次新的。同一会话因此至多一个没结束的运行。
-pub fn current_or_start_in(tx: &mut Tx<'_>, live: &Live, session_id: &str) -> Result<i64> {
+pub(crate) fn current_or_start_in(tx: &mut Tx<'_>, live: &Live, session_id: &str) -> Result<i64> {
     if let Some(r) = unfinished_in(tx, session_id)? {
         return Ok(r.id);
     }
@@ -118,7 +118,7 @@ pub fn current_or_start_in(tx: &mut Tx<'_>, live: &Live, session_id: &str) -> Re
 }
 
 /// 记下结局。
-pub fn end_in(tx: &mut Tx<'_>, live: &Live, run_id: i64, outcome: Outcome) -> Result<()> {
+pub(crate) fn end_in(tx: &mut Tx<'_>, live: &Live, run_id: i64, outcome: Outcome) -> Result<()> {
     let session_id: Option<String> = tx
         .query_row(
             "UPDATE runs SET ended_at = ?1, outcome = ?2, error = ?3 WHERE id = ?4 AND ended_at IS NULL \
@@ -133,19 +133,19 @@ pub fn end_in(tx: &mut Tx<'_>, live: &Live, run_id: i64, outcome: Outcome) -> Re
 }
 
 /// 手动重试一次最终失败的运行：它重新算作没结束（同一个编号，交给它的信与它保存的消息都还指向它）。
-pub fn reopen_in(tx: &mut Tx<'_>, live: &Live, run: &RunRecord) -> Result<()> {
+pub(crate) fn reopen_in(tx: &mut Tx<'_>, live: &Live, run: &RunRecord) -> Result<()> {
     tx.execute("UPDATE runs SET ended_at = NULL, outcome = NULL, error = NULL WHERE id = ?1", [run.id])?;
     live.saved_on_commit(tx, &run.session_id);
     Ok(())
 }
 
 /// 会话没结束的那次运行（至多一个）。
-pub fn unfinished_in(c: &Connection, session_id: &str) -> Result<Option<RunRecord>> {
+pub(crate) fn unfinished_in(c: &Connection, session_id: &str) -> Result<Option<RunRecord>> {
     Ok(query(c, "session_id = ?1 AND ended_at IS NULL", [session_id])?.into_iter().next())
 }
 
 /// 停止：没结束的运行记为停止（actor 已经放下它，或它停在两次重试之间）。
-pub fn stop_unfinished_in(tx: &mut Tx<'_>, live: &Live, session_id: &str) -> Result<Vec<i64>> {
+pub(crate) fn stop_unfinished_in(tx: &mut Tx<'_>, live: &Live, session_id: &str) -> Result<Vec<i64>> {
     let ids: Vec<i64> = query(tx, "session_id = ?1 AND ended_at IS NULL", [session_id])?.iter().map(|r| r.id).collect();
     for id in &ids {
         end_in(tx, live, *id, Outcome::Stopped)?;
@@ -154,13 +154,13 @@ pub fn stop_unfinished_in(tx: &mut Tx<'_>, live: &Live, session_id: &str) -> Res
 }
 
 /// 有没结束的运行的会话（重启后接着跑）。
-pub fn sessions_unfinished_in(c: &Connection) -> Result<Vec<String>> {
+pub(crate) fn sessions_unfinished_in(c: &Connection) -> Result<Vec<String>> {
     let mut stmt = c.prepare("SELECT DISTINCT session_id FROM runs WHERE ended_at IS NULL")?;
     Ok(stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)
 }
 
 /// 这些会话里有没结束的运行的。
-pub fn unfinished_among(c: &Connection, session_ids: &[String]) -> Result<Vec<String>> {
+pub(crate) fn unfinished_among(c: &Connection, session_ids: &[String]) -> Result<Vec<String>> {
     if session_ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -173,12 +173,12 @@ pub fn unfinished_among(c: &Connection, session_ids: &[String]) -> Result<Vec<St
 }
 
 /// 会话最近一次运行。
-pub fn latest_in(c: &Connection, session_id: &str) -> Result<Option<RunRecord>> {
+pub(crate) fn latest_in(c: &Connection, session_id: &str) -> Result<Option<RunRecord>> {
     Ok(latest_among(c, &[session_id.to_owned()])?.remove(session_id))
 }
 
 /// 这些会话各自最近一次运行；还没有运行的不在结果里。
-pub fn latest_among(c: &Connection, session_ids: &[String]) -> Result<BTreeMap<String, RunRecord>> {
+pub(crate) fn latest_among(c: &Connection, session_ids: &[String]) -> Result<BTreeMap<String, RunRecord>> {
     if session_ids.is_empty() {
         return Ok(BTreeMap::new());
     }
@@ -199,7 +199,7 @@ pub fn get_in(c: &Connection, run_id: i64) -> Result<Option<RunRecord>> {
 }
 
 /// 这些会话在 [start, end) 里开始的运行，各自按先后。
-pub fn started_between_in(
+pub(crate) fn started_between_in(
     c: &Connection,
     start: DateTime<Utc>,
     end: DateTime<Utc>,

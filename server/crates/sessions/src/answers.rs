@@ -52,7 +52,7 @@ pub struct AskArgs {
 
 impl AskArgs {
     /// 长度约束（schema 里也写了，模型可能不守）。
-    pub fn check(&self) -> Result<(), String> {
+    pub(crate) fn check(&self) -> Result<(), String> {
         let n = self.questions.len();
         if !(1..=QUESTIONS_MAX).contains(&n) {
             return Err(format!("ask 1-{QUESTIONS_MAX} questions, got {n}"));
@@ -81,7 +81,7 @@ impl AskArgs {
 
 /// 一次 ask_user 调用里的问题，按工具参数的同一个类型与约束解析；参数不合法（被工具退回重试的、生成到一半被打断的）时
 /// 为空：这次调用不是提问。
-pub fn questions_of(args: &str) -> Vec<Question> {
+pub(crate) fn questions_of(args: &str) -> Vec<Question> {
     match serde_json::from_str::<AskArgs>(args) {
         Ok(a) if a.check().is_ok() => a.questions,
         _ => Vec::new(),
@@ -115,12 +115,12 @@ pub struct AskResult {
 
 impl AskResult {
     /// 交给模型的结果正文。
-    pub fn text(&self) -> String {
+    pub(crate) fn text(&self) -> String {
         serde_json::to_string(self).expect("ask results serialize")
     }
 
     /// 作为提问调用的结果交给模型的内容（按时交回与停止时保留的回答共用）。
-    pub fn content(&self) -> Vec<Content> {
+    pub(crate) fn content(&self) -> Vec<Content> {
         vec![Content::text(self.text())]
     }
 }
@@ -133,7 +133,7 @@ const NOT_ANSWERED: &str = "The user did not answer these questions and sent a n
 const SKIPPED: &str = "The user answered other questions you asked at the same time, but not these.";
 
 /// 校验用户的回答并整理成交给模型的结果。
-pub fn answer_result(questions: &[Question], answers: &[QuestionAnswer]) -> Result<AskResult> {
+pub(crate) fn answer_result(questions: &[Question], answers: &[QuestionAnswer]) -> Result<AskResult> {
     if answers.len() != questions.len() {
         return Err(invalid(format!("expected {} answers, got {}", questions.len(), answers.len())));
     }
@@ -165,7 +165,7 @@ pub fn answer_result(questions: &[Question], answers: &[QuestionAnswer]) -> Resu
 }
 
 /// 运行停在提问上时给用户的通知正文。
-pub fn questions_waiting_text(questions: &[Question]) -> String {
+pub(crate) fn questions_waiting_text(questions: &[Question]) -> String {
     let asked: Vec<&str> = questions.iter().map(|q| q.question.as_str()).collect();
     format!("等你回答：{}", asked.join("；"))
 }
@@ -215,13 +215,13 @@ pub struct Decision {
 }
 
 impl Decision {
-    pub fn approved(&self) -> bool {
+    pub(crate) fn approved(&self) -> bool {
         self.choice != Choice::Deny
     }
 }
 
 /// 运行停在等批准上时给用户的通知正文。
-pub fn approvals_waiting_text(calls: &[String]) -> String {
+pub(crate) fn approvals_waiting_text(calls: &[String]) -> String {
     format!("等你批准：{}", calls.join("、"))
 }
 
@@ -237,7 +237,7 @@ pub enum Waiting {
 }
 
 impl Waiting {
-    pub fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Waiting::AskUser => "ask_user",
             Waiting::AskAgent => "ask_agent",
@@ -247,7 +247,7 @@ impl Waiting {
 }
 
 /// 用户对提问的回答，每题一行（`- 问题: 选项; 其他`）：调用结束后才到的回答交给模型、热历史列出用户的回答，都用这一份。
-pub fn answer_lines(asked: &[&AskResult]) -> Vec<String> {
+pub(crate) fn answer_lines(asked: &[&AskResult]) -> Vec<String> {
     asked
         .iter()
         .flat_map(|r| &r.answers)
@@ -268,7 +268,7 @@ pub enum CallResult {
 }
 
 impl CallResult {
-    pub fn kind(&self) -> Waiting {
+    pub(crate) fn kind(&self) -> Waiting {
         match self {
             CallResult::AskUser(_) => Waiting::AskUser,
             CallResult::AskAgent(_) => Waiting::AskAgent,
@@ -277,7 +277,7 @@ impl CallResult {
     }
 
     /// 交给模型的结果。
-    pub fn resolution(&self) -> Resolution {
+    pub(crate) fn resolution(&self) -> Resolution {
         match self {
             CallResult::AskUser(r) => Resolution::Result { content: r.content(), is_error: false },
             CallResult::AskAgent(a) => {
@@ -300,7 +300,7 @@ impl CallResult {
     }
 
     /// 调用结束后才到的回答（那次调用已经带着「没回答」或「之后送达」继续了），作为一段文字交给模型，回答不丢。
-    pub fn late_text(results: &[CallResult]) -> String {
+    pub(crate) fn late_text(results: &[CallResult]) -> String {
         let mut lines = Vec::new();
         let asked: Vec<&AskResult> = results
             .iter()
@@ -328,7 +328,7 @@ impl CallResult {
 }
 
 /// 没等到回答就继续时这一种调用的结果；given 是这次交回的别的回答。
-pub fn skipped(kind: Waiting, given: &[&CallResult]) -> Resolution {
+pub(crate) fn skipped(kind: Waiting, given: &[&CallResult]) -> Resolution {
     match kind {
         Waiting::AskUser => {
             let answered_other = given.iter().any(|r| matches!(r, CallResult::AskUser(_)));

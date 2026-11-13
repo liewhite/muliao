@@ -117,7 +117,7 @@ impl From<muliao_runtime::StepError> for Failure {
 
 /// 回答交给谁（唯一规则）：处理的信件有用户在等的就是用户；否则会话有委派来、还没结清的工作就是发起委派的 agent；都没有
 /// 就是没人在等。
-pub fn audience_of(mail: &[&Mail], delegated: bool) -> Audience {
+pub(crate) fn audience_of(mail: &[&Mail], delegated: bool) -> Audience {
     if mail.iter().any(|m| m.awaited) {
         Audience::User
     } else if delegated {

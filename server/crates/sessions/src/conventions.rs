@@ -94,17 +94,17 @@ fn metadata_mut(message: &mut Message) -> &mut Option<Value> {
 }
 
 /// 这条消息标着「已停止」。
-pub fn is_stopped(message: &Message) -> bool {
+pub(crate) fn is_stopped(message: &Message) -> bool {
     meta_of(metadata_of(message)).and_then(|m| m.get(RUN_STOPPED)).and_then(Value::as_bool).unwrap_or(false)
 }
 
 /// 标上「已停止」：界面据此显示，续跑据此不重发这条请求。
-pub fn mark_stopped(message: &mut Message) {
+pub(crate) fn mark_stopped(message: &mut Message) {
     meta_mut(metadata_mut(message)).insert(RUN_STOPPED.into(), Value::Bool(true));
 }
 
 /// 生成到一半被停下的回复（停止时按已收到的部分保存）。
-pub fn interrupted_response(parts: Vec<ResponsePart>, protocol: &str, model: &str) -> Response {
+pub(crate) fn interrupted_response(parts: Vec<ResponsePart>, protocol: &str, model: &str) -> Response {
     let mut metadata = None;
     meta_mut(&mut metadata).insert(INTERRUPTED.into(), Value::Bool(true));
     Response {
@@ -119,12 +119,12 @@ pub fn interrupted_response(parts: Vec<ResponsePart>, protocol: &str, model: &st
     }
 }
 
-pub fn is_interrupted(response: &Response) -> bool {
+pub(crate) fn is_interrupted(response: &Response) -> bool {
     meta_of(&response.metadata).and_then(|m| m.get(INTERRUPTED)).and_then(Value::as_bool).unwrap_or(false)
 }
 
 /// 给没出结果的调用补上的结果。
-pub fn made_up_result(call: &ToolCall, kind: MadeUp) -> ToolResult {
+pub(crate) fn made_up_result(call: &ToolCall, kind: MadeUp) -> ToolResult {
     let mut metadata = None;
     meta_mut(&mut metadata).insert(MADE_UP.into(), Value::from(kind.as_str()));
     ToolResult {
@@ -137,7 +137,7 @@ pub fn made_up_result(call: &ToolCall, kind: MadeUp) -> ToolResult {
 }
 
 /// 这个结果是事后补的（不是工具交回的）：它产生的时刻不是调用结束的时刻。
-pub fn made_up(result: &ToolResult) -> Option<MadeUp> {
+pub(crate) fn made_up(result: &ToolResult) -> Option<MadeUp> {
     match meta_of(&result.metadata).and_then(|m| m.get(MADE_UP)).and_then(Value::as_str) {
         Some("stopped") => Some(MadeUp::Stopped),
         Some("interrupted") => Some(MadeUp::Interrupted),
@@ -147,7 +147,7 @@ pub fn made_up(result: &ToolResult) -> Option<MadeUp> {
 
 /// 工具调用结束的时刻（保存结果时记下）；没记的（事后补的结果、记下这条约定之前的结果）为 None。值不是 RFC3339 时间是
 /// 写入方的 bug，当场 panic。
-pub fn finished_at(result: &ToolResult) -> Option<DateTime<Utc>> {
+pub(crate) fn finished_at(result: &ToolResult) -> Option<DateTime<Utc>> {
     let value = meta_of(&result.metadata)?.get(FINISHED_AT)?;
     let parsed = value.as_str().and_then(|s| DateTime::parse_from_rfc3339(s).ok());
     let at = parsed.unwrap_or_else(|| panic!("bad {FINISHED_AT} {value} on a result of {}", result.tool_name));
@@ -155,13 +155,13 @@ pub fn finished_at(result: &ToolResult) -> Option<DateTime<Utc>> {
 }
 
 /// 记下工具调用结束的时刻。
-pub fn set_finished_at(result: &mut ToolResult, at: DateTime<Utc>) {
+pub(crate) fn set_finished_at(result: &mut ToolResult, at: DateTime<Utc>) {
     meta_mut(&mut result.metadata)
         .insert(FINISHED_AT.into(), Value::from(at.to_rfc3339_opts(SecondsFormat::Micros, true)));
 }
 
 /// 这些结果合成一条请求；没有则 None。
-pub fn results_request(results: Vec<ToolResult>) -> Option<Request> {
+pub(crate) fn results_request(results: Vec<ToolResult>) -> Option<Request> {
     (!results.is_empty()).then(|| Request {
         parts: results.into_iter().map(RequestPart::ToolResult).collect(),
         timestamp: chrono::Utc::now(),
@@ -208,7 +208,7 @@ impl PartMark {
     }
 
     /// 同一段在前面多了 n 段的请求里。
-    pub fn shifted(self, n: usize) -> Self {
+    pub(crate) fn shifted(self, n: usize) -> Self {
         PartMark { part: self.part + n, ..self }
     }
 }
@@ -220,17 +220,17 @@ fn event_head(source: &EventSource) -> String {
 }
 
 /// 交给模型的一条事件。
-pub fn format_event(source: &EventSource, content: &str) -> String {
+pub(crate) fn format_event(source: &EventSource, content: &str) -> String {
     format!("{}{content}{EVENT_END}", event_head(source))
 }
 
 /// 事件段里的事件内容（去掉 [`format_event`] 套的外壳）；只用于展示，外壳对不上时整段原样展示。
-pub fn event_content<'a>(text: &'a str, source: &EventSource) -> &'a str {
+pub(crate) fn event_content<'a>(text: &'a str, source: &EventSource) -> &'a str {
     text.strip_prefix(event_head(source).as_str()).and_then(|t| t.strip_suffix(EVENT_END)).unwrap_or(text)
 }
 
 /// 这条请求里记下的各段，按记下的顺序。读库边界：形状不对是数据与代码不一致。
-pub fn part_marks(request: &Request) -> Result<Vec<PartMark>> {
+pub(crate) fn part_marks(request: &Request) -> Result<Vec<PartMark>> {
     let Some(v) = meta_of(&request.metadata).and_then(|m| m.get(PARTS)) else { return Ok(Vec::new()) };
     v.as_array()
         .and_then(|a| a.iter().map(PartMark::from_json).collect::<Option<Vec<_>>>())
@@ -238,7 +238,7 @@ pub fn part_marks(request: &Request) -> Result<Vec<PartMark>> {
 }
 
 /// 整条请求记下的各段换成这些（新建请求时）。
-pub fn set_part_marks(request: &mut Request, marks: &[PartMark]) {
+pub(crate) fn set_part_marks(request: &mut Request, marks: &[PartMark]) {
     if marks.is_empty() {
         if let Some(Value::Object(m)) = &mut request.metadata {
             m.remove(PARTS);
@@ -250,7 +250,7 @@ pub fn set_part_marks(request: &mut Request, marks: &[PartMark]) {
 }
 
 /// 接在请求末尾的这些段记下来（交出信件时；part 已是在整条请求里的下标）。
-pub fn mark_parts(request: &mut Request, marks: Vec<PartMark>) -> Result<()> {
+pub(crate) fn mark_parts(request: &mut Request, marks: Vec<PartMark>) -> Result<()> {
     if marks.is_empty() {
         return Ok(());
     }
@@ -262,7 +262,7 @@ pub fn mark_parts(request: &mut Request, marks: Vec<PartMark>) -> Result<()> {
 
 /// 把运行上下文作为独立的一段文字放进这条请求，并记下它的下标。放在工具结果之后、别的内容之前：模型先看到「现在
 /// 几点」再看这次要处理的内容。已记下的各段下标随之后移。
-pub fn attach_run_context(request: &mut Request, text: &str) -> Result<()> {
+pub(crate) fn attach_run_context(request: &mut Request, text: &str) -> Result<()> {
     assert!(run_context_index(request).is_none(), "request already carries a run context");
     let at = request.parts.iter().position(|p| !matches!(p, RequestPart::ToolResult(_))).unwrap_or(request.parts.len());
     let marks: Vec<PartMark> =
@@ -274,13 +274,13 @@ pub fn attach_run_context(request: &mut Request, text: &str) -> Result<()> {
 }
 
 /// 这条请求里哪一段是运行上下文。
-pub fn run_context_index(request: &Request) -> Option<usize> {
+pub(crate) fn run_context_index(request: &Request) -> Option<usize> {
     meta_of(&request.metadata).and_then(|m| m.get(RUN_CONTEXT)).and_then(Value::as_u64).map(|i| i as usize)
 }
 
 /// 报告了上下文大小的回复，按时间顺序：完整的回复（报 0 也算一次测量，由压缩判断告警），生成到一半被停的只在收到了
 /// 输入用量时算。压缩判断只认这些。
-pub fn measured_responses(history: &[Message]) -> Vec<&Response> {
+pub(crate) fn measured_responses(history: &[Message]) -> Vec<&Response> {
     history
         .iter()
         .filter_map(|m| match m {
@@ -291,12 +291,12 @@ pub fn measured_responses(history: &[Message]) -> Vec<&Response> {
 }
 
 /// 一条回复给用户的文字（会话最近的回答、运行的回答都按这一条取）。
-pub fn answer_text(response: &Response) -> String {
+pub(crate) fn answer_text(response: &Response) -> String {
     response.text()
 }
 
 /// 这条消息给出结果的调用 id。
-pub fn results_in(message: &Message) -> impl Iterator<Item = &str> {
+pub(crate) fn results_in(message: &Message) -> impl Iterator<Item = &str> {
     let parts: &[RequestPart] = match message {
         Message::User(r) => &r.parts,
         Message::Assistant(_) => &[],
@@ -308,7 +308,7 @@ pub fn results_in(message: &Message) -> impl Iterator<Item = &str> {
 }
 
 /// 这条消息发出的工具调用。
-pub fn calls_in(message: &Message) -> Vec<&ToolCall> {
+pub(crate) fn calls_in(message: &Message) -> Vec<&ToolCall> {
     match message {
         Message::Assistant(r) => r.tool_calls().collect(),
         Message::User(_) => Vec::new(),
@@ -319,7 +319,7 @@ pub fn calls_in(message: &Message) -> Vec<&ToolCall> {
 ///
 /// 库里的历史守着一条不变式（提供方的要求）：每条回复的调用在下一条回复之前都有结果，所以没结果的调用只可能在最后一条
 /// 回复里。破了说明有一处写错了，当场报错，不往末尾补结果（补在末尾的结果离开了它的调用，提供方会拒绝之后的每一次请求）。
-pub fn unanswered_calls(messages: &[Message]) -> Result<Vec<ToolCall>> {
+pub(crate) fn unanswered_calls(messages: &[Message]) -> Result<Vec<ToolCall>> {
     let done: HashSet<&str> = messages.iter().flat_map(results_in).collect();
     let last = messages.iter().rposition(|m| matches!(m, Message::Assistant(_)));
     let mut unanswered = Vec::new();
@@ -342,7 +342,7 @@ pub fn unanswered_calls(messages: &[Message]) -> Result<Vec<ToolCall>> {
 
 /// 消息里可按关键字搜到的文字：用户一方的文字（不含运行上下文）、模型的文字回复、工具调用（工具名与参数的各个字符串值）。
 /// 不含工具结果（文件内容、命令输出，搜什么都会命中很多）和思考。各段用换行连接；没有文字时为空串。
-pub fn searchable_text(message: &Message) -> String {
+pub(crate) fn searchable_text(message: &Message) -> String {
     let mut chunks: Vec<String> = Vec::new();
     match message {
         Message::User(r) => {

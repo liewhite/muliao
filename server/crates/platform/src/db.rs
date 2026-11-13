@@ -236,6 +236,11 @@ pub fn migrate(path: &Path, domains: &[Migration]) -> Result<(), MigrateError> {
     Ok(())
 }
 
+/// `IN (…)` 里的 n 个 `?`，逗号分隔。
+pub fn placeholders(n: usize) -> String {
+    vec!["?"; n].join(", ")
+}
+
 /// 含有 text（按字面，`%` `_` `\` 转义）的 LIKE 模式；SQL 里写 `LIKE ? ESCAPE '\'`。
 pub fn like_contains(text: &str) -> String {
     format!("%{}%", escape_like(text))

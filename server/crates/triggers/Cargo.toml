@@ -27,6 +27,7 @@ uuid = { workspace = true }
 similar = "2"
 
 [dev-dependencies]
+muliao-sessions = { workspace = true, features = ["testing"] }
 muliao-files = { workspace = true }
 muliao-runtime = { workspace = true }
 reqwest = { workspace = true }

@@ -11,7 +11,7 @@ use muliao_platform::db::{Database, Tx};
 use rusqlite::{Connection, params};
 
 use crate::actor::Waker;
-use crate::holds::{self, COLUMN_COUNT, COLUMNS, Outside, abandon_in, from_row};
+use crate::holds::{self, Hold, Outside, abandon_in, active_wakes_in};
 use crate::work::{EventSource, deliver_in};
 use muliao_platform::errors::Result;
 
@@ -24,43 +24,38 @@ pub struct Scheduled {
     pub replaced: Option<DateTime<Utc>>,
 }
 
+/// 约好的一次唤醒。
+struct Wakeup {
+    due_at: DateTime<Utc>,
+    note: String,
+    created_at: DateTime<Utc>,
+}
+
 /// 取消会话还在等的唤醒（至多一个），返回它原定的时刻。
-pub fn cancel_in(c: &Connection, session_id: &str) -> Result<Option<DateTime<Utc>>> {
+pub(crate) fn cancel_in(c: &Connection, session_id: &str) -> Result<Option<DateTime<Utc>>> {
     let mut cancelled = None;
-    for (hold, due_at) in waiting_in(c, "h.session_id = ?1", [session_id])? {
+    for (hold, wakeup) in waiting_in(c, Some(session_id))? {
         abandon_in(c, &hold)?;
-        cancelled = Some(due_at);
+        cancelled = Some(wakeup.due_at);
     }
     Ok(cancelled)
 }
 
-/// 占用还 active 的唤醒与它约的时刻（按约的时刻）；filter 是 SQL 条件（表别名 h 是占用、w 是唤醒）。
-fn waiting_in(
-    c: &Connection,
-    filter: &str,
-    params: impl rusqlite::Params,
-) -> Result<Vec<(holds::Hold, DateTime<Utc>)>> {
-    waiting_rows(c, filter, params, |r| r.get(COLUMN_COUNT))
-}
-
-/// 同 [`waiting_in`]，每行另取 extra（从第 [`COLUMN_COUNT`] 列起是 w.due_at、w.note、w.created_at）。
-fn waiting_rows<T>(
-    c: &Connection,
-    filter: &str,
-    params: impl rusqlite::Params,
-    extra: impl Fn(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
-) -> Result<Vec<(holds::Hold, T)>> {
-    let sql = format!(
-        "SELECT {COLUMNS}, w.due_at, w.note, w.created_at FROM session_holds h JOIN wakeups w ON w.holder = h.holder \
-         WHERE h.status = 'active' AND {filter} ORDER BY w.due_at"
-    );
-    let mut stmt = c.prepare(&sql)?;
-    let rows = stmt.query_map(params, |r| Ok((from_row(r)?, extra(r)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
-    rows.into_iter().map(|(raw, x)| Ok((holds::hold(raw)?, x))).collect()
+/// 占用还 active 的唤醒（按约的时刻）；session_id：只看这个会话的。
+fn waiting_in(c: &Connection, session_id: Option<&str>) -> Result<Vec<(Hold, Wakeup)>> {
+    let mut stmt = c.prepare("SELECT due_at, note, created_at FROM wakeups WHERE holder = ?1")?;
+    let mut waiting = Vec::new();
+    for (hold, holder) in active_wakes_in(c, session_id)? {
+        let wakeup =
+            stmt.query_row([&holder], |r| Ok(Wakeup { due_at: r.get(0)?, note: r.get(1)?, created_at: r.get(2)? }))?;
+        waiting.push((hold, wakeup));
+    }
+    waiting.sort_by_key(|(_, w)| w.due_at);
+    Ok(waiting)
 }
 
 /// 约一次唤醒，取代会话还在等的那个。awaited：用户是否在等约它的那次运行的回答（唤醒的信件随之推送）。
-pub fn schedule_in(
+pub(crate) fn schedule_in(
     c: &Connection,
     session_id: &str,
     call_id: &str,
@@ -80,15 +75,12 @@ pub fn schedule_in(
 }
 
 /// 会话还在等的唤醒（至多一个）：约的时刻与说明，会话页的等待项用。
-pub(crate) fn pending_of_in(c: &Connection, session_id: &str) -> Result<Vec<(holds::Hold, DateTime<Utc>, String)>> {
-    Ok(waiting_rows(c, "h.session_id = ?1", [session_id], |r| Ok((r.get(COLUMN_COUNT)?, r.get(COLUMN_COUNT + 1)?)))?
-        .into_iter()
-        .map(|(h, (due, note))| (h, due, note))
-        .collect())
+pub(crate) fn pending_of_in(c: &Connection, session_id: &str) -> Result<Vec<(Hold, DateTime<Utc>, String)>> {
+    Ok(waiting_in(c, Some(session_id))?.into_iter().map(|(h, w)| (h, w.due_at, w.note)).collect())
 }
 
 /// 给模型看的本地时刻（带时区缩写）。
-pub fn local_time(at: DateTime<Utc>, tz: Tz) -> String {
+pub(crate) fn local_time(at: DateTime<Utc>, tz: Tz) -> String {
     at.with_timezone(&tz).format("%Y-%m-%d %H:%M %Z").to_string()
 }
 
@@ -97,19 +89,13 @@ pub(crate) async fn deliver_due(db: &Database, waker: &Waker, tz: Tz) -> Result<
     let waker = waker.clone();
     db.write(move |tx: &mut Tx<'_>| {
         let now = Utc::now();
-        let due = waiting_rows(tx, "w.due_at <= ?1", [now], |r| {
-            Ok((
-                r.get::<_, DateTime<Utc>>(COLUMN_COUNT)?,
-                r.get::<_, String>(COLUMN_COUNT + 1)?,
-                r.get(COLUMN_COUNT + 2)?,
-            ))
-        })?;
-        for (hold, (due_at, note, created_at)) in &due {
-            let created_at: &DateTime<Utc> = created_at;
+        let due: Vec<_> = waiting_in(tx, None)?.into_iter().take_while(|(_, w)| w.due_at <= now).collect();
+        for (hold, wakeup) in &due {
             let text = format!(
-                "Wake-up you scheduled with {WAKE_ME} at {} is due ({}). Your note: {note}",
-                local_time(*created_at, tz),
-                local_time(*due_at, tz)
+                "Wake-up you scheduled with {WAKE_ME} at {} is due ({}). Your note: {}",
+                local_time(wakeup.created_at, tz),
+                local_time(wakeup.due_at, tz),
+                wakeup.note
             );
             deliver_in(tx, &waker, Some(hold), &EventSource::Wake, &text, None)?;
         }
