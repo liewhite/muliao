@@ -23,8 +23,6 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Action; 2] = [Action::Use, Action::Write];
-
     pub fn as_str(self) -> &'static str {
         match self {
             Action::Use => "use",

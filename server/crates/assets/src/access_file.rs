@@ -352,17 +352,14 @@ pub fn vet(before: Option<&str>, after: &str, tools: &ToolTable, addressable: &[
         return Err(invalid(reasons.join("; ")));
     }
     let old: HashSet<Rule> = rules_in(before).into_iter().collect();
-    let mut bad: Vec<String> = Vec::new();
+    let mut bad: Vec<Rule> = Vec::new();
     for r in rules_in(Some(after)) {
-        let p = r.to_string();
-        if old.contains(&r) || bad.contains(&p) {
-            continue;
-        }
-        if r.matches_nothing(addressable) {
-            bad.push(p);
+        if !old.contains(&r) && !bad.contains(&r) && r.matches_nothing(addressable) {
+            bad.push(r);
         }
     }
     if !bad.is_empty() {
+        let bad = texts(&bad);
         return Err(invalid(format!(
             "rules {bad:?} match no existing tool, skill, MCP server, secret or shared memory; check the names (tools \
              are listed by get_agent, e.g. 'use:tool:issue_*'; private memories belong to their agent and are not \
