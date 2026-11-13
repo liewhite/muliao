@@ -387,7 +387,8 @@ struct Driver<'a> {
     config: &'a AgentDir,
     audience: Audience,
     partial: SharedPartial,
-    /// 发给模型的历史（存储形态）：保存一步就接上这一步，压缩后从库里重新加载
+    /// 发给模型的历史（存储形态）：保存一步就接上这一步，压缩后从库里重新加载。这次运行新增的工具调用不脱敏（库里那份
+    /// 脱敏）：下一步执行的就是它们（#770）
     history: Vec<Message>,
     context: SessionContext,
     /// 挂着这次运行的运行上下文的那条请求：还没挂，或压缩把它切进了摘要时为 None，下一条新请求挂一段
