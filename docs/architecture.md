@@ -229,6 +229,7 @@ Web / 触发器 / delegate_task / ask_agent        后台任务与委派的结�
 - **使用**：上下文 = 最新摘要（放进 instructions）+ 切点之后的原始消息（`history::load_context`）。原始消息不删，界面显示全文并标出压缩点；会话页显示「上下文 现在 / 阈值」（#600），「现在」就是压缩判断看的那个数；平台不知道模型标称窗口，所以上限显示压缩阈值。
 ## 12. 数据库迁移
 - **表结构**：每个领域在自己的 crate 里给出一串 SQL（`platform::db::Migration`），按领域在 `schema_versions` 表记版本；组合根的 `MIGRATIONS` 列出全部领域。启动时（`platform::db::migrate`）在一个 `BEGIN IMMEDIATE` 事务里把每个领域升到最新，期间关外键防级联删除，提交前跑 `foreign_key_check`，任何一步失败整个回滚、什么都不留；库里某领域的版本比代码新（装回了旧版）时拒绝启动。已部署的数据只经迁移升级，不删库。
+- **换算旧数据的迁移配回归测试**（例：`sessions/tests/migrations.rs`）：停在那一步之前的版本插入旧形状的行，升到那一步和最新，用领域代码读出断言。只用程序内置的 SQLite 验，命令行 sqlite3 版本不同、JSON 子类型的处理不同，手验看不出存错形状。
 - Python 版旧库到 Rust 版的一次性迁移工具（#688，`server/crates/migrate`）在切换完成后已删除（#775），要看从 git 历史取。
 ## 13. 进化机制
 - **Skill**：agent 在任何运行里都能在自己的资源目录建 `skills/<名>/SKILL.md`，新建的归自己、只有自己用，要给别人用就加进角色。名字全局唯一：与平台同名的只加载平台那份，agent 之间同名的都不加载并报出（#502）。
