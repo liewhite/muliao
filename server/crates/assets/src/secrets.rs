@@ -121,14 +121,17 @@ impl Secrets {
                  your roles or your own allow rules)"
             )));
         }
-        if usage == SecretUse::AgentCommand {
-            let denied: Vec<&String> = keys.iter().filter(|k| !found[k.as_str()].1.allow_shell).collect();
-            if !denied.is_empty() {
-                return Err(invalid(format!(
-                    "secret(s) {denied:?} are not allowed in shell commands (allow_shell = false): use them through a \
-                     skill script that wraps the operation, with skill_run(secrets=[...])"
-                )));
+        match usage {
+            SecretUse::AgentCommand => {
+                let denied: Vec<&String> = keys.iter().filter(|k| !found[k.as_str()].1.allow_shell).collect();
+                if !denied.is_empty() {
+                    return Err(invalid(format!(
+                        "secret(s) {denied:?} are not allowed in shell commands (allow_shell = false): use them through \
+                         a skill script that wraps the operation, with skill_run(secrets=[...])"
+                    )));
+                }
             }
+            SecretUse::Wrapped => {}
         }
         let mut values = BTreeMap::new();
         for k in keys {
