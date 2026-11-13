@@ -87,15 +87,14 @@ pub struct UserMessage {
     pub approvals: BTreeMap<String, Choice>,
 }
 
-/// 投不进的原因（只有收信入口判断，发送方按原因决定自己怎么反应）。
+/// 别的领域的来信投不进的原因：目标 agent 收不了信（只有收信入口判断，发送方按原因决定自己怎么反应）。发送方只投新会话
+/// 或按自己定位的会话，所以没有「会话不在了」「不准续写」这两种（那是续写已有会话的用户、父会话才会碰到的，直接报错）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Refusal {
     /// 目标 agent 已归档：取消归档后又能投
     Archived,
-    /// 目标会话已删除，或目标 agent 不存在、正在删除
+    /// 目标 agent 不存在、正在删除
     Gone,
-    /// 目标会话不是这个发送方开的，它不准续写
-    NotYours,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,7 +108,6 @@ impl Refused {
         match self.reason {
             Refusal::Archived => conflict(self.detail),
             Refusal::Gone => not_found(self.detail),
-            Refusal::NotYours => forbidden(self.detail),
         }
     }
 }
@@ -243,7 +241,8 @@ pub(crate) fn create_session_in(c: &Connection, opener: Opener<'_>, agent_id: &s
     )
 }
 
-/// 新来信能不能交给这个 agent（不能时是原因）。
+/// 新来信能不能交给这个 agent（不能时是原因）。「agent 能不能收信」只在这里回答：发送方要在投信前判断（如触发器不为
+/// 收不了信的 agent 跑前置检查）也用它（[`SenderInbox::refusal_in`]）。
 fn agent_refusal_in(c: &Connection, agent_id: &str) -> Result<Option<Refused>> {
     Ok(match availability_in(c, agent_id)? {
         Availability::Runnable => None,
@@ -264,8 +263,8 @@ pub(crate) struct Checked {
     attachments: Vec<FileMeta>,
 }
 
-/// 来信的校验规则（只读）：目标会话存在且发送方可以续写、agent 能运行，不满足的是 Refused。内容为空、附件不存在是发送方
-/// 自己的错（只有用户的消息会碰到），仍然报错。
+/// 来信的校验规则（只读）：agent 收不了信的是 Refused。续写已有会话时（只有用户与父会话会）会话不在了、发送方不准续写
+/// 直接报领域错误；内容为空、附件不存在是发送方自己的错（只有用户的消息会碰到），也报错。
 pub(crate) fn check_in(c: &Connection, inbound: &Inbound) -> Result<std::result::Result<Checked, Refused>> {
     if inbound.content.trim().is_empty()
         && inbound.attachments.is_empty()
@@ -296,21 +295,18 @@ pub(crate) fn check_in(c: &Connection, inbound: &Inbound) -> Result<std::result:
                 }
             }
         }
-        Target::Existing(id) => match directory::get_in(c, id)? {
-            Some(s) => s,
-            None => return Ok(Err(Refused { reason: Refusal::Gone, detail: format!("session {id:?} not found") })),
-        },
+        Target::Existing(id) => {
+            let session = directory::get_in(c, id)?.ok_or_else(|| not_found(format!("session {id:?} not found")))?;
+            if !may_continue(&session, &inbound.from) {
+                tracing::warn!(session_id = %session.id, sender = ?inbound.from, "continuation refused");
+                return Err(forbidden(format!(
+                    "session {} was not started by this sender; it may only continue its own sessions",
+                    session.id
+                )));
+            }
+            session
+        }
     };
-    if !may_continue(&session, &inbound.from) {
-        tracing::warn!(session_id = %session.id, sender = ?inbound.from, "continuation refused");
-        return Ok(Err(Refused {
-            reason: Refusal::NotYours,
-            detail: format!(
-                "session {} was not started by this sender; it may only continue its own sessions",
-                session.id
-            ),
-        }));
-    }
     Ok(match agent_refusal_in(c, &session.agent_id)? {
         Some(r) => Err(r),
         None => Ok(Checked { session: Some(session), attachments }),
@@ -409,6 +405,11 @@ pub struct SenderInbox {
 impl SenderInbox {
     pub fn new(waker: Waker) -> Self {
         Self { waker }
+    }
+
+    /// 这个 agent 现在收不收得了新来信（只读）：发送方在投信前要先知道时用，投信本身仍以 [`Self::receive_in`] 的结果为准。
+    pub fn refusal_in(c: &Connection, agent_id: &str) -> Result<Option<Refused>> {
+        agent_refusal_in(c, agent_id)
     }
 
     /// 投不进的返回 Refused（原因由这里判断，发送方只决定自己怎么反应）。

@@ -15,12 +15,12 @@ use std::time::Duration;
 
 use chrono::Utc;
 use chrono_tz::Tz;
-use muliao_assets::agents::{Availability, agent_in, availability_in, runnable_agent_in};
+use muliao_assets::agents::runnable_agent_in;
 use muliao_assets::lifecycle::DeletionHook;
 use muliao_platform::db::{Database, Tx};
 use muliao_platform::errors::{DomainError, ErrorKind};
 use muliao_sessions::activity::{WorkState, states_of_in};
-use muliao_sessions::inbound::{SenderInbox, SenderMail, SenderTarget};
+use muliao_sessions::inbound::{Refusal, Refused, SenderInbox, SenderMail, SenderTarget};
 use muliao_sessions::origins::Sender;
 use muliao_workspace::commands::AgentCommands;
 use rusqlite::Connection;
@@ -512,11 +512,11 @@ impl TriggerService {
                     return Ok::<_, Error>(First::Done(Outcome::Skipped(Skip::Deleted, detail)));
                 };
                 // 停用、归档的 agent 不跑前置检查、不触发；检查结束后投信前再查一次（检查期间可能被归档）
-                if let Some((why, detail)) = skip_in(tx, &t)? {
-                    return Ok(First::Done(Outcome::Skipped(why, detail)));
+                if let Some(outcome) = skip_in(tx, &t)? {
+                    return Ok(First::Done(outcome));
                 }
                 match t.precheck.clone() {
-                    None => Ok(First::Done(Outcome::Fired(this.deliver_in(tx, &mut t, event.as_deref())?))),
+                    None => Ok(First::Done(this.deliver_in(tx, &mut t, event.as_deref())?)),
                     Some(precheck) => Ok(First::Check { agent_id: t.agent_id.clone(), precheck }),
                 }
             })
@@ -545,9 +545,6 @@ impl TriggerService {
                     Ok(output) => output,
                     Err(Failed(error)) => return this.check_failed_in(tx, &mut t, &precheck, error, record),
                 };
-                if let Some((why, detail)) = skip_in(tx, &t)? {
-                    return Ok(Outcome::Skipped(why, detail));
-                }
                 let previous = baseline_in(tx, trigger_id)?;
                 let decision = match decide(&precheck, &output, previous.as_deref(), this.0.precheck.max_bytes()) {
                     Ok(d) => d,
@@ -560,7 +557,7 @@ impl TriggerService {
                         save_in(tx, &t)?;
                         Ok(Outcome::Nothing)
                     }
-                    Some(event) => Ok(Outcome::Fired(this.deliver_in(tx, &mut t, Some(&event))?)),
+                    Some(event) => this.deliver_in(tx, &mut t, Some(&event)),
                 }
             })
             .await
@@ -584,8 +581,9 @@ impl TriggerService {
         Ok(Outcome::CheckFailed(error))
     }
 
-    /// 新开触发器 agent 的一个会话交出这次事件：记下触发与投信在同一事务，恰好一次。
-    fn deliver_in(&self, tx: &mut Tx<'_>, t: &mut Trigger, payload: Option<&str>) -> Result<Fired> {
+    /// 新开触发器 agent 的一个会话交出这次事件：记下触发与投信在同一事务，恰好一次。agent 收不了信（检查期间被归档、
+    /// 正在删除）时这次跳过。
+    fn deliver_in(&self, tx: &mut Tx<'_>, t: &mut Trigger, payload: Option<&str>) -> Result<Outcome> {
         let now = Utc::now();
         let mail = SenderMail {
             sender: Sender::Trigger { trigger_id: t.id },
@@ -597,18 +595,12 @@ impl TriggerService {
         };
         let session_id = match self.0.inbox.receive_in(tx, mail)? {
             Ok(accepted) => accepted.session_id,
-            // 新会话只看 agent 能不能运行，同一事务里刚由 skip_in 确认过
-            Err(refused) => {
-                return Err(Error::Broken(format!(
-                    "trigger {:?}: its own agent refused after the check: {}",
-                    t.name, refused.detail
-                )));
-            }
+            Err(refused) => return Ok(skipped(t, refused)),
         };
         (t.last_fired_at, t.last_session_id) = (Some(now), Some(session_id.clone()));
         save_in(tx, t)?;
         tracing::info!(trigger = %t.name, kind = %t.kind, session_id, "trigger fired");
-        Ok(Fired { session_id })
+        Ok(Outcome::Fired(Fired { session_id }))
     }
 }
 
@@ -628,17 +620,19 @@ fn manageable_in(c: &Connection, trigger_id: i64) -> Result<Trigger> {
     Ok(t)
 }
 
-/// 触发器自己能不能触发：停用、它的 agent 已归档或不在了时这次不触发。投信之前在同一事务里查，投不进就都是目标的问题。
-fn skip_in(c: &Connection, t: &Trigger) -> Result<Option<(Skip, String)>> {
+/// 触发器这次跑不跑（前置检查之前）：停用的不跑；它的 agent 收不了信的不跑前置检查（能不能收信由会话领域回答）。
+fn skip_in(c: &Connection, t: &Trigger) -> Result<Option<Outcome>> {
     if !t.enabled {
-        return Ok(Some((Skip::Disabled, format!("trigger {:?} is disabled", t.name))));
+        return Ok(Some(Outcome::Skipped(Skip::Disabled, format!("trigger {:?} is disabled", t.name))));
     }
-    Ok(match availability_in(c, &t.agent_id)? {
-        Availability::Runnable => None,
-        Availability::Archived => {
-            let agent = agent_in(c, &t.agent_id)?.name;
-            Some((Skip::Archived, format!("trigger {:?}: agent {agent:?} is archived; unarchive it first", t.name)))
-        }
-        Availability::Gone => Some((Skip::Deleted, format!("trigger {:?}: its agent is being deleted", t.name))),
-    })
+    Ok(SenderInbox::refusal_in(c, &t.agent_id)?.map(|r| skipped(t, r)))
+}
+
+/// 它的 agent 收不了信：这次跳过（归档的保持启用，取消归档后照常触发；不在了的按删除算）。
+fn skipped(t: &Trigger, refused: Refused) -> Outcome {
+    let why = match refused.reason {
+        Refusal::Archived => Skip::Archived,
+        Refusal::Gone => Skip::Deleted,
+    };
+    Outcome::Skipped(why, format!("trigger {:?}: {}", t.name, refused.detail))
 }

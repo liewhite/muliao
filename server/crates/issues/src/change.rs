@@ -21,7 +21,7 @@ use rusqlite::Connection;
 
 use crate::activity::{Activity, Arrival, Change, DependencyChange, Happening, record_in, timeline_in};
 use crate::conversation;
-use crate::error::{Error, Result, broken, invalid};
+use crate::error::{Error, Result, invalid};
 use crate::graph::{Links, downstream_in, links_of_in, set_depends_on_in};
 use crate::model::{Actor, Assignee, By, Issue, Priority, Status, agent_of, issue_in, save_in};
 use crate::render::delivery_message;
@@ -363,12 +363,6 @@ impl Changes {
             // 删除流程会清理它在 issue 上的指派与 owner
             Err(Refused { reason: Refusal::Archived | Refusal::Gone, detail }) => {
                 tracing::info!(issue_id = issue.id, %detail, "issue activity not delivered");
-            }
-            Err(Refused { reason: Refusal::NotYours, detail }) => {
-                return Err(broken(format!(
-                    "issue #{}: mail to the agent's own issue session was refused as not ours: {detail}",
-                    issue.id
-                )));
             }
         }
         Ok(())
