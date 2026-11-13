@@ -16,6 +16,7 @@ use muliao_sessions::runs::RunRecord;
 use muliao_sessions::transcript::SavedItem;
 use muliao_sessions::work::{EventSource, parse_source};
 use muliao_usage::UsageTotals;
+use muliao_workspace::jobs::JobStatus;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::router::OpenApiRouter;
@@ -225,8 +226,8 @@ pub struct CompactionOut {
 #[derive(Serialize, ToSchema)]
 pub struct JobOut {
     pub command: String,
-    /// running、exited、killed、interrupted：取等待项与取任务信息不在同一事务，之间任务可能已经结束（结局还没交回）
-    pub status: String,
+    /// 取等待项与取任务信息不在同一事务，之间任务可能已经结束（结局还没交回）
+    pub status: JobStatus,
     /// 日志，相对 agent 工作目录
     pub log_path: String,
     /// 日志最后几行
@@ -251,7 +252,7 @@ async fn wait_outs(s: &AppState, agent_id: &str, waits: Vec<Wait>) -> ApiResult<
                 let info = s.services.jobs.info(*job_id, agent_id).await?;
                 Some(JobOut {
                     command: info.command,
-                    status: info.status.to_owned(),
+                    status: info.state.status(),
                     log_path: info.log_path,
                     tail: info.tail,
                 })

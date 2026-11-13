@@ -4,7 +4,7 @@
 use muliao_sessions::activity::WorkState;
 
 use crate::activity::{Activity, Happening};
-use crate::model::{Actor, Assignee, Status, agent_of};
+use crate::model::{Actor, Assignee, Recorded, Status, agent_of};
 
 /// issue 会话在指令里的说明：怎么处理一个 issue（会话级、不变，进缓存前缀；信件里不重复）。组合根交给会话领域
 /// （`OriginNotes`）。
@@ -102,11 +102,10 @@ pub fn handed_to_user<'a>(actor: &'a Actor, assignee: Option<&Assignee>, happene
 }
 
 /// 这次的状态变更让 issue 进入 done / cancelled（下游因此少等一个上游）：返回进入前的状态（原文），否则 None。
-pub fn finishing(happened: &[Activity]) -> Option<String> {
+pub fn finishing(happened: &[Activity]) -> Option<Recorded> {
     happened.iter().find_map(|a| match &a.what {
         Happening::Status { change } => {
-            let finished = |s: &str| Status::parse(s).is_some_and(Status::finished);
-            (!finished(&change.before) && finished(&change.to)).then(|| change.before.clone())
+            (!change.before.finished() && change.to.finished()).then(|| change.before.clone())
         }
         _ => None,
     })
@@ -231,9 +230,11 @@ mod tests {
         let created = [act(a.clone(), Happening::Created)];
         assert_eq!(handed_to_user(&a, Some(&Assignee::User), &created), Some("a"));
         assert_eq!(handed_to_user(&a, agent("b").as_ref(), &created), None);
-        let done = [act(a.clone(), Happening::Status { change: Change::new("in_progress".into(), "done".into()) })];
-        assert_eq!(finishing(&done).as_deref(), Some("in_progress"));
-        let reopened = [act(a.clone(), Happening::Status { change: Change::new("done".into(), "cancelled".into()) })];
+        let done =
+            [act(a.clone(), Happening::Status { change: Change::new(Status::InProgress.into(), Status::Done.into()) })];
+        assert_eq!(finishing(&done), Some(Recorded::Now(Status::InProgress)));
+        let reopened =
+            [act(a.clone(), Happening::Status { change: Change::new(Status::Done.into(), Status::Cancelled.into()) })];
         assert_eq!(finishing(&reopened), None);
         let comment = [act(Actor::User, Happening::Comment { body: "x".into() })];
         assert!(from_outside(&Actor::User, &comment));

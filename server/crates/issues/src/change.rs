@@ -181,7 +181,7 @@ impl IssueChange<'_> {
     pub fn set_status(&mut self, status: Status) -> Result<()> {
         if status != self.issue.status {
             let before = std::mem::replace(&mut self.issue.status, status);
-            self.record(Happening::Status { change: Change::new(before.as_str().into(), status.as_str().into()) })?;
+            self.record(Happening::Status { change: Change::new(before.into(), status.into()) })?;
         }
         Ok(())
     }
@@ -299,8 +299,7 @@ impl Changes {
         if let Some(was) = finishing(happened) {
             let downstream = downstream_in(tx, issue.id)?;
             for down in &downstream {
-                let change =
-                    DependencyChange { issue: issue.id, before: was.clone(), to: issue.status.as_str().into() };
+                let change = DependencyChange { issue: issue.id, before: was.clone(), to: issue.status.into() };
                 self.open_in(tx, *down, by, Routing::ByRules, |d| {
                     d.record(Happening::Dependency { change }).map(drop)
                 })?;

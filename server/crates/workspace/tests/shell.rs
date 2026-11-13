@@ -9,6 +9,7 @@ use common::{Out, World, world};
 use muliao_sessions::events::SessionStopped;
 use muliao_sessions::mailbox::MailBody;
 use muliao_workspace::grants::GRANTED_NOTE;
+use muliao_workspace::jobs::{End, JobState, JobStatus};
 use serde_json::json;
 
 const SCRIPT: &str = "#!/bin/sh\necho \"args: $*\"\necho \"key is $DEPLOY_KEY\"\n";
@@ -38,7 +39,7 @@ fn job_id(started: &str) -> i64 {
 async fn wait_done(w: &World, id: i64) -> muliao_workspace::jobs::JobInfo {
     for _ in 0..200 {
         let info = w.workspace.jobs.info(id, &w.me).await.unwrap();
-        if info.status != "running" {
+        if info.state != JobState::Running {
             return info;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -189,7 +190,7 @@ async fn a_finished_background_job_reports_back_with_its_output() {
         )
     );
     let info = wait_done(&w, id).await;
-    assert_eq!((info.status, info.exit_code), ("exited", Some(2)));
+    assert!(matches!(info.state, JobState::Ended { end: End::Exited { code: Some(2) }, .. }), "{info:?}");
     assert_eq!(std::fs::read_to_string(w.ws().join(&info.log_path)).unwrap(), "[secret:TOKEN]\ndone\n");
     let mail = w.queued().await;
     assert_eq!(mail.len(), 1);
@@ -236,7 +237,7 @@ async fn running_jobs_get_check_events_without_piling_up_and_can_be_killed() {
         format!("sent kill signal to job {id}; its final status will arrive as an event")
     );
     let info = wait_done(&w, id).await;
-    assert_eq!(info.status, "killed");
+    assert_eq!(info.state.status(), JobStatus::Killed);
     let mail = w.queued().await;
     assert!(
         mail.last()
@@ -253,7 +254,7 @@ async fn a_job_ends_when_its_process_exits_even_if_a_grandchild_keeps_the_output
     let started = w.call("run_shell", json!({"command": "(sleep 30 &); echo parent", "background": true})).await;
     let id = job_id(started.ok());
     let info = wait_done(&w, id).await;
-    assert_eq!(info.status, "exited");
+    assert_eq!(info.state.status(), JobStatus::Exited);
     let mail = w.queued().await;
     assert!(
         mail[0].body.content().contains(&format!("Note: {}", muliao_platform::shell::LEFT_RUNNING_NOTE)),
@@ -279,7 +280,7 @@ async fn stopping_the_session_kills_its_jobs() {
     })
     .await
     .unwrap();
-    assert_eq!(wait_done(&w, id).await.status, "killed");
+    assert_eq!(wait_done(&w, id).await.state.status(), JobStatus::Killed);
 }
 
 #[tokio::test]
@@ -295,7 +296,7 @@ async fn jobs_left_running_by_a_previous_process_are_reported_interrupted() {
     );
     fresh.run().await.unwrap().abort();
     let info = fresh.info(id, &w.me).await.unwrap();
-    assert_eq!(info.status, "interrupted");
+    assert_eq!(info.state.status(), JobStatus::Interrupted);
     let mail = w.queued().await;
     let text = mail[0].body.content();
     assert!(
@@ -314,7 +315,7 @@ async fn shutting_down_reports_running_jobs_as_interrupted() {
     let id = job_id(started.ok());
     w.workspace.jobs.shutdown().await;
     let info = w.workspace.jobs.info(id, &w.me).await.unwrap();
-    assert_eq!(info.status, "interrupted");
+    assert_eq!(info.state.status(), JobStatus::Interrupted);
     let mail = w.queued().await;
     assert!(mail[0].body.content().starts_with(&format!(
         "Background job {id} was interrupted after 0m00s: the service was stopped. It may have partly run."
@@ -347,6 +348,6 @@ async fn an_unreadable_log_does_not_keep_the_job_from_ending() {
     std::fs::set_permissions(&log, std::fs::Permissions::from_mode(0o000)).unwrap();
     let info = wait_done(&w, id).await;
     std::fs::set_permissions(&log, std::fs::Permissions::from_mode(0o644)).unwrap();
-    assert_eq!(info.status, "exited");
+    assert_eq!(info.state.status(), JobStatus::Exited);
     assert!(w.queued().await[0].body.content().contains("Last lines of output:\n(could not read the log: "));
 }

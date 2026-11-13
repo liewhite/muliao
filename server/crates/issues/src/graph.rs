@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use rusqlite::{Connection, params, params_from_iter};
 use serde::{Deserialize, Serialize};
 
-use crate::error::{Result, broken, invalid};
+use crate::error::{Result, invalid};
 use crate::model::Status;
 
 /// 依赖关系里的另一个 issue（上游或下游）与它现在的状态。
@@ -142,12 +142,10 @@ pub fn links_in(c: &Connection, issue_ids: &[i64]) -> Result<BTreeMap<i64, Links
         let mut stmt = c.prepare(&sql)?;
         let rows = stmt
             .query_map(params_from_iter(issue_ids), |r| {
-                Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?))
+                Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, Status>(2)?))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         for (at, other, status) in rows {
-            let status =
-                Status::parse(&status).ok_or_else(|| broken(format!("issue #{other} has status {status:?}")))?;
             let entry = links.get_mut(&at).expect("queried for these issues");
             let side = if upstream { &mut entry.depends_on } else { &mut entry.blocks };
             side.push(Dependency { id: other, status });

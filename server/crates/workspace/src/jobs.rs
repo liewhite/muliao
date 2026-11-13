@@ -43,8 +43,9 @@ pub const TICK: Duration = Duration::from_secs(5);
 /// 关停时等照看者写完结局最多这么久
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(2 * DRAIN.as_secs());
 
-/// 后台任务的状态。结束的三种：自己退出（看 exit_code）、被 job_kill 或会话停止结束、因服务停止被中断。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// 后台任务的状态（界面与 job_status 看到的）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum JobStatus {
     Running,
     Exited,
@@ -61,23 +62,69 @@ impl JobStatus {
             JobStatus::Interrupted => "interrupted",
         }
     }
+}
 
-    fn parse(raw: &str) -> Option<Self> {
-        Some(match raw {
-            "running" => JobStatus::Running,
-            "exited" => JobStatus::Exited,
-            "killed" => JobStatus::Killed,
-            "interrupted" => JobStatus::Interrupted,
-            _ => return None,
-        })
+/// 后台任务怎样结束的（结束的时刻在记下时另给，[`End::at`]）。code：退出码，被信号结束的是负的信号值，取不到为 None。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum End {
+    /// 自己退出
+    Exited { code: Option<i32> },
+    /// 被 job_kill 或会话停止结束
+    Killed { code: Option<i32> },
+    /// 因服务停止被中断
+    Interrupted,
+}
+
+impl End {
+    fn at(self, at: DateTime<Utc>) -> JobState {
+        JobState::Ended { end: self, at }
     }
 }
 
-impl rusqlite::types::FromSql for JobStatus {
-    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
-        let raw = value.as_str()?;
-        JobStatus::parse(raw)
-            .ok_or_else(|| rusqlite::types::FromSqlError::Other(format!("unknown job status {raw:?}").into()))
+/// 后台任务的状态：结束了的带结局与结束的时刻。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobState {
+    Running,
+    Ended { end: End, at: DateTime<Utc> },
+}
+
+impl JobState {
+    pub fn status(self) -> JobStatus {
+        match self {
+            JobState::Running => JobStatus::Running,
+            JobState::Ended { end: End::Exited { .. }, .. } => JobStatus::Exited,
+            JobState::Ended { end: End::Killed { .. }, .. } => JobStatus::Killed,
+            JobState::Ended { end: End::Interrupted, .. } => JobStatus::Interrupted,
+        }
+    }
+
+    fn running(self) -> bool {
+        self == JobState::Running
+    }
+
+    /// 存下的三列（status、exit_code、finished_at）的唯一解析。
+    fn parse(status: &str, code: Option<i32>, at: Option<DateTime<Utc>>) -> Option<Self> {
+        Some(match (status, code, at) {
+            ("running", None, None) => JobState::Running,
+            ("exited", code, Some(at)) => End::Exited { code }.at(at),
+            ("killed", code, Some(at)) => End::Killed { code }.at(at),
+            ("interrupted", None, Some(at)) => End::Interrupted.at(at),
+            _ => return None,
+        })
+    }
+
+    /// 存成三列。
+    fn columns(self) -> (&'static str, Option<i32>, Option<DateTime<Utc>>) {
+        match self {
+            JobState::Running => ("running", None, None),
+            JobState::Ended { end, at } => {
+                let code = match end {
+                    End::Exited { code } | End::Killed { code } => code,
+                    End::Interrupted => None,
+                };
+                (self.status().as_str(), code, Some(at))
+            }
+        }
     }
 }
 
@@ -88,31 +135,35 @@ struct Job {
     session_id: String,
     agent_id: String,
     command: String,
-    status: JobStatus,
-    exit_code: Option<i32>,
+    state: JobState,
     log_path: String,
     pid: Option<i32>,
     check_seconds: f64,
     started_at: DateTime<Utc>,
-    finished_at: Option<DateTime<Utc>>,
 }
 
 const COLUMNS: &str =
     "id, session_id, agent_id, command, status, exit_code, log_path, pid, check_seconds, started_at, finished_at";
 
 fn job_of(r: &Row<'_>) -> rusqlite::Result<Job> {
+    let (status, code, at): (String, Option<i32>, Option<DateTime<Utc>>) = (r.get(4)?, r.get(5)?, r.get(10)?);
+    let state = JobState::parse(&status, code, at).ok_or_else(|| {
+        rusqlite::Error::FromSqlConversionFailure(
+            4,
+            rusqlite::types::Type::Text,
+            format!("job status {status:?} with exit code {code:?} and finished_at {at:?}").into(),
+        )
+    })?;
     Ok(Job {
         id: r.get(0)?,
         session_id: r.get(1)?,
         agent_id: r.get(2)?,
         command: r.get(3)?,
-        status: r.get(4)?,
-        exit_code: r.get(5)?,
+        state,
         log_path: r.get(6)?,
         pid: r.get(7)?,
         check_seconds: r.get(8)?,
         started_at: r.get(9)?,
-        finished_at: r.get(10)?,
     })
 }
 
@@ -138,12 +189,11 @@ pub struct JobStarted {
 }
 
 /// job_status 与界面看到的一个任务。
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JobInfo {
     pub id: i64,
     pub command: String,
-    pub status: &'static str,
-    pub exit_code: Option<i32>,
+    pub state: JobState,
     pub log_path: String,
     pub running_for: String,
     pub tail: String,
@@ -222,19 +272,19 @@ pub fn format_g(x: f64) -> String {
 }
 
 /// note：被中断时是原因；退出、被结束时是补充说明（如后代还占着输出），没有为 None。
-fn final_text(job: &Job, now: DateTime<Utc>, last: &str, note: Option<&str>) -> String {
+fn final_text(job: &Job, end: End, now: DateTime<Utc>, last: &str, note: Option<&str>) -> String {
     let took = duration(job.started_at, now);
-    let (head, note) = match job.status {
-        JobStatus::Exited => (
+    let (head, note) = match end {
+        End::Exited { code } => (
             format!(
                 "Background job {} finished with exit code {} after {took}.",
                 job.id,
-                job.exit_code.map_or("None".to_owned(), |c| c.to_string())
+                code.map_or("None".to_owned(), |c| c.to_string())
             ),
             note,
         ),
-        JobStatus::Killed => (format!("Background job {} was killed (job_kill) after {took}.", job.id), note),
-        _ => (
+        End::Killed { .. } => (format!("Background job {} was killed (job_kill) after {took}.", job.id), note),
+        End::Interrupted => (
             format!(
                 "Background job {} was interrupted after {took}: {}. It may have partly run.",
                 job.id,
@@ -408,53 +458,55 @@ impl JobRunner {
             });
             (code, read.is_some(), read.unwrap_or(Ok(())), ending)
         };
-        let (status, exit_code, note) = match (recorded, ending) {
+        let (end, note) = match (recorded, ending) {
             (Err(e), _) => {
                 tracing::error!(job_id, error = %e, "background job output could not be recorded");
-                (JobStatus::Interrupted, None, Some("its output could not be recorded (see server log)".to_owned()))
+                (End::Interrupted, Some("its output could not be recorded (see server log)".to_owned()))
             }
-            (Ok(()), Some(Ending::Interrupted(reason))) => (JobStatus::Interrupted, None, Some(reason)),
-            (Ok(()), ending) => {
-                let status = if ending == Some(Ending::Killed) { JobStatus::Killed } else { JobStatus::Exited };
-                (status, exit_code, (!drained).then(|| LEFT_RUNNING_NOTE.to_owned()))
+            (Ok(()), Some(Ending::Interrupted(reason))) => (End::Interrupted, Some(reason)),
+            (Ok(()), Some(Ending::Killed)) => {
+                (End::Killed { code: exit_code }, (!drained).then(|| LEFT_RUNNING_NOTE.to_owned()))
             }
+            (Ok(()), None) => (End::Exited { code: exit_code }, (!drained).then(|| LEFT_RUNNING_NOTE.to_owned())),
         };
-        if let Err(e) = self.finish(job_id, &log_file, status, exit_code, note, &shell).await {
+        if let Err(e) = self.finish(job_id, &log_file, end, note, &shell).await {
             tracing::error!(job_id, error = %e, "background job outcome could not be recorded; it stays running until the next start");
             return;
         }
-        tracing::info!(job_id, status = status.as_str(), exit_code, "background job finished");
+        tracing::info!(job_id, end = ?end, "background job finished");
     }
 
     async fn finish(
         &self,
         job_id: i64,
         log_file: &std::path::Path,
-        status: JobStatus,
-        exit_code: Option<i32>,
+        end: End,
         note: Option<String>,
         shell: &AgentShell,
     ) -> Result<()> {
         // 事务里不做文件 IO：进程已经结束，先读好输出的最后几行
         let path = log_file.to_path_buf();
         let last = tokio::task::spawn_blocking(move || log_tail(&path)).await.expect("reading the log panicked");
+        let exit_code = match end {
+            End::Exited { code } | End::Killed { code } => code,
+            End::Interrupted => None,
+        };
         let refused = shell.refusal(exit_code, &last);
         let work = self.work.clone();
         self.db
             .write(move |tx| {
                 let mut job = job_in(tx, job_id)?
                     .ok_or_else(|| Error::Broken(format!("job {job_id} vanished while it was running")))?;
-                if job.status != JobStatus::Running {
+                if !job.state.running() {
                     // 结局只记一次：照看者在写完之前一直登记着
                     return Err(Error::Broken(format!(
-                        "job {job_id} already ended as {}, cannot record {}",
-                        job.status.as_str(),
-                        status.as_str()
+                        "job {job_id} already ended as {}, cannot record {end:?}",
+                        job.state.status().as_str()
                     )));
                 }
                 let now = Utc::now();
-                (job.status, job.exit_code, job.finished_at) = (status, exit_code, Some(now));
-                let text = final_text(&job, now, &last, note.as_deref());
+                job.state = end.at(now);
+                let text = final_text(&job, end, now, &last, note.as_deref());
                 let text = match refused {
                     Some(r) => format!("{text}\n{r}"),
                     None => text,
@@ -468,8 +520,8 @@ impl JobRunner {
     pub async fn kill(&self, job_id: i64, agent_id: &str) -> Result<()> {
         let agent = agent_id.to_owned();
         let job = self.db.read(move |c| own_in(c, job_id, &agent)).await?;
-        if job.status != JobStatus::Running {
-            return Err(conflict(format!("job {job_id} is not running (status: {})", job.status.as_str())));
+        if !job.state.running() {
+            return Err(conflict(format!("job {job_id} is not running (status: {})", job.state.status().as_str())));
         }
         let handle = self.running.lock().expect("running lock").get(&job_id).cloned();
         if !handle.is_some_and(|h| h.end(Ending::Killed)) {
@@ -513,10 +565,15 @@ impl JobRunner {
         Ok(JobInfo {
             id: job.id,
             command: job.command.clone(),
-            status: job.status.as_str(),
-            exit_code: job.exit_code,
+            state: job.state,
             log_path: job.log_path.clone(),
-            running_for: duration(job.started_at, job.finished_at.unwrap_or_else(Utc::now)),
+            running_for: duration(
+                job.started_at,
+                match job.state {
+                    JobState::Running => Utc::now(),
+                    JobState::Ended { at, .. } => at,
+                },
+            ),
             tail,
         })
     }
@@ -560,7 +617,7 @@ impl JobRunner {
             .write(move |tx| {
                 let (mut checked, mut sent) = (Vec::new(), 0);
                 for id in ids {
-                    let Some(job) = job_in(tx, id)?.filter(|j| j.status == JobStatus::Running) else { continue };
+                    let Some(job) = job_in(tx, id)?.filter(|j| j.state.running()) else { continue };
                     let text = check_text(&job, Utc::now(), &tails[&id]);
                     if work.checked_in(tx, &job.session_id, id, &text)? {
                         sent += 1;
@@ -607,9 +664,9 @@ impl JobRunner {
             .write(move |tx| {
                 let mut closed = Vec::new();
                 for id in ids {
-                    let Some(mut job) = job_in(tx, id)?.filter(|j| j.status == JobStatus::Running) else { continue };
+                    let Some(mut job) = job_in(tx, id)?.filter(|j| j.state.running()) else { continue };
                     let now = Utc::now();
-                    (job.status, job.finished_at) = (JobStatus::Interrupted, Some(now));
+                    job.state = End::Interrupted.at(now);
                     let mut note = "the service stopped unexpectedly".to_owned();
                     if let Some(pid) = job.pid {
                         note.push_str(&format!(
@@ -617,7 +674,7 @@ impl JobRunner {
                              with `kill -- -{pid}` if it should not keep running"
                         ));
                     }
-                    let text = final_text(&job, now, &tails[&id], Some(&note));
+                    let text = final_text(&job, End::Interrupted, now, &tails[&id], Some(&note));
                     record_end_in(tx, &work, &job, &text)?;
                     closed.push(id);
                 }
@@ -657,9 +714,10 @@ impl JobRunner {
 
 /// 记下结局并交回会话（同一个事务）：会话投一封事件信件并释放占用；会话已被停止（占用已清掉）或已删除时不投。
 fn record_end_in(tx: &mut Tx<'_>, work: &SessionWork, job: &Job, text: &str) -> Result<()> {
+    let (status, exit_code, finished_at) = job.state.columns();
     tx.execute(
         "UPDATE jobs SET status = ?1, exit_code = ?2, finished_at = ?3 WHERE id = ?4",
-        params![job.status.as_str(), job.exit_code, job.finished_at, job.id],
+        params![status, exit_code, finished_at, job.id],
     )?;
     work.ended_in(tx, &job.session_id, job.id, text)?;
     Ok(())

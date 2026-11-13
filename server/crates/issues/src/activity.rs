@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::{Result, broken};
-use crate::model::{Actor, Assignee, By, Priority};
+use crate::model::{Actor, Assignee, By, Priority, Recorded};
 
 /// 属性从什么改成什么（存为 `{"from": ..., "to": ...}`）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
@@ -34,8 +34,10 @@ pub struct DependencyChange {
     /// 完成的那个上游
     pub issue: i64,
     #[serde(rename = "from")]
-    pub before: String,
-    pub to: String,
+    #[schema(value_type = String)]
+    pub before: Recorded,
+    #[schema(value_type = String)]
+    pub to: Recorded,
 }
 
 /// 不是属性变化、只有一个值的记法（存为 `{"from": null, "to": 值}`）。
@@ -61,9 +63,10 @@ pub enum Happening {
     Title {
         change: Change<String>,
     },
-    /// 状态按文字记：#258 之前的历史里有已去掉的 todo、waiting，时间线只增不改
+    /// 状态：#258 之前的历史里有已去掉的 todo、waiting（[`Recorded`]）
     Status {
-        change: Change<String>,
+        #[schema(value_type = Change<String>)]
+        change: Change<Recorded>,
     },
     Priority {
         change: Change<Priority>,
@@ -222,12 +225,16 @@ mod tests {
             Happening::Created,
             Happening::Comment { body: "hi".into() },
             Happening::Description,
-            Happening::Status { change: Change::new("todo".into(), "done".into()) },
+            Happening::Status { change: Change::new(String::from("todo").into(), String::from("done").into()) },
             Happening::Assignee { change: Change::new(None, Some(Assignee::User)) },
             Happening::Owner { change: Change::new(Some("abc".into()), None) },
             Happening::DependsOn { change: Change::new(vec![1], vec![]) },
             Happening::Dependency {
-                change: DependencyChange { issue: 3, before: "in_progress".into(), to: "done".into() },
+                change: DependencyChange {
+                    issue: 3,
+                    before: String::from("in_progress").into(),
+                    to: String::from("done").into(),
+                },
             },
             Happening::Stopped { change: Arrival { before: (), to: "abc".into() } },
             Happening::Unsettled,

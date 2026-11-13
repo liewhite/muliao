@@ -53,9 +53,8 @@ pub fn render_activity(a: &Activity, names: &AgentNames, tz: Tz) -> String {
         Happening::Created => format!("{head} {actor} created the issue"),
         Happening::Comment { body } => format!("{head} {actor} commented:{}", indented(body)),
         Happening::Description => format!("{head} {actor} edited the description"),
-        Happening::Title { change } | Happening::Status { change } => {
-            format!("{head} {actor} changed {kind}: {} -> {}", change.before, change.to)
-        }
+        Happening::Title { change } => format!("{head} {actor} changed {kind}: {} -> {}", change.before, change.to),
+        Happening::Status { change } => format!("{head} {actor} changed {kind}: {} -> {}", change.before, change.to),
         Happening::Priority { change } => format!("{head} {actor} changed {kind}: {} -> {}", change.before, change.to),
         Happening::Assignee { change } => format!(
             "{head} {actor} changed {kind}: {} -> {}",

@@ -23,7 +23,7 @@ use serde::Deserialize;
 use crate::commands::{AgentCommands, Options};
 use crate::error::Error;
 use crate::grants::{GRANTED_NOTE, ScriptCall, ScriptGrants};
-use crate::jobs::{JobRunner, format_g};
+use crate::jobs::{End, JobRunner, JobState, format_g};
 
 /// run_shell 与 skill_run 共用的依赖。
 pub struct ShellTools {
@@ -510,9 +510,11 @@ impl Tool<RunScope> for JobStatusTool {
 
     async fn call(&self, ctx: ToolCtx<'_, RunScope>, a: JobArgs) -> Result<ToolOutput, ToolError> {
         let info = self.0.jobs.info(a.job_id, &ctx.deps.agent_id).await?;
-        let state = match (info.status, info.exit_code) {
-            ("exited", code) => format!("exited with code {}", code.map_or("None".to_owned(), |c| c.to_string())),
-            (status, _) => status.to_owned(),
+        let state = match info.state {
+            JobState::Ended { end: End::Exited { code }, .. } => {
+                format!("exited with code {}", code.map_or("None".to_owned(), |c| c.to_string()))
+            }
+            other => other.status().as_str().to_owned(),
         };
         let tail = if info.tail.is_empty() { "(no output yet)" } else { &info.tail };
         Ok(agenter::tool::text(format!(

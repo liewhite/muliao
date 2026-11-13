@@ -1686,13 +1686,18 @@ export interface components {
         /** @description 在等的后台任务的详情（与 job_status 同一份）。 */
         JobOut: {
             command: string;
-            /** @description running、exited、killed、interrupted：取等待项与取任务信息不在同一事务，之间任务可能已经结束（结局还没交回） */
-            status: string;
+            /** @description 取等待项与取任务信息不在同一事务，之间任务可能已经结束（结局还没交回） */
+            status: components["schemas"]["JobStatus"];
             /** @description 日志，相对 agent 工作目录 */
             log_path: string;
             /** @description 日志最后几行 */
             tail: string;
         };
+        /**
+         * @description 后台任务的状态（界面与 job_status 看到的）。
+         * @enum {string}
+         */
+        JobStatus: "running" | "exited" | "killed" | "interrupted";
         KindInDoc: {
             config: components["schemas"]["ScheduleConfig"];
             /** @enum {string} */

@@ -8,7 +8,7 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::error::{Result, broken, not_found};
+use crate::error::{Result, not_found};
 
 // 状态。不设 todo（给 agent 的一建就投，与 in_progress 无别）、不设 waiting：在等上游由依赖派生，在等后台任务、委派、
 // 唤醒由 issue 会话的工作状态看出（#258、#261）。工具参数的 schema 用到它：类型与变体上只写 `//` 注释，免得说明进 schema
@@ -71,6 +71,55 @@ impl fmt::Display for Status {
     }
 }
 
+impl rusqlite::types::FromSql for Status {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        let raw = value.as_str()?;
+        Status::parse(raw).ok_or_else(|| rusqlite::types::FromSqlError::Other(format!("unknown status {raw:?}").into()))
+    }
+}
+
+/// 时间线里记下的状态：现有的取值，或 #258 之前去掉的（todo、waiting，只在旧动态里；时间线只增不改）。存成文字。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "String", into = "String")]
+pub enum Recorded {
+    Now(Status),
+    Retired(String),
+}
+
+impl Recorded {
+    /// 已结束（done / cancelled）。
+    pub fn finished(&self) -> bool {
+        matches!(self, Recorded::Now(s) if s.finished())
+    }
+}
+
+impl From<Status> for Recorded {
+    fn from(s: Status) -> Self {
+        Recorded::Now(s)
+    }
+}
+
+impl From<String> for Recorded {
+    fn from(s: String) -> Self {
+        Status::parse(&s).map_or(Recorded::Retired(s), Recorded::Now)
+    }
+}
+
+impl From<Recorded> for String {
+    fn from(r: Recorded) -> Self {
+        r.to_string()
+    }
+}
+
+impl fmt::Display for Recorded {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Recorded::Now(s) => f.write_str(s.as_str()),
+            Recorded::Retired(s) => f.write_str(s),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Priority {
@@ -103,6 +152,14 @@ impl Priority {
 impl fmt::Display for Priority {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
+    }
+}
+
+impl rusqlite::types::FromSql for Priority {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        let raw = value.as_str()?;
+        Priority::parse(raw)
+            .ok_or_else(|| rusqlite::types::FromSqlError::Other(format!("unknown priority {raw:?}").into()))
     }
 }
 
@@ -252,37 +309,29 @@ pub struct Issue {
 pub(crate) const COLUMNS: &str =
     "id, title, description, status, priority, owner_agent_id, assignee, creator, created_at, updated_at";
 
-pub(crate) fn issue(r: &Row<'_>) -> rusqlite::Result<std::result::Result<Issue, String>> {
-    let status: String = r.get(3)?;
-    let priority: String = r.get(4)?;
-    let id: i64 = r.get(0)?;
-    let (Some(status), Some(priority)) = (Status::parse(&status), Priority::parse(&priority)) else {
-        return Ok(Err(format!("issue #{id} has status {status:?} and priority {priority:?}")));
-    };
-    Ok(Ok(Issue {
-        id,
+pub(crate) fn issue(r: &Row<'_>) -> rusqlite::Result<Issue> {
+    Ok(Issue {
+        id: r.get(0)?,
         title: r.get(1)?,
         description: r.get(2)?,
-        status,
-        priority,
+        status: r.get(3)?,
+        priority: r.get(4)?,
         owner: r.get(5)?,
         assignee: r.get::<_, Option<String>>(6)?.map(Assignee::from),
         creator: Actor::from(r.get::<_, String>(7)?),
         created_at: r.get(8)?,
         updated_at: r.get(9)?,
-    }))
+    })
 }
 
 /// 按条件查 issue（filter 是 WHERE 之后的部分，可带 ORDER BY）。
 pub(crate) fn query(c: &Connection, filter: &str, params: impl rusqlite::Params) -> Result<Vec<Issue>> {
     let mut stmt = c.prepare(&format!("SELECT {COLUMNS} FROM issues WHERE {filter}"))?;
-    let rows = stmt.query_map(params, issue)?.collect::<rusqlite::Result<Vec<_>>>()?;
-    rows.into_iter().map(|r| r.map_err(broken)).collect()
+    Ok(stmt.query_map(params, issue)?.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
 pub(crate) fn find_in(c: &Connection, issue_id: i64) -> Result<Option<Issue>> {
-    let row = c.query_row(&format!("SELECT {COLUMNS} FROM issues WHERE id = ?1"), [issue_id], issue).optional()?;
-    row.map(|r| r.map_err(broken)).transpose()
+    Ok(c.query_row(&format!("SELECT {COLUMNS} FROM issues WHERE id = ?1"), [issue_id], issue).optional()?)
 }
 
 /// 存在的 issue；不存在 NotFound。
