@@ -143,15 +143,8 @@ fn query(c: &Connection, filter: &str, params: impl rusqlite::Params) -> Result<
     rows.into_iter().map(hold).collect()
 }
 
-/// 登记一项后台任务或到点唤醒的占用；已经登记过（重放）就返回它。
+/// 登记一项后台任务或到点唤醒的占用（各自的 id 每次新生成，不会重复登记）。
 pub fn hold_in(c: &Connection, session_id: &str, outside: Outside, awaited: bool) -> Result<Hold> {
-    if let Some(existing) = get_in(c, session_id, &outside)? {
-        assert_eq!(
-            existing.awaited, awaited,
-            "hold {outside:?} of session {session_id} was registered with another awaited"
-        );
-        return Ok(existing);
-    }
     let holder = outside.holder(session_id);
     insert(c, session_id, Some(&holder), outside.into(), awaited)
 }

@@ -175,15 +175,6 @@ impl SessionWork {
         Ok(())
     }
 
-    /// 这项工作没开始就放弃了：清掉占用，不交回结局。只在发起它的那次运行里调用（停止排在运行退出之后、删除拒绝忙会话），
-    /// 所以占用一定还 active。
-    pub fn abandoned_in(&self, tx: &mut Tx<'_>, session_id: &str, job_id: i64) -> Result<()> {
-        let hold = hold_of_in(tx, session_id, &Outside::Job { job_id })?.ok_or_else(|| {
-            broken(format!("session {session_id} was deleted while its run was starting job {job_id}"))
-        })?;
-        holds::abandon_in(tx, &hold)
-    }
-
     /// 后台任务结束了：往会话的信箱投一封事件信件，同时释放占用。
     pub fn ended_in(&self, tx: &mut Tx<'_>, session_id: &str, job_id: i64, text: &str) -> Result<Delivered> {
         let hold = hold_of_in(tx, session_id, &Outside::Job { job_id })?;

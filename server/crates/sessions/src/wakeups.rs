@@ -8,7 +8,7 @@
 use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
 use muliao_platform::db::{Database, Tx};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, params};
 
 use crate::actor::Waker;
 use crate::error::Result;
@@ -59,8 +59,7 @@ fn waiting_rows<T>(
     rows.into_iter().map(|(raw, x)| Ok((holds::hold(raw)?, x))).collect()
 }
 
-/// 约一次唤醒，取代会话还在等的那个。awaited：用户是否在等约它的那次运行的回答（唤醒的信件随之推送）。同一次调用重放时
-/// 返回已约的，不再取代。
+/// 约一次唤醒，取代会话还在等的那个。awaited：用户是否在等约它的那次运行的回答（唤醒的信件随之推送）。
 pub fn schedule_in(
     c: &Connection,
     session_id: &str,
@@ -71,11 +70,6 @@ pub fn schedule_in(
 ) -> Result<Scheduled> {
     let of = Outside::Wake { call_id: call_id.to_owned() };
     let holder = of.holder(session_id);
-    let existing: Option<DateTime<Utc>> =
-        c.query_row("SELECT due_at FROM wakeups WHERE holder = ?1", [&holder], |r| r.get(0)).optional()?;
-    if let Some(due_at) = existing {
-        return Ok(Scheduled { due_at, replaced: None });
-    }
     let replaced = cancel_in(c, session_id)?;
     holds::hold_in(c, session_id, of, awaited)?;
     c.execute(
