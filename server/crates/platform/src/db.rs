@@ -134,7 +134,7 @@ impl Database {
         }
     }
 
-    /// 用一个只读连接读（在阻塞线程池里）。写语句会报错。
+    /// 用一个只读连接读（在阻塞线程池里）。写语句会报错。闭包里的所有语句看同一个快照（一个读事务）。
     pub async fn read<T, E, F>(&self, f: F) -> Result<T, E>
     where
         F: FnOnce(&Connection) -> Result<T, E> + Send + 'static,
@@ -156,8 +156,14 @@ impl Database {
                     c
                 }
             };
+            // 闭包在一个读事务里跑：WAL 下否则每条语句各取一个快照，两条查询之间的写入会让它们对不上（#766）。
+            // 闭包 panic 时连接随之丢弃，不带着未结束的事务回池。
+            conn.execute_batch("BEGIN DEFERRED")?;
             let result = f(&conn);
-            readers.lock().expect("reader pool lock").push(conn);
+            // 只读事务，结束方式无所谓；结束不了的连接不回池，免得下次接着用旧快照
+            if conn.execute_batch("ROLLBACK").is_ok() {
+                readers.lock().expect("reader pool lock").push(conn);
+            }
             result
         })
         .await
@@ -317,6 +323,27 @@ mod tests {
         assert_eq!(n, 1);
         // 读连接写不了
         assert!(db.read(|c| c.execute("DELETE FROM notes", [])).await.is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn read_sees_one_snapshot() {
+        let (_dir, path) = setup();
+        let db = Database::open(&path, Arc::new(|| {})).unwrap();
+        let p = path.clone();
+        let (before, after): (i64, i64) = db
+            .read(move |c| {
+                let count = || c.query_row("SELECT count(*) FROM notes", [], |r| r.get(0));
+                let before = count()?;
+                // 两条查询之间别的连接写入并提交（#766：会话列表的两条查询就这样对不上）
+                Connection::open(&p)?.execute("INSERT INTO notes (body) VALUES ('x')", [])?;
+                Ok::<_, rusqlite::Error>((before, count()?))
+            })
+            .await
+            .unwrap();
+        assert_eq!((before, after), (0, 0));
+        // 下一次读（同一个回池的连接）看到新数据
+        let n: i64 = db.read(|c| c.query_row("SELECT count(*) FROM notes", [], |r| r.get(0))).await.unwrap();
+        assert_eq!(n, 1);
     }
 
     #[tokio::test(flavor = "multi_thread")]
