@@ -237,9 +237,7 @@ async fn begin(core: &Core, session_id: &str) -> Result<Begun> {
     let (session_id, live) = (session_id.to_owned(), core.live.clone());
     core.db
         .write(move |tx| {
-            let session = directory::get_in(tx, &session_id)?.unwrap_or_else(|| {
-                panic!("session {session_id} vanished while it had work: busy sessions are not deleted")
-            });
+            let session = directory::running_in(tx, &session_id)?;
             let run_id = match runs::unfinished_in(tx, &session_id)? {
                 Some(r) => r.id,
                 None => runs::start_in(tx, &live, &session_id)?,
@@ -362,8 +360,7 @@ fn finish_in(
     runs::end_in(tx, live, run_id, Outcome::Done)?;
     let saved = history::saved_by_in(tx, session_id, run_id)?;
     let Some(end) = end.filter(|_| !saved.is_empty()) else { return Ok(()) };
-    let session = directory::get_in(tx, session_id)?
-        .ok_or_else(|| broken(format!("session {session_id} vanished during its run")))?;
+    let session = directory::running_in(tx, session_id)?;
     directory::touch_in(tx, session_id)?;
     let mut handled = consumed_by_in(tx, session_id, run_id)?;
     handled.extend(adopted.iter().cloned());

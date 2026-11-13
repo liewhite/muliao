@@ -381,8 +381,7 @@ async fn fail(core: &Core, id: &str, error: &str) -> bool {
         .write(move |tx| {
             let Some(run) = runs::unfinished_in(tx, &session_id)? else { return Ok(false) };
             runs::end_in(tx, &live, run.id, Outcome::Failed(message.clone()))?;
-            let session = directory::get_in(tx, &session_id)?
-                .ok_or_else(|| not_found(format!("session {session_id} not found")))?;
+            let session = directory::running_in(tx, &session_id)?;
             settle_failure_in(tx, &waker, &session, run.id, &message)?;
             let agent_name = muliao_assets::agents::agent_in(tx, &session.agent_id)?.name;
             events.run_failed(

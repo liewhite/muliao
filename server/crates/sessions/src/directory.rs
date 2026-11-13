@@ -81,6 +81,13 @@ pub fn get_in(c: &Connection, session_id: &str) -> Result<Option<Session>> {
     Ok(query(c, "id = ?1", [session_id])?.pop())
 }
 
+/// 正在运行的会话（运行的开头、结束、失败时取）。忙的会话不会被删除（[`crate::deletion`]），所以不在是 bug，报 Broken。
+pub(crate) fn running_in(c: &Connection, session_id: &str) -> Result<Session> {
+    get_in(c, session_id)?.ok_or_else(|| {
+        crate::error::broken(format!("session {session_id} vanished while it had work: busy sessions are not deleted"))
+    })
+}
+
 /// 续写或运行做完时更新会话的最近时间（列表按它排序）。
 pub(crate) fn touch_in(c: &Connection, session_id: &str) -> Result<()> {
     c.execute("UPDATE sessions SET updated_at = ?1 WHERE id = ?2", params![Utc::now(), session_id])?;
