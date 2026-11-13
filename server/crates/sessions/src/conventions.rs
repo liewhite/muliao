@@ -20,9 +20,9 @@ use agenter::{Message, Request, RequestPart, Response, ResponsePart, ToolCall, T
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde_json::{Map, Value};
 
-use crate::error::{Result, broken};
 use crate::origins::Origin;
 use crate::work::EventSource;
+use muliao_platform::errors::{Result, broken};
 
 pub const RUN_STOPPED: &str = "muliao_stopped";
 pub const INTERRUPTED: &str = "muliao_interrupted";

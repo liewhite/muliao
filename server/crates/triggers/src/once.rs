@@ -13,9 +13,9 @@ use muliao_platform::time::parse_local;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::error::{Result, invalid};
 use crate::kinds::{Configured, DueRule, TriggerKind, parse_config, stored_time};
 use crate::store::Trigger;
+use muliao_platform::errors::{Result, invalid};
 
 pub const KIND: &str = "once";
 

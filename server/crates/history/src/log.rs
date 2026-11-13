@@ -12,7 +12,7 @@ use muliao_sessions::history::like_pattern;
 use rusqlite::{Connection, ToSql, params};
 use serde::Serialize;
 
-use crate::error::{Error, Result, invalid};
+use muliao_platform::errors::{Result, invalid};
 
 /// trigram 分词下 FTS5 只能匹配至少 3 个字符的词，更短的词改用 LIKE
 const TRIGRAM: usize = 3;
@@ -254,8 +254,9 @@ pub fn search_in(c: &Connection, s: &Search) -> Result<Vec<Record>> {
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
         .map(|(id, agent_id, day, title, summary, refs, importance, created_at)| {
-            let refs = serde_json::from_str(&refs)
-                .map_err(|e| Error::Broken(format!("refs of history entry {id} are not a list of strings: {e}")))?;
+            let refs = serde_json::from_str(&refs).map_err(|e| {
+                muliao_platform::errors::broken(format!("refs of history entry {id} are not a list of strings: {e}"))
+            })?;
             Ok(Record { id, agent_id, day, title, summary, refs, importance, created_at })
         })
         .collect()

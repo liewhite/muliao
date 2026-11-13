@@ -11,8 +11,8 @@ use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::answers::{APPROVAL_INTERRUPTED, CallResult};
-use crate::error::{Result, broken};
 use crate::mailbox::placeholders;
+use muliao_platform::errors::{Result, broken};
 
 /// 这些调用停下来等批准了（运行收尾的事务里），连同工具请求批准时定下的 pin。已记过的不再记。
 pub fn record_in(c: &Connection, session_id: &str, calls: &[(String, String)]) -> Result<()> {

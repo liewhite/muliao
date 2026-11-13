@@ -8,10 +8,10 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 
 use crate::access::{Actor, grants_for, usable};
-use crate::error::{Result, not_found};
 use crate::kinds::StoredKind;
 use crate::source::AssetSource;
 use crate::tree::{Asset, Expect, Owner, version_of};
+use muliao_platform::errors::{Result, not_found};
 
 /// 一次运行放进指令的一块记忆。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,7 +38,7 @@ pub struct MemoryInfo {
 
 /// 界面编辑用：正文与版本出自同一次读文件（正文去掉首尾空白，同读树；版本按文件原样算，写回时据此核对）。
 fn info(a: &Asset) -> Result<MemoryInfo> {
-    let raw = crate::formats::read(&a.path).map_err(crate::error::conflict)?;
+    let raw = crate::formats::read(&a.path).map_err(muliao_platform::errors::conflict)?;
     Ok(MemoryInfo {
         name: a.name.clone(),
         owner: a.owner.clone(),

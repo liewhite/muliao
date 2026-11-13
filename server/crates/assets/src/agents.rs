@@ -12,8 +12,8 @@ use chrono::{DateTime, Utc};
 use muliao_platform::db::{Database, Migration};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
-use crate::error::{Error, Result, conflict, not_found};
 use crate::naming::AgentName;
+use muliao_platform::errors::{Error, Result, conflict, not_found};
 
 pub const MIGRATION: Migration = Migration {
     domain: "agents",

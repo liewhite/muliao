@@ -16,8 +16,8 @@ use agenter::{Message, Resolution, ToolCall, ToolResult};
 
 use crate::answers::{CallResult, Question, Waiting, questions_of, skipped};
 use crate::conventions::{is_stopped, unanswered_calls};
-use crate::error::{Result, broken};
 use crate::mailbox::{Mail, MailBody};
+use muliao_platform::errors::{Result, broken};
 
 pub const ASK_USER: &str = "ask_user";
 pub const ASK_AGENT: &str = "ask_agent";

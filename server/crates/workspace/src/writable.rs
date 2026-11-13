@@ -16,8 +16,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use muliao_assets::distribution::Distribution;
-use muliao_assets::error::Result as AssetsResult;
 use muliao_assets::service::workspace_of;
+use muliao_platform::errors::Result as AssetsResult;
 use muliao_platform::errors::{DomainError, ErrorKind};
 use muliao_platform::fs::RealPath;
 use muliao_platform::sandbox::{Category, Confinement, Sandbox, WritablePaths, covers, expand, real_forms};

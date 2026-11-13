@@ -10,11 +10,11 @@ use std::path::{Path, PathBuf};
 use muliao_platform::fs::{is_within, real};
 
 use crate::access_file::ACCESS_FILE;
-use crate::error::{Result, forbidden};
 use crate::kinds::{Kind, StoredKind};
 use crate::naming::PLATFORM;
 use crate::rules::{Action, BASE, Role, Rules, ToolSpec, pattern_of, permission_of, permits};
 use crate::tree::{Asset, Owner, Snapshot};
+use muliao_platform::errors::{Result, forbidden};
 
 /// 做事的人：用户（界面），或某个 agent（id）。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

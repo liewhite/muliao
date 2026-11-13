@@ -21,9 +21,9 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::commands::{AgentCommands, Options};
-use crate::error::Error;
 use crate::grants::{GRANTED_NOTE, ScriptCall, ScriptGrants};
 use crate::jobs::{End, JobRunner, JobState, format_g};
+use muliao_platform::errors::Error;
 
 /// run_shell 与 skill_run 共用的依赖。
 pub struct ShellTools {
@@ -257,7 +257,7 @@ impl ShellTools {
         secrets: &[String],
         shell: bool,
     ) -> Result<String, ToolError> {
-        let agent_shell = self.commands.prepare(&scope.agent_id, secrets, shell).await.map_err(Error::from)?;
+        let agent_shell = self.commands.prepare(&scope.agent_id, secrets, shell).await?;
         let limit = Duration::try_from_secs_f64(timeout).unwrap_or(Duration::MAX);
         let run = agent_shell
             .run(command, limit, Options { merge_stderr: true, ..Options::default() })

@@ -18,7 +18,6 @@ pub mod agents;
 pub mod asset_files;
 pub mod catalog;
 pub mod distribution;
-pub mod error;
 pub mod formats;
 pub mod kinds;
 pub mod lifecycle;
@@ -32,5 +31,3 @@ pub mod skills;
 pub mod source;
 pub mod tools;
 pub mod tree;
-
-pub use error::{AssetRejected, Error, Result};

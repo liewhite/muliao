@@ -25,13 +25,13 @@ use std::path::{Path, PathBuf};
 
 use toml_edit::{Array, DocumentMut, Item, Table, TableLike, Value};
 
-use crate::error::{Result, conflict, invalid};
 use crate::kinds::Kind;
 use crate::naming::{AgentName, is_agent_id, validate_slug};
 use crate::rules::{
     ADMIN, AgentRules, BASE, Role, Roles, Rules, ToolTable, fixed_rules, fnmatch, kind_of, matches_no_tool,
 };
 use crate::tree::{Expect, Snapshot};
+use muliao_platform::errors::{Result, conflict, invalid};
 
 pub const ACCESS_FILE: &str = "access.toml";
 
@@ -331,7 +331,9 @@ impl AccessEdit {
     pub fn revert(&self) -> Result<()> {
         match Expect::text(Some(&self.after)).check(&self.path) {
             Ok(()) => {}
-            Err(crate::error::Error::Domain(e)) if e.kind == muliao_platform::errors::ErrorKind::Conflict => {
+            Err(muliao_platform::errors::Error::Domain(e))
+                if e.kind == muliao_platform::errors::ErrorKind::Conflict =>
+            {
                 return Ok(());
             }
             Err(e) => return Err(e),

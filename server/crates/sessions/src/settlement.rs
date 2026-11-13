@@ -11,9 +11,9 @@ use rusqlite::Connection;
 use crate::actor::Waker;
 use crate::delegation::{Ending, hand_back_in};
 use crate::directory::Session;
-use crate::error::Result;
 use crate::mailbox::{Mail, MailBody, MailState, delegated_mail_in, discard_in, queued_in};
 use crate::thread_calls::{Owed, owed_in};
+use muliao_platform::errors::Result;
 
 /// 交给会话、还没做完的信件所在的状态：排着的与已交给模型的
 const LIVE: [MailState; 2] = [MailState::Queued, MailState::Consumed];

@@ -10,7 +10,6 @@
 //! `service.deletion_hook()` 交给 agent 的删除流程 → 对外服务时 [`TriggerDomain::start`] → 关停时 [`TriggerDomain::shutdown`]。
 
 pub mod due;
-pub mod error;
 pub mod faults;
 pub mod kinds;
 pub mod once;

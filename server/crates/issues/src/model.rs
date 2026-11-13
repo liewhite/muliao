@@ -8,7 +8,7 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::error::{Result, not_found};
+use muliao_platform::errors::{Result, not_found};
 
 // 状态。不设 todo（给 agent 的一建就投，与 in_progress 无别）、不设 waiting：在等上游由依赖派生，在等后台任务、委派、
 // 唤醒由 issue 会话的工作状态看出（#258、#261）。工具参数的 schema 用到它：类型与变体上只写 `//` 注释，免得说明进 schema

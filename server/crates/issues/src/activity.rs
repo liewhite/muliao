@@ -9,8 +9,8 @@ use rusqlite::{Connection, Row, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::error::{Result, broken};
 use crate::model::{Actor, Assignee, By, Priority, Recorded};
+use muliao_platform::errors::{Result, broken};
 
 /// 属性从什么改成什么（存为 `{"from": ..., "to": ...}`）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]

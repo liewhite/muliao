@@ -8,11 +8,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::error::{Error, invalid};
 use crate::faults::TriggerFault;
 use crate::precheck::Precheck;
 use crate::service::{NewSpec, PrecheckChange, TriggerService, TriggerView, Update};
 use crate::store::Listing;
+use muliao_platform::errors::{Error, invalid};
 
 #[derive(Serialize)]
 struct KindInfo<'a> {
@@ -60,7 +60,7 @@ fn info(view: TriggerView, names: &AgentNames) -> TriggerInfo {
 }
 
 async fn names(service: &TriggerService) -> Result<AgentNames, Error> {
-    service.db().read(|c| Ok::<_, Error>(agent_names_in(c)?)).await
+    service.db().read(agent_names_in).await
 }
 
 fn status_value(status: &std::result::Result<Value, String>) -> Value {

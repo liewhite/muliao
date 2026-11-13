@@ -30,11 +30,11 @@ use indexmap::IndexMap;
 use sha2::{Digest, Sha256};
 
 use crate::access_file::{self, ACCESS_FILE};
-use crate::error::{Result, conflict, not_found};
 use crate::formats::agent_file::{self, AGENT_FILE, AgentFile};
 use crate::kinds::{Content, Kind, Section, StoredKind};
 use crate::naming::{AgentName, PLATFORM};
 use crate::rules::{Action, AgentRules, Roles, ToolTable, pattern_of};
+use muliao_platform::errors::{Result, conflict, not_found};
 
 pub const PRIVATE_MEMORY_FILE: &str = "memory.md";
 
@@ -106,7 +106,7 @@ pub fn place_of(rel: &[String], in_agent: bool) -> Result<Place, Misplaced> {
 /// 一项按名字认的资源在 owner 目录里的相对路径（[`place_of`] 的反向）。名字不合这种资源的规则时报错。
 pub fn rel_of(kind: StoredKind, name: &str) -> Result<PathBuf> {
     let spec = kind.spec();
-    spec.check_name(name).map_err(crate::error::invalid)?;
+    spec.check_name(name).map_err(muliao_platform::errors::invalid)?;
     Ok(Path::new(spec.shelf).join(format!("{name}{}", spec.suffix)))
 }
 
@@ -797,7 +797,7 @@ pub fn remove(path: &Path) -> std::io::Result<()> {
 /// 改名或换 owner：目标已存在是冲突（不覆盖；大小写不敏感的文件系统上只改大小写的是同一个，照常改）。
 pub fn move_to(src: &Path, dst: &Path) -> Result<()> {
     if dst.exists() && !same_file(src, dst) {
-        return Err(crate::error::invalid(format!("{} already exists", dst.display())));
+        return Err(muliao_platform::errors::invalid(format!("{} already exists", dst.display())));
     }
     if let Some(parent) = dst.parent() {
         std::fs::create_dir_all(parent)?;

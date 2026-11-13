@@ -17,8 +17,8 @@ use muliao_sessions::transcript::Item;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::error::{Error, Result, invalid};
 use crate::log::{DEFAULT_LIMIT, History, MAX_LIMIT, NewEntry, Record, Search, search_in};
+use muliao_platform::errors::{Result, invalid};
 
 /// history_search、activity_overview 的 agent 取这个值时是全部 agent
 const ALL_AGENTS: &str = "all";
@@ -44,13 +44,13 @@ async fn agent_ids_of(history: &History, me: &str, agent: Option<String>) -> Res
         Some(ALL_AGENTS) => Ok(None),
         Some(name) => {
             let name = name.to_owned();
-            Ok(Some(vec![history.db().read(move |c| named_in(c, &name)).await.map_err(Error::from)?.id]))
+            Ok(Some(vec![history.db().read(move |c| named_in(c, &name)).await?.id]))
         }
     }
 }
 
 async fn names(history: &History) -> Result<AgentNames> {
-    history.db().read(|c| agent_names_in(c).map_err(Error::from)).await
+    history.db().read(agent_names_in).await
 }
 
 // ---- history_append ----

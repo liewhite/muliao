@@ -1,13 +1,11 @@
 //! 接口的错误响应：一律是 `{"detail": "<原因>"}`。领域错误按种类映射成 4xx（[`ErrorKind::ScriptFailed`] 为 502），外部服务
 //! 出错为 502 并带上原因；其余（库出错、存下的数据坏了、程序错误）记 error 日志，对外只说 500。
-//!
-//! 各领域的错误类型把领域错误包在自己的变体里（也会包着下层领域的错误）：[`Classify`] 是每种错误「是哪一类」的唯一判断，
-//! 新的错误类型在这里加一个实现。
+//! 各领域共用一个错误类型（[`Error`]），这里按它的三类映射。
 
 use axum::Json;
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use muliao_platform::errors::{DomainError, ErrorKind};
+use muliao_platform::errors::{DomainError, Error, ErrorKind};
 use serde::Serialize;
 use utoipa::ToSchema;
 
@@ -25,22 +23,6 @@ pub struct ApiError {
 }
 
 pub type ApiResult<T> = Result<T, ApiError>;
-
-/// 一个错误是哪一类。
-pub enum Class<'a> {
-    /// 调用方改了输入就能成（4xx）
-    Domain(&'a DomainError),
-    /// 写入口拒绝的资源文件（按输入不对处理）
-    Rejected(String),
-    /// 外部服务出错，原因给已登录的用户看（502）
-    Upstream(String),
-    /// 别的都是服务端的问题（500，原因只进日志）
-    Internal,
-}
-
-pub trait Classify: std::error::Error {
-    fn class(&self) -> Class<'_>;
-}
 
 impl ApiError {
     pub fn new(status: StatusCode, detail: impl Into<String>) -> Self {
@@ -66,18 +48,6 @@ impl ApiError {
 
     pub fn status(&self) -> StatusCode {
         self.status
-    }
-
-    fn of(e: &(impl Classify + ?Sized)) -> Self {
-        match e.class() {
-            Class::Domain(d) => Self::from(d.clone()),
-            Class::Rejected(reason) => Self::invalid(reason),
-            Class::Upstream(detail) => Self::new(StatusCode::BAD_GATEWAY, detail),
-            Class::Internal => {
-                tracing::error!(error = %e, "request failed");
-                Self::new(StatusCode::INTERNAL_SERVER_ERROR, "internal server error (see the service log)")
-            }
-        }
     }
 }
 
@@ -107,145 +77,22 @@ impl IntoResponse for ApiError {
     }
 }
 
-/// 每种领域错误类型都能直接 `?` 成 [`ApiError`]
-macro_rules! from_classified {
-    ($($t:ty),* $(,)?) => {$(
-        impl From<$t> for ApiError {
-            fn from(e: $t) -> Self {
-                Self::of(&e)
+impl From<Error> for ApiError {
+    fn from(e: Error) -> Self {
+        match e {
+            Error::Domain(d) => Self::from(d),
+            // 原因给已登录的用户看
+            Error::Upstream { message, .. } => Self::new(StatusCode::BAD_GATEWAY, message),
+            Error::Internal(e) => {
+                tracing::error!(error = %e, "request failed");
+                Self::new(StatusCode::INTERNAL_SERVER_ERROR, "internal server error (see the service log)")
             }
         }
-    )*};
-}
-
-from_classified!(
-    muliao_assets::Error,
-    muliao_sessions::error::Error,
-    muliao_issues::Error,
-    muliao_triggers::error::Error,
-    muliao_history::error::Error,
-    muliao_workspace::error::Error,
-    muliao_files::FilesError,
-    muliao_speech::SpeechError,
-    muliao_runtime::models::ListError,
-    muliao_notifications::push::SubscribeError,
-    rusqlite::Error,
-);
-
-impl Classify for muliao_assets::Error {
-    fn class(&self) -> Class<'_> {
-        use muliao_assets::Error as E;
-        match self {
-            E::Domain(d) => Class::Domain(d),
-            E::Rejected(r) => Class::Rejected(r.to_string()),
-            E::Db(_) | E::Io(_) => Class::Internal,
-        }
     }
 }
 
-impl Classify for muliao_sessions::error::Error {
-    fn class(&self) -> Class<'_> {
-        use muliao_sessions::error::Error as E;
-        match self {
-            E::Domain(d) => Class::Domain(d),
-            E::Assets(e) => e.class(),
-            E::Files(e) => e.class(),
-            E::Broken(_) | E::Db(_) | E::Subscriber(_) | E::Summarize(_) | E::Io(_) => Class::Internal,
-        }
-    }
-}
-
-impl Classify for muliao_issues::Error {
-    fn class(&self) -> Class<'_> {
-        use muliao_issues::Error as E;
-        match self {
-            E::Domain(d) => Class::Domain(d),
-            E::Sessions(e) => e.class(),
-            E::Assets(e) => e.class(),
-            E::Broken(_) | E::Db(_) => Class::Internal,
-        }
-    }
-}
-
-impl Classify for muliao_triggers::error::Error {
-    fn class(&self) -> Class<'_> {
-        use muliao_triggers::error::Error as E;
-        match self {
-            E::Domain(d) => Class::Domain(d),
-            E::Assets(e) => e.class(),
-            E::Sessions(e) => e.class(),
-            E::Corrupt(_) | E::Broken(_) | E::Db(_) | E::Io(_) => Class::Internal,
-        }
-    }
-}
-
-impl Classify for muliao_history::error::Error {
-    fn class(&self) -> Class<'_> {
-        use muliao_history::error::Error as E;
-        match self {
-            E::Domain(d) => Class::Domain(d),
-            E::Sessions(e) => e.class(),
-            E::Issues(e) => e.class(),
-            E::Assets(e) => e.class(),
-            E::Broken(_) | E::Db(_) => Class::Internal,
-        }
-    }
-}
-
-impl Classify for muliao_workspace::error::Error {
-    fn class(&self) -> Class<'_> {
-        use muliao_workspace::error::Error as E;
-        match self {
-            E::Domain(d) => Class::Domain(d),
-            E::Assets(e) => e.class(),
-            E::Sessions(e) => e.class(),
-            E::Db(_) | E::Io(_) | E::Broken(_) => Class::Internal,
-        }
-    }
-}
-
-impl Classify for muliao_files::FilesError {
-    fn class(&self) -> Class<'_> {
-        use muliao_files::FilesError as E;
-        match self {
-            E::Domain(d) => Class::Domain(d),
-            E::Corrupt(_) | E::Io(_) | E::Db(_) => Class::Internal,
-        }
-    }
-}
-
-impl Classify for muliao_speech::SpeechError {
-    fn class(&self) -> Class<'_> {
-        use muliao_speech::SpeechError as E;
-        match self {
-            E::Invalid(d) => Class::Domain(d),
-            E::Upstream(detail) => Class::Upstream(detail.clone()),
-        }
-    }
-}
-
-impl Classify for muliao_runtime::models::ListError {
-    fn class(&self) -> Class<'_> {
-        use muliao_runtime::models::ListError as E;
-        match self {
-            E::Domain(d) => Class::Domain(d),
-            E::Upstream { .. } => Class::Upstream(self.to_string()),
-        }
-    }
-}
-
-impl Classify for muliao_notifications::push::SubscribeError {
-    fn class(&self) -> Class<'_> {
-        use muliao_notifications::push::SubscribeError as E;
-        match self {
-            E::Invalid(e) => Class::Rejected(e.to_string()),
-            E::Db(_) => Class::Internal,
-        }
-    }
-}
-
-impl Classify for rusqlite::Error {
-    fn class(&self) -> Class<'_> {
-        Class::Internal
+impl From<rusqlite::Error> for ApiError {
+    fn from(e: rusqlite::Error) -> Self {
+        Error::from(e).into()
     }
 }

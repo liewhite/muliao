@@ -15,11 +15,11 @@ use std::time::Duration;
 use agenter::mcp::{McpConnection, McpServer as Server, McpTransport as Transport, connect};
 use futures::future::BoxFuture;
 use muliao_assets::access::Actor;
-use muliao_assets::error::Error as AssetError;
 use muliao_assets::formats::mcp::McpConfig;
 use muliao_assets::mcp::{McpRegistry, McpServer};
 use muliao_assets::secrets::Secrets;
 use muliao_platform::errors::DomainError;
+use muliao_platform::errors::Error;
 use muliao_platform::sandbox::Confinement;
 use muliao_platform::shell::redact;
 
@@ -122,7 +122,7 @@ impl McpConnector {
 
     /// 实际连接 server 并列出工具名（不带前缀），secret 按 user（添加它的 agent，或用户）能用的解析。连不上是预期结果之一，
     /// 以领域错误交还调用方修正。
-    pub async fn probe(&self, server: &McpServer, user: &Actor) -> Result<Vec<String>, AssetError> {
+    pub async fn probe(&self, server: &McpServer, user: &Actor) -> Result<Vec<String>, Error> {
         let connection = match self.connect_one(server, user, None).await {
             Ok(c) => c,
             Err(BuildError::Skip(reason)) => {

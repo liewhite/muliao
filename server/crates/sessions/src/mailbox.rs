@@ -14,10 +14,10 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use crate::actor::Waker;
 use crate::answers::CallResult;
-use crate::error::{Result, broken, not_found};
 use crate::origins::Origin;
 use crate::work::EventSource;
 use muliao_platform::db::Tx;
+use muliao_platform::errors::{Result, broken, not_found};
 
 /// 信件的种类与它自己的内容。
 #[derive(Debug, Clone, PartialEq)]

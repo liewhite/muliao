@@ -10,7 +10,6 @@
 pub mod browse;
 pub mod commands;
 pub mod edits;
-pub mod error;
 pub mod file_tools;
 pub mod grants;
 pub mod jobs;

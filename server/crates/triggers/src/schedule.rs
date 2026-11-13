@@ -17,10 +17,10 @@ use muliao_platform::db::Tx;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::error::{Error, Result, invalid};
 use crate::kinds::{Configured, DueRule, TriggerKind, parse_config, stored_time};
 use crate::service::{Busy, busy_previous_in};
-use crate::store::Trigger;
+use crate::store::{Corrupt, Trigger};
+use muliao_platform::errors::{Error, Result, invalid};
 
 pub const KIND: &str = "schedule";
 
@@ -157,8 +157,9 @@ impl DueRule for Schedule {
         let mut state = self.state(t)?;
         let cron = t.config_as::<ScheduleConfig>()?.cron;
         // 存下的表达式是配置时校验过的：现在算不出下次时间是存下的数据坏了
-        let following =
-            self.next_run(&cron, now).map_err(|e| Error::Corrupt(format!("trigger {} ({}): {e}", t.id, t.name)))?;
+        let following = self
+            .next_run(&cron, now)
+            .map_err(|e| Error::internal(Corrupt(format!("trigger {} ({}): {e}", t.id, t.name))))?;
         state.next_run_at = following.to_rfc3339();
         let Some((session_id, busy)) = busy_previous_in(tx, t)? else {
             state.skipped = None;

@@ -9,9 +9,9 @@ use muliao_runtime::attachments::{copy_to_workspace, references};
 
 use crate::answers::CallResult;
 use crate::conventions::{PartKind, PartMark, format_event, mark_parts, set_part_marks};
-use crate::error::{Result, broken};
 use crate::mailbox::{Mail, MailBody};
 use crate::origins::Origin;
+use muliao_platform::errors::{Result, broken};
 
 /// 一批信件的内容段，以及各段是什么（part 从 0 起，在这批内容里；迟到的回答不记）。
 #[derive(Debug, Clone, Default, PartialEq)]

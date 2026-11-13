@@ -27,11 +27,11 @@ use serde::Serialize;
 use crate::activity::{self, Activity, timeline_in};
 use crate::change::{Changes, Patch, Routing, check_assignee, checked_title, snapshot};
 use crate::conversation;
-use crate::error::{Error, Result, conflict, invalid};
 use crate::graph::{Upstream, batch_label, check_batch, downstream_in, links_in, links_of_in, set_depends_on_in};
 use crate::model::{self, Actor, Assignee, By, Issue, Priority, Status, agent_of, issue_in};
 use crate::render::{render_activity, render_issue};
 use crate::rules::{ask_to_settle, cannot_review, cannot_stop_into, handed_by, stalled, start_assignee};
+use muliao_platform::errors::{Error, Result, conflict, invalid};
 
 /// 运行失败记进时间线的正文（错误原文）最多这么多字符，全文在会话页
 const RUN_FAILED_BODY_MAX: usize = 500;
@@ -305,7 +305,7 @@ impl Board {
     /// 不投）。它的会话由会话领域删除。
     pub fn deletion_hook(&self) -> DeletionHook {
         let this = self.clone();
-        Arc::new(move |tx, agent_id| this.on_agent_deleting(tx, agent_id).map_err(to_assets))
+        Arc::new(move |tx, agent_id| this.on_agent_deleting(tx, agent_id))
     }
 
     fn on_agent_deleting(&self, tx: &mut Tx<'_>, agent_id: &str) -> Result<()> {
@@ -638,14 +638,5 @@ impl Board {
                 Ok(())
             })
             .await
-    }
-}
-
-fn to_assets(e: Error) -> muliao_assets::error::Error {
-    match e {
-        Error::Domain(d) => d.into(),
-        Error::Db(d) => d.into(),
-        Error::Assets(a) => a,
-        other => std::io::Error::other(other.to_string()).into(),
     }
 }

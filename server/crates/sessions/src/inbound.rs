@@ -19,11 +19,11 @@ use rusqlite::Connection;
 use crate::actor::Waker;
 use crate::answers::{CallResult, Choice, Decision, QuestionAnswer, answer_result};
 use crate::directory::{self, NewSession, Session, keyed_among};
-use crate::error::{Error, Result, conflict, forbidden, invalid, not_found};
 use crate::mailbox::{MailBody, NewMail, post_in, queued_in};
 use crate::origins::{Origin, Sender, SessionOrigin};
 use crate::pending::open_asks_of;
 use crate::work::position_in;
+use muliao_platform::errors::{Error, Result, conflict, forbidden, invalid, not_found};
 
 const TITLE_MAX: usize = 60;
 /// 会话标题的长度上限：发送方给的标题过长时在新建会话时截断

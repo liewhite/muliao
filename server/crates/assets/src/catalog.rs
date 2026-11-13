@@ -7,7 +7,6 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 
 use crate::access::Sharing;
-use crate::error::{Result, conflict, invalid};
 use crate::formats::mcp::McpFile;
 use crate::formats::memory::MemoryText;
 use crate::formats::skill::SkillDir;
@@ -15,6 +14,7 @@ use crate::kinds::{Content, Kind, StoredKind};
 use crate::rules::{GLOBAL_MEMORY, ToolSpec};
 use crate::source::AssetSource;
 use crate::tree::{Owner, remove};
+use muliao_platform::errors::{Result, conflict, invalid};
 
 /// 种类专有的详情：内置工具的读写与是否管理类；存成文件的是它的内容，secret 只有 allow_shell（密文不出这个领域）。
 #[derive(Debug, Clone, PartialEq, Eq)]

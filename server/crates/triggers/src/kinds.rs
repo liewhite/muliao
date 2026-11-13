@@ -8,8 +8,8 @@ use chrono::{DateTime, Utc};
 use muliao_platform::db::Tx;
 use serde_json::Value;
 
-use crate::error::{Result, invalid};
 use crate::store::Trigger;
+use muliao_platform::errors::{Result, invalid};
 
 /// 由配置推导出的东西：规范化后的配置与这种方式的初始运行状态。
 #[derive(Debug, Clone, PartialEq)]
@@ -35,7 +35,7 @@ pub trait TriggerKind: Send + Sync {
         Vec::new()
     }
 
-    /// 给界面与模型看的运行状态（如下次触发时间），不含凭证。存下的数据坏了是 [`crate::error::Error::Corrupt`]。
+    /// 给界面与模型看的运行状态（如下次触发时间），不含凭证。存下的数据坏了是 [`crate::store::Corrupt`]。
     fn status(&self, t: &Trigger) -> Result<Value>;
 }
 
@@ -85,6 +85,9 @@ pub fn parse_config<T: serde::de::DeserializeOwned>(kind: &str, config: &Value) 
 /// 存下的时间（配置时总是带时区写入）。
 pub fn stored_time(t: &Trigger, value: &str, what: &str) -> Result<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(value).map(|d| d.with_timezone(&Utc)).map_err(|e| {
-        crate::error::Error::Corrupt(format!("trigger {} ({}) has no valid {what}: {value:?}: {e}", t.id, t.name))
+        muliao_platform::errors::Error::internal(crate::store::Corrupt(format!(
+            "trigger {} ({}) has no valid {what}: {value:?}: {e}",
+            t.id, t.name
+        )))
     })
 }

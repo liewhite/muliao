@@ -38,9 +38,9 @@ async fn missing_ids_are_not_found_for_callers_and_corrupt_for_stored_references
     let (_dir, s) = store(1024).await;
     let a = s.put("a.png", "image/png", &b"x"[..]).await.unwrap();
     let err = s.get_many(vec![a.id.clone(), "nope".into()]).await.unwrap_err();
-    assert!(matches!(err, FilesError::Domain(ref e) if e.kind == ErrorKind::NotFound), "{err}");
+    assert!(matches!(err, Error::Domain(ref e) if e.kind == ErrorKind::NotFound), "{err}");
     let err = s.referenced(vec![a.id.clone(), "nope".into()]).await.unwrap_err();
-    assert!(matches!(err, FilesError::Corrupt(ref ids) if ids == &["nope".to_string()]), "{err}");
+    assert!(matches!(err, Error::Internal(_)) && err.to_string().contains("nope"), "{err}");
     assert!(a.is_inline_image());
 }
 
@@ -48,7 +48,7 @@ async fn missing_ids_are_not_found_for_callers_and_corrupt_for_stored_references
 async fn too_large_stops_and_leaves_nothing() {
     let (_dir, s) = store(4).await;
     let err = s.put("big", "application/octet-stream", &b"12345"[..]).await.unwrap_err();
-    assert!(matches!(err, FilesError::Domain(ref e) if e.kind == ErrorKind::TooLarge), "{err}");
+    assert!(matches!(err, Error::Domain(ref e) if e.kind == ErrorKind::TooLarge), "{err}");
     assert_eq!(tmp_count(&s), 0);
     let rows: i64 = s.db.read(|c| c.query_row("SELECT count(*) FROM files", [], |r| r.get(0))).await.unwrap();
     assert_eq!(rows, 0);
@@ -61,7 +61,7 @@ async fn bad_names_and_types_are_rejected_before_reading() {
     let (_dir, s) = store(1024).await;
     for name in ["", ".", "..", "a/b", "a\\b", "a\nb", &"x".repeat(256)] {
         let err = s.put(name, "text/plain", &b"x"[..]).await.unwrap_err();
-        assert!(matches!(err, FilesError::Domain(ref e) if e.kind == ErrorKind::InvalidInput), "{name:?}");
+        assert!(matches!(err, Error::Domain(ref e) if e.kind == ErrorKind::InvalidInput), "{name:?}");
     }
     for t in ["text", "/plain", "text/", "te xt/plain", ""] {
         assert!(check_media_type(t).is_err(), "{t:?}");

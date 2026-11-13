@@ -16,9 +16,9 @@ use std::time::Duration;
 
 use futures::FutureExt;
 use muliao_assets::access::Actor;
-use muliao_assets::error::Result as AssetsResult;
 use muliao_assets::secrets::Secrets;
 use muliao_assets::service::workspace_of;
+use muliao_platform::errors::Result as AssetsResult;
 use muliao_platform::sandbox::Confinement;
 use muliao_platform::shell::{Command, ShellResult, Spawned, run_bash, spawn_bash};
 

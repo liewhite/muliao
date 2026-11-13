@@ -14,8 +14,9 @@ use std::time::SystemTime;
 use agenter::{Content, File, FileSource, Tool, ToolCtx, ToolError, ToolOutput};
 use muliao_assets::source::AssetSource;
 use muliao_assets::tree::Expect;
-use muliao_files::{FileStore, FilesError, INLINE_IMAGE_TYPES};
+use muliao_files::{FileStore, INLINE_IMAGE_TYPES};
 use muliao_platform::errors::DomainError;
+use muliao_platform::errors::Error;
 use muliao_platform::fs::{read_text, real};
 use muliao_platform::sandbox::Confinement;
 use muliao_platform::text::truncate;
@@ -477,7 +478,8 @@ impl Tool<RunScope> for WriteFile {
         let existed = target.is_file();
         let content = if deps.assets.contains(&target) {
             let expect = expect_for_write(scope, &target)?;
-            let mut written = deps.assets.write(&[(target.clone(), a.content, expect)]).await.map_err(asset_error)?;
+            let mut written =
+                deps.assets.write(&[(target.clone(), a.content, expect)]).await.map_err(|e| store_error(e, ""))?;
             let (_, done) = written.pop().expect("one file written");
             remember(scope, &target, Some(done.modified.into()));
             done.text
@@ -498,11 +500,11 @@ impl Tool<RunScope> for WriteFile {
     }
 }
 
-/// 写入口的错误：被拒时交给 agent 的是完整说明（是谁的、看 assets-files 哪一节）；文件系统出错交还模型。
-fn asset_error(e: muliao_assets::error::Error) -> ToolError {
-    match e {
-        muliao_assets::error::Error::Io(e) => io_error(e, ""),
-        other => other.into(),
+/// 资源目录写入口、文件存储报的错：文件系统出错交还模型（接上 note），别的按统一规则（被拒的资源文件是领域错误，说明已写给 agent）。
+fn store_error(e: Error, note: &str) -> ToolError {
+    match e.internal_as::<std::io::Error>() {
+        Some(io) => ToolError::Retry(format!("{io}.{note}")),
+        None => e.into(),
     }
 }
 
@@ -782,11 +784,8 @@ impl Tool<RunScope> for EditFile {
 
         // 资源目录里的先经写入口：全部校验通过才写（原子写入，记忆规整空白），回显按实际存下的
         if !in_tree.is_empty() {
-            let written = deps.assets.write(&in_tree).await.map_err(|e| match e {
-                muliao_assets::error::Error::Io(e) => {
-                    io_error(e, " Asset files of this edit may be partly written; nothing else was written.")
-                }
-                other => other.into(),
+            let written = deps.assets.write(&in_tree).await.map_err(|e| {
+                store_error(e, " Asset files of this edit may be partly written; nothing else was written.")
             })?;
             for (target, done) in written {
                 after.insert(target.clone(), as_lf(&done.text).0);
@@ -854,11 +853,7 @@ impl Tool<RunScope> for ShareFile {
             return Err(not_found(format!("file not found: {}", target.display())).into());
         }
         let name = target.file_name().unwrap_or_default().to_string_lossy().into_owned();
-        let meta = deps.files.put_path(&name, &media_type_of(&name), &target).await.map_err(|e| match e {
-            FilesError::Domain(d) => d.into(),
-            FilesError::Io(e) => io_error(e, ""),
-            other => ToolError::Abort(Box::new(other)),
-        })?;
+        let meta = deps.files.put_path(&name, &media_type_of(&name), &target).await.map_err(|e| store_error(e, ""))?;
         tracing::info!(agent = %scope.agent_id, session_id = %scope.session_id, file_id = %meta.id, "file shared with user");
         attach(scope, &ctx.call.id, &[SharedFile::of(&meta)]);
         Ok(agenter::tool::text(format!("shared file {} with the user; it is shown with your reply", meta.name)))

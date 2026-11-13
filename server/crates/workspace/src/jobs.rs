@@ -29,8 +29,8 @@ use rusqlite::{Connection, Row, params};
 use tokio::sync::watch;
 
 use crate::commands::{AgentCommands, AgentShell, Options};
-use crate::error::{Error, Result, conflict, not_found};
 use crate::output::{record_output, tail};
+use muliao_platform::errors::{Error, Result, conflict, not_found};
 
 /// 日志的最后几行；读不了（agent 把它换成了目录、改了权限）时换成一句说明，不让结局与检查因此写不下去。
 fn log_tail(path: &std::path::Path) -> String {
@@ -495,11 +495,12 @@ impl JobRunner {
         let work = self.work.clone();
         self.db
             .write(move |tx| {
-                let mut job = job_in(tx, job_id)?
-                    .ok_or_else(|| Error::Broken(format!("job {job_id} vanished while it was running")))?;
+                let mut job = job_in(tx, job_id)?.ok_or_else(|| {
+                    muliao_platform::errors::broken(format!("job {job_id} vanished while it was running"))
+                })?;
                 if !job.state.running() {
                     // 结局只记一次：照看者在写完之前一直登记着
-                    return Err(Error::Broken(format!(
+                    return Err(muliao_platform::errors::broken(format!(
                         "job {job_id} already ended as {}, cannot record {end:?}",
                         job.state.status().as_str()
                     )));

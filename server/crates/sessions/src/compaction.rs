@@ -19,9 +19,9 @@ use muliao_platform::db::Database;
 use muliao_runtime::Runtime;
 
 use crate::conventions::{calls_in, measured_responses, results_in};
-use crate::error::Result;
 use crate::history::{Stored, add_compaction_in, latest_compaction, rows_after};
 use crate::transcript::{Renders, to_items, to_text};
+use muliao_platform::errors::Result;
 
 /// 文字记录里每条的字符上限。
 const ITEM_CHARS: usize = 4000;

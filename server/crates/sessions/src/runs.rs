@@ -9,9 +9,9 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use muliao_platform::db::Tx;
 
-use crate::error::{Result, broken};
 use crate::live::Live;
 use crate::mailbox::placeholders;
+use muliao_platform::errors::{Result, broken};
 
 /// 一次运行的结局（[`end_in`] 记下）：失败的自带说明。
 #[derive(Debug, Clone, PartialEq, Eq)]

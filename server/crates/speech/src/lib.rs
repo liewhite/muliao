@@ -4,7 +4,7 @@
 //! [`Transcriber`] 是唯一接口，具体服务是它的实现，由配置 `[transcription].type` 选择（[`build`]）。用户说话时中英文混杂，
 //! 用专门的语音识别模型（不用全模态对话模型：它会把语音当成提问来回答，还要先思考，慢）。
 //!
-//! 转写是用户在界面上同步等待的一次调用：服务出错或不可达时报 [`SpeechError::Upstream`]（HTTP 层映射成 502），原因原样
+//! 转写是用户在界面上同步等待的一次调用：服务出错或不可达时报 外部服务出错（[`Error::Upstream`]）（HTTP 层映射成 502），原因原样
 //! 交给界面，由用户决定重录，不重试。
 
 use std::collections::BTreeMap;
@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use base64::Engine;
 use futures::future::BoxFuture;
 use muliao_platform::config::{TranscriptionConfig, TranscriptionType};
-use muliao_platform::errors::DomainError;
+use muliao_platform::errors::{DomainError, Error};
 use serde::Deserialize;
 
 pub const DASHSCOPE_BASE_URL: &str = "https://dashscope.aliyuncs.com/api/v1";
@@ -40,22 +40,12 @@ const AUDIO_FORMATS: &[(&str, &str)] = &[
 /// 一段语音转写通常一两秒；服务挂起时让用户尽早看到失败，而不是一直转圈
 const TIMEOUT: Duration = Duration::from_secs(60);
 
-#[derive(Debug, thiserror::Error)]
-pub enum SpeechError {
-    /// 调用方的输入不对（不支持的音频类型、空音频）
-    #[error(transparent)]
-    Invalid(#[from] DomainError),
-    /// 转写服务出错或不可达，原因原样交给界面
-    #[error("{0}")]
-    Upstream(String),
-}
-
 pub trait Transcriber: Send + Sync {
     /// 一段语音的字节上限，HTTP 层按它读取请求体
     fn max_bytes(&self) -> u64;
 
     /// 转写出的文字（首尾空白已去掉）；听不到人说话时为空字符串。
-    fn transcribe<'a>(&'a self, audio: &'a [u8], media_type: &'a str) -> BoxFuture<'a, Result<String, SpeechError>>;
+    fn transcribe<'a>(&'a self, audio: &'a [u8], media_type: &'a str) -> BoxFuture<'a, Result<String, Error>>;
 }
 
 /// 按配置选实现。`client` 是共用的出站 HTTP 客户端（由组合根创建）。
@@ -131,9 +121,9 @@ impl DashScope {
         })
     }
 
-    fn failed(&self, reason: String, format: &str, size: usize) -> SpeechError {
+    fn failed(&self, reason: String, format: &str, size: usize) -> Error {
         tracing::warn!(model = %self.model, format, bytes = size, %reason, "transcription failed");
-        SpeechError::Upstream(format!("transcription failed ({}): {reason}", self.model))
+        Error::Upstream { message: format!("transcription failed ({}): {reason}", self.model), transient: false }
     }
 }
 
@@ -142,7 +132,7 @@ impl Transcriber for DashScope {
         self.max_bytes
     }
 
-    fn transcribe<'a>(&'a self, audio: &'a [u8], media_type: &'a str) -> BoxFuture<'a, Result<String, SpeechError>> {
+    fn transcribe<'a>(&'a self, audio: &'a [u8], media_type: &'a str) -> BoxFuture<'a, Result<String, Error>> {
         Box::pin(async move {
             let (mime, format) = audio_type(media_type)?;
             if audio.is_empty() {

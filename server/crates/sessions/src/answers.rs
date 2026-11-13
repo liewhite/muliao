@@ -7,7 +7,7 @@ use muliao_runtime::conventions::SharedFile;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::error::{Result, invalid};
+use muliao_platform::errors::{Result, invalid};
 
 // ---- 提问（ask_user）----
 

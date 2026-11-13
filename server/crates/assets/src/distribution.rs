@@ -5,12 +5,12 @@ use std::sync::Arc;
 
 use crate::access::{Actor, Grants, Reach, Source, WriteScope, grants_for, holders_of, reach_of, write_scope};
 use crate::access_file;
-use crate::error::{Result, conflict, invalid, not_found};
 use crate::kinds::StoredKind;
 use crate::mcp::{McpServer, server_of};
 use crate::rules::{Action, AgentRules, BUILTIN_ROLES, Role, Rules};
 use crate::source::AssetSource;
 use crate::tree::{Owner, Snapshot};
+use muliao_platform::errors::{Result, conflict, invalid, not_found};
 
 #[derive(Debug, Clone)]
 pub struct RoleSpec {

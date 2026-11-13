@@ -10,8 +10,8 @@ use std::collections::{BTreeMap, HashSet};
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
-use crate::error::{Result, broken};
 use crate::mailbox::placeholders;
+use muliao_platform::errors::{Result, broken};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HoldStatus {

@@ -8,9 +8,9 @@ use std::collections::BTreeMap;
 
 use rusqlite::{Connection, Row, params};
 
-use crate::error::Result;
 use crate::holds::{COLUMN_COUNT, COLUMNS as HOLD_COLUMNS, Hold, from_row, hold};
 use crate::mailbox::placeholders;
+use muliao_platform::errors::Result;
 
 /// 一次开出或续写 thread 的调用；发起方有引用它的占用时就是一项委派。
 #[derive(Debug, Clone, PartialEq)]

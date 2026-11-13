@@ -15,7 +15,6 @@ pub mod activity;
 pub mod board;
 pub mod change;
 mod conversation;
-pub mod error;
 pub mod graph;
 pub mod model;
 pub mod render;
@@ -29,7 +28,6 @@ use muliao_platform::db::Migration;
 
 pub use board::{Board, BoardIssue, Filter, IssueDetail, IssueWork, NewIssue, Stopping, UserActions, user_actions_in};
 pub use change::Patch;
-pub use error::{Error, Result};
 pub use model::{Actor, Assignee, By, Issue, Priority, Status};
 
 pub const MIGRATION: Migration = Migration { domain: "issues", steps: &[include_str!("../migrations/001_issues.sql")] };

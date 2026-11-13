@@ -9,10 +9,10 @@ use std::sync::Arc;
 
 use agenter::anthropic::AnthropicModel;
 use agenter::openai_responses::OpenAIResponsesModel;
-use agenter::{Effort, Limit, Model, ModelError};
+use agenter::{Effort, Limit, Model};
 use muliao_assets::formats::agent_file::Thinking;
 use muliao_platform::config::{LlmConfig, ProviderType, split_model};
-use muliao_platform::errors::DomainError;
+use muliao_platform::errors::{DomainError, Error};
 
 /// 各协议的官方地址：配置不写 base_url 时用（永远显式给地址，不让 SDK 读环境变量）。
 fn official_base_url(kind: ProviderType) -> &'static str {
@@ -109,7 +109,7 @@ impl ModelRegistry {
     }
 
     /// 向这个 provider 实时查询它提供的模型（界面上的同步等待）；失败原样报出，不用猜测的列表兜底。
-    pub async fn list_models(&self, provider_name: &str) -> Result<Vec<String>, ListError> {
+    pub async fn list_models(&self, provider_name: &str) -> Result<Vec<String>, Error> {
         let p = self.providers.get(provider_name).ok_or_else(|| {
             DomainError::not_found(format!(
                 "provider {provider_name:?} is not configured, have {:?}",
@@ -130,19 +130,13 @@ impl ModelRegistry {
             }
             Err(e) => {
                 tracing::warn!(provider = provider_name, error = %e, "listing models failed");
-                Err(ListError::Upstream { provider: provider_name.to_owned(), source: e })
+                Err(Error::Upstream {
+                    message: format!("provider {provider_name:?} failed to list models: {e}"),
+                    transient: false,
+                })
             }
         }
     }
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum ListError {
-    #[error(transparent)]
-    Domain(#[from] DomainError),
-    /// provider 那边出错（鉴权、限流、5xx、网络不可达）
-    #[error("provider {provider:?} failed to list models: {source}")]
-    Upstream { provider: String, source: ModelError },
 }
 
 #[cfg(test)]
@@ -191,6 +185,6 @@ mod tests {
     #[tokio::test]
     async fn listing_an_unknown_provider_is_not_found() {
         let e = registry().list_models("nope").await.unwrap_err();
-        assert!(matches!(e, ListError::Domain(d) if d.kind == muliao_platform::errors::ErrorKind::NotFound));
+        assert!(matches!(e, Error::Domain(d) if d.kind == muliao_platform::errors::ErrorKind::NotFound));
     }
 }

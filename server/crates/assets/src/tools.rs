@@ -12,25 +12,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::access::Actor;
 use crate::distribution::Distribution;
-use crate::error::Error;
 use crate::formats::agent_file::Thinking;
 use crate::lifecycle::AgentLifecycle;
 use crate::rules::{AgentRules, Role};
 use crate::secrets::Secrets;
 use crate::service::{AgentService, AgentSpec, AgentView};
 use crate::tree::Owner;
-
-/// 本领域的错误交给工具层（platform::tooling 的统一规则）：领域错误交还模型；写入口拒绝的资源文件交还模型完整的说明；
-/// 数据库与文件系统出错让这次运行失败。
-impl From<Error> for ToolError {
-    fn from(e: Error) -> Self {
-        match e {
-            Error::Domain(d) => d.into(),
-            Error::Rejected(r) => ToolError::Retry(r.for_agent()),
-            other => ToolError::Abort(Box::new(other)),
-        }
-    }
-}
 
 /// 本领域的全部工具（组合根交给运行端口的工具箱）。
 pub fn tools(

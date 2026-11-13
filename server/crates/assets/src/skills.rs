@@ -10,11 +10,11 @@ use muliao_platform::fs::RealPath;
 use sha2::{Digest, Sha256};
 
 use crate::access::{Actor, grants_for, usable};
-use crate::error::{Result, invalid, not_found};
 use crate::formats::skill::{SKILL_FILE, body_of, compose};
 use crate::kinds::StoredKind;
 use crate::source::AssetSource;
 use crate::tree::{Asset, Expect, Owner, version_of};
+use muliao_platform::errors::{Result, invalid, not_found};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillMeta {

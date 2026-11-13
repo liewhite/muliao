@@ -20,9 +20,9 @@ use rusqlite::Connection;
 use crate::access::{Actor, Sharing};
 use crate::access_file::{self, AccessEdit};
 use crate::agents::{self, AgentInfo};
-use crate::error::{Result, conflict};
 use crate::source::AssetSource;
 use crate::tree::{Owner, Snapshot, move_to, remove};
+use muliao_platform::errors::{Result, conflict};
 
 /// 删除 agent 时一个领域的清理：在标记它的事务里删掉或改掉自己引用它的数据；返回错误整个回滚（如它的会话忙）。
 pub type DeletionHook = Arc<dyn Fn(&mut Tx<'_>, &str) -> Result<()> + Send + Sync>;
@@ -64,7 +64,7 @@ impl AgentLifecycle {
                 for hook in hooks.iter() {
                     hook(tx, &id)?;
                 }
-                Ok::<_, crate::error::Error>(())
+                Ok::<_, muliao_platform::errors::Error>(())
             })
             .await?;
         tracing::info!(agent = agent_id, actor = actor.as_str(), "agent deletion started");

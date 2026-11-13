@@ -19,11 +19,11 @@ use crate::activity::WorkState;
 use crate::actor::{Actors, Waker};
 use crate::answers::AskArgs;
 use crate::delegation::{Mode, send_in, threads_in, validate_thread};
-use crate::error::{Error, Result, invalid, not_found};
 use crate::halt::Halted;
 use crate::pending::{ASK_AGENT, ASK_USER};
 use crate::wakeups::{WAKE_ME, cancel_in, local_time, schedule_in};
 use crate::work::check_interval;
+use muliao_platform::errors::{Error, Result, invalid, not_found};
 
 /// 停止会话的入口，在 actor 系统起来之后接上（工具先于 actor 系统构造：工具 → 运行端口 → actor 系统）。
 #[derive(Clone, Default)]

@@ -35,12 +35,12 @@ use tokio::sync::Notify as Wakeup;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
-use crate::error::{Error, Result, invalid};
 use crate::faults::{FaultSource, TriggerFault, recovered};
 use crate::kinds::{Configured, TriggerKind, parse_config};
 use crate::precheck::tail_chars;
 use crate::service::{Busy, EVENT_MAX_BYTES, TriggerService, busy_previous_in};
 use crate::store::{Listing, Trigger, load_in, save_in};
+use muliao_platform::errors::{Error, Result, invalid};
 
 pub const KIND: &str = "stream";
 /// 稳定运行这么久算恢复：清除出错，退避与连续失败计数从头算

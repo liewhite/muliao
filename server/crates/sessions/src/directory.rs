@@ -6,10 +6,10 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, Row, params};
 
-use crate::error::Result;
 use crate::history::{SESSIONS_MENTIONING, like_pattern};
 use crate::mailbox::placeholders;
 use crate::origins::{Origin, Sender, SessionOrigin};
+use muliao_platform::errors::Result;
 
 /// 一个会话（读模型）。
 #[derive(Debug, Clone, PartialEq)]
@@ -84,7 +84,9 @@ pub fn get_in(c: &Connection, session_id: &str) -> Result<Option<Session>> {
 /// 正在运行的会话（运行的开头、结束、失败时取）。忙的会话不会被删除（[`crate::deletion`]），所以不在是 bug，报 Broken。
 pub(crate) fn running_in(c: &Connection, session_id: &str) -> Result<Session> {
     get_in(c, session_id)?.ok_or_else(|| {
-        crate::error::broken(format!("session {session_id} vanished while it had work: busy sessions are not deleted"))
+        muliao_platform::errors::broken(format!(
+            "session {session_id} vanished while it had work: busy sessions are not deleted"
+        ))
     })
 }
 

@@ -113,6 +113,9 @@ impl fmt::Display for StoredKind {
     }
 }
 
+/// 讲资源目录怎么改的公共 skill（#501）：写入口的拒绝与提示词指向它
+pub const ASSETS_SKILL: &str = "assets-files";
+
 /// 讲资源目录怎么改的公共 skill（assets-files）的小节；报错里指向它们，标题与 skill 里的 `## <名>` 逐字一致
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Section {

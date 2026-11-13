@@ -108,23 +108,23 @@ impl Events {
         self.subscribers.get().expect("session events published before their subscribers were registered")
     }
 
-    pub(crate) fn run_ended(&self, tx: &mut Tx<'_>, e: &RunEnded) -> crate::error::Result<()> {
+    pub(crate) fn run_ended(&self, tx: &mut Tx<'_>, e: &RunEnded) -> muliao_platform::errors::Result<()> {
         publish(tx, &self.all().run_ended, e)
     }
-    pub(crate) fn run_failed(&self, tx: &mut Tx<'_>, e: &RunFailed) -> crate::error::Result<()> {
+    pub(crate) fn run_failed(&self, tx: &mut Tx<'_>, e: &RunFailed) -> muliao_platform::errors::Result<()> {
         publish(tx, &self.all().run_failed, e)
     }
-    pub(crate) fn session_stopped(&self, tx: &mut Tx<'_>, e: &SessionStopped) -> crate::error::Result<()> {
+    pub(crate) fn session_stopped(&self, tx: &mut Tx<'_>, e: &SessionStopped) -> muliao_platform::errors::Result<()> {
         publish(tx, &self.all().session_stopped, e)
     }
-    pub(crate) fn session_deleted(&self, tx: &mut Tx<'_>, e: &SessionDeleted) -> crate::error::Result<()> {
+    pub(crate) fn session_deleted(&self, tx: &mut Tx<'_>, e: &SessionDeleted) -> muliao_platform::errors::Result<()> {
         publish(tx, &self.all().session_deleted, e)
     }
 }
 
-fn publish<E>(tx: &mut Tx<'_>, handlers: &[Handler<E>], event: &E) -> crate::error::Result<()> {
+fn publish<E>(tx: &mut Tx<'_>, handlers: &[Handler<E>], event: &E) -> muliao_platform::errors::Result<()> {
     for h in handlers {
-        h(tx, event).map_err(crate::error::Error::Subscriber)?;
+        h(tx, event).map_err(muliao_platform::errors::Error::Internal)?;
     }
     Ok(())
 }

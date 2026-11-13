@@ -6,8 +6,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use rusqlite::{Connection, params, params_from_iter};
 use serde::{Deserialize, Serialize};
 
-use crate::error::{Result, invalid};
 use crate::model::Status;
+use muliao_platform::errors::{Result, invalid};
 
 /// 依赖关系里的另一个 issue（上游或下游）与它现在的状态。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

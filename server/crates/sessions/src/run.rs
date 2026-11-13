@@ -41,7 +41,6 @@ use crate::conventions::{
     set_finished_at, unanswered_calls,
 };
 use crate::directory::{self, Session};
-use crate::error::{Error, Result, broken};
 use crate::events::{Events, RunEnded};
 use crate::history::{self, SessionContext, Stored};
 use crate::live::{DeltaType, Live};
@@ -52,6 +51,7 @@ use crate::runs::{self, Outcome};
 use crate::settlement::{delegated_in, settle_finished_in};
 use crate::transcript::{call_item, result_item};
 use crate::work::position_in;
+use muliao_platform::errors::{Error, Result, broken};
 
 /// 会话领域运行时共用的部件（组合根装配一次）。
 pub struct Core {
@@ -117,12 +117,6 @@ impl From<muliao_runtime::StepError> for Failure {
 
 impl From<muliao_runtime::StartError> for Failure {
     fn from(e: muliao_runtime::StartError) -> Self {
-        Failure { transient: false, message: e.to_string() }
-    }
-}
-
-impl From<muliao_assets::error::Error> for Failure {
-    fn from(e: muliao_assets::error::Error) -> Self {
         Failure { transient: false, message: e.to_string() }
     }
 }

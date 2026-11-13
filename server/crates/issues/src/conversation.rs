@@ -9,7 +9,7 @@ use muliao_sessions::inbound::{SenderMail, SenderTarget};
 use muliao_sessions::origins::Sender;
 use rusqlite::Connection;
 
-use crate::error::Result;
+use muliao_platform::errors::Result;
 
 fn sender(issue_id: i64) -> Sender {
     Sender::Issue { issue_id }

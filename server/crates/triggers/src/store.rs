@@ -11,9 +11,9 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use crate::error::{Error, Result};
 use crate::faults::TriggerFault;
 use crate::precheck::Precheck;
+use muliao_platform::errors::{Error, Result};
 
 /// 一个触发器（一行）。
 #[derive(Debug, Clone, PartialEq)]
@@ -42,11 +42,20 @@ pub struct Trigger {
     pub created_at: DateTime<Utc>,
 }
 
+/// 这个触发器存下的配置或状态与代码的约定对不上（只经 configure 写入，现在读不懂）。是内部错误（[`Error::internal`]），到期扫描
+/// 与运行状态用 [`Error::internal_as`] 认出它：只停用这一个、原因给用户看，不影响别的触发器。
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct Corrupt(pub String);
+
 impl Trigger {
     /// 读出这种方式自己的配置或状态类型：读不懂是存下的数据坏了（只经 configure 写入）。
     pub fn decode<T: DeserializeOwned>(&self, what: &str, value: &Value) -> Result<T> {
         serde_json::from_value(value.clone()).map_err(|e| {
-            Error::Corrupt(format!("trigger {} ({}) has an invalid stored {what} {value}: {e}", self.id, self.name))
+            Error::internal(Corrupt(format!(
+                "trigger {} ({}) has an invalid stored {what} {value}: {e}",
+                self.id, self.name
+            )))
         })
     }
 

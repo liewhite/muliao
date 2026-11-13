@@ -17,7 +17,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use agenter::{Content, File, FileSource, Message, Request, RequestPart, ToolResult};
-use muliao_files::{FileMeta, FileStore, FilesError, INLINE_IMAGE_TYPES, parse_file_url};
+use muliao_files::{FileMeta, FileStore, INLINE_IMAGE_TYPES, parse_file_url};
+use muliao_platform::errors::Error;
 
 use crate::images;
 use crate::instructions::py_repr;
@@ -85,7 +86,7 @@ fn refs_in(request: &Request) -> impl Iterator<Item = String> + '_ {
 
 /// 一张图片的模型形态：按 provider 的上限整理，整理过就在前面写明做了什么；解不成图片的换成一句说明，不发给 provider（它
 /// 会拒绝整次请求，而图片在历史里，之后每次请求都会失败）。
-async fn image_content(store: &FileStore, meta: &FileMeta) -> Result<Vec<Content>, FilesError> {
+async fn image_content(store: &FileStore, meta: &FileMeta) -> Result<Vec<Content>, Error> {
     let data = store.read(meta).await?;
     let fitted = tokio::task::spawn_blocking(move || images::fit(&data))
         .await
@@ -111,7 +112,7 @@ async fn image_content(store: &FileStore, meta: &FileMeta) -> Result<Vec<Content
 }
 
 /// 这次请求要发出的历史：文件引用展开成模型形态（见模块说明）。历史本身不动。
-pub async fn for_model(store: &FileStore, history: &[Message]) -> Result<Vec<Message>, FilesError> {
+pub async fn for_model(store: &FileStore, history: &[Message]) -> Result<Vec<Message>, Error> {
     let mut ids: Vec<String> = Vec::new();
     for m in history {
         if let Message::User(r) = m {
@@ -181,7 +182,7 @@ fn extension(media_type: &str) -> &'static str {
 
 /// 工具结果里能内联的图片存进文件存储、换成引用（见模块说明）。其余内容（文字、PDF 等别的文件）原样留着。存不下（如超过
 /// 上传上限）是这次运行的失败。
-pub async fn store_tool_images(store: &FileStore, result: &mut ToolResult) -> Result<(), FilesError> {
+pub async fn store_tool_images(store: &FileStore, result: &mut ToolResult) -> Result<(), Error> {
     for c in &mut result.content {
         let Content::File(File { media_type, source: FileSource::Data(data) }) = c else { continue };
         if !INLINE_IMAGE_TYPES.contains(&media_type.as_str()) {

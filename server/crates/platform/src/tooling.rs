@@ -3,7 +3,7 @@
 //! - [`RunScope`]：一次运行交给每个工具的上下文（agenter 的 deps），[`Audience`]：这次运行的回答交给谁。
 //! - [`ToolTraits`]：内置工具自己声明的属性（读写、管理类、要脱敏的参数、界面展示、是否排队执行）。内置工具只能经
 //!   [`builtin`] 带着声明交出（[`BuiltinTool`]），没声明的写不出来；运行端口的工具箱收集后交给分发、脱敏和界面。
-//! - 领域错误交还模型的统一规则（见 [`DomainError`] 到 `ToolError` 的转换）。
+//! - 错误交给模型的统一规则（见 [`Error`] 到 `ToolError` 的转换）。
 //!
 //! **错误映射的统一规则**（各领域的工具都照这个，不各写一份）：
 //! - 调用方改了输入就能成的（[`DomainError`]：参数不对、找不到、冲突……）→ `ToolError::Retry`：交还模型修正，连续次数有
@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use agenter::{DynTool, Tool, ToolError};
 use serde_json::{Map, Value};
 
-use crate::errors::DomainError;
+use crate::errors::{DomainError, Error};
 use crate::tool_views::ToolRender;
 
 /// 一次运行的回答交给谁：运行开始时由会话与它处理的信件推导一次，决定运行上下文里怎么说、ask_user 接不接受（没有用户
@@ -175,6 +175,16 @@ impl DynTool<RunScope> for Barrier {
 impl From<DomainError> for ToolError {
     fn from(e: DomainError) -> Self {
         ToolError::Retry(e.message)
+    }
+}
+
+impl From<Error> for ToolError {
+    fn from(e: Error) -> Self {
+        match e {
+            Error::Domain(d) => d.into(),
+            e @ Error::Upstream { transient: true, .. } => ToolError::Unavailable(Box::new(e)),
+            other => ToolError::Abort(Box::new(other)),
+        }
     }
 }
 

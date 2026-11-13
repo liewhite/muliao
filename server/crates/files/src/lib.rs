@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use muliao_platform::db::{Database, Migration};
-use muliao_platform::errors::{DomainError, ErrorKind};
+use muliao_platform::errors::{DomainError, Error, ErrorKind, broken};
 use muliao_platform::ids::new_id;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use rusqlite::{Connection, OptionalExtension};
@@ -42,20 +42,6 @@ const NAME_MAX_BYTES: usize = 255;
 const CHUNK_BYTES: usize = 64 * 1024;
 /// URL 里名称这一段除字母数字和 `-._~` 外都转义（同 Python 的 `quote(name, safe='')`）
 const NAME_SEGMENT: &AsciiSet = &NON_ALPHANUMERIC.remove(b'-').remove(b'.').remove(b'_').remove(b'~');
-
-#[derive(Debug, thiserror::Error)]
-pub enum FilesError {
-    /// 调用方给的输入不对（名称、类型、超过大小上限、id 不存在）
-    #[error(transparent)]
-    Domain(#[from] DomainError),
-    /// 系统自己存下的引用（消息里的附件）指向不存在的文件：文件从不删除，这是不变量被破坏，不是输入错误
-    #[error("stored references point to missing files: {0:?}")]
-    Corrupt(Vec<String>),
-    #[error("file storage: {0}")]
-    Io(#[from] io::Error),
-    #[error(transparent)]
-    Db(#[from] rusqlite::Error),
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileMeta {
@@ -122,7 +108,7 @@ pub fn check_media_type(media_type: &str) -> Result<String, DomainError> {
 
 /// 按给出的顺序返回元数据；任何一个不存在都报 NotFound。可以在调用方的事务里用（文件写入后不变、不删，没有先查后写的
 /// 竞态）。files 表只经过这里读。
-pub fn load_metas(conn: &Connection, file_ids: &[String]) -> Result<Vec<FileMeta>, FilesError> {
+pub fn load_metas(conn: &Connection, file_ids: &[String]) -> Result<Vec<FileMeta>, Error> {
     let (metas, missing) = lookup(conn, file_ids)?;
     if !missing.is_empty() {
         return Err(DomainError::not_found(format!("files {missing:?} not found")).into());
@@ -215,12 +201,7 @@ impl FileStore {
     }
 
     /// 存一个文件：边读边写边算哈希，超过上限立即停止读取（TooLarge）。
-    pub async fn put(
-        &self,
-        name: &str,
-        media_type: &str,
-        mut body: impl AsyncRead + Unpin,
-    ) -> Result<FileMeta, FilesError> {
+    pub async fn put(&self, name: &str, media_type: &str, mut body: impl AsyncRead + Unpin) -> Result<FileMeta, Error> {
         let name = check_name(name)?.to_string();
         let media_type = check_media_type(media_type)?;
         let tmp_dir = self.tmp_dir();
@@ -266,26 +247,26 @@ impl FileStore {
         Ok(meta)
     }
 
-    pub async fn put_path(&self, name: &str, media_type: &str, path: &Path) -> Result<FileMeta, FilesError> {
+    pub async fn put_path(&self, name: &str, media_type: &str, path: &Path) -> Result<FileMeta, Error> {
         let file = tokio::fs::File::open(path).await?;
         self.put(name, media_type, file).await
     }
 
-    pub async fn get(&self, file_id: &str) -> Result<FileMeta, FilesError> {
+    pub async fn get(&self, file_id: &str) -> Result<FileMeta, Error> {
         let mut metas = self.get_many(vec![file_id.to_string()]).await?;
         Ok(metas.remove(0))
     }
 
     /// 调用方给出的 id（可能有误）：不存在报 NotFound。
-    pub async fn get_many(&self, file_ids: Vec<String>) -> Result<Vec<FileMeta>, FilesError> {
+    pub async fn get_many(&self, file_ids: Vec<String>) -> Result<Vec<FileMeta>, Error> {
         self.db.read(move |c| load_metas(c, &file_ids)).await
     }
 
-    /// 系统自己存下的引用（消息里的附件）：找不到是数据损坏（[`FilesError::Corrupt`]），不是输入错误。
-    pub async fn referenced(&self, file_ids: Vec<String>) -> Result<Vec<FileMeta>, FilesError> {
+    /// 系统自己存下的引用（消息里的附件）：找不到是数据损坏（内部错误），不是输入错误。
+    pub async fn referenced(&self, file_ids: Vec<String>) -> Result<Vec<FileMeta>, Error> {
         let (metas, missing) = self.db.read(move |c| lookup(c, &file_ids)).await?;
         if !missing.is_empty() {
-            return Err(FilesError::Corrupt(missing));
+            return Err(broken(format!("stored references point to missing files: {missing:?}")));
         }
         Ok(metas)
     }

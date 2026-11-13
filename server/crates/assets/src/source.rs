@@ -22,11 +22,11 @@ use muliao_platform::db::Database;
 use tokio::sync::{Mutex, MutexGuard};
 
 use crate::asset_files;
-use crate::error::Result;
 use crate::formats::agent_file::{AGENT_FILE, AgentFile, Thinking};
 use crate::kinds::StoredKind;
 use crate::rules::{GLOBAL_MEMORY, ToolTable};
 use crate::tree::{Expect, Owner, Problem, Snapshot, fingerprint, load_tree};
+use muliao_platform::errors::Result;
 
 /// (模型, 思考档位) 在当前配置下能不能运行；不能时的原因（运行端口的模型注册表给）。
 pub type ModelCheck = Arc<dyn Fn(&str, Thinking) -> std::result::Result<(), String> + Send + Sync>;
@@ -160,11 +160,11 @@ impl AssetSource {
 
     /// agent.toml 的内容在当前配置下能运行（模型与思考档位），否则 InvalidInput。格式与字段的规则在 AgentFile。
     pub fn check_agent(&self, data: &AgentFile) -> Result<()> {
-        (self.check_model)(data.model(), data.thinking()).map_err(crate::error::invalid)
+        (self.check_model)(data.model(), data.thinking()).map_err(muliao_platform::errors::invalid)
     }
 
     /// 把资源目录里的这些文件写成给出的文本：改写资源文件的唯一入口。在锁里按此刻的树逐份校验（不合格是
-    /// [`crate::error::AssetRejected`]），再核对每份此刻合不合调用方的预期（[`Expect`]：打开编辑时的版本、读到时的样子），
+    /// InvalidInput，说明见 [`crate::asset_files::vet`]），再核对每份此刻合不合调用方的预期（[`Expect`]：打开编辑时的版本、读到时的样子），
     /// 全部通过才逐个原子写入；有一份不过就一份都不写。返回每份实际存下的。
     pub async fn write(&self, texts: &[(PathBuf, String, Expect)]) -> Result<Vec<(PathBuf, Written)>> {
         let w = self.writing().await?;

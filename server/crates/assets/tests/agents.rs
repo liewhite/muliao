@@ -6,13 +6,14 @@ use std::sync::Arc;
 
 use common::{world, write};
 use muliao_assets::access::Actor;
+use muliao_assets::agents;
 use muliao_assets::formats::agent_file::{AgentConfig, Thinking};
 use muliao_assets::kinds::StoredKind;
 use muliao_assets::lifecycle::{AgentLifecycle, ArchiveBlocker, DeletionHook};
 use muliao_assets::rules::AgentRules;
 use muliao_assets::service::{AgentPatch, AgentSpec};
 use muliao_assets::tree::Owner;
-use muliao_assets::{Error, agents};
+use muliao_platform::errors::Error;
 
 fn read(path: std::path::PathBuf) -> String {
     std::fs::read_to_string(path).unwrap_or_default()
@@ -230,7 +231,7 @@ async fn failed_file_removal_is_reported_and_resumed() {
     std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o555)).unwrap();
     let err = life.delete(&a, &Actor::User).await;
     std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
-    assert!(matches!(err, Err(Error::Io(_))), "{err:?}");
+    assert!(err.as_ref().is_err_and(|e| e.internal_as::<std::io::Error>().is_some()), "{err:?}");
     let info = w.service.get(&a).await.unwrap();
     assert_eq!(info.state, muliao_assets::agents::AgentState::Deleting, "it stays marked as being deleted");
     assert!(w.service.list().await.unwrap().is_empty());

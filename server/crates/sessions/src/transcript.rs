@@ -17,10 +17,10 @@ use serde::Serialize;
 use crate::answers::Waiting;
 use crate::answers::{AnsweredQuestion, AskResult, Question, questions_of};
 use crate::conventions::{PartKind, event_content, finished_at, is_stopped, made_up, part_marks, run_context_index};
-use crate::error::{Result, broken};
 use crate::origins::Origin;
 use crate::pending::{ASK_USER, OpenAsk, OpenAsks};
 use crate::work::EventSource;
+use muliao_platform::errors::{Result, broken};
 
 /// 各工具的展示规则（`Toolbox::renders`）；只要文字的投影给空的。
 pub type Renders = HashMap<String, Arc<ToolRender>>;

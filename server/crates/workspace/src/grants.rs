@@ -15,7 +15,7 @@ use rusqlite::{OptionalExtension, params};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use crate::error::{Result, not_found};
+use muliao_platform::errors::{Result, not_found};
 
 /// 按始终允许直接执行时，接在结果前面告诉模型（也留在会话记录里）
 pub const GRANTED_NOTE: &str = "(Run without asking: the user always allows this exact call.)";
@@ -205,7 +205,7 @@ impl ScriptGrants {
 }
 
 fn parse_list(raw: &str) -> Result<Vec<String>> {
-    serde_json::from_str(raw).map_err(|e| crate::error::Error::Broken(format!("script grant list {raw:?}: {e}")))
+    serde_json::from_str(raw).map_err(|e| muliao_platform::errors::broken(format!("script grant list {raw:?}: {e}")))
 }
 
 #[cfg(test)]

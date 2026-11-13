@@ -13,12 +13,12 @@ use chrono::{DateTime, Utc};
 use muliao_platform::vault::Vault;
 
 use crate::access::{Actor, grants_for, usable, writable};
-use crate::error::{Result, invalid, not_found};
 use crate::formats::mcp::McpConfig;
 use crate::formats::secret::{SecretFile, fill, refs, render, validate_key};
 use crate::kinds::StoredKind;
 use crate::source::AssetSource;
 use crate::tree::{Asset, Owner};
+use muliao_platform::errors::{Result, invalid, not_found};
 
 /// 一个 secret 的信息，不含值。
 #[derive(Debug, Clone, PartialEq, Eq)]

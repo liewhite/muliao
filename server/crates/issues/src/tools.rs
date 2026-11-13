@@ -12,10 +12,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::board::{Board, BoardIssue, Filter, NewIssue, in_batch};
 use crate::change::Patch;
-use crate::error::{Result, invalid};
 use crate::graph::Upstream;
 use crate::model::{Assignee, By, Priority, Status};
 use crate::render::assignee_name;
+use muliao_platform::errors::{Result, invalid};
 
 /// issue 看板的工具组。
 pub fn tools(board: Board) -> Vec<BuiltinTool> {
@@ -44,7 +44,7 @@ async fn assignee(board: &Board, name: String) -> Result<Assignee> {
 }
 
 async fn names(board: &Board) -> Result<AgentNames> {
-    Ok(board.db().read(agent_names_in).await?)
+    board.db().read(agent_names_in).await
 }
 
 fn markdown(text: &str) -> Option<ViewBlock> {

@@ -18,7 +18,6 @@ use muliao_platform::db::Tx;
 
 use crate::conventions::{MadeUp, is_interrupted, is_stopped, made_up_result, mark_stopped, results_request};
 use crate::directory;
-use crate::error::{Result, broken};
 use crate::events::SessionStopped;
 use crate::history::{self, since_last_response};
 use crate::holds::{HoldOf, clear_in};
@@ -29,6 +28,7 @@ use crate::runs;
 use crate::settlement::settle_stopped_in;
 use crate::thread_calls::delegations_among;
 use crate::work::position_in;
+use muliao_platform::errors::{Result, broken};
 
 /// 停止的结果。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

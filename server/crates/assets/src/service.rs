@@ -14,12 +14,12 @@ use muliao_platform::db::Database;
 use crate::access::Actor;
 use crate::access_file::{self, AccessEdit};
 use crate::agents::{self, AgentInfo, AgentNames};
-use crate::error::{Result, invalid};
 use crate::formats::agent_file::{self, AGENT_FILE, AgentConfig, AgentFile, Thinking};
 use crate::naming::{AgentName, new_agent_id};
 use crate::rules::AgentRules;
 use crate::source::AssetSource;
 use crate::tree::{AgentDir, PRIVATE_MEMORY_FILE, Snapshot, move_to, remove};
+use muliao_platform::errors::{Result, invalid};
 
 /// 新建 agent。model 为 None 时取服务端配置的默认模型。roles 不含 base（每个 agent 隐含）。
 #[derive(Debug, Clone, Default)]

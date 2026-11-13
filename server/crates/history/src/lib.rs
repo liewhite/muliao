@@ -5,7 +5,6 @@
 //! - 热历史：还没总结的活动直接从会话领域的读模型（`muliao_sessions::recall`）与 issue 看板读。
 //! - 工具（[`tools`]）：history_append、history_search、activity_overview、session_read。
 
-pub mod error;
 pub mod log;
 pub mod tools;
 
@@ -14,7 +13,6 @@ mod tests;
 
 use muliao_platform::db::Migration;
 
-pub use error::{Error, Result};
 pub use log::{History, NewEntry, Record, Search};
 pub use tools::tools;
 

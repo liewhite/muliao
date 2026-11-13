@@ -14,14 +14,15 @@ use agenter::{
 use chrono::Utc;
 use chrono_tz::Tz;
 use muliao_assets::distribution::Distribution;
-use muliao_assets::error::{ASSETS_SKILL, Error as AssetError};
+use muliao_assets::kinds::ASSETS_SKILL;
 use muliao_assets::memory::MemoryStore;
 use muliao_assets::service::AgentService;
 use muliao_assets::skills::SkillStore;
 use muliao_assets::source::AssetSource;
 use muliao_assets::tree::AgentDir;
-use muliao_files::{FileStore, FilesError};
+use muliao_files::FileStore;
 use muliao_platform::errors::DomainError;
+use muliao_platform::errors::Error;
 use muliao_platform::tooling::{Audience, RunScope};
 use muliao_usage::{RunKind, UsageEntry, UsageLog, UsageTotals};
 use serde_json::Value;
@@ -67,7 +68,7 @@ pub struct RunSpec<'a> {
 #[derive(Debug, thiserror::Error)]
 pub enum StartError {
     #[error(transparent)]
-    Assets(#[from] AssetError),
+    Assets(#[from] Error),
     /// agent.toml 里的模型在当前配置下不能运行
     #[error(transparent)]
     Model(#[from] DomainError),
@@ -82,7 +83,7 @@ pub enum StepError {
     Run(#[from] RunError),
     /// 读附件、存工具交回的图片失败
     #[error(transparent)]
-    Files(#[from] FilesError),
+    Files(#[from] Error),
 }
 
 impl StepError {
@@ -107,7 +108,7 @@ impl Runtime {
 
     /// agent 现在的配置与资源目录，只认 agent.toml：没加载时 NotFound（带上原因），要它的运行当场失败，不沿用旧值。会话
     /// 的一次运行在开头取一份，整次运行与压缩都用它。
-    pub async fn config(&self, agent_id: &str) -> Result<AgentDir, AssetError> {
+    pub async fn config(&self, agent_id: &str) -> Result<AgentDir, Error> {
         Ok(self.d.source.snapshot().await?.loaded_agent(agent_id)?.clone())
     }
 
@@ -123,7 +124,7 @@ impl Runtime {
         config: &AgentDir,
         origin_note: &str,
         summary: Option<&str>,
-    ) -> Result<String, AssetError> {
+    ) -> Result<String, Error> {
         let id = config.id.as_str();
         let memories = self.d.memory.for_run(id).await?;
         let skills = self.d.skills.index(id).await?;
@@ -143,7 +144,7 @@ impl Runtime {
     }
 
     /// 资源目录里与它相关、没加载的文件（读坏、名字冲突），告诉模型去修。
-    async fn asset_problems(&self, agent_id: &str) -> Result<Vec<String>, AssetError> {
+    async fn asset_problems(&self, agent_id: &str) -> Result<Vec<String>, Error> {
         let snapshot = self.d.source.snapshot().await?;
         Ok(snapshot
             .problems_for(agent_id)
@@ -212,7 +213,7 @@ impl Runtime {
         session_id: &str,
         instructions: &str,
         prompt: &str,
-    ) -> Result<String, SummarizeError> {
+    ) -> Result<String, Error> {
         let model = self.d.models.resolve(config.file.model())?;
         let settings = Settings { thinking: thinking_of(config.file.thinking()), max_tokens: None };
         let agent: Agent<()> = Agent::new(model, instructions, settings, vec![]).expect("no tools");
@@ -228,7 +229,11 @@ impl Runtime {
             config.file.model(),
             RunKind::Compaction,
         );
-        match agent.step(&(), &history, &HashMap::new(), &mut |_| {}).await? {
+        let step = agent.step(&(), &history, &HashMap::new(), &mut |_| {}).await.map_err(|e| Error::Upstream {
+            message: format!("summarizing for compaction failed: {e}"),
+            transient: e.is_transient(),
+        })?;
+        match step {
             Step::Responded(r) => {
                 meter.bill(r.usage).await;
                 Ok(r.text())
@@ -236,14 +241,6 @@ impl Runtime {
             other => unreachable!("a request without tools ends with a response, got {other:?}"),
         }
     }
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum SummarizeError {
-    #[error(transparent)]
-    Model(#[from] DomainError),
-    #[error(transparent)]
-    Run(#[from] RunError),
 }
 
 /// 一次运行（见模块说明）。
@@ -316,13 +313,13 @@ impl Run {
     }
 
     /// 一步没走完就被停下时，已经做完的工具结果（取自 `ToolFinished` 事件）变成存储形态（同 [`Run::step`] 交回的）。
-    pub async fn settled(&self, mut result: ToolResult) -> Result<ToolResult, FilesError> {
+    pub async fn settled(&self, mut result: ToolResult) -> Result<ToolResult, Error> {
         self.settle(&mut result).await?;
         Ok(result)
     }
 
     /// 工具结果变成存储形态：挂上的附加数据并进 metadata，图片存进文件存储。
-    async fn settle(&self, result: &mut ToolResult) -> Result<(), FilesError> {
+    async fn settle(&self, result: &mut ToolResult) -> Result<(), Error> {
         if let Some(extra) = self.scope.take_result_metadata(&result.call_id) {
             let mut merged = match result.metadata.take() {
                 Some(Value::Object(m)) => m,

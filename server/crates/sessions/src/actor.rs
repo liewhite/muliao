@@ -21,7 +21,6 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::activity::{WorkState, work_state_in};
 use crate::delegation::check_threads;
-use crate::error::{Error, Result, broken, conflict, not_found};
 use crate::events::RunFailed;
 use crate::halt::{Halted, StopThread, halt};
 use crate::mailbox::Mail;
@@ -31,6 +30,7 @@ use crate::runs::{self, Outcome, RunRecord};
 use crate::settlement::settle_failure_in;
 use crate::work::CheckBeats;
 use crate::{directory, wakeups};
+use muliao_platform::errors::{Error, Result, broken, conflict, not_found};
 
 /// 叫醒会话 actor 的句柄：只说「这个会话可能有事了」，要不要跑由 actor 自己按 [`should_run`] 判断。可以先于 actor 系统
 /// 构造（组合根里没有构造环）。

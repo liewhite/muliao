@@ -8,9 +8,9 @@ use muliao_platform::db::Tx;
 use crate::activity::{blocking_deletion_in, blocks_agent_in};
 use crate::actor::Waker;
 use crate::directory::{self, Session};
-use crate::error::{Error, Result, conflict};
 use crate::events::{Events, SessionDeleted};
 use crate::settlement::settle_deleted_in;
+use muliao_platform::errors::{Result, conflict};
 
 /// 删除会话（删会话、删 agent 都经过这里）：一个事务。它开出的 thread 保留为独立会话（父引用置空）。任一被删会话忙时拒绝
 /// （避免运行结果无处提交、工具写进被删的目录）；交给被删会话、还没结清的委派以「被删除」交回发起方；发布 SessionDeleted。
@@ -35,19 +35,11 @@ pub(crate) fn delete_sessions_in(tx: &mut Tx<'_>, waker: &Waker, events: &Events
     Ok(())
 }
 
-fn to_assets(e: Error) -> muliao_assets::error::Error {
-    match e {
-        Error::Domain(d) => d.into(),
-        Error::Db(d) => d.into(),
-        other => std::io::Error::other(other.to_string()).into(),
-    }
-}
-
 /// 删除 agent 时：在标记它的事务里删掉它的全部会话；有忙的就 Conflict，整个删除回滚。
 pub fn deletion_hook(waker: Waker, events: Arc<Events>) -> DeletionHook {
     Arc::new(move |tx, agent_id| {
-        let sessions = directory::of_agent_in(tx, agent_id).map_err(to_assets)?;
-        delete_sessions_in(tx, &waker, &events, &sessions).map_err(to_assets)?;
+        let sessions = directory::of_agent_in(tx, agent_id)?;
+        delete_sessions_in(tx, &waker, &events, &sessions)?;
         tracing::info!(agent = agent_id, sessions = sessions.len(), "sessions of a deleted agent removed");
         Ok(())
     })
@@ -55,5 +47,5 @@ pub fn deletion_hook(waker: Waker, events: Arc<Events>) -> DeletionHook {
 
 /// 归档前的检查：它的会话里有忙的（与删除 agent 时的判断同一条规则）。
 pub fn archive_blocker() -> (String, ArchiveBlocker) {
-    ("sessions".to_owned(), Arc::new(|c, agent_id| blocks_agent_in(c, agent_id).map_err(to_assets)))
+    ("sessions".to_owned(), Arc::new(blocks_agent_in))
 }

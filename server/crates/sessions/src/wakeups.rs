@@ -11,9 +11,9 @@ use muliao_platform::db::{Database, Tx};
 use rusqlite::{Connection, params};
 
 use crate::actor::Waker;
-use crate::error::Result;
 use crate::holds::{self, COLUMN_COUNT, COLUMNS, Outside, abandon_in, from_row};
 use crate::work::{EventSource, deliver_in};
+use muliao_platform::errors::Result;
 
 /// 工具名，也是唤醒信件的事件来源
 pub const WAKE_ME: &str = "wake_me";

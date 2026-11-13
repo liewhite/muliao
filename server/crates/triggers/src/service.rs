@@ -28,13 +28,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::watch;
 
-use crate::error::{Error, Result, conflict, invalid, not_found};
 use crate::faults::{FaultSource, Faults, TriggerFault, local_minute, reset};
 use crate::kinds::{Configured, Kinds};
 use crate::precheck::{Failed, Precheck, PrecheckRunner, alert_letter, decide, failed, passed_in, set_in};
 use crate::store::{
-    Listing, NewTrigger, Trigger, baseline_in, delete_in, insert_in, list_in, load_in, named_in, save_in,
+    Corrupt, Listing, NewTrigger, Trigger, baseline_in, delete_in, insert_in, list_in, load_in, named_in, save_in,
 };
+use muliao_platform::errors::{Error, Result, conflict, invalid, not_found};
 
 /// 事件内容（流式命令的输出、前置检查的输出）原样进 prompt，过大的应由来源裁剪或改为传引用
 pub const EVENT_MAX_BYTES: usize = 256 * 1024;
@@ -276,8 +276,11 @@ impl TriggerService {
                     .map(|t| {
                         let alive = t.last_session_id.clone().filter(|id| states.contains_key(id));
                         let status = match kinds.get(&t.kind)?.status(&t) {
-                            Err(Error::Corrupt(e)) => Err(e),
-                            other => Ok(other?),
+                            Ok(s) => Ok(s),
+                            Err(e) => match e.internal_as::<Corrupt>() {
+                                Some(c) => Err(c.0.clone()),
+                                None => return Err(e),
+                            },
                         };
                         Ok(TriggerView { trigger: t, status, live_session_id: alive })
                     })

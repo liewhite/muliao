@@ -8,7 +8,7 @@ use agenter::{
 };
 use chrono::{Duration, NaiveDate, Utc};
 use muliao_platform::db::{Database, migrate};
-use muliao_platform::errors::ErrorKind;
+use muliao_platform::errors::{Error, ErrorKind};
 use muliao_platform::tooling::{Audience, RunScope};
 use muliao_sessions::actor::Waker;
 use muliao_sessions::conventions::{PartKind, PartMark, attach_run_context, mark_parts};
@@ -166,7 +166,7 @@ impl World {
                 if let Some(o) = outcome {
                     end_in(tx, &live, run, o)?;
                 }
-                Ok::<_, muliao_sessions::error::Error>(())
+                Ok::<_, muliao_platform::errors::Error>(())
             })
             .await
             .unwrap();

@@ -6,7 +6,7 @@ use common::{World, world, write};
 use muliao_assets::access::{Actor, grants_for, write_scope};
 use muliao_assets::kinds::StoredKind;
 use muliao_assets::tree::Owner;
-use muliao_assets::{AssetRejected, Error};
+use muliao_platform::errors::{Error, ErrorKind};
 
 fn skill(dir: &std::path::Path, name: &str, description: &str) {
     write(
@@ -128,7 +128,7 @@ async fn write_entry_vets_like_the_reader() {
     let (w, a, _b) = two_agents().await;
     let root = w.root();
     let rejected = |e: Error| match e {
-        Error::Rejected(r) => r,
+        Error::Domain(d) if d.kind == ErrorKind::InvalidInput => d.message,
         other => panic!("not rejected: {other:?}"),
     };
     let write = |path: std::path::PathBuf, text: &str| {
@@ -140,14 +140,14 @@ async fn write_entry_vets_like_the_reader() {
     let out = write(root.join("alice/memory.md"), "a  \n\n\n\nb\n\n").await.unwrap();
     assert_eq!(out[0].1.text, "a\n\nb\n");
     // 新 secret 不能手写
-    let r: AssetRejected = rejected(write(root.join("alice/secrets/K.toml"), "ciphertext = \"x\"").await.unwrap_err());
-    assert!(r.reason.contains("vault_set"));
-    assert!(r.for_agent().contains("section 'Secrets'"), "{}", r.for_agent());
-    assert!(r.whose.contains("alice"));
+    let r = rejected(write(root.join("alice/secrets/K.toml"), "ciphertext = \"x\"").await.unwrap_err());
+    assert!(r.contains("vault_set"), "{r}");
+    assert!(r.contains("section 'Secrets'"), "{r}");
+    assert!(r.contains("agent \"alice\"'s asset files"), "{r}");
     // agent.toml 按格式校验
     let toml = std::fs::read_to_string(root.join("alice/agent.toml")).unwrap();
     let r = rejected(write(root.join("alice/agent.toml"), &format!("{toml}extra = 1\n")).await.unwrap_err());
-    assert!(r.reason.contains("unknown keys"));
+    assert!(r.contains("unknown keys"));
     // 模型不能用的不写
     assert!(write(root.join("alice/agent.toml"), &toml.replace("p:default", "q:x")).await.is_err());
     // skill 附件要先有 SKILL.md；SKILL.md 按 frontmatter 校验；approval 要指向存在的脚本

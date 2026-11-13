@@ -11,7 +11,6 @@ pub mod conventions;
 pub mod delegation;
 pub mod deletion;
 pub mod directory;
-pub mod error;
 pub mod events;
 pub mod halt;
 pub mod history;

@@ -29,11 +29,11 @@ use muliao_sessions::work::SessionWork;
 use muliao_workspace::{Workspace, WorkspaceDeps};
 use serde_json::{Value, json};
 
-use crate::error::Error;
 use crate::precheck::{FireWhen, Precheck};
 use crate::service::{NewSpec, PrecheckChange, Update};
 use crate::store::{Listing, Trigger};
 use crate::*;
+use muliao_platform::errors::Error;
 
 struct World {
     dir: tempfile::TempDir,

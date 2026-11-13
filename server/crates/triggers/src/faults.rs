@@ -19,8 +19,8 @@ use muliao_sessions::inbound::{SenderInbox, SenderMail, SenderTarget};
 use muliao_sessions::origins::Sender;
 use serde::{Deserialize, Serialize};
 
-use crate::error::Result;
 use crate::store::Trigger;
+use muliao_platform::errors::Result;
 
 /// 告警推给用户时正文最多这么多字符
 const SUMMARY_MAX: usize = 500;

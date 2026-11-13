@@ -8,8 +8,8 @@ use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::conventions::{CONTINUATION, answer_text, mark_stopped, measured_responses, searchable_text};
-use crate::error::{Result, broken};
 use crate::mailbox::placeholders;
+use muliao_platform::errors::{Result, broken};
 
 /// 一条存下的消息。
 #[derive(Debug, Clone, PartialEq)]

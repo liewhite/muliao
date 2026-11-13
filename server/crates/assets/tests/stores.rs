@@ -99,7 +99,7 @@ async fn mcp_add_probe_and_toggle() {
     let config =
         McpConfig::new(McpTransport::Stdio, Some("npx".into()), vec![], None, BTreeMap::new(), BTreeMap::new())
             .unwrap();
-    let failing = async |_: &muliao_assets::mcp::McpServer| -> muliao_assets::Result<Vec<String>> {
+    let failing = async |_: &muliao_assets::mcp::McpServer| -> muliao_platform::errors::Result<Vec<String>> {
         Err(muliao_platform::errors::DomainError::invalid("cannot connect").into())
     };
     assert!(registry.add("srv", config.clone(), Owner::Agent(a.clone()), Some(failing)).await.is_err());

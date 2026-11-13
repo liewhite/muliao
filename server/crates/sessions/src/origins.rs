@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::{Result, broken};
+use muliao_platform::errors::{Result, broken};
 
 /// 来源的种类：用户在界面发起、触发器、agent 之间委派、issue 看板。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]

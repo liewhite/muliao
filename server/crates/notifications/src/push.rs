@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use muliao_platform::db::Database;
+use muliao_platform::errors::{Error, invalid};
 use muliao_platform::retry::Retry;
 use muliao_platform::text::truncate;
 use rusqlite::{Connection, OptionalExtension, params};
@@ -51,14 +52,6 @@ fn payload(m: &PushMessage) -> Vec<u8> {
     serde_json::to_vec(&p).expect("the push payload serializes")
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum SubscribeError {
-    #[error(transparent)]
-    Invalid(#[from] InvalidDevice),
-    #[error("database error: {0}")]
-    Db(#[from] rusqlite::Error),
-}
-
 pub struct Push {
     db: Arc<Database>,
     keys: VapidKeys,
@@ -79,9 +72,9 @@ impl Push {
     }
 
     /// 用户在界面上开启推送：解析核对（https、密钥解得开）后记下这台设备（同一个 endpoint 再订阅就换成新的密钥）。
-    pub async fn subscribe(&self, sub: Subscription) -> Result<(), SubscribeError> {
-        if !sub.parse()?.is_https() {
-            return Err(InvalidDevice("endpoint must be an https URL".into()).into());
+    pub async fn subscribe(&self, sub: Subscription) -> Result<(), Error> {
+        if !sub.parse().map_err(|e| invalid(e.to_string()))?.is_https() {
+            return Err(invalid(InvalidDevice("endpoint must be an https URL".into()).to_string()));
         }
         self.db
             .write(move |tx| {

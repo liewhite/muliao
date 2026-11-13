@@ -19,11 +19,11 @@ use rusqlite::Connection;
 
 use crate::activity::{Activity, Arrival, Change, DependencyChange, Happening, record_in, timeline_in};
 use crate::conversation;
-use crate::error::{Result, invalid};
 use crate::graph::{Links, downstream_in, links_of_in, set_depends_on_in};
 use crate::model::{Actor, Assignee, By, Issue, Priority, Status, agent_of, issue_in, save_in};
 use crate::render::delivery_message;
 use crate::rules::{Snapshot, finishing, from_outside, handed_to_user, recipient};
+use muliao_platform::errors::{Result, invalid};
 
 const TITLE_MAX: usize = 300;
 

@@ -13,10 +13,10 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use tokio::task::JoinHandle;
 
-use crate::error::Error;
 use crate::kinds::DueRule;
 use crate::service::TriggerService;
-use crate::store::{Listing, load_in, save_in};
+use crate::store::{Corrupt, Listing, load_in, save_in};
+use muliao_platform::errors::Error;
 
 /// 没有更早到期的也至少这么久醒一次
 const MAX_SLEEP: Duration = Duration::from_secs(60);
@@ -143,7 +143,7 @@ impl DueRunner {
                 tracing::info!(trigger_id, why, "due fire skipped");
                 false
             }
-            Err(e @ Error::Corrupt(_)) => {
+            Err(e) if e.internal_as::<Corrupt>().is_some() => {
                 self.disable(trigger_id, e).await;
                 false
             }

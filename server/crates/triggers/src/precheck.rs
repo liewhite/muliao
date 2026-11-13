@@ -22,9 +22,9 @@ use serde::{Deserialize, Serialize};
 use similar::TextDiff;
 use std::sync::Arc;
 
-use crate::error::{Error, Result};
 use crate::faults::{FaultSource, recovered};
 use crate::store::{Trigger, set_baseline_in};
+use muliao_platform::errors::{Error, Result};
 
 /// 报错里带上的 stderr 结尾
 const STDERR_TAIL_CHARS: usize = 2000;
@@ -60,7 +60,9 @@ impl Precheck {
     pub fn validate(&self) -> Result<()> {
         let n = self.command.chars().count();
         if self.command.trim().is_empty() || n > 4000 {
-            return Err(crate::error::invalid(format!("precheck command must be 1 to 4000 characters, got {n}")));
+            return Err(muliao_platform::errors::invalid(format!(
+                "precheck command must be 1 to 4000 characters, got {n}"
+            )));
         }
         Ok(())
     }
@@ -208,7 +210,7 @@ impl PrecheckRunner {
         p: &Precheck,
         payload: Option<&str>,
     ) -> Result<std::result::Result<String, Failed>> {
-        let shell = match self.commands.prepare(agent_id, &p.secrets, true).await.map_err(Error::from) {
+        let shell = match self.commands.prepare(agent_id, &p.secrets, true).await {
             Ok(shell) => shell,
             Err(Error::Domain(e)) => return Ok(Err(Failed(format!("precheck could not start: {e}")))),
             Err(e) => return Err(e),

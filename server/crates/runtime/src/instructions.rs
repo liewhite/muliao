@@ -9,7 +9,7 @@ use std::path::Path;
 
 use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
-use muliao_assets::error::ASSETS_SKILL;
+use muliao_assets::kinds::ASSETS_SKILL;
 use muliao_assets::memory::MemoryBlock;
 use muliao_assets::skills::SkillMeta;
 use muliao_platform::tooling::Audience;

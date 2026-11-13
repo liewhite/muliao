@@ -3,8 +3,9 @@
 use std::sync::Arc;
 
 use muliao_platform::config::TranscriptionConfig;
+use muliao_platform::errors::Error;
 use muliao_platform::errors::ErrorKind;
-use muliao_speech::{SpeechError, Transcriber};
+use muliao_speech::Transcriber;
 use wiremock::matchers::{body_partial_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -62,7 +63,7 @@ async fn bad_input_is_rejected_without_calling_the_service() {
     let t = transcriber(&server.uri(), "");
     for (audio, media) in [(&b"x"[..], "video/webm"), (&b""[..], "audio/webm")] {
         let err = t.transcribe(audio, media).await.unwrap_err();
-        assert!(matches!(err, SpeechError::Invalid(ref e) if e.kind == ErrorKind::InvalidInput), "{err}");
+        assert!(matches!(err, Error::Domain(ref e) if e.kind == ErrorKind::InvalidInput), "{err}");
     }
 }
 
@@ -79,11 +80,11 @@ async fn upstream_failures_carry_the_reason() {
         let server = MockServer::start().await;
         Mock::given(method("POST")).respond_with(resp).mount(&server).await;
         let err = transcriber(&server.uri(), "").transcribe(b"x", "audio/ogg").await.unwrap_err();
-        let SpeechError::Upstream(reason) = err else { panic!("{err}") };
+        let Error::Upstream { message: reason, .. } = err else { panic!("{err}") };
         assert!(reason.starts_with("transcription failed (asr): "), "{reason}");
         assert!(reason.contains(want), "{reason}");
     }
     let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     let err = transcriber(&format!("http://127.0.0.1:{port}"), "").transcribe(b"x", "audio/ogg").await.unwrap_err();
-    assert!(matches!(err, SpeechError::Upstream(_)), "{err}");
+    assert!(matches!(err, Error::Upstream { .. }), "{err}");
 }

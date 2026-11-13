@@ -6,11 +6,11 @@ use crate::tree::Expect;
 use std::sync::Arc;
 
 use crate::access::{Actor, grants_for, usable};
-use crate::error::{Result, conflict};
 use crate::formats::mcp::{McpConfig, parse, render};
 use crate::kinds::StoredKind;
 use crate::source::AssetSource;
 use crate::tree::{Asset, Owner};
+use muliao_platform::errors::{Result, conflict};
 
 /// 一个已保存的 MCP server。env / headers / args / url 的值可以包含 `${vault:KEY}`，按用它的 agent 能用的 secret 解析。
 #[derive(Debug, Clone, PartialEq, Eq)]

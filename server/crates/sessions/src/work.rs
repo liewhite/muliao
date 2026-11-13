@@ -12,11 +12,11 @@ use rusqlite::Connection;
 use crate::actor::Waker;
 use crate::answers::CallResult;
 use crate::directory;
-use crate::error::{Result, broken};
 use crate::history::since_last_response;
 use crate::holds::{self, Hold, HoldStatus, Outside};
 use crate::mailbox::{NewMail, has_queued_from, post_in, queued_in};
 use crate::pending::{HandedOut, Position, position};
+use muliao_platform::errors::{Result, broken};
 
 /// 发起并发工作时不给 heartbeat_seconds 的默认间隔
 pub const DEFAULT_CHECK_SECONDS: f64 = 60.0;
