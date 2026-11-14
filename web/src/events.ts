@@ -104,9 +104,12 @@ function emit(event: PageEvent) {
   })
 }
 
-/** 连接已死就丢掉它重新连接；连上时页面收到 connected，从数据库重新拉取。页面隐藏时没有连接，不检查 */
+/** 连接已死就丢掉它重新连接；连上时页面收到 connected，从数据库重新拉取。页面在前台却没有连接（漏了回到前台的事件）也连上 */
 function checkAlive() {
-  if (source === null) return
+  if (source === null) {
+    if (document.visibilityState === 'visible') connect()
+    return
+  }
   const closed = source.readyState === EventSource.CLOSED
   if (!needsReconnect(closed, lastMessageAt, Date.now(), heartbeatSeconds)) return
   console.warn(
@@ -118,16 +121,25 @@ function checkAlive() {
   connect()
 }
 
+/** 隐藏多久才断开：来回切一下标签页不断开，也就不用回来时整页重拉 */
+const HIDDEN_DISCONNECT_MS = 60_000
+let hiddenTimer: ReturnType<typeof setTimeout> | null = null
+
 /**
- * 页面隐藏（切到别的标签页、手机切后台）时断开连接：没人看的页面不随 changed 一轮轮重拉数据。回到前台重新连接，
- * 第一次心跳时照常发 connected，页面按它拉一次，隐藏期间错过的变化都在里面。
+ * 页面隐藏（切到别的标签页、手机切后台）一分钟后断开连接：长时间没人看的页面不随 changed 一轮轮重拉数据。回到前台
+ * 重新连接，第一次心跳时照常发 connected，页面按它拉一次，隐藏期间错过的变化都在里面。
  */
 const onVisibilityChange = () => {
+  if (hiddenTimer !== null) clearTimeout(hiddenTimer)
+  hiddenTimer = null
   if (document.visibilityState === 'visible') {
     if (source === null) connect()
   } else {
-    source?.close()
-    source = null
+    hiddenTimer = setTimeout(() => {
+      hiddenTimer = null
+      source?.close()
+      source = null
+    }, HIDDEN_DISCONNECT_MS)
   }
 }
 
@@ -216,6 +228,8 @@ export function closeServerEvents() {
   source?.close()
   source = null
   started = false
+  if (hiddenTimer !== null) clearTimeout(hiddenTimer)
+  hiddenTimer = null
   heartbeatSeconds = null
   if (watchdog !== null) clearInterval(watchdog)
   watchdog = null

@@ -30,7 +30,7 @@ use crate::kinds::Kind;
 use crate::naming::{AgentName, is_agent_id};
 use crate::roles::{AgentRules, AssignedRole, BoundRules, RoleName, Roles};
 use crate::rules::{Rule, RuleList, Rules, ToolTable, builtin_roles, texts};
-use crate::tree::{Expect, Snapshot, version_of};
+use crate::tree::{Expect, Snapshot};
 use muliao_platform::errors::{Result, conflict, invalid};
 use serde::Deserialize;
 
@@ -301,7 +301,7 @@ impl AccessEdit {
             return Ok(());
         }
         let now = crate::formats::read(&self.path).map_err(std::io::Error::other)?;
-        if version_of(&now) != version_of(&self.after) {
+        if now != crate::formats::lf(&self.after) {
             return Ok(());
         }
         match &self.before {

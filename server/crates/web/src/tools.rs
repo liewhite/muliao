@@ -120,7 +120,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tools_call_the_service_and_map_errors() {
+    async fn tools_call_the_service_and_render_its_results() {
         let server = MockServer::start().await;
         let hit = serde_json::json!({"results": [{"title": "q", "url": "u", "summary": "s"}]});
         Mock::given(path("/v1/tools/search"))

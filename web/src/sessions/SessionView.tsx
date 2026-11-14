@@ -101,8 +101,9 @@ export default function SessionView() {
 
   const live = useLiveRun(id, detail)
   // 看着它时又来了指向它的通知（会话的未读由通知派生）：用户已经在看，直接标记已读
+  // 隐藏一阵后回到前台（重新连上）时也标一次：隐藏期间断开了连接，那时来的通知没被标掉
   useServerEvents((e) => {
-    if (e.type === 'notification' && e.session_id === id) markSessionRead(id)
+    if ((e.type === 'notification' && e.session_id === id) || e.type === 'connected') markSessionRead(id)
   })
 
   // 打开会话即标记已读（看着它时新来的通知见上面的事件处理）

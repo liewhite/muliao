@@ -193,13 +193,7 @@ fn work_in(c: &Connection, issues: &[Issue]) -> Result<BTreeMap<IssueId, IssueWo
     Ok(work)
 }
 
-/// 一个 issue 连同谁在做：命令在自己的事务里用它交回读模型，界面不用再查一次。
-fn board_one_in(c: &Connection, issue: Issue) -> Result<BoardIssue> {
-    let mut work = work_in(c, std::slice::from_ref(&issue))?;
-    let work = work.remove(&issue.id).expect("work for every issue");
-    Ok(BoardIssue { issue, work })
-}
-
+/// 这些 issue 连同谁在做（读模型）；命令也在自己的事务里用它交回，界面不用再查一次。
 fn board_in(c: &Connection, issues: Vec<Issue>) -> Result<Vec<BoardIssue>> {
     let mut work = work_in(c, &issues)?;
     Ok(issues
@@ -485,7 +479,7 @@ impl Board {
             .write(move |tx| {
                 let ((), issue) = changes.open_in(tx, issue_id, &by, Routing::ByRules, |c| c.apply(patch))?;
                 tracing::info!(issue_id = issue_id.get(), actor = by.actor.as_str(), status = %issue.status, "issue updated");
-                board_one_in(tx, issue)
+                Ok::<_, Error>(board_in(tx, vec![issue])?.remove(0))
             })
             .await?;
         Ok(issue)
@@ -560,7 +554,7 @@ impl Board {
             .db
             .write(move |tx| {
                 let ((), issue) = changes.open_in(tx, issue_id, &By::user(), Routing::ByRules, f)?;
-                board_one_in(tx, issue)
+                Ok::<_, Error>(board_in(tx, vec![issue])?.remove(0))
             })
             .await?;
         tracing::info!(issue_id = issue_id.get(), status = %issue.issue.status, "issue changed by the user");

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button, Card, Chip, SearchField, Spinner } from '@heroui/react'
 import { ChevronDown, ChevronRight, Hourglass } from 'lucide-react'
 import { Link, useMatch } from 'react-router-dom'
@@ -96,17 +96,19 @@ export default function Sessions() {
     const timer = setTimeout(() => setKeyword(text.trim()), 300)
     return () => clearTimeout(timer)
   }, [text])
-  // 一次多取一页：列表满了就在底下给「显示更多」；换分类、换关键字时回到第一页（记下是给哪个筛选加的页）
+  // 一次多取一页：列表满了（条数是整页的倍数）就在底下给「显示更多」，加大条数后原地重拉（期间照常显示已有的）。换分类、
+  // 换关键字是另一份数据，从第一页取。总数恰好是整页倍数时按钮也在，点了列表不变（已接受）
   const listKey = `${filter}\n${keyword}`
-  const [more, setMore] = useState({ key: listKey, limit: PAGE })
-  const limit = more.key === listKey ? more.limit : PAGE
-  const sessions = useLoad(() =>
-      api.sessions({
+  const wanted = useRef({ key: listKey, count: PAGE })
+  const sessions = useLoad(() => {
+      if (wanted.current.key !== listKey) wanted.current = { key: listKey, count: PAGE }
+      return api.sessions({
         origin: FILTERS[filter].origins ?? undefined,
         q: keyword === '' ? undefined : keyword,
-        limit,
-      }),
-    [filter, keyword, limit],
+        limit: wanted.current.count,
+      })
+    },
+    [filter, keyword],
   )
 
   return (
@@ -178,8 +180,14 @@ export default function Sessions() {
                   </section>
                 )
               })}
-              {list.length === limit && (
-                <Button variant="secondary" onPress={() => setMore({ key: listKey, limit: limit + PAGE })}>
+              {list.length > 0 && list.length % PAGE === 0 && (
+                <Button
+                  variant="secondary"
+                  onPress={() => {
+                    wanted.current = { key: listKey, count: list.length + PAGE }
+                    void sessions.reload()
+                  }}
+                >
                   显示更多
                 </Button>
               )}

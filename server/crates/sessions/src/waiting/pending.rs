@@ -171,6 +171,12 @@ pub(crate) fn deferred_results(
             (Waiting::AskUser, Some(CallResult::AskUser(r)), _) => r.resolution(),
             (Waiting::AskAgent, Some(CallResult::AskAgent(a)), _) => a.resolution(),
             (Waiting::Approval, Some(CallResult::Approval(_)), Some(r)) => r,
+            (Waiting::Approval, Some(CallResult::Approval(_)), None) => {
+                return Err(broken(format!(
+                    "call {id} of {} has an approval answer but no recorded decision",
+                    p.call.name
+                )));
+            }
             (_, Some(a), _) => {
                 return Err(broken(format!("call {id} of {} cannot take the {} answer it got", p.call.name, a.kind())));
             }
