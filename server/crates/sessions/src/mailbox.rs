@@ -27,9 +27,9 @@ pub enum MailBody {
     /// 交给模型的原文：用户在界面发的消息（可带附件）、触发器事件、另一个 agent 委派来的任务。origin 是经来信入口投进来的
     /// 发送方来源，「用户说了什么」只按它认；delegation_id：委派来的信件是哪项委派（thread_calls 的行）
     Message { origin: Origin, content: String, attachments: Vec<String>, delegation_id: Option<DelegationId> },
-    /// 对挂起调用的回答（调用 id -> 结果）：作为那次调用的结果交回，不是一段新消息。from_user：用户的回答（否则是交回的
-    /// 结局）
-    Answer { answers: BTreeMap<String, CallResult>, from_user: bool },
+    /// 对一次挂起调用的回答：作为那次调用的结果交回，不是一段新消息。是用户的回答还是交回的结局由结果的种类定
+    /// （[`CallResult::from_user`]）
+    Answer { call_id: String, result: CallResult },
     /// 后台任务、交回的结果、运行中检查（check_in）：套上来源（如 job:12、thread:<会话 id>）交给模型，界面单独显示
     Event { source: EventSource, content: String, check_in: bool },
 }
@@ -47,7 +47,7 @@ impl MailBody {
     pub(crate) fn origin(&self) -> Option<Origin> {
         match self {
             MailBody::Message { origin, .. } => Some(*origin),
-            MailBody::Answer { from_user, .. } => from_user.then_some(Origin::User),
+            MailBody::Answer { result, .. } => result.from_user().then_some(Origin::User),
             MailBody::Event { .. } => None,
         }
     }
@@ -68,10 +68,10 @@ impl MailBody {
         }
     }
 
-    /// 回答的调用 id -> 结果；不是回答的为空。
-    pub(crate) fn answers(&self) -> Option<&BTreeMap<String, CallResult>> {
+    /// 回答的调用 id 与结果；不是回答的为 None。
+    pub(crate) fn answer(&self) -> Option<(&str, &CallResult)> {
         match self {
-            MailBody::Answer { answers, .. } => Some(answers),
+            MailBody::Answer { call_id, result } => Some((call_id, result)),
             _ => None,
         }
     }
@@ -132,10 +132,9 @@ impl NewMail {
         NewMail { body: MailBody::Event { source, content: content.into(), check_in }, awaited }
     }
 
-    /// 对挂起调用的回答。from_user：用户的回答（否则是交回的结局）。
-    /// 一次挂起调用的结果（回答信件可以带多个，存储形状不变；现在每封只交一个）。
-    pub(crate) fn answer(call_id: String, result: CallResult, from_user: bool, awaited: bool) -> Self {
-        NewMail { body: MailBody::Answer { answers: BTreeMap::from([(call_id, result)]), from_user }, awaited }
+    /// 对一次挂起调用的回答。
+    pub(crate) fn answer(call_id: String, result: CallResult, awaited: bool) -> Self {
+        NewMail { body: MailBody::Answer { call_id, result }, awaited }
     }
 }
 
@@ -191,10 +190,22 @@ impl RawMail {
                 attachments: serde_json::from_str(&self.attachments).map_err(|e| bad("attachments", e))?,
                 delegation_id: self.delegation_id,
             },
-            ("answer", None | Some(Origin::User), None) => MailBody::Answer {
-                answers: serde_json::from_str(&self.answers).map_err(|e| bad("answers", e))?,
-                from_user: origin.is_some(),
-            },
+            ("answer", origin @ (None | Some(Origin::User)), None) => {
+                // answers 列存的是 调用 id -> 结果 的表（早先设计成一封可带多个），实际每封只有一个
+                let answers: BTreeMap<String, CallResult> =
+                    serde_json::from_str(&self.answers).map_err(|e| bad("answers", e))?;
+                let mut answers = answers.into_iter();
+                let (Some((call_id, result)), None) = (answers.next(), answers.next()) else {
+                    return Err(broken(format!("answer mail {id} does not answer exactly one call")));
+                };
+                if result.from_user() != origin.is_some() {
+                    return Err(broken(format!(
+                        "answer mail {id} has origin {origin:?} for a {:?} result",
+                        result.kind()
+                    )));
+                }
+                MailBody::Answer { call_id, result }
+            }
             ("event", None, Some(raw)) => match EventSource::parse(&raw) {
                 Some(source) => MailBody::Event { source, content: self.content, check_in: self.check_in },
                 None => return Err(broken(format!("event mail {id} has an unknown source {raw:?}"))),
@@ -230,7 +241,9 @@ pub(crate) fn post_in(tx: &mut Tx<'_>, waker: &Waker, session_id: &SessionId, ma
     let body = &mail.body;
     let (source, check_in, delegation, answers) = match body {
         MailBody::Message { delegation_id, .. } => (None, false, *delegation_id, None),
-        MailBody::Answer { answers, .. } => (None, false, None, Some(answers)),
+        MailBody::Answer { call_id, result } => {
+            (None, false, None, Some(BTreeMap::from([(call_id.clone(), result.clone())])))
+        }
         MailBody::Event { source, check_in, .. } => (Some(source.raw()), *check_in, None, None),
     };
     tx.execute(
@@ -244,7 +257,7 @@ pub(crate) fn post_in(tx: &mut Tx<'_>, waker: &Waker, session_id: &SessionId, ma
             body.content(),
             check_in,
             serde_json::to_string(body.attachments()).expect("ids serialize"),
-            serde_json::to_string(&answers.cloned().unwrap_or_default()).expect("answers serialize"),
+            serde_json::to_string(&answers.unwrap_or_default()).expect("answers serialize"),
             mail.awaited,
             delegation,
             Utc::now(),

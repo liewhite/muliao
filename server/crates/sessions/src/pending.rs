@@ -10,7 +10,7 @@
 //!   一起交给模型。
 
 use muliao_platform::ids::MailId;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 use agenter::{Message, Resolution, ToolCall, ToolResult};
 
@@ -41,7 +41,7 @@ pub struct Paused {
     /// 信箱里对它们的回答
     pub answers: HashMap<String, CallResult>,
     /// 带着这些回答的信件：信件 id 与它回答的调用
-    pub answer_mail: Vec<(MailId, Vec<String>)>,
+    pub answer_mail: Vec<(MailId, String)>,
     /// 现在能不能继续
     pub ready: bool,
 }
@@ -121,13 +121,13 @@ pub(crate) fn position(history: &[Message], paused: &PausedKinds, queued: &[Mail
         None
     } else {
         let ids: HashSet<&str> = pending.iter().map(|p| p.call.id.as_str()).collect();
-        let answer_mail: Vec<(MailId, &BTreeMap<String, CallResult>)> =
-            queued.iter().filter_map(|m| on_time_answers(m, &ids).map(|a| (m.id, a))).collect();
+        let on_time: Vec<(MailId, &str, &CallResult)> =
+            queued.iter().filter_map(|m| on_time_answer(m, &ids).map(|(c, r)| (m.id, c, r))).collect();
         let answers: HashMap<String, CallResult> =
-            answer_mail.iter().flat_map(|(_, a)| a.iter().map(|(k, v)| (k.clone(), v.clone()))).collect();
+            on_time.iter().map(|(_, c, r)| ((*c).to_owned(), (*r).clone())).collect();
         let ready = queued.iter().any(|m| matches!(m.body, MailBody::Message { .. }))
             || ids.iter().all(|i| answers.contains_key(*i));
-        let answer_mail = answer_mail.into_iter().map(|(id, a)| (id, a.keys().cloned().collect())).collect();
+        let answer_mail = on_time.into_iter().map(|(id, c, _)| (id, c.to_owned())).collect();
         Some(Paused { pending, answers, answer_mail, ready })
     };
     if !interrupted.is_empty() {
@@ -146,9 +146,9 @@ pub(crate) fn position(history: &[Message], paused: &PausedKinds, queued: &[Mail
     Ok(if queued.is_empty() { Position::Idle } else { Position::Fresh })
 }
 
-/// 这封回答信件针对的调用都还挂着：它的回答作为那些调用的结果交回（返回这些回答）。否则它是迟到的，作为文字交给模型。
-pub(crate) fn on_time_answers<'a>(mail: &'a Mail, pending: &HashSet<&str>) -> Option<&'a BTreeMap<String, CallResult>> {
-    mail.body.answers().filter(|a| a.keys().all(|k| pending.contains(k.as_str())))
+/// 这封回答信件针对的调用还挂着：它的回答作为那次调用的结果交回（返回调用 id 与回答）。否则它是迟到的，作为文字交给模型。
+pub(crate) fn on_time_answer<'a>(mail: &'a Mail, pending: &HashSet<&str>) -> Option<(&'a str, &'a CallResult)> {
+    mail.body.answer().filter(|(c, _)| pending.contains(c))
 }
 
 /// 交给运行的挂起调用结果。有回答的用回答，等批准的调用的结果由 [`crate::paused_calls::take_in`] 对着挂起记录给出
@@ -220,14 +220,10 @@ fn closing_paused(p: &Paused) -> StopClosing {
             metadata: None,
         });
     }
-    // 整封信记为已处理：同一封里对等批准调用的决定也算处理了（那个调用已补「已停止」）
+    // 写进结果的回答所在的信记为已处理
     let answered: HashSet<&str> = closing.answered.iter().map(|r| r.call_id.as_str()).collect();
-    closing.used = p
-        .answer_mail
-        .iter()
-        .filter(|(_, calls)| calls.iter().any(|c| answered.contains(c.as_str())))
-        .map(|(id, _)| *id)
-        .collect();
+    closing.used =
+        p.answer_mail.iter().filter(|(_, call)| answered.contains(call.as_str())).map(|(id, _)| *id).collect();
     closing
 }
 
@@ -274,10 +270,9 @@ pub(crate) fn open_asks_of(at: &Position, queued: &[Mail]) -> OpenAsks {
     let pending = |id: &str| at.paused().is_some_and(|p| p.pending.iter().any(|pc| pc.call.id == id));
     let submitted: Vec<(String, OpenAsk)> = queued
         .iter()
-        .filter_map(|m| m.body.answers())
-        .flatten()
+        .filter_map(|m| m.body.answer())
         .filter(|(id, r)| r.kind() != Waiting::Approval || pending(id))
-        .map(|(id, r)| (id.clone(), OpenAsk::Submitted(r.kind())))
+        .map(|(id, r)| (id.to_owned(), OpenAsk::Submitted(r.kind())))
         .collect();
     let is_submitted = |id: &str| submitted.iter().any(|(k, _)| k == id);
     let mut open = Vec::new();
@@ -302,7 +297,6 @@ pub(crate) fn open_asks_of(at: &Position, queued: &[Mail]) -> OpenAsks {
 #[cfg(test)]
 mod tests {
     use muliao_platform::ids::JobId;
-    use std::collections::BTreeMap;
 
     use agenter::{Request, RequestPart, Response, ResponsePart};
     use chrono::Utc;
@@ -358,12 +352,8 @@ mod tests {
         MailBody::Message { origin: Origin::User, content: String::new(), attachments: vec![], delegation_id: None }
     }
 
-    fn answer_body(answers: BTreeMap<String, CallResult>) -> MailBody {
-        MailBody::Answer { answers, from_user: true }
-    }
-
-    fn answered(id: &str) -> BTreeMap<String, CallResult> {
-        BTreeMap::from([(id.to_owned(), CallResult::AskUser(AskResult::Answered(vec![])))])
+    fn answered(id: &str) -> MailBody {
+        MailBody::Answer { call_id: id.to_owned(), result: CallResult::AskUser(AskResult::Answered(vec![])) }
     }
 
     fn kinds(of: &[(&str, Waiting)]) -> PausedKinds {
@@ -400,7 +390,7 @@ mod tests {
         )
         .unwrap();
         assert!(at.waiting_for_answers(), "events wait with the question");
-        let at = position(&h, &asked, &[mail(1, answer_body(answered("q1")))]).unwrap();
+        let at = position(&h, &asked, &[mail(1, answered("q1"))]).unwrap();
         assert!(at.paused().unwrap().ready);
         let at = position(&h, &asked, &[mail(1, message())]).unwrap();
         assert!(at.paused().unwrap().ready, "a new message skips the question");
@@ -419,11 +409,11 @@ mod tests {
         let h = [response(vec![call("a1", ASK_AGENT, "{}")])];
         let asked = kinds(&[("a1", Waiting::AskAgent)]);
         assert!(position(&h, &asked, &[]).unwrap().waiting_for_answers());
-        let answer = BTreeMap::from([(
-            "a1".to_owned(),
-            CallResult::AskAgent(AgentAnswer { text: "x".into(), attachments: vec![] }),
-        )]);
-        assert!(position(&h, &asked, &[mail(1, answer_body(answer))]).unwrap().paused().unwrap().ready);
+        let answer = MailBody::Answer {
+            call_id: "a1".to_owned(),
+            result: CallResult::AskAgent(AgentAnswer { text: "x".into(), attachments: vec![] }),
+        };
+        assert!(position(&h, &asked, &[mail(1, answer)]).unwrap().paused().unwrap().ready);
         // 同一条回复里记下的仍挂着，没记下的补「被中断」
         let mixed = [response(vec![call("a1", ASK_AGENT, "{}"), call("c1", "run_shell", "{}")])];
         let Position::Interrupted { calls, after } = position(&mixed, &asked, &[]).unwrap() else { panic!() };
@@ -441,7 +431,7 @@ mod tests {
     fn stop_keeps_unanswered_questions_and_writes_submitted_answers() {
         let asked = kinds(&[("q1", Waiting::AskUser), ("q2", Waiting::AskUser)]);
         let h = [response(vec![call("q1", ASK_USER, ASK), call("q2", ASK_USER, ASK)])];
-        let at = position(&h, &asked, &[mail(7, answer_body(answered("q1")))]).unwrap();
+        let at = position(&h, &asked, &[mail(7, answered("q1"))]).unwrap();
         let closing = closing_on_stop(&at);
         assert!(closing.stopped.is_empty());
         assert_eq!(closing.answered.iter().map(|r| r.call_id.as_str()).collect::<Vec<_>>(), ["q1"]);

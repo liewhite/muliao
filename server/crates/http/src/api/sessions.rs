@@ -174,8 +174,10 @@ pub enum MailKindOut {
         check_in: bool,
     },
     Answer {
-        /// tool_call_id -> 那次挂起调用的结果（用户的回答，或被问 agent 的结局）
-        answers: BTreeMap<String, CallResult>,
+        /// 回答的是哪次挂起调用
+        call_id: String,
+        /// 那次挂起调用的结果（用户的回答，或被问 agent 的结局）
+        result: CallResult,
     },
 }
 
@@ -193,7 +195,7 @@ async fn mail_outs(s: &AppState, mail: Vec<Mail>) -> ApiResult<Vec<MailOut>> {
             let (content, kind) = match m.body {
                 MailBody::Message { content, .. } => (content, MailKindOut::Message),
                 MailBody::Event { source, content, check_in } => (content, MailKindOut::Event { source, check_in }),
-                MailBody::Answer { answers, .. } => (String::new(), MailKindOut::Answer { answers }),
+                MailBody::Answer { call_id, result } => (String::new(), MailKindOut::Answer { call_id, result }),
             };
             MailOut { attachments, id: m.id, content, state: m.state, created_at: m.created_at, kind }
         })

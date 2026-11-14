@@ -7,7 +7,6 @@ use agenter::{Request, RequestPart};
 use muliao_files::FileStore;
 use muliao_runtime::attachments::{copy_to_workspace, references};
 
-use crate::answers::CallResult;
 use crate::conventions::{PartKind, PartMark, format_event, mark_parts, set_part_marks};
 use crate::mailbox::{Mail, MailBody};
 use crate::origins::Origin;
@@ -32,12 +31,11 @@ pub(crate) async fn content_of(files: &FileStore, workspace: &Path, mail: &[Mail
     let mut c = Content::default();
     for m in mail {
         match &m.body {
-            MailBody::Answer { answers, from_user } => {
-                if *from_user {
+            MailBody::Answer { result, .. } => {
+                if result.from_user() {
                     c.marks.push(PartMark { part: c.parts.len(), kind: PartKind::Message { origin: Origin::User } });
                 }
-                let results: Vec<CallResult> = answers.values().cloned().collect();
-                c.parts.push(RequestPart::Text { text: CallResult::late_text(&results) });
+                c.parts.push(RequestPart::Text { text: result.late_text() });
             }
             MailBody::Event { source, content, check_in } => {
                 let kind = PartKind::Event { source: source.clone(), check_in: *check_in };

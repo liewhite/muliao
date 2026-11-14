@@ -363,6 +363,14 @@ pub enum CallResult {
 }
 
 impl CallResult {
+    /// 用户给的（回答提问、批准调用）；否则是被问的 agent 交回的结局。
+    pub(crate) fn from_user(&self) -> bool {
+        match self {
+            CallResult::AskUser(_) | CallResult::Approval(_) => true,
+            CallResult::AskAgent(_) => false,
+        }
+    }
+
     pub(crate) fn kind(&self) -> Waiting {
         match self {
             CallResult::AskUser(_) => Waiting::AskUser,
@@ -372,30 +380,19 @@ impl CallResult {
     }
 
     /// 调用结束后才到的回答（那次调用已经带着「没回答」或「之后送达」继续了），作为一段文字交给模型，回答不丢。
-    pub(crate) fn late_text(results: &[CallResult]) -> String {
-        let mut lines = Vec::new();
-        let asked: Vec<&AskResult> = results
-            .iter()
-            .filter_map(|r| match r {
-                CallResult::AskUser(a) => Some(a),
-                _ => None,
-            })
-            .collect();
-        if !asked.is_empty() {
-            lines.push("The user answered questions that had already been closed:".to_owned());
-            lines.extend(answer_lines(&asked));
-        }
-        for r in results {
-            match r {
-                CallResult::AskAgent(a) => lines.push(format!("An agent you asked earlier answered:\n{}", a.text)),
-                CallResult::Approval(d) => lines.push(format!(
-                    "The user {} a call that had already been closed without running; it was not run.",
-                    if d.approved() { "approved" } else { "denied" }
-                )),
-                CallResult::AskUser(_) => {}
+    pub(crate) fn late_text(&self) -> String {
+        match self {
+            CallResult::AskUser(a) => {
+                let mut lines = vec!["The user answered questions that had already been closed:".to_owned()];
+                lines.extend(answer_lines(&[a]));
+                lines.join("\n")
             }
+            CallResult::AskAgent(a) => format!("An agent you asked earlier answered:\n{}", a.text),
+            CallResult::Approval(d) => format!(
+                "The user {} a call that had already been closed without running; it was not run.",
+                if d.approved() { "approved" } else { "denied" }
+            ),
         }
-        lines.join("\n")
     }
 }
 

@@ -76,7 +76,7 @@ pub(crate) fn deliver_in(
     let at = position_in(tx, session_id)?;
     let delivered = match answer {
         Some((call_id, answer)) if at.paused().is_some_and(|p| p.get(call_id).is_some()) => {
-            post_in(tx, waker, session_id, NewMail::answer(call_id.to_owned(), answer, false, hold.awaited))?;
+            post_in(tx, waker, session_id, NewMail::answer(call_id.to_owned(), answer, hold.awaited))?;
             Delivered::Answer
         }
         _ => {

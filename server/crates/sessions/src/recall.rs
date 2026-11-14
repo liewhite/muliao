@@ -106,14 +106,11 @@ pub fn between_in(
 }
 
 fn words_of(mail: &Mail) -> UserWords {
-    let text = if let MailBody::Answer { answers, .. } = &mail.body {
-        let asked: Vec<&AskResult> = answers
-            .values()
-            .filter_map(|r| match r {
-                CallResult::AskUser(a) => Some(a),
-                _ => None,
-            })
-            .collect();
+    let text = if let MailBody::Answer { result, .. } = &mail.body {
+        let asked: Vec<&AskResult> = match result {
+            CallResult::AskUser(a) => vec![a],
+            CallResult::AskAgent(_) | CallResult::Approval(_) => Vec::new(),
+        };
         let mut lines = vec!["(answers to ask_user)".to_owned()];
         lines.extend(answer_lines(&asked));
         lines.join("\n")

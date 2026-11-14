@@ -365,7 +365,7 @@ pub(crate) fn reply_in(
     }
     directory::touch_in(tx, &session.id)?;
     let result = resolve_reply(tx, &session.id, &call_id, &reply)?;
-    post_in(tx, waker, &session.id, NewMail::answer(call_id, result, true, true))?;
+    post_in(tx, waker, &session.id, NewMail::answer(call_id, result, true))?;
     tracing::info!(session_id = %session.id, "reply received");
     Ok(session)
 }

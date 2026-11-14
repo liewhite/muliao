@@ -108,11 +108,22 @@ impl OldDb {
             .collect()
     }
 
-    /// 某次运行取走的回答信件里的结果（领域代码读）。
+    /// 某次运行取走的回答信件里的结果（领域代码读），每封一个。
     fn answers(&self, run: i64) -> BTreeMap<String, CallResult> {
         let mail = mailbox::consumed_by_in(&self.conn(), &SessionId::new(SESSION), RunId::new(run)).unwrap();
-        let [m] = mail.as_slice() else { panic!("expected one mail, got {mail:?}") };
-        m.body.answers().expect("an answer").clone()
+        mail.iter()
+            .map(|m| {
+                let (call_id, result) = m.body.answer().expect("an answer");
+                (call_id.to_owned(), result.clone())
+            })
+            .collect()
+    }
+
+    /// 一封回答信件，回答一次调用（answer 是存储里那次调用的结果）；用户的回答 origin 为 user。
+    fn answer_mail(&self, run: i64, call_id: &str, answer: Value) {
+        let from_user = answer["tool"] != "ask_agent";
+        let answers = json!({ call_id: answer }).to_string();
+        self.mail(run, "answer", from_user.then_some("user"), "", "[]", &answers);
     }
 }
 
@@ -295,14 +306,15 @@ fn pending_calls_move_into_one_table() {
 fn approval_booleans_become_a_choice() {
     let db = OldDb::at(2);
     let run = db.run();
-    let answers = json!({
-        "c1": { "tool": "approval", "result": { "approved": true, "always": true, "pin": "p1" } },
-        "c2": { "tool": "approval", "result": { "approved": true, "always": false } },
-        "c3": { "tool": "approval", "result": { "approved": false, "always": true } },
-        "c4": { "tool": "approval", "result": {} },
-        "c5": { "tool": "ask_agent", "result": { "text": "done" } },
-    });
-    db.mail(run, "answer", Some("user"), "", "[]", &answers.to_string());
+    db.answer_mail(
+        run,
+        "c1",
+        json!({ "tool": "approval", "result": { "approved": true, "always": true, "pin": "p1" } }),
+    );
+    db.answer_mail(run, "c2", json!({ "tool": "approval", "result": { "approved": true, "always": false } }));
+    db.answer_mail(run, "c3", json!({ "tool": "approval", "result": { "approved": false, "always": true } }));
+    db.answer_mail(run, "c4", json!({ "tool": "approval", "result": {} }));
+    db.answer_mail(run, "c5", json!({ "tool": "ask_agent", "result": { "text": "done" } }));
     let decision = |choice| CallResult::Approval(Decision { choice });
     let expected = BTreeMap::from([
         ("c1".to_owned(), decision(Choice::Always)),
@@ -394,11 +406,12 @@ fn shared_files_keep_only_ids() {
         ],
         None,
     );
-    let answers = json!({
-        "c1": { "tool": "ask_agent", "result": { "text": "done", "attachments": [old_attachment("f3", "x.txt", "x.txt", "text/plain")] } },
-        "c2": { "tool": "approval", "result": { "choice": "approve", "pin": null } },
-    });
-    db.mail(run, "answer", None, "", "[]", &answers.to_string());
+    db.answer_mail(
+        run,
+        "c1",
+        json!({ "tool": "ask_agent", "result": { "text": "done", "attachments": [old_attachment("f3", "x.txt", "x.txt", "text/plain")] } }),
+    );
+    db.answer_mail(run, "c2", json!({ "tool": "approval", "result": { "choice": "approve", "pin": null } }));
 
     let check = || {
         let stored = history::transcript_in(&db.conn(), &SessionId::new(SESSION), None).unwrap();
