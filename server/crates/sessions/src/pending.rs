@@ -9,15 +9,17 @@
 //! - 什么时候继续（[`Paused::ready`]）：用户发了新消息（跳过还没回答的），或挂起的调用都有了回答；事件留在信箱里等它们
 //!   一起交给模型。
 
-use muliao_platform::ids::{CallId, MailId};
+use muliao_platform::ids::{CallId, MailId, SessionId};
 use std::collections::{HashMap, HashSet};
 
 use agenter::{Message, Resolution, ToolCall, ToolResult};
+use rusqlite::Connection;
 
 use crate::answers::{CallResult, Question, Waiting, questions_of, skipped};
 use crate::conventions::{is_stopped, unanswered_calls};
-use crate::mailbox::{Mail, MailBody};
-use crate::paused_calls::PausedKinds;
+use crate::history::since_last_response;
+use crate::mailbox::{Mail, MailBody, queued_in};
+use crate::paused_calls::{PausedKinds, kinds_in};
 use muliao_platform::errors::{Result, broken};
 
 impl Waiting {
@@ -386,7 +388,7 @@ mod tests {
             &[mail(
                 1,
                 MailBody::Event {
-                    source: crate::work::EventSource::Job { job_id: JobId::new(1) },
+                    source: crate::mailbox::EventSource::Job { job_id: JobId::new(1) },
                     content: String::new(),
                     check_in: false,
                 },
@@ -441,4 +443,9 @@ mod tests {
         assert_eq!(closing.answered.iter().map(|r| r.call_id.as_str()).collect::<Vec<_>>(), ["q1"]);
         assert_eq!(closing.used, [MailId::new(7)]);
     }
+}
+
+/// 会话现在停在哪（规则在 [`position`]）。没出结果的调用只可能在最后一条回复里，不加载整段上下文。
+pub(crate) fn position_in(c: &Connection, session_id: &SessionId) -> Result<Position> {
+    position(&since_last_response(c, session_id)?, &kinds_in(c, session_id)?, &queued_in(c, session_id)?)
 }

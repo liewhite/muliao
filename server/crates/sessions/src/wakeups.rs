@@ -13,7 +13,8 @@ use rusqlite::{Connection, params};
 
 use crate::actor::Waker;
 use crate::holds::{self, Hold, abandon_in, active_wakes_in};
-use crate::work::{EventSource, deliver_in};
+use crate::mailbox::EventSource;
+use crate::work::deliver_in;
 use muliao_platform::errors::Result;
 
 /// 工具名

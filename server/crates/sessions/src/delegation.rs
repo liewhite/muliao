@@ -27,11 +27,12 @@ use crate::directory::{self, Session};
 use crate::history::latest_answers_among;
 use crate::holds::hold_delegation_in;
 use crate::inbound::{Handback, Inbound, Opener, create_session_in, receive_in};
+use crate::mailbox::EventSource;
 use crate::origins::ThreadName;
 use crate::paused_calls::{self, Pause};
 use crate::runs::{RunRecord, latest_among};
 use crate::thread_calls::{CallMode, Delegated, Owed, owed_in, record_call_in};
-use crate::work::{CheckBeats, EventSource, deliver_in, no_progress_hint, post_check_in};
+use crate::work::{CheckBeats, deliver_in, no_progress_hint, post_check_in};
 use muliao_platform::errors::Result;
 
 /// 取已有 thread 或新建。

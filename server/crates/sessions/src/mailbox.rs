@@ -7,7 +7,7 @@
 //!   保存时（这时同时记为已处理）。
 //! - 用户停止会话、运行最终失败时没交给模型的信件记为被丢弃（[`discard_in`]），留着记录。
 
-use muliao_platform::ids::{CallId, DelegationId, FileId, MailId, RunId, SessionId};
+use muliao_platform::ids::{CallId, DelegationId, FileId, JobId, MailId, RunId, SessionId};
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
@@ -17,7 +17,6 @@ use crate::actor::Waker;
 use crate::answers::CallResult;
 use crate::directory;
 use crate::origins::Origin;
-use crate::work::EventSource;
 use muliao_platform::db::{Tx, placeholders};
 use muliao_platform::errors::{Result, broken, not_found};
 
@@ -395,4 +394,42 @@ pub(crate) fn first_arrivals_between_in(
     )?;
     let rows = stmt.query_map(params![start, end], |r| Ok((r.get(0)?, r.get(1)?)))?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// 到点唤醒的事件来源的写法（存在信件里，也交给模型）。与工具名 wake_me 同字只是巧合：工具改名不改它，已存的信件靠它认
+const WAKE_SOURCE: &str = "wake_me";
+
+/// 事件信件的来源：交给模型时套在事件外面（[`EventSource::raw`]），界面按种类显示。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum EventSource {
+    /// 后台任务
+    Job { job_id: JobId },
+    /// thread 交回的结果或运行中检查
+    Thread { session_id: SessionId },
+    /// 到点唤醒
+    Wake,
+}
+
+impl EventSource {
+    /// 存下与交给模型的写法（`job:7`、`thread:<会话 id>`、`wake_me`）。
+    pub fn raw(&self) -> String {
+        match self {
+            EventSource::Job { job_id } => format!("job:{job_id}"),
+            EventSource::Thread { session_id } => format!("thread:{session_id}"),
+            EventSource::Wake => WAKE_SOURCE.to_owned(),
+        }
+    }
+
+    /// [`EventSource::raw`] 的逆运算（读库边界用）；不是三种写法之一为 None。
+    pub(crate) fn parse(raw: &str) -> Option<Self> {
+        if raw == WAKE_SOURCE {
+            return Some(EventSource::Wake);
+        }
+        if let Some(id) = raw.strip_prefix("thread:").filter(|s| !s.is_empty()) {
+            return Some(EventSource::Thread { session_id: SessionId::new(id) });
+        }
+        let digits = raw.strip_prefix("job:").filter(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))?;
+        Some(EventSource::Job { job_id: JobId::new(digits.parse().ok()?) })
+    }
 }

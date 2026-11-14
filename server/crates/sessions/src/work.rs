@@ -13,27 +13,11 @@ use rusqlite::Connection;
 use crate::actor::Waker;
 use crate::answers::CallResult;
 use crate::directory;
-use crate::history::since_last_response;
 use crate::holds::{self, Hold, HoldStatus};
-use crate::mailbox::{NewMail, has_queued_from, post_in, queued_in};
-use crate::paused_calls::kinds_in;
-use crate::pending::{Position, position};
+use crate::mailbox::EventSource;
+use crate::mailbox::{NewMail, has_queued_from, post_in};
+use crate::pending::position_in;
 use muliao_platform::errors::{Result, broken};
-
-/// 发起并发工作时不给 heartbeat_seconds 的默认间隔
-pub const DEFAULT_CHECK_SECONDS: f64 = 60.0;
-
-/// 工具参数 heartbeat_seconds → 运行中检查的间隔（run_shell(background)、delegate_task(report_back) 共用）：不给时取默认，
-/// 不大于 0（含 NaN）时是参数错误。
-pub fn check_interval(heartbeat_seconds: Option<f64>) -> Result<f64, String> {
-    let interval = heartbeat_seconds.unwrap_or(DEFAULT_CHECK_SECONDS);
-    if interval > 0.0 { Ok(interval) } else { Err("heartbeat_seconds must be greater than 0".to_owned()) }
-}
-
-/// 会话现在停在哪（规则在 [`position`]）。没出结果的调用只可能在最后一条回复里，不加载整段上下文。
-pub(crate) fn position_in(c: &Connection, session_id: &SessionId) -> Result<Position> {
-    position(&since_last_response(c, session_id)?, &kinds_in(c, session_id)?, &queued_in(c, session_id)?)
-}
 
 /// 交回结局的结果。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,44 +92,6 @@ fn job_hold_in(c: &Connection, session_id: &SessionId, job_id: JobId) -> Result<
         return Err(broken(format!("session {session_id} has no hold for job {job_id}")));
     }
     Ok(hold)
-}
-
-/// 到点唤醒的事件来源的写法（存在信件里，也交给模型）。与工具名 wake_me 同字只是巧合：工具改名不改它，已存的信件靠它认
-const WAKE_SOURCE: &str = "wake_me";
-
-/// 事件信件的来源：交给模型时套在事件外面（[`EventSource::raw`]），界面按种类显示。
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum EventSource {
-    /// 后台任务
-    Job { job_id: JobId },
-    /// thread 交回的结果或运行中检查
-    Thread { session_id: SessionId },
-    /// 到点唤醒
-    Wake,
-}
-
-impl EventSource {
-    /// 存下与交给模型的写法（`job:7`、`thread:<会话 id>`、`wake_me`）。
-    pub fn raw(&self) -> String {
-        match self {
-            EventSource::Job { job_id } => format!("job:{job_id}"),
-            EventSource::Thread { session_id } => format!("thread:{session_id}"),
-            EventSource::Wake => WAKE_SOURCE.to_owned(),
-        }
-    }
-
-    /// [`EventSource::raw`] 的逆运算（读库边界用）；不是三种写法之一为 None。
-    pub(crate) fn parse(raw: &str) -> Option<Self> {
-        if raw == WAKE_SOURCE {
-            return Some(EventSource::Wake);
-        }
-        if let Some(id) = raw.strip_prefix("thread:").filter(|s| !s.is_empty()) {
-            return Some(EventSource::Thread { session_id: SessionId::new(id) });
-        }
-        let digits = raw.strip_prefix("job:").filter(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))?;
-        Some(EventSource::Job { job_id: JobId::new(digits.parse().ok()?) })
-    }
 }
 
 /// 别的领域在会话之外做一项工作时对会话的命令（都在发送方自己的事务里）。

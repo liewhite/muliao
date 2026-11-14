@@ -196,7 +196,7 @@ async fn a_finished_background_job_reports_back_with_its_output() {
     let mail = w.queued().await;
     assert_eq!(mail.len(), 1);
     assert!(
-        matches!(&mail[0].body, MailBody::Event { source, .. } if *source == muliao_sessions::work::EventSource::Job { job_id: id })
+        matches!(&mail[0].body, MailBody::Event { source, .. } if *source == muliao_sessions::mailbox::EventSource::Job { job_id: id })
     );
     let text = mail[0].body.content();
     assert!(

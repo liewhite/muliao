@@ -24,11 +24,11 @@ use crate::history::{self, since_last_response};
 use crate::holds::{HoldOf, clear_in};
 use crate::mailbox::consume_in;
 use crate::pending::closing_on_stop;
+use crate::pending::position_in;
 use crate::run::Core;
 use crate::runs;
 use crate::settlement::settle_stopped_in;
 use crate::thread_calls::delegations_among;
-use crate::work::position_in;
 use muliao_platform::errors::{Result, broken};
 
 /// 停止的结果。

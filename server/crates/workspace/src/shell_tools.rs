@@ -18,7 +18,7 @@ use muliao_platform::shell::LEFT_RUNNING_NOTE;
 use muliao_platform::text::truncate;
 use muliao_platform::tool_views::{ToolRender, ViewBlock};
 use muliao_platform::tooling::{BuiltinTool, RunScope, ToolTraits, builtin};
-use muliao_sessions::work::check_interval;
+use muliao_sessions::tools::check_interval;
 use schemars::JsonSchema;
 use serde::Deserialize;
 

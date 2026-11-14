@@ -25,7 +25,7 @@ use crate::origins::ThreadName;
 use crate::paused_calls::{self, Pause};
 use crate::thread_calls::Delegated;
 use crate::wakeups::{WAKE_ME, cancel_in, local_time, schedule_in};
-use crate::work::{check_interval, no_progress_hint};
+use crate::work::no_progress_hint;
 use muliao_platform::errors::{Error, invalid, not_found};
 
 pub use crate::actor::Stopper;
@@ -493,4 +493,14 @@ mod tests {
             Utc.with_ymd_and_hms(2026, 11, 12, 2, 30, 0).unwrap()
         );
     }
+}
+
+/// 发起并发工作时不给 heartbeat_seconds 的默认间隔
+pub const DEFAULT_CHECK_SECONDS: f64 = 60.0;
+
+/// 工具参数 heartbeat_seconds → 运行中检查的间隔（run_shell(background)、delegate_task(report_back) 共用）：不给时取默认，
+/// 不大于 0（含 NaN）时是参数错误。
+pub fn check_interval(heartbeat_seconds: Option<f64>) -> Result<f64, String> {
+    let interval = heartbeat_seconds.unwrap_or(DEFAULT_CHECK_SECONDS);
+    if interval > 0.0 { Ok(interval) } else { Err("heartbeat_seconds must be greater than 0".to_owned()) }
 }

@@ -20,10 +20,11 @@ use crate::answers::{AnsweredQuestion, AskResult, Question, questions_of};
 use crate::conventions::{
     PartKind, event_content, finished_at, is_stopped, made_up, part_marks, run_context_index, tool_attachments,
 };
+use crate::mailbox::EventSource;
 use crate::origins::Origin;
 use crate::pending::{OpenAsk, OpenAsks};
 use crate::tools::ASK_USER;
-use crate::work::{EventSource, is_no_progress};
+use crate::work::is_no_progress;
 use muliao_platform::errors::{Result, broken};
 
 /// 各工具的展示规则（`Toolbox::renders`）；只要文字的投影给空的。

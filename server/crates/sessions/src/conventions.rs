@@ -27,19 +27,20 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::mailbox::EventSource;
 use crate::origins::Origin;
-use crate::work::EventSource;
 use muliao_platform::errors::{Result, broken};
 
 /// 停止时还没出结果的工具调用的结果：副作用可能已经发生，告诉模型它没有完成。
-pub const STOPPED_TOOL_RESULT: &str = "Stopped by the user before this tool call finished; it may have partly run.";
+pub(crate) const STOPPED_TOOL_RESULT: &str =
+    "Stopped by the user before this tool call finished; it may have partly run.";
 /// 一步在执行工具时被打断（进程退出，或这一步失败）：续跑不重新执行这些调用——副作用可能已经发生，而我们无从知道。
-pub const INTERRUPTED_TOOL_RESULT: &str = "Interrupted: this run was interrupted while the call was running (the \
+pub(crate) const INTERRUPTED_TOOL_RESULT: &str = "Interrupted: this run was interrupted while the call was running (the \
      service restarted, or the step failed), and the call was NOT re-run automatically. It may or may not have taken \
      effect; check its effects before deciding whether to run it again.";
 
 /// 压缩切点落在一条回复之前时补在留下部分前面的一条用户消息（由切点推导，不存库）。
-pub const CONTINUATION: &str =
+pub(crate) const CONTINUATION: &str =
     "The earlier part of this conversation is summarized in your instructions. Continue from there.";
 
 /// 事后补的结果是哪一种。
@@ -264,7 +265,7 @@ pub enum PartKind {
 mod raw_source {
     use serde::{Deserialize, Deserializer, Serializer};
 
-    use crate::work::EventSource;
+    use crate::mailbox::EventSource;
 
     pub fn serialize<S: Serializer>(source: &EventSource, s: S) -> Result<S::Ok, S::Error> {
         s.serialize_str(&source.raw())

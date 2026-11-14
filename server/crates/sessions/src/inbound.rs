@@ -21,7 +21,7 @@ use crate::directory::{self, NewSession, Session, keyed_in};
 use crate::mailbox::{MailBody, NewMail, post_in, queued_in};
 use crate::origins::{Origin, Sender, SessionOrigin, ThreadName};
 use crate::pending::open_asks_of;
-use crate::work::position_in;
+use crate::pending::position_in;
 use muliao_platform::errors::{Error, Result, conflict, forbidden, invalid, not_found};
 
 const TITLE_MAX: usize = 60;
