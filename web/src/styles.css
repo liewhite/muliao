@@ -30,7 +30,7 @@ select {
   font-size: max(16px, 1em);
 }
 
-/* 负责项目（owner）的颜色：色相由 issues.ts 的 ownerHue 给出（内联 --owner-hue），这里按亮/暗主题定亮度与彩度。用 oklch：
+/* 负责项目（owner）的颜色：色相由 issues/model.ts 的 ownerHue 给出（内联 --owner-hue），这里按亮/暗主题定亮度与彩度。用 oklch：
    各色相亮度一致，黄、绿也和蓝、紫一样对比度够 */
 .owner-color {
   --owner-fg: oklch(0.5 0.13 var(--owner-hue));
@@ -42,7 +42,7 @@ select {
   --owner-bg: oklch(0.3 0.06 var(--owner-hue));
 }
 
-/* 文件预览的代码高亮（highlight.js 的类名，pages/FileBrowser.tsx）：配色取 GitHub 亮/暗主题，跟随界面主题 */
+/* 文件预览的代码高亮（highlight.js 的类名，FileBrowser.tsx）：配色取 GitHub 亮/暗主题，跟随界面主题 */
 .hljs-comment,
 .hljs-quote {
   color: #6e7781;

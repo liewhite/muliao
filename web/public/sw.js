@@ -36,7 +36,7 @@ self.addEventListener('push', (event) => {
   )
 })
 
-// 点开是 issue 页的通知（交给用户审核的 issue）：它的编号，其余为 null。issue 页的路由是 issues.ts 的 issueRoute
+// 点开是 issue 页的通知（交给用户审核的 issue）：它的编号，其余为 null。issue 页的路由是 routes.ts 的 issueRoute
 function reviewedIssue(url) {
   const m = /^\/issues\/(\d+)$/.exec(url)
   return m ? Number(m[1]) : null
