@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 
 use agenter::{
     DeltaKind, Event, Message, Request, RequestPart, Resolution, ResponseBuilder, ResponsePart, RunEvent, ToolCall,
-    ToolResult,
+    ToolResult, ToolsDone,
 };
 use chrono::Utc;
 use muliao_assets::agents::agent_in;
@@ -30,7 +30,7 @@ use muliao_platform::tooling::Audience;
 use muliao_runtime::conventions::{attach, shared_attachments};
 use muliao_runtime::instructions::with_notices;
 use muliao_runtime::toolbox::Redaction;
-use muliao_runtime::{Run, RunSpec, Runtime, ToolsDone};
+use muliao_runtime::{Run, RunSpec, Runtime};
 use rusqlite::Connection;
 
 use crate::actor::Waker;
@@ -521,7 +521,7 @@ impl Driver<'_> {
         Ok(Next::Continue)
     }
 
-    /// 历史末尾是带工具调用的回复：执行工具（或交回挂起调用的结局）。
+    /// 最后一条回复里还有没出结果的调用：执行工具（或交回挂起调用的结局）。
     async fn tools(
         &mut self,
         run: &Run,
@@ -529,10 +529,19 @@ impl Driver<'_> {
         first: Option<(Content, Vec<MailId>)>,
         notices: &mut Vec<String>,
     ) -> std::result::Result<Next, Failure> {
-        let cut =
-            self.history.iter().rposition(|m| matches!(m, Message::Assistant(_))).expect("ends with a response") + 1;
+        // 末尾那条回复（之后可能跟着挂起前存下的结果）
+        let (at, response) = self
+            .history
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(i, m)| match m {
+                Message::Assistant(r) => Some((i, r)),
+                Message::User(_) => None,
+            })
+            .expect("ends with a response");
         // 挂起之前已经做完、存在回复之后的结果：连同回答交回 agenter（它们不再执行），新出的结果只存新的那些
-        let saved: Vec<ToolResult> = self.history[cut..]
+        let saved: Vec<ToolResult> = self.history[at + 1..]
             .iter()
             .filter_map(|m| match m {
                 Message::User(r) => Some(r),
@@ -555,7 +564,7 @@ impl Driver<'_> {
             p.finished_at.clear();
         }
         let mut on_event = self.on_event();
-        let done = run.run_tools(&self.history[..cut], &resolved, &mut on_event).await?;
+        let done = run.run_tools(&self.history[..at], response, &resolved, &mut on_event).await?;
         let finished_at = std::mem::take(&mut self.partial.lock().expect("partial lock").finished_at);
         let fresh = |results: Vec<ToolResult>| -> Vec<ToolResult> {
             results

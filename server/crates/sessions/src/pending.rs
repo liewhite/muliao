@@ -53,7 +53,7 @@ pub(crate) fn kind_of(call: &ToolCall, approvals: &HashSet<String>) -> Option<Wa
     }
 }
 
-/// 一步停在挂起的调用上时（agenter 的 `Step::Paused`）各调用是哪一种，同 [`kind_of`]：挂起的只能是 ask_user、ask_agent，
+/// 一步停在挂起的调用上时（agenter 的 `ToolsDone::Paused`）各调用是哪一种，同 [`kind_of`]：挂起的只能是 ask_user、ask_agent，
 /// 请求批准的不能是它们（按工具名认的与按记录认的会认不清）。不符合是工具与这里的约定不一致。
 pub(crate) fn paused_calls(deferred: Vec<ToolCall>, approvals: Vec<ToolCall>) -> Result<Vec<PendingCall>> {
     let none = HashSet::new();

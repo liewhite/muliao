@@ -7,7 +7,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use agenter::{Content, FileSource, Message, Request, RequestPart, Resolution, Tool, ToolCtx, ToolError, ToolOutput};
+use agenter::{
+    Content, FileSource, Message, Request, RequestPart, Resolution, Tool, ToolCtx, ToolError, ToolOutput, ToolsDone,
+};
 use chrono::Utc;
 use futures::FutureExt;
 use muliao_assets::access::Actor;
@@ -26,7 +28,7 @@ use muliao_runtime::conventions::{SharedFile, TOOL_ATTACHMENTS, attach, tool_att
 use muliao_runtime::mcp::{Confine, McpConnector};
 use muliao_runtime::models::ModelRegistry;
 use muliao_runtime::toolbox::Toolbox;
-use muliao_runtime::{RunSpec, Runtime, RuntimeDeps, ToolsDone};
+use muliao_runtime::{RunSpec, Runtime, RuntimeDeps};
 use muliao_usage::UsageLog;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -287,7 +289,7 @@ async fn a_run_from_start_to_finish() {
     let mut events = 0;
     let r = run.respond(&history, &mut |_| events += 1).await.unwrap();
     assert!(events > 0);
-    history.push(Message::Assistant(r));
+    history.push(Message::Assistant(r.clone()));
 
     // 发出的请求：指令在 system 里，附件展开成说明 + 图片内容，工具定义里只有 snap
     let sent: serde_json::Value = server.received_requests().await.unwrap()[0].body_json().unwrap();
@@ -316,7 +318,10 @@ async fn a_run_from_start_to_finish() {
     );
 
     // 执行工具：图片存成引用，附件并进结果
-    let ToolsDone::Results(results) = run.run_tools(&history, &resolved, &mut |_| {}).await.unwrap() else { panic!() };
+    let earlier = &history[..history.len() - 1];
+    let ToolsDone::Results(results) = run.run_tools(earlier, &r, &resolved, &mut |_| {}).await.unwrap() else {
+        panic!()
+    };
     let t = &results[0];
     let Content::File(f) = &t.content[1] else { panic!("{t:?}") };
     let FileSource::Url(url) = &f.source else { panic!("the image is stored, not kept inline") };

@@ -46,7 +46,7 @@ Cargo workspace，一个领域一个 crate（`server/crates/<领域>`，包名 `
   muliao/          组合根（src/lib.rs，只装配，无业务规则）与二进制 `muliao`
 ```
 
-每个领域独占自己的表（各表有唯一读写的模块，模块注释写明「`xxx` 表的唯一读写处」），迁移是自己 crate 里的一串 SQL；领域之间只用不透明的 id 相互引用，没有跨领域外键。会话领域（#804）里各表模块的 SQL 只碰自己的表，要别的表的数据调那张表模块的函数、不联查（例外：会话列表按关键字筛选时嵌入 `history` 给出的子查询 `SESSIONS_MENTIONING`，命中的会话可能成千上万，拆成 `IN (…)` 会撞参数上限）；对外只开放查询和按角色给的入口（`SenderInbox`、`SessionWork`、`SessionService` 等），写表的函数都是 `pub(crate)`，编译器挡住别的领域绕开会话调度直接改运行和信件；别的领域的测试要造会话数据，用 feature `testing` 下的 `muliao_sessions::testing`（只许在 dev-dependencies 里开，`layers.rs` 查），会话领域自己的端到端测试放在 crate 内（`src/tests/`）。`runtime` 不是业务领域，是会话运行的端口：把 agenter 的逐步运行收在两种步骤后面：请求模型（`Run::respond`，得到一条回复）与执行工具（`Run::run_tools`，得到结果或停在挂起的调用上），下一步做哪种由会话领域按历史定，agenter 的 `Step` 到这两种的映射只在 `runtime/src/runner.rs`，每一步的产物交给会话领域保存，它自己除了用量账目不存库。具体工具各在所属领域，它只按规则组合组合根交来的工具集；工具一律通过领域接口做事，不碰别的领域的表。
+每个领域独占自己的表（各表有唯一读写的模块，模块注释写明「`xxx` 表的唯一读写处」），迁移是自己 crate 里的一串 SQL；领域之间只用不透明的 id 相互引用，没有跨领域外键。会话领域（#804）里各表模块的 SQL 只碰自己的表，要别的表的数据调那张表模块的函数、不联查（例外：会话列表按关键字筛选时嵌入 `history` 给出的子查询 `SESSIONS_MENTIONING`，命中的会话可能成千上万，拆成 `IN (…)` 会撞参数上限）；对外只开放查询和按角色给的入口（`SenderInbox`、`SessionWork`、`SessionService` 等），写表的函数都是 `pub(crate)`，编译器挡住别的领域绕开会话调度直接改运行和信件；别的领域的测试要造会话数据，用 feature `testing` 下的 `muliao_sessions::testing`（只许在 dev-dependencies 里开，`layers.rs` 查），会话领域自己的端到端测试放在 crate 内（`src/tests/`）。`runtime` 不是业务领域，是会话运行的端口：把 agenter 的逐步运行收在两种步骤后面：请求模型（`Run::respond`，得到一条回复）与执行工具（`Run::run_tools`，得到结果或停在挂起的调用上），下一步做哪种只由会话领域按历史定，两种各对应 agenter 的一个入口（`respond`、`call_tools`），每一步的产物交给会话领域保存，它自己除了用量账目不存库。具体工具各在所属领域，它只按规则组合组合根交来的工具集；工具一律通过领域接口做事，不碰别的领域的表。
 
 ### 2.2 领域之间怎么通信
 
@@ -68,7 +68,7 @@ Cargo workspace，一个领域一个 crate（`server/crates/<领域>`，包名 `
 - 领域之间只用对方 `pub` 的函数与类型，不写对方表的 SQL。
 - **依赖按层单向**，只能依赖更早一层的 crate：0 `platform` → 1 `assets`、`files`、`usage`、`web`、`speech` → 2 `runtime` → 3 `sessions` → 4 `workspace`、`notifications` → 5 `issues`、`triggers` → 6 `history`（活动概览要读会话与 issue）→ 7 `http` → 8 组合根。Cargo 只拦循环依赖，同层、反向由 `layers.rs` 查（测试用的 dev 依赖不算）；新领域先在它的 `LAYERS` 里定层，没定层的也报错。反向或同层需要的调用由组合根注入函数。
 - `platform` 不认识领域的词汇（会话、issue、agent 这些词都不出现在里面），只有一个例外：`platform::ids` 里各种编号的类型（`AgentId`、`SessionId`、`RunId`、`MailId`、`HoldId`、`JobId`、`DelegationId`）与规整过的值（`MediaType`、`Importance`）。它们只是名字、不带领域规则，各层都要传，放在最底层才能让不同编号互传编译不过（#805）；只在读入边界构造（读库、HTTP 路径与请求体、工具参数、新建记录）。前端生成接口类型时给 `AgentId`、`SessionId` 打上品牌（`web/scripts/gen-api.mjs`），同样传错位置编译不过。领域不依赖 HTTP 层与组合根；HTTP 层只经各领域给界面的门面（`muliao_http::Services`），业务规则都在领域里，HTTP 层与组合根不另写一份。
-- 工具的错误一律经 `platform::tooling` 的统一映射交还模型（第 6 节）；agenter 的 `Agent` 只在 `runtime` 构造，会话领域按它的 `Step` 驱动、存它的 `Message`（历史的存储形态），各领域的工具实现它的 `Tool` 接口；路径身份（「是不是同一个路径、在不在某目录下」）只在 `platform::fs::real` 算（#570：APFS 不分大小写与正规化形式），「在不在某目录下」与写沙箱只收它给的 `RealPath`。
+- 工具的错误一律经 `platform::tooling` 的统一映射交还模型（第 6 节）；agenter 的 `Agent` 只在 `runtime` 构造，会话领域经 `runtime` 的两种步骤驱动、存它的 `Message`（历史的存储形态），各领域的工具实现它的 `Tool` 接口；路径身份（「是不是同一个路径、在不在某目录下」）只在 `platform::fs::real` 算（#570：APFS 不分大小写与正规化形式），「在不在某目录下」与写沙箱只收它给的 `RealPath`。
 - 写事务经 `platform::db::Database::write`：同步闭包，在单写者线程上执行，里面不能 await（第 3.1 节）。
 - agent 的命令只经 `platform::shell` 起；以哪个 agent 的身份（secret、工作目录、可写路径）由工作区领域拼好交进来（第 9 节）。
 - 数据库层级联只在会话领域内部（没有跨领域外键）。
@@ -186,7 +186,7 @@ Web / 触发器 / delegate_task / ask_agent        后台任务与委派的结�
 
 ### 挂起的调用（`ask_user`、`ask_agent` 与等批准的调用，`sessions/src/pending.rs`）
 
-三者是同一件事：**模型调用了一个要等别人回信的工具**（工具返回 `ToolError::Defer`，或工具执行前要用户批准）。agenter 停在这里交回 `Step::Paused`，运行正常结束，不占着 actor；回信是一封回答信件，下一次运行把它作为那次调用的结果交回，模型看到的就是「我问了，对方这样答」。三种的差别只写在 `Waiting` 的几个方法里，各处查它，不按工具名或种类分支（#574）：要不要占用才算挂起、没交出去时能否原样重放、停止时是否仍挂着、没等到回答就继续时给什么结果（`sessions/src/answers.rs`）。一次调用是哪一种只经 `kind_of` 认：ask_user、ask_agent 按工具名，等批准的按记录（同一个工具多数调用不用批准）。
+三者是同一件事：**模型调用了一个要等别人回信的工具**（工具返回 `ToolError::Defer`，或工具执行前要用户批准）。agenter 停在这里交回 `ToolsDone::Paused`，运行正常结束，不占着 actor；回信是一封回答信件，下一次运行把它作为那次调用的结果交回，模型看到的就是「我问了，对方这样答」。三种的差别只写在 `Waiting` 的几个方法里，各处查它，不按工具名或种类分支（#574）：要不要占用才算挂起、没交出去时能否原样重放、停止时是否仍挂着、没等到回答就继续时给什么结果（`sessions/src/answers.rs`）。一次调用是哪一种只经 `kind_of` 认：ask_user、ask_agent 按工具名，等批准的按记录（同一个工具多数调用不用批准）。
 
 - **会话停在哪**（`pending::position`，纯函数，唯一判断）：由最后一条回复起的历史、交出去的永久事实（`HandedOut`）与信箱推导出空闲 / 新开 / 从历史续跑 / 被打断 / 等回答之一。actor、唤醒、停止、交回结局都 match 它，不各自组合谓词。挂起的调用由历史推导、不另存状态，且只可能在历史末尾。
 - **什么时候继续**（`Paused::ready`，唯一规则）：用户发了新消息，或挂起的调用都有了回答；事件留在信箱里等它们一起交给模型。**跳过与迟到**：未处理的调用后不能追加消息，所以用户发新消息时没回答的 `ask_user` 记为「没回答」，`ask_agent` 记为「还在处理，回答会作为事件送达」；之后才到的回答作为一段用户消息交给模型，不丢也不卡住。`ask_agent` 续跑时按调用 id 幂等，不重复投信。
