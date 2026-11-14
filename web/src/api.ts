@@ -103,7 +103,8 @@ export type AgentAssets = Schemas['AgentAssetsOut']
 export type AgentAsset = Schemas['AssetOut']
 export type IssueStatus = Schemas['Status']
 export type IssuePriority = Schemas['Priority']
-export type Issue = Schemas['BoardIssue']
+/** 列表里的 issue（看板、列表、依赖图）：不带描述，描述只在单个 issue 的详情里 */
+export type Issue = Schemas['ListedIssue']
 /** issue 的指派人：用户或一个 agent（未指派是 null，不在这个类型里） */
 export type Assignee = Schemas['Assignee']
 /** 时间线上做事的人：用户、agent，或系统自己的清理（删除 agent） */

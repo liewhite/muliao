@@ -26,7 +26,9 @@ mod tests;
 
 use muliao_platform::db::Migration;
 
-pub use board::{Board, BoardIssue, Filter, IssueDetail, IssueWork, NewIssue, Stopping, UserActions, user_actions_in};
+pub use board::{
+    Board, BoardIssue, Filter, IssueDetail, IssueWork, ListedIssue, NewIssue, Stopping, UserActions, user_actions_in,
+};
 pub use change::Patch;
 pub use model::{Actor, Assignee, By, Issue, Priority, Status};
 

@@ -15,6 +15,7 @@ pub mod web;
 
 use axum::Router;
 use axum::middleware;
+use tower_http::compression::CompressionLayer;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
@@ -64,5 +65,8 @@ pub fn router(state: AppState) -> Router {
         // agent 的页面在沙箱里跑、拿不到 cookie，凭签名网址访问；不进接口描述
         .merge(api::sites::public_routes())
         .fallback(web::spa)
+        // 按浏览器的 Accept-Encoding 压缩：用户经代理从外网访问，JSON 和前端代码压缩后小一个数量级（#843）。
+        // 默认规则不压事件流（text/event-stream，压了会被缓冲、事件延迟）、图片和很小的响应
+        .layer(CompressionLayer::new())
         .with_state(state)
 }

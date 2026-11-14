@@ -14,7 +14,6 @@ import {
 const issue = (id: number, over: Partial<Issue> = {}): Issue => ({
   id,
   title: `t${id}`,
-  description: '',
   status: 'in_progress',
   priority: 'none',
   owner: null,

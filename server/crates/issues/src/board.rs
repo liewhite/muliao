@@ -67,6 +67,35 @@ pub struct BoardIssue {
     pub work: IssueWork,
 }
 
+/// 列表里的一个 issue：[`BoardIssue`] 去掉描述。看板、列表、依赖图、issue_list 都不显示描述，整份列表里它占七成（#843），
+/// 所以描述只在单个 issue 里给（[`IssueDetail`]、命令返回的 [`BoardIssue`]）。
+#[derive(Debug, Clone, PartialEq, Serialize, utoipa::ToSchema)]
+pub struct ListedIssue {
+    pub id: i64,
+    pub title: String,
+    pub status: Status,
+    pub priority: Priority,
+    /// 负责的项目（agent id）；只在负责的 agent 被删除后为空
+    pub owner: Option<AgentId>,
+    /// agent id、`user`，或 null（未指派）
+    pub assignee: Option<Assignee>,
+    /// 创建者：agent id；用户创建的为 `user`
+    pub creator: Actor,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    #[serde(flatten)]
+    pub work: IssueWork,
+}
+
+impl From<BoardIssue> for ListedIssue {
+    fn from(b: BoardIssue) -> Self {
+        // 逐个字段解构：Issue 加了字段编译不过，逼着决定列表里要不要它
+        let Issue { id, title, description: _, status, priority, owner, assignee, creator, created_at, updated_at } =
+            b.issue;
+        ListedIssue { id, title, status, priority, owner, assignee, creator, created_at, updated_at, work: b.work }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, utoipa::ToSchema)]
 pub struct IssueDetail {
     pub issue: BoardIssue,
@@ -326,8 +355,8 @@ impl Board {
 
     // ---- 查询 ----
 
-    /// 按条件列出，最近更新的在前，带上谁在做。
-    pub async fn list(&self, filter: Filter) -> Result<Vec<BoardIssue>> {
+    /// 按条件列出，最近更新的在前，带上谁在做；不带描述。
+    pub async fn list(&self, filter: Filter) -> Result<Vec<ListedIssue>> {
         self.db
             .read(move |c| {
                 let mut conditions = vec!["1 = 1".to_owned()];
@@ -353,7 +382,7 @@ impl Board {
                 }
                 let filter = format!("{} ORDER BY updated_at DESC, id DESC", conditions.join(" AND "));
                 let found = model::query(c, &filter, rusqlite::params_from_iter(&values))?;
-                board_in(c, found)
+                Ok(board_in(c, found)?.into_iter().map(ListedIssue::from).collect())
             })
             .await
     }

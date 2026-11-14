@@ -4,7 +4,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use muliao_issues::activity::Activity;
 use muliao_issues::graph::Upstream;
-use muliao_issues::{Assignee, BoardIssue, By, Filter, IssueDetail, NewIssue, Patch, Priority, Status};
+use muliao_issues::{Assignee, BoardIssue, By, Filter, IssueDetail, ListedIssue, NewIssue, Patch, Priority, Status};
 use muliao_platform::ids::AgentId;
 use serde::Deserialize;
 use utoipa::{IntoParams, ToSchema};
@@ -39,8 +39,11 @@ pub struct IssueQuery {
 }
 
 #[utoipa::path(get, path = "/api/issues", tag = "issues", params(IssueQuery),
-    responses((status = 200, body = Vec<BoardIssue>), (status = 422, body = ErrorOut)))]
-async fn list_issues(State(s): State<AppState>, Query(q): Query<IssueQuery>) -> ApiResult<axum::Json<Vec<BoardIssue>>> {
+    responses((status = 200, body = Vec<ListedIssue>), (status = 422, body = ErrorOut)))]
+async fn list_issues(
+    State(s): State<AppState>,
+    Query(q): Query<IssueQuery>,
+) -> ApiResult<axum::Json<Vec<ListedIssue>>> {
     // 查询参数沿用库里的写法（`user` 或 agent id）：查询串里放不了按种类打标签的对象
     let filter = Filter { statuses: q.status, assignee: q.assignee.map(Assignee::from_stored), owner: q.owner };
     Ok(axum::Json(s.services.board.list(filter).await?))

@@ -2597,7 +2597,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/BoardIssue"
+                    "$ref": "#/components/schemas/ListedIssue"
                   }
                 }
               }
@@ -6331,6 +6331,77 @@
             ]
           }
         }
+      },
+      "ListedIssue": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/IssueWork"
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "title",
+              "status",
+              "priority",
+              "owner",
+              "assignee",
+              "creator",
+              "created_at",
+              "updated_at"
+            ],
+            "properties": {
+              "id": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "title": {
+                "type": "string"
+              },
+              "status": {
+                "$ref": "#/components/schemas/Status"
+              },
+              "priority": {
+                "$ref": "#/components/schemas/Priority"
+              },
+              "owner": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/AgentId",
+                    "description": "负责的项目（agent id）；只在负责的 agent 被删除后为空"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "assignee": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Assignee",
+                    "description": "agent id、`user`，或 null（未指派）"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "creator": {
+                "$ref": "#/components/schemas/Actor",
+                "description": "创建者：agent id；用户创建的为 `user`"
+              },
+              "created_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "updated_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          }
+        ],
+        "description": "列表里的一个 issue：[`BoardIssue`] 去掉描述。看板、列表、依赖图、issue_list 都不显示描述，整份列表里它占七成（#843），\n所以描述只在单个 issue 里给（[`IssueDetail`]、命令返回的 [`BoardIssue`]）。"
       },
       "LiveSegment": {
         "type": "object",

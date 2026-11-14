@@ -11,7 +11,7 @@ use muliao_sessions::activity::WorkState;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::board::{Board, BoardIssue, Filter, NewIssue, in_batch};
+use crate::board::{Board, Filter, ListedIssue, NewIssue, in_batch};
 use crate::change::Patch;
 use crate::graph::Upstream;
 use crate::model::{Assignee, By, Priority, Status};
@@ -77,8 +77,7 @@ pub struct IssueSummary {
 }
 
 impl IssueSummary {
-    fn of(b: BoardIssue, names: &AgentNames) -> Self {
-        let i = b.issue;
+    fn of(i: ListedIssue, names: &AgentNames) -> Self {
         IssueSummary {
             id: i.id,
             title: i.title,
@@ -86,10 +85,10 @@ impl IssueSummary {
             status: i.status,
             priority: i.priority,
             assignee: i.assignee.as_ref().map(|a| assignee_name(Some(a), names)),
-            assignee_state: b.work.assignee_state,
-            stalled: b.work.stalled,
-            depends_on: b.work.depends_on,
-            waiting_on: b.work.waiting_on,
+            assignee_state: i.work.assignee_state,
+            stalled: i.work.stalled,
+            depends_on: i.work.depends_on,
+            waiting_on: i.work.waiting_on,
             updated_at: i.updated_at,
         }
     }

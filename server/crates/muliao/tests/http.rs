@@ -180,8 +180,17 @@ async fn a_conversation_over_http_with_live_events() {
     let agent = w.agent("helper").await;
 
     // SSE：连上先收到心跳（带间隔与前端版本）
-    let events = w.http.get(format!("{}/api/events", w.base)).header(header::COOKIE, &w.cookie).send().await.unwrap();
+    // 浏览器会带 Accept-Encoding：事件流不压缩（压缩会缓冲、事件延迟），下面照样边发边收
+    let events = w
+        .http
+        .get(format!("{}/api/events", w.base))
+        .header(header::COOKIE, &w.cookie)
+        .header(header::ACCEPT_ENCODING, "gzip")
+        .send()
+        .await
+        .unwrap();
     assert_eq!(events.headers()[header::CONTENT_TYPE], "text/event-stream");
+    assert_eq!(events.headers().get(header::CONTENT_ENCODING), None);
     let mut stream = events.bytes_stream();
     let mut buffer = String::new();
     let mut seen: Vec<Value> = Vec::new();
@@ -493,6 +502,17 @@ async fn issues_triggers_notifications_usage_and_history() {
     w.call(Method::POST, &format!("/api/issues/{n}/approve"), None, 409).await;
     let listed = w.get("/api/issues?status=backlog&status=in_progress").await;
     assert_eq!(listed.as_array().unwrap().len(), 1);
+    // 列表不带描述；浏览器说能解 gzip 就压缩（#843）
+    assert_eq!(listed[0].get("description"), None);
+    let zipped = w
+        .http
+        .get(format!("{}/api/issues", w.base))
+        .header(header::COOKIE, &w.cookie)
+        .header(header::ACCEPT_ENCODING, "gzip")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(zipped.headers()[header::CONTENT_ENCODING], "gzip");
     w.call(Method::GET, "/api/issues?status=nope", None, 422).await;
     w.call(Method::DELETE, &format!("/api/issues/{n}"), None, 204).await;
 

@@ -484,7 +484,9 @@ async fn issue_show_lists_and_stop_rules() {
     assert!(lines[8].ends_with("] alpha created the issue") && lines[8].starts_with("- [20"), "{}", lines[8]);
     // 列表：筛选与停滞
     let found = w.board.list(Filter { statuses: vec![Status::InProgress], ..Filter::default() }).await.unwrap();
-    assert_eq!(found.iter().map(|b| b.issue.id).collect::<Vec<_>>(), [i.id]);
+    assert_eq!(found.iter().map(|b| b.id).collect::<Vec<_>>(), [i.id]);
+    // 列表不带描述，描述只在单个 issue 里（#843）
+    assert_eq!(serde_json::to_value(&found[0]).unwrap().get("description"), None);
     assert!(!found[0].work.stalled, "its session has mail to run");
     assert_eq!(found[0].work.sessions.keys().collect::<Vec<_>>(), [&AgentId::new(B)]);
     w.consume_all().await;
