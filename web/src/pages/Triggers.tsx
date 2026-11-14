@@ -54,6 +54,18 @@ const KIND_LABELS: Record<TriggerKindName, { label: string; summary: string }> =
   stream: { label: '流式', summary: '托管一条常驻命令，它输出的每一行是一个事件' },
 }
 
+/** 已有触发器的方式与配置 */
+function kindConfigOf(trigger: Trigger): KindConfig {
+  switch (trigger.kind) {
+    case 'schedule':
+      return { kind: trigger.kind, config: trigger.config }
+    case 'once':
+      return { kind: trigger.kind, config: trigger.config }
+    case 'stream':
+      return { kind: trigger.kind, config: trigger.config }
+  }
+}
+
 /** 新建时的初始配置。在打开表单、切换方式时才算：一次性触发器的默认时间是那时起一小时后 */
 function emptyConfig(kind: TriggerKindName): KindConfig {
   switch (kind) {
@@ -544,9 +556,9 @@ function TriggerItem({ trigger }: { trigger: Trigger }) {
 /** 字段草稿（drafts.useDraft）：只提交改过的，没动的字段别人可能改过；前置检查改了还会重置 changed 模式的基线 */
 function TriggerEditor({ trigger, facts, onDone }: { trigger: Trigger; facts: ReactNode; onDone: () => void }) {
   // 配置不合法时为 null
-  const form = useDraft<{ prompt: string; config: KindConfig['config'] | null; precheck: Precheck | null }>({
+  const form = useDraft<{ prompt: string; config: KindConfig | null; precheck: Precheck | null }>({
     prompt: trigger.prompt,
-    config: trigger.config,
+    config: kindConfigOf(trigger),
     precheck: trigger.precheck,
   })
   const action = useAction()
@@ -555,13 +567,13 @@ function TriggerEditor({ trigger, facts, onDone }: { trigger: Trigger; facts: Re
     action.run(async () => {
       const { config, ...rest } = form.changes
       if (config === null) throw new Error('配置不合法')
-      const patch = { ...rest, ...(config && { config }) }
+      const patch = { ...rest, ...(config && { config: config.config }) }
       if (Object.keys(form.changes).length > 0) await api.updateTrigger(trigger.id, patch)
       onDone()
     })
   // 配置与前置检查的编辑器自己保存编辑中的内容、只在挂载时读初值（这两个是例外，不由草稿受控）：草稿被外部换掉（跟上
   // 服务端、保存后）就按 key 重新挂载，从换上的草稿开始（被换上的总是合法的，null 只出现在用户输入中，那时不重新挂载）
-  const config = { kind: trigger.kind, config: draft.config ?? form.base.config } as KindConfig
+  const config = draft.config ?? kindConfigOf(trigger)
   return (
     <>
       <Modal.Body className="flex flex-col gap-3">
@@ -569,7 +581,7 @@ function TriggerEditor({ trigger, facts, onDone }: { trigger: Trigger; facts: Re
         <ConfigEditor
           key={form.replaced('config')}
           value={config}
-          onChange={(c) => form.set({ config: c?.config ?? null })}
+          onChange={(config) => form.set({ config })}
         />
         <PrecheckEditor
           key={form.replaced('precheck')}

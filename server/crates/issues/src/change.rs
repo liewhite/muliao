@@ -83,7 +83,7 @@ pub(crate) fn snapshot(issue: &Issue, links: &Links) -> Snapshot {
 
 /// 一次修改：一个 issue、做事的人、这期间记下的动态。由 [`Changes::open_in`] 给出。
 pub(crate) struct IssueChange<'c> {
-    c: &'c Connection,
+    c: &'c Tx<'c>,
     issue: Issue,
     by: &'c By,
     recorded: Vec<Activity>,

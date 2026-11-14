@@ -121,10 +121,9 @@ pub async fn world(max_output_chars: usize) -> World {
     });
     let tools = workspace.tools();
     binder.bind(Toolbox::new(tools.clone()).specs());
-    let events = Arc::new(Events::default());
     let mut subscribers = Subscribers::default();
     workspace.subscribe(&mut subscribers);
-    events.subscribe(subscribers);
+    let events = Arc::new(Events::new(subscribers));
     let spec = |name: &str| AgentSpec { name: name.into(), description: "测试".into(), ..Default::default() };
     let me = agents.create(spec("me"), &Actor::User).await.unwrap().id;
     let other = agents.create(spec("other"), &Actor::User).await.unwrap().id;

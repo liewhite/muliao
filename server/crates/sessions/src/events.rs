@@ -2,10 +2,10 @@
 //! 每个订阅者，订阅者的写入与发布方一起提交或回滚，出错交给发布方（docs/architecture.md 3.3）。订阅者只做短的数据库
 //! 操作；事务外的事用 `Tx::on_commit` 排到提交之后。
 //!
-//! 订阅在组合根装配时登记一次（[`Events::subscribe`]），之后不变；没登记完就发布是装配漏了，当场 panic。
+//! 订阅在组合根装配时一次收齐，随 [`Events::new`] 交进来，之后不变：没有「还没登记就发布」的状态。
 
 use muliao_platform::ids::{AgentId, JobId, RunId, SessionId};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use muliao_platform::db::Tx;
 
@@ -110,33 +110,27 @@ impl Subscribers {
     }
 }
 
-/// 发布点：组合根登记一次订阅者，之后会话领域在自己的事务里发布。
-#[derive(Default)]
+/// 发布点：组合根建它时交进全部订阅者，之后会话领域在自己的事务里发布。
 pub struct Events {
-    subscribers: OnceLock<Subscribers>,
+    subscribers: Subscribers,
 }
 
 impl Events {
-    /// 登记全部订阅者（只能一次）。
-    pub fn subscribe(&self, subscribers: Subscribers) {
-        assert!(self.subscribers.set(subscribers).is_ok(), "session event subscribers are registered once");
-    }
-
-    fn all(&self) -> &Subscribers {
-        self.subscribers.get().expect("session events published before their subscribers were registered")
+    pub fn new(subscribers: Subscribers) -> Self {
+        Self { subscribers }
     }
 
     pub(crate) fn run_ended(&self, tx: &mut Tx<'_>, e: &RunEnded) -> muliao_platform::errors::Result<()> {
-        publish(tx, &self.all().run_ended, e)
+        publish(tx, &self.subscribers.run_ended, e)
     }
     pub(crate) fn run_failed(&self, tx: &mut Tx<'_>, e: &RunFailed) -> muliao_platform::errors::Result<()> {
-        publish(tx, &self.all().run_failed, e)
+        publish(tx, &self.subscribers.run_failed, e)
     }
     pub(crate) fn session_stopped(&self, tx: &mut Tx<'_>, e: &SessionStopped) -> muliao_platform::errors::Result<()> {
-        publish(tx, &self.all().session_stopped, e)
+        publish(tx, &self.subscribers.session_stopped, e)
     }
     pub(crate) fn session_deleted(&self, tx: &mut Tx<'_>, e: &SessionDeleted) -> muliao_platform::errors::Result<()> {
-        publish(tx, &self.all().session_deleted, e)
+        publish(tx, &self.subscribers.session_deleted, e)
     }
 }
 

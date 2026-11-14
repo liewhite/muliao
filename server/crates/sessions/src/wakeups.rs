@@ -33,7 +33,7 @@ struct Wakeup {
 }
 
 /// 取消会话还在等的唤醒（至多一个），返回它原定的时刻。
-pub(crate) fn cancel_in(c: &Connection, session_id: &SessionId) -> Result<Option<DateTime<Utc>>> {
+pub(crate) fn cancel_in(c: &Tx<'_>, session_id: &SessionId) -> Result<Option<DateTime<Utc>>> {
     let mut cancelled = None;
     for (hold, wakeup) in waiting_in(c, Some(session_id))? {
         abandon_in(c, &hold)?;
@@ -57,7 +57,7 @@ fn waiting_in(c: &Connection, session_id: Option<&SessionId>) -> Result<Vec<(Hol
 
 /// 约一次唤醒，取代会话还在等的那个。awaited：用户是否在等约它的那次运行的回答（唤醒的信件随之推送）。
 pub(crate) fn schedule_in(
-    c: &Connection,
+    c: &Tx<'_>,
     session_id: &SessionId,
     due_at: DateTime<Utc>,
     note: &str,

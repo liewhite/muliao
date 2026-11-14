@@ -1,10 +1,8 @@
 //! 会话来源：会话创建时定下、整个会话不变（`sessions.origin` 与 `origin_ref` 两列），以及每种来源在指令里怎么向 agent
 //! 说明。来源编号的格式只在这里写：对外只有结构化的 [`SessionOrigin`]，读回只经 [`SessionOrigin::parse`]。
 //!
-//! 会话领域只写自己开出的来源的说明（[`OWN_NOTES`]：用户、委派）；触发器、issue 的说明含它们自己的规则，由各自领域给出，
-//! 组合根合成 [`OriginNotes`]。
-
-use std::collections::HashMap;
+//! 会话领域只写自己开出的来源的说明（用户、委派）；触发器、issue 的说明含它们自己的规则，由各自领域给出，组合根填进
+//! [`OriginNotes`]。
 
 use serde::{Deserialize, Serialize};
 
@@ -155,30 +153,22 @@ impl From<Sender> for SessionOrigin {
     }
 }
 
-/// 会话领域自己开出的来源的说明。
-pub const OWN_NOTES: [(Origin, &str); 2] = [
-    (Origin::User, "The user started this conversation in the app and may be reading along."),
-    (Origin::Delegation, "Another agent opened this conversation with you."),
-];
-
-/// 每种来源的会话在指令里的那一行说明（会话级的稳定内容，进缓存前缀）。构造时必须覆盖全部来源。
+/// 每种来源的会话在指令里的那一行说明（会话级的稳定内容，进缓存前缀）。会话领域自己开出的来源（用户、委派）的说明写在
+/// [`OriginNotes::of`] 里；别的领域开出的（触发器、issue）含它们自己的规则，由各自领域给，组合根按字段填齐。
 #[derive(Debug, Clone)]
-pub struct OriginNotes(HashMap<Origin, String>);
+pub struct OriginNotes {
+    pub trigger: &'static str,
+    pub issue: &'static str,
+}
 
 impl OriginNotes {
-    /// notes：别的领域给的说明（触发器、issue），与 [`OWN_NOTES`] 合起来要覆盖全部来源，否则 panic（组合根漏装配）。
-    pub fn new(notes: impl IntoIterator<Item = (Origin, String)>) -> Self {
-        let mut all: HashMap<Origin, String> = OWN_NOTES.iter().map(|(o, n)| (*o, (*n).to_owned())).collect();
-        for (o, n) in notes {
-            assert!(all.insert(o, n).is_none(), "two session notes for origin {o}");
-        }
-        let missing: Vec<&Origin> = Origin::ALL.iter().filter(|o| !all.contains_key(o)).collect();
-        assert!(missing.is_empty(), "no session note for origins {missing:?}");
-        Self(all)
-    }
-
     pub(crate) fn of(&self, origin: Origin) -> &str {
-        &self.0[&origin]
+        match origin {
+            Origin::User => "The user started this conversation in the app and may be reading along.",
+            Origin::Delegation => "Another agent opened this conversation with you.",
+            Origin::Trigger => self.trigger,
+            Origin::Issue => self.issue,
+        }
     }
 }
 

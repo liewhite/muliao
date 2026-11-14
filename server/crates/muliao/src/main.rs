@@ -80,8 +80,7 @@ async fn main() -> anyhow::Result<()> {
     // 先占端口：同一个库上已有服务在跑时当场退出，不先续跑会话（同一个工具调用会被执行两次）
     let addr = format!("{}:{}", config.server.host, config.server.port);
     let listener = tokio::net::TcpListener::bind(&addr).await.with_context(|| format!("binding {addr}"))?;
-    let app = muliao_server::assemble(config, web_dir).await?;
-    app.start().await?;
+    let app = muliao_server::assemble(config, web_dir).await?.start().await?;
     // pid：部署自检（deploy/selfcheck.sh）凭它认出本进程的启动行
     tracing::info!(%addr, pid = std::process::id(), "muliao is serving");
 

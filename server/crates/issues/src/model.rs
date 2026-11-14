@@ -8,6 +8,7 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use muliao_platform::db::Tx;
 use muliao_platform::errors::{Result, not_found};
 
 // 状态。不设 todo（给 agent 的一建就投，与 in_progress 无别）、不设 waiting：在等上游由依赖派生，在等后台任务、委派、
@@ -249,7 +250,7 @@ pub(crate) struct NewRow<'a> {
 }
 
 /// 新建一行，返回它的编号。
-pub(crate) fn insert_in(c: &Connection, new: &NewRow<'_>) -> Result<IssueId> {
+pub(crate) fn insert_in(c: &Tx<'_>, new: &NewRow<'_>) -> Result<IssueId> {
     c.execute(
         "INSERT INTO issues (title, description, status, priority, owner_agent_id, assignee, creator, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
@@ -268,7 +269,7 @@ pub(crate) fn insert_in(c: &Connection, new: &NewRow<'_>) -> Result<IssueId> {
 }
 
 /// 把改过的字段写回（只由变更单元调用）。
-pub(crate) fn save_in(c: &Connection, i: &Issue) -> Result<()> {
+pub(crate) fn save_in(c: &Tx<'_>, i: &Issue) -> Result<()> {
     c.execute(
         "UPDATE issues SET title = ?2, description = ?3, status = ?4, priority = ?5, owner_agent_id = ?6, assignee = ?7,
          updated_at = ?8 WHERE id = ?1",
@@ -286,7 +287,7 @@ pub(crate) fn save_in(c: &Connection, i: &Issue) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn delete_in(c: &Connection, issue_id: IssueId) -> Result<()> {
+pub(crate) fn delete_in(c: &Tx<'_>, issue_id: IssueId) -> Result<()> {
     c.execute("DELETE FROM issues WHERE id = ?1", [issue_id])?;
     Ok(())
 }

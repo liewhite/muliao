@@ -35,5 +35,9 @@ similar = "2"
 [target.'cfg(target_os = "macos")'.dependencies]
 system-configuration = "0.7"
 
+[features]
+# 测试在 Database 之外直接写库（db::write_on）；只在 dev-dependencies 里开
+testing = []
+
 [lints]
 workspace = true

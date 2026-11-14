@@ -455,25 +455,33 @@ function MailNote({ mail, ctx }: { mail: Mail; ctx: SessionContext }) {
   const discarded = mail.state === 'discarded'
   return (
     <div className={`flex flex-col gap-1.5 ${discarded ? 'line-through opacity-50' : ''}`}>
-      {mail.kind === 'event' ? (
-        mail.check_in ? (
-          <CheckInsNote source={mail.source} checks={[{ text: mail.content, at: mail.created_at }]} ctx={ctx} />
-        ) : (
-          <EventNote lead={<SourceLabel source={mail.source} ctx={ctx} />} text={mail.content} />
-        )
-      ) : mail.kind === 'answer' ? (
-        mail.result.tool === 'ask_user' ? (
-          <AnsweredQuestions answers={mail.result.result.answers} />
-        ) : mail.result.tool === 'approval' ? (
-          <QuestionNote text={CHOICE_TEXT[mail.result.result.choice]} />
-        ) : (
-          <EventNote lead={<span className="shrink-0 text-foreground">agent 的回答</span>} text={mail.result.result.text} />
-        )
-      ) : (
-        <UserBubble text={mail.content} attachments={mail.attachments} pending={!discarded} />
-      )}
+      <MailContent mail={mail} pending={!discarded} ctx={ctx} />
     </div>
   )
+}
+
+function MailContent({ mail, pending, ctx }: { mail: Mail; pending: boolean; ctx: SessionContext }) {
+  switch (mail.kind) {
+    case 'event':
+      return mail.check_in ? (
+        <CheckInsNote source={mail.source} checks={[{ text: mail.content, at: mail.created_at }]} ctx={ctx} />
+      ) : (
+        <EventNote lead={<SourceLabel source={mail.source} ctx={ctx} />} text={mail.content} />
+      )
+    case 'answer':
+      switch (mail.result.tool) {
+        case 'ask_user':
+          return <AnsweredQuestions answers={mail.result.result.answers} />
+        case 'approval':
+          return <QuestionNote text={CHOICE_TEXT[mail.result.result.choice]} />
+        case 'ask_agent':
+          return (
+            <EventNote lead={<span className="shrink-0 text-foreground">agent 的回答</span>} text={mail.result.result.text} />
+          )
+      }
+    case 'message':
+      return <UserBubble text={mail.content} attachments={mail.attachments} pending={pending} />
+  }
 }
 
 /** 运行中的提示：出过暂时性的错时说在重试；下次尝试的时间已过（正在重试）就不写时间 */

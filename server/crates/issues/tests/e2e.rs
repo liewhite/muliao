@@ -34,7 +34,7 @@ use muliao_sessions::compaction::Compactor;
 use muliao_sessions::events::{Events, Subscribers};
 use muliao_sessions::inbound::SenderInbox;
 use muliao_sessions::live::Live;
-use muliao_sessions::origins::{Origin, OriginNotes};
+use muliao_sessions::origins::OriginNotes;
 use muliao_sessions::run::Core;
 use muliao_sessions::tools::Stopper;
 use schemars::JsonSchema;
@@ -172,7 +172,7 @@ async fn world() -> World {
     let secrets = Arc::new(Secrets::new(source.clone(), vault));
     let tz = chrono_tz::Asia::Shanghai;
     let (waker, wakes) = Waker::channel();
-    let stopper = Stopper::default();
+    let (stopper, stopper_binder) = Stopper::pending();
     let keys = VapidKeys::load_or_create(&dir.path().join("vapid.pem")).unwrap();
     let push = Push::new(db.clone(), keys, "mailto:t@example.com".into(), reqwest::Client::new(), Retry::default());
     let notifications = Notifications::new(db.clone(), Arc::new(Bus::new(16)), Arc::new(push));
@@ -190,10 +190,9 @@ async fn world() -> World {
     let spec = |name: &str| AgentSpec { name: name.into(), description: "测试".into(), ..Default::default() };
     let me = agents.create(spec("me"), &Actor::User).await.unwrap().id;
     let other = agents.create(spec("other"), &Actor::User).await.unwrap().id;
-    let events = Arc::new(Events::default());
     let mut subscribers = Subscribers::default();
     board.subscribe(&mut subscribers);
-    events.subscribe(subscribers);
+    let events = Arc::new(Events::new(subscribers));
     let bus = Arc::new(Bus::new(1000));
     let core = Arc::new(Core {
         db: db.clone(),
@@ -202,10 +201,7 @@ async fn world() -> World {
         agents,
         live: Live::new(bus.clone()),
         events,
-        notes: OriginNotes::new([
-            (Origin::Trigger, "A trigger started this.".to_owned()),
-            (Origin::Issue, muliao_issues::rules::SESSION_NOTE.to_owned()),
-        ]),
+        notes: OriginNotes { trigger: "A trigger started this.", issue: muliao_issues::rules::SESSION_NOTE },
         waker,
         compactor: Compactor { db: db.clone(), runtime, threshold_tokens: 1_000_000, keep_steps: 10 },
         renders: toolbox.renders(),
@@ -214,7 +210,7 @@ async fn world() -> World {
         bus,
     });
     let actors = Actors::start(core, wakes);
-    stopper.bind(actors.clone());
+    stopper_binder.bind(actors.clone());
     actors.resume().await.unwrap();
     World { _dir: dir, db, script, _server: server, board, _actors: actors, me, other, notifications }
 }

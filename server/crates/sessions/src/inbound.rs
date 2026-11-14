@@ -17,7 +17,7 @@ use rusqlite::Connection;
 
 use crate::actor::Waker;
 use crate::answers::{CallResult, Choice, Decision, QuestionAnswer, answer_result};
-use crate::directory::{self, NewSession, Session, keyed_among};
+use crate::directory::{self, NewSession, Session, keyed_in};
 use crate::mailbox::{MailBody, NewMail, post_in, queued_in};
 use crate::origins::{Origin, Sender, SessionOrigin, ThreadName};
 use crate::pending::open_asks_of;
@@ -209,12 +209,7 @@ pub(crate) enum Opener<'a> {
 }
 
 /// 新建会话的唯一实现（来信与开 thread 都经过这里）：只为能运行的 agent 建。
-pub(crate) fn create_session_in(
-    c: &Connection,
-    opener: Opener<'_>,
-    agent_id: &AgentId,
-    title: &str,
-) -> Result<Session> {
+pub(crate) fn create_session_in(c: &Tx<'_>, opener: Opener<'_>, agent_id: &AgentId, title: &str) -> Result<Session> {
     runnable_agent_in(c, agent_id)?;
     let origin = match opener {
         Opener::User => SessionOrigin::User,
@@ -296,7 +291,7 @@ pub(crate) fn check_in(c: &Connection, inbound: &Inbound) -> Result<std::result:
             Checked::New { opener: Opener::Sender(*sender), agent_id: agent_id.clone(), title: title.clone() }
         }
         Inbound::Sender(SenderMail { sender, session: SenderTarget::Keyed { agent_id, title }, .. }) => {
-            match keyed_among(c, &[*sender], Some(agent_id))?.remove(&(*sender, agent_id.clone())) {
+            match keyed_in(c, *sender, agent_id)? {
                 Some(s) => Checked::Existing(s),
                 None => {
                     Checked::New { opener: Opener::Sender(*sender), agent_id: agent_id.clone(), title: title.clone() }

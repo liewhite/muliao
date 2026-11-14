@@ -11,7 +11,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use crate::conventions::{
     CONTINUATION, answer_text, check_metadata, mark_stopped, measured_responses, searchable_text,
 };
-use muliao_platform::db::placeholders;
+use muliao_platform::db::{Tx, placeholders};
 use muliao_platform::errors::{Result, broken};
 
 /// 一条存下的消息。
@@ -45,7 +45,7 @@ fn stored(c: &Connection, filter: &str, params: impl rusqlite::Params) -> Result
 
 /// 把这些消息接在会话历史末尾（run_id：保存它们的运行），同一事务写可搜索文字。返回写下的消息 id。
 pub(crate) fn append_in(
-    c: &Connection,
+    c: &Tx<'_>,
     session_id: &SessionId,
     run_id: RunId,
     messages: &[Message],
@@ -68,7 +68,7 @@ pub(crate) fn append_in(
 }
 
 /// 给历史最后一条消息标上停止。
-pub(crate) fn mark_last_stopped_in(c: &Connection, session_id: &SessionId) -> Result<()> {
+pub(crate) fn mark_last_stopped_in(c: &Tx<'_>, session_id: &SessionId) -> Result<()> {
     let last = stored(c, "session_id = ?1 ORDER BY id DESC LIMIT 1", [session_id])?
         .pop()
         .ok_or_else(|| broken(format!("session {session_id} has history but no message rows")))?;
@@ -258,7 +258,7 @@ pub(crate) fn latest_compaction(c: &Connection, session_id: &SessionId) -> Resul
 
 /// 记下一次压缩：through_message_id 及之前的消息由摘要代替发给模型。
 pub(crate) fn add_compaction_in(
-    c: &Connection,
+    c: &Tx<'_>,
     session_id: &SessionId,
     through_message_id: MessageId,
     summary: &str,

@@ -10,6 +10,7 @@ import {
   type SessionId,
   type ViewBlock,
 } from './api'
+import { assertNever } from './exhaustive'
 
 /** 一次工具调用的调用这一半（调用条目给出） */
 export interface ToolCall {
@@ -149,6 +150,8 @@ export function toBlocks(items: Item[]): Block[] {
         }
         break
       }
+      default:
+        assertNever(item)
     }
   }
   return blocks

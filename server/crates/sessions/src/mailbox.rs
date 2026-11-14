@@ -286,7 +286,7 @@ pub(crate) fn queued_among(c: &Connection, session_ids: &[SessionId]) -> Result<
 }
 
 /// 这些排着的信件交给这次运行（运行开头取走时）。已经不在排队的不动。
-pub(crate) fn give_in(c: &Connection, ids: &[MailId], run_id: RunId) -> Result<()> {
+pub(crate) fn give_in(c: &Tx<'_>, ids: &[MailId], run_id: RunId) -> Result<()> {
     for id in ids {
         c.execute(
             "UPDATE mail SET taken_by = ?1 WHERE id = ?2 AND state = ?3",
@@ -297,7 +297,7 @@ pub(crate) fn give_in(c: &Connection, ids: &[MailId], run_id: RunId) -> Result<(
 }
 
 /// 交给模型的那一步保存时记下处理掉的信件。同一会话只有一个 actor，取走的信不可能被别人处理掉。
-pub(crate) fn consume_in(c: &Connection, ids: &[MailId], run_id: RunId) -> Result<()> {
+pub(crate) fn consume_in(c: &Tx<'_>, ids: &[MailId], run_id: RunId) -> Result<()> {
     for id in ids {
         let n = c.execute(
             "UPDATE mail SET state = ?1, taken_by = ?2 WHERE id = ?3 AND state = ?4",
@@ -311,7 +311,7 @@ pub(crate) fn consume_in(c: &Connection, ids: &[MailId], run_id: RunId) -> Resul
 }
 
 /// 这些还没交给模型的信件记为被丢弃。返回丢弃的信件 id。
-pub(crate) fn discard_in(c: &Connection, session_id: &SessionId, ids: &[MailId]) -> Result<Vec<MailId>> {
+pub(crate) fn discard_in(c: &Tx<'_>, session_id: &SessionId, ids: &[MailId]) -> Result<Vec<MailId>> {
     for id in ids {
         c.execute("UPDATE mail SET state = ?1 WHERE id = ?2", params![MailState::Discarded, id])?;
     }

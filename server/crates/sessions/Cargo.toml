@@ -30,6 +30,7 @@ uuid = { workspace = true }
 testing = []
 
 [dev-dependencies]
+muliao-platform = { workspace = true, features = ["testing"] }
 reqwest = { workspace = true }
 tempfile = { workspace = true }
 wiremock = { workspace = true }

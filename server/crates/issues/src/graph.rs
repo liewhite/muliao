@@ -7,6 +7,7 @@ use rusqlite::{Connection, params, params_from_iter};
 use serde::{Deserialize, Serialize};
 
 use crate::model::Status;
+use muliao_platform::db::Tx;
 use muliao_platform::errors::{Result, invalid};
 use muliao_platform::ids::IssueId;
 
@@ -166,7 +167,7 @@ pub(crate) fn downstream_in(c: &Connection, issue_id: IssueId) -> Result<Vec<Iss
 
 /// 把 issue 的上游整体换成 depends_on：上游必须存在、不能重复、不能成环。返回（原来的, 现在的），没变为 None。
 pub(crate) fn set_depends_on_in(
-    c: &Connection,
+    c: &Tx<'_>,
     issue_id: IssueId,
     depends_on: &[IssueId],
 ) -> Result<Option<(Vec<IssueId>, Vec<IssueId>)>> {

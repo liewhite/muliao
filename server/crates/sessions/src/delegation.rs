@@ -35,12 +35,7 @@ use crate::work::{CheckBeats, EventSource, deliver_in, no_progress_hint, post_ch
 use muliao_platform::errors::Result;
 
 /// 取已有 thread 或新建。
-pub(crate) fn open_in(
-    c: &Connection,
-    parent_id: &SessionId,
-    agent_id: &AgentId,
-    thread: &ThreadName,
-) -> Result<Session> {
+pub(crate) fn open_in(c: &Tx<'_>, parent_id: &SessionId, agent_id: &AgentId, thread: &ThreadName) -> Result<Session> {
     if let Some(existing) = directory::thread_in(c, parent_id, agent_id, thread)? {
         return Ok(existing);
     }

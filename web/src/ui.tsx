@@ -519,10 +519,11 @@ export function Segmented<T extends string>({
         disallowEmptySelection
         selectedKeys={[value]}
         onSelectionChange={(keys) => {
-          // disallowEmptySelection 保证恰好选中一项
+          // disallowEmptySelection 保证恰好选中一项，选中的就是 options 里的一项
           const [key] = [...keys]
-          if (key === undefined) throw new Error(`segmented "${label}" lost its selection`)
-          onChange(String(key) as T)
+          const picked = options.find((o) => o.id === key)
+          if (picked === undefined) throw new Error(`segmented "${label}" lost its selection`)
+          onChange(picked.id)
         }}
       >
         {options.map((o) => (

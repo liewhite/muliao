@@ -569,7 +569,7 @@ async fn stream_lines_are_debounced_into_one_firing_and_queue_while_busy() {
     let config =
         json!({"command": format!("echo a; echo; echo b; sleep 0.5; echo c; {sleep}"), "debounce_seconds": 0.2});
     let t = w.create("s", "stream", config, None).await;
-    w.triggers.start();
+    let activation = w.triggers.start();
     eventually("the first batch", || async { w.sessions(t.id).await.len() == 1 }).await;
     let first = w.sessions(t.id).await.remove(0).0;
     assert_eq!(w.mail(&first).await, vec!["do s\n\n<event>\na\nb\n</event>"]);
@@ -590,14 +590,14 @@ async fn stream_lines_are_debounced_into_one_firing_and_queue_while_busy() {
     })
     .await;
     assert_eq!(w.status(t.id).await["running_since"], Value::Null);
-    w.triggers.shutdown().await;
+    activation.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_stream_that_keeps_exiting_alerts_once_with_its_stderr() {
     let w = world().await;
     let t = w.create("crash", "stream", json!({"command": "echo boom >&2; exit 2"}), None).await;
-    w.triggers.start();
+    let activation = w.triggers.start();
     eventually("the alert", || async { !w.sessions(t.id).await.is_empty() }).await;
     let faults = w.get(t.id).await.faults;
     assert_eq!(faults.len(), 1);
@@ -611,7 +611,7 @@ async fn a_stream_that_keeps_exiting_alerts_once_with_its_stderr() {
     let log = std::fs::read_to_string(w.ws().join("trigger-logs/crash.stderr.log")).unwrap();
     assert!(log.contains("--- started ") && log.contains("boom"));
     assert!(w.status(t.id).await["failures"].as_u64().unwrap() >= 3);
-    w.triggers.shutdown().await;
+    activation.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

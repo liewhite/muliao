@@ -9,7 +9,7 @@ use rusqlite::{Connection, Row, params};
 
 use crate::history::SESSIONS_MENTIONING;
 use crate::origins::{Origin, Sender, SessionOrigin, ThreadName};
-use muliao_platform::db::placeholders;
+use muliao_platform::db::{Tx, placeholders};
 use muliao_platform::db::{like_contains, like_prefix};
 use muliao_platform::errors::Result;
 
@@ -67,7 +67,7 @@ pub(crate) struct NewSession<'a> {
     pub origin: SessionOrigin,
 }
 
-pub(crate) fn add_in(c: &Connection, s: NewSession<'_>) -> Result<Session> {
+pub(crate) fn add_in(c: &Tx<'_>, s: NewSession<'_>) -> Result<Session> {
     let now = Utc::now();
     let reference = s.origin.sender().map(Sender::reference);
     let parent = match &s.origin {
@@ -96,7 +96,7 @@ pub(crate) fn running_in(c: &Connection, session_id: &SessionId) -> Result<Sessi
 }
 
 /// 续写或运行做完时更新会话的最近时间（列表按它排序）。
-pub(crate) fn touch_in(c: &Connection, session_id: &SessionId) -> Result<()> {
+pub(crate) fn touch_in(c: &Tx<'_>, session_id: &SessionId) -> Result<()> {
     c.execute("UPDATE sessions SET updated_at = ?1 WHERE id = ?2", params![Utc::now(), session_id])?;
     Ok(())
 }
@@ -120,34 +120,32 @@ pub(crate) fn of_agent_in(c: &Connection, agent_id: &AgentId) -> Result<Vec<Sess
     query(c, "agent_id = ?1", [agent_id])
 }
 
-/// 按发送方定位会话的唯一规则：(发送方, agent id) -> 这个发送方给这个 agent 开过的最新一个顶层会话，一次查询；给出
-/// agent_id 时只看这个 agent。thread 没有发送方身份，不会被定位到。
-pub fn keyed_among(
-    c: &Connection,
-    senders: &[Sender],
-    agent_id: Option<&AgentId>,
-) -> Result<BTreeMap<(Sender, AgentId), Session>> {
+/// 按发送方定位会话的唯一规则：(发送方, agent) -> 这个发送方给这个 agent 开过的最新一个顶层会话。thread 没有发送方身份，
+/// 不会被定位到。
+pub fn keyed_in(c: &Connection, sender: Sender, agent_id: &AgentId) -> Result<Option<Session>> {
+    let filter = "origin = ?1 AND origin_ref = ?2 AND agent_id = ?3 ORDER BY created_at DESC, id DESC LIMIT 1";
+    Ok(query(c, filter, params![sender.origin().to_string(), sender.reference(), agent_id])?.pop())
+}
+
+/// 同一规则（[`keyed_in`]）一次查多个发送方给各个 agent 开的会话，按调用方给每个发送方起的键返回：(键, agent id) -> 会话。
+pub fn keyed_among<K: Ord + Copy>(c: &Connection, senders: &[(K, Sender)]) -> Result<BTreeMap<(K, AgentId), Session>> {
     let mut found = BTreeMap::new();
     if senders.is_empty() {
         return Ok(found);
     }
     let mut conditions = Vec::new();
     let mut values: Vec<String> = Vec::new();
-    for s in senders {
+    for (_, s) in senders {
         conditions.push(format!("(origin = ?{} AND origin_ref = ?{})", values.len() + 1, values.len() + 2));
         values.push(s.origin().to_string());
         values.push(s.reference());
     }
-    let mut filter = format!("({})", conditions.join(" OR "));
-    if let Some(a) = agent_id {
-        values.push(a.to_string());
-        filter.push_str(&format!(" AND agent_id = ?{}", values.len()));
-    }
-    filter.push_str(" ORDER BY created_at, id");
+    let filter = format!("({}) ORDER BY created_at, id", conditions.join(" OR "));
+    let keys: BTreeMap<Sender, K> = senders.iter().map(|(k, s)| (*s, *k)).collect();
     for s in query(c, &filter, rusqlite::params_from_iter(&values))? {
-        let sender = s.origin.sender().expect("matched by an origin with a ref");
+        let key = s.origin.sender().and_then(|sender| keys.get(&sender)).expect("matched by one of the asked senders");
         // 按创建先后，后面的覆盖前面的：留下最新的
-        found.insert((sender, s.agent_id.clone()), s);
+        found.insert((*key, s.agent_id.clone()), s);
     }
     Ok(found)
 }
@@ -253,7 +251,7 @@ pub(crate) fn listed_page_in(
 }
 
 /// 删掉这些会话（规则在 [`crate::deletion`]）。它们开出的 thread 保留（父引用置空），其余行随之级联删除。
-pub(crate) fn delete_in(c: &Connection, session_ids: &[SessionId]) -> Result<()> {
+pub(crate) fn delete_in(c: &Tx<'_>, session_ids: &[SessionId]) -> Result<()> {
     for id in session_ids {
         c.execute("DELETE FROM sessions WHERE id = ?1", [id])?;
     }

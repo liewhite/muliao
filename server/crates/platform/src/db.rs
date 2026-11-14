@@ -106,15 +106,7 @@ impl Database {
             // 闭包或提交后的动作 panic 都不让写线程退出：事务随 Transaction 的 drop 回滚，panic 交回调用方
             let outcome = catch_unwind(AssertUnwindSafe(|| -> Result<T, E> {
                 let before = conn.total_changes();
-                let (value, committed) = {
-                    let mut tx = Tx {
-                        tx: conn.transaction_with_behavior(TransactionBehavior::Immediate)?,
-                        committed: Vec::new(),
-                    };
-                    let value = f(&mut tx)?;
-                    tx.tx.commit()?;
-                    (value, tx.committed)
-                };
+                let (value, committed) = transact(conn, f)?;
                 // total_changes 也算回滚掉的修改，所以只在提交之后看
                 if conn.total_changes() != before {
                     after_write();
@@ -169,6 +161,31 @@ impl Database {
         .await
         .unwrap_or_else(|e| resume_unwind(e.into_panic()))
     }
+}
+
+/// 在 conn 上跑一个写事务，提交后交回值与登记的提交后动作（还没执行）。
+fn transact<T, E: From<rusqlite::Error>>(
+    conn: &mut Connection,
+    f: impl FnOnce(&mut Tx<'_>) -> Result<T, E>,
+) -> Result<(T, Vec<Committed>), E> {
+    let mut tx = Tx { tx: conn.transaction_with_behavior(TransactionBehavior::Immediate)?, committed: Vec::new() };
+    let value = f(&mut tx)?;
+    tx.tx.commit()?;
+    Ok((value, tx.committed))
+}
+
+/// 测试在 [`Database`] 之外直接打开的库上写（如迁移测试往停在旧版本的库里造数据）：同步跑一个写事务，提交后执行登记的
+/// 动作。服务里的写一律经 [`Database::write`]。
+#[cfg(feature = "testing")]
+pub fn write_on<T, E: From<rusqlite::Error>>(
+    conn: &mut Connection,
+    f: impl FnOnce(&mut Tx<'_>) -> Result<T, E>,
+) -> Result<T, E> {
+    let (value, committed) = transact(conn, f)?;
+    for action in committed {
+        action();
+    }
+    Ok(value)
 }
 
 /// 一个领域的迁移：按顺序的 SQL 脚本（通常 `include_str!` 自领域 crate 的 migrations 目录）。已发布的脚本不改不删，

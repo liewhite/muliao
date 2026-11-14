@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use rusqlite::{Connection, Row, params};
 
 use crate::holds::{Hold, HoldOf, active_delegations_in};
-use muliao_platform::db::placeholders;
+use muliao_platform::db::{Tx, placeholders};
 use muliao_platform::errors::{Result, broken};
 
 /// 一次往 thread 投信的调用用的哪种方式。
@@ -120,7 +120,7 @@ fn query(c: &Connection, filter: &str, params: impl rusqlite::Params) -> Result<
 /// 记下这次调用用这种方式开出或续写了这个 thread，返回这一行。同一次调用只执行一次（被打断的调用不重做），
 /// 表上的唯一索引挡住重复。
 pub(crate) fn record_call_in(
-    c: &Connection,
+    c: &Tx<'_>,
     parent_id: &SessionId,
     call_id: &CallId,
     thread_id: &SessionId,

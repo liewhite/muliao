@@ -5,7 +5,7 @@ use muliao_platform::ids::{AgentId, IssueId, SessionId};
 use std::collections::BTreeMap;
 
 use muliao_sessions::activity::{WorkState, keyed_states_in};
-use muliao_sessions::directory::{Session, keyed_among};
+use muliao_sessions::directory::{Session, keyed_among, keyed_in};
 use muliao_sessions::inbound::{SenderMail, SenderTarget};
 use muliao_sessions::origins::Sender;
 use rusqlite::Connection;
@@ -27,8 +27,7 @@ pub(crate) fn mail(issue_id: IssueId, agent_id: &AgentId, title: String, content
 
 /// agent 在这个 issue 上的会话；还没有（或已删除）为 None。
 pub(crate) fn session_in(c: &Connection, issue_id: IssueId, agent_id: &AgentId) -> Result<Option<Session>> {
-    let s = sender(issue_id);
-    Ok(keyed_among(c, &[s], Some(agent_id))?.remove(&(s, agent_id.to_owned())))
+    keyed_in(c, sender(issue_id), agent_id)
 }
 
 /// 每个 issue -> {agent id -> 它在这个 issue 上的会话 id}。
@@ -36,11 +35,10 @@ pub(crate) fn sessions_among(
     c: &Connection,
     issue_ids: &[IssueId],
 ) -> Result<BTreeMap<IssueId, BTreeMap<AgentId, SessionId>>> {
-    let senders: Vec<Sender> = issue_ids.iter().map(|&i| sender(i)).collect();
+    let senders: Vec<(IssueId, Sender)> = issue_ids.iter().map(|&i| (i, sender(i))).collect();
     let mut out: BTreeMap<IssueId, BTreeMap<AgentId, SessionId>> =
         issue_ids.iter().map(|&i| (i, BTreeMap::new())).collect();
-    for ((s, agent), session) in keyed_among(c, &senders, None)? {
-        let Sender::Issue { issue_id } = s else { unreachable!("asked only for issue senders") };
+    for ((issue_id, agent), session) in keyed_among(c, &senders)? {
         out.entry(issue_id).or_default().insert(agent, session.id);
     }
     Ok(out)

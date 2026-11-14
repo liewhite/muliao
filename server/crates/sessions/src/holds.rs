@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
-use muliao_platform::db::placeholders;
+use muliao_platform::db::{Tx, placeholders};
 use muliao_platform::errors::{Result, broken};
 use muliao_platform::ids::{DelegationId, HoldId, JobId, SessionId};
 use serde::{Deserialize, Serialize};
@@ -98,26 +98,21 @@ fn query(c: &Connection, filter: &str, params: impl rusqlite::Params) -> Result<
 }
 
 /// 登记一项后台任务的占用（任务编号每次新生成，不会重复登记）。
-pub(crate) fn hold_job_in(c: &Connection, session_id: &SessionId, job_id: JobId, awaited: bool) -> Result<Hold> {
+pub(crate) fn hold_job_in(c: &Tx<'_>, session_id: &SessionId, job_id: JobId, awaited: bool) -> Result<Hold> {
     insert(c, session_id, HoldOf::Job { job_id }, awaited)
 }
 
 /// 登记一次到点唤醒的占用；约的时刻与说明由 `wakeups` 记在引用它的行里。
-pub(crate) fn hold_wake_in(c: &Connection, session_id: &SessionId, awaited: bool) -> Result<Hold> {
+pub(crate) fn hold_wake_in(c: &Tx<'_>, session_id: &SessionId, awaited: bool) -> Result<Hold> {
     insert(c, session_id, HoldOf::Wake, awaited)
 }
 
 /// 发起方登记一项委派的占用，引用委派行（row）。
-pub(crate) fn hold_delegation_in(
-    c: &Connection,
-    session_id: &SessionId,
-    row: DelegationId,
-    awaited: bool,
-) -> Result<Hold> {
+pub(crate) fn hold_delegation_in(c: &Tx<'_>, session_id: &SessionId, row: DelegationId, awaited: bool) -> Result<Hold> {
     insert(c, session_id, HoldOf::Delegation { row }, awaited)
 }
 
-fn insert(c: &Connection, session_id: &SessionId, of: HoldOf, awaited: bool) -> Result<Hold> {
+fn insert(c: &Tx<'_>, session_id: &SessionId, of: HoldOf, awaited: bool) -> Result<Hold> {
     let (job_id, row) = match &of {
         HoldOf::Job { job_id } => (Some(*job_id), None),
         HoldOf::Wake => (None, None),
@@ -158,7 +153,7 @@ fn active_of(c: &Connection, kind: HoldKind, session_id: Option<&SessionId>) -> 
 }
 
 /// 把还 active 的占用改成 status（按库里的现状，不按调用方手里的副本）。返回改之前的状态。
-fn end_active(c: &Connection, hold_id: HoldId, status: HoldStatus) -> Result<HoldStatus> {
+fn end_active(c: &Tx<'_>, hold_id: HoldId, status: HoldStatus) -> Result<HoldStatus> {
     let n = c.execute(
         "UPDATE session_holds SET status = ?1, ended_at = ?2 WHERE id = ?3 AND status = ?4",
         params![status, Utc::now(), hold_id, HoldStatus::Active],
@@ -170,12 +165,12 @@ fn end_active(c: &Connection, hold_id: HoldId, status: HoldStatus) -> Result<Hol
 }
 
 /// 记为已释放，返回释放前的状态。已经被清掉或释放的不变：调用方按返回值决定。
-pub(crate) fn release_in(c: &Connection, hold: &Hold) -> Result<HoldStatus> {
+pub(crate) fn release_in(c: &Tx<'_>, hold: &Hold) -> Result<HoldStatus> {
     end_active(c, hold.id, HoldStatus::Released)
 }
 
 /// 会话自己放弃一项还在进行的工作（改期、取消到点唤醒、后台任务没起来）：记为 cleared，之后的结局不再投。
-pub(crate) fn abandon_in(c: &Connection, hold: &Hold) -> Result<()> {
+pub(crate) fn abandon_in(c: &Tx<'_>, hold: &Hold) -> Result<()> {
     match end_active(c, hold.id, HoldStatus::Cleared)? {
         HoldStatus::Active => Ok(()),
         _ => Err(broken(format!("hold {} of session {} is not active", hold.id, hold.session_id))),
@@ -183,7 +178,7 @@ pub(crate) fn abandon_in(c: &Connection, hold: &Hold) -> Result<()> {
 }
 
 /// 会话被停止：全部 active 占用记为 cleared，返回它们。
-pub(crate) fn clear_in(c: &Connection, session_id: &SessionId) -> Result<Vec<Hold>> {
+pub(crate) fn clear_in(c: &Tx<'_>, session_id: &SessionId) -> Result<Vec<Hold>> {
     let holds = query(c, "session_id = ?1 AND status = ?2 ORDER BY id", params![session_id, HoldStatus::Active])?;
     for h in &holds {
         end_active(c, h.id, HoldStatus::Cleared)?;

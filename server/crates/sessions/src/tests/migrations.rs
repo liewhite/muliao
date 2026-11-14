@@ -20,7 +20,7 @@ use crate::pending::{AfterInterrupted, Position};
 use crate::work::{EventSource, position_in};
 use agenter::{Content, File, FileSource, Message, Request, RequestPart, Response, ResponsePart, ToolCall, ToolResult};
 use chrono::Utc;
-use muliao_platform::db::{Migration, migrate};
+use muliao_platform::db::{Migration, migrate, write_on};
 use muliao_runtime::conventions::SharedFile;
 use rusqlite::{Connection, params};
 use serde_json::{Value, json};
@@ -250,7 +250,10 @@ fn pending_calls_move_into_one_table() {
     };
     let sid = SessionId::new(SESSION);
     // 上一轮问过、已经答了的提问：不再挂起
-    history::append_in(&db.conn(), &sid, RunId::new(run), &[response(vec![call("q0", "ask_user", ask)])]).unwrap();
+    write_on(&mut db.conn(), |tx| {
+        history::append_in(tx, &sid, RunId::new(run), &[response(vec![call("q0", "ask_user", ask)])])
+    })
+    .unwrap();
     db.request(
         run,
         vec![RequestPart::ToolResult(ToolResult {
@@ -270,7 +273,7 @@ fn pending_calls_move_into_one_table() {
         call("g2", "skill_run", "{}"),
         call("c1", "run_shell", "{}"),
     ]);
-    history::append_in(&db.conn(), &sid, RunId::new(run), &[last]).unwrap();
+    write_on(&mut db.conn(), |tx| history::append_in(tx, &sid, RunId::new(run), &[last])).unwrap();
     let c = db.conn();
     let now = Utc::now();
     c.execute(
@@ -295,7 +298,7 @@ fn pending_calls_move_into_one_table() {
     // 老行没有 pin 的读成空指纹；第二次交给运行的批准不再执行：取走的时间一起搬过来了
     let approve = || CallResult::Approval(Decision { choice: Choice::Approve });
     let answers = std::collections::HashMap::from([(CallId::new("g1"), approve()), (CallId::new("g2"), approve())]);
-    let decided = crate::paused_calls::take_in(&c, &sid, &answers).unwrap();
+    let decided = write_on(&mut db.conn(), |tx| crate::paused_calls::take_in(tx, &sid, &answers)).unwrap();
     assert_eq!(
         decided[&CallId::new("g1")],
         agenter::Resolution::Approved(agenter::Approval { always: false, pin: String::new() }),
@@ -541,7 +544,16 @@ fn delegation_mode_is_recorded_on_the_call() {
         .unwrap();
     assert_eq!(held, 1);
     assert_eq!(
-        record_call_in(&c, &sid, &CallId::new("new"), &SessionId::new("t"), CallMode::Plain).unwrap().id.get(),
+        write_on(&mut db.conn(), |tx| record_call_in(
+            tx,
+            &sid,
+            &CallId::new("new"),
+            &SessionId::new("t"),
+            CallMode::Plain
+        ))
+        .unwrap()
+        .id
+        .get(),
         6
     );
     // 只有 report_back 带间隔

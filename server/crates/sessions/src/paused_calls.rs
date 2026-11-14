@@ -15,7 +15,7 @@ use chrono::Utc;
 use rusqlite::{Connection, params};
 
 use crate::answers::{CallResult, Waiting};
-use muliao_platform::db::placeholders;
+use muliao_platform::db::{Tx, placeholders};
 use muliao_platform::errors::Result;
 
 /// 一个会话里挂起过的调用（调用 id → 种类）；行永久保留，没结果的才在等。
@@ -43,7 +43,7 @@ impl Pause {
 }
 
 /// 这次调用挂起了。每次调用只挂起一次（被打断的调用不重做），表上的唯一索引挡住重复。
-pub(crate) fn record_in(c: &Connection, session_id: &SessionId, call_id: &CallId, pause: &Pause) -> Result<()> {
+pub(crate) fn record_in(c: &Tx<'_>, session_id: &SessionId, call_id: &CallId, pause: &Pause) -> Result<()> {
     let pin = match pause {
         Pause::Approval { pin } => Some(pin.as_str()),
         Pause::AskUser | Pause::AskAgent => None,
@@ -84,7 +84,7 @@ pub(crate) fn kinds_in(c: &Connection, session_id: &SessionId) -> Result<PausedK
 /// 交给运行的回答里对等批准的调用的决定变成结果（运行开头取走信件的事务里），每个决定都在结果里：批准的带上请求批准时记下的
 /// pin，没交过的记下时间。之前已经交过的，那次运行可能在执行中被打断，不能再执行一遍：结果是「被中断」。
 pub(crate) fn take_in(
-    c: &Connection,
+    c: &Tx<'_>,
     session_id: &SessionId,
     answers: &HashMap<CallId, CallResult>,
 ) -> Result<HashMap<CallId, Resolution>> {

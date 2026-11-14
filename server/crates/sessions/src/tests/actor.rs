@@ -241,7 +241,7 @@ async fn world() -> World {
     let secrets = Arc::new(Secrets::new(source.clone(), vault));
     let tz = chrono_tz::Asia::Shanghai;
     let (waker, wakes) = Waker::channel();
-    let stopper = Stopper::default();
+    let (stopper, stopper_binder) = Stopper::pending();
     let release = Arc::new(tokio::sync::Notify::new());
     let mut tools = crate::tools::tools(db.clone(), waker.clone(), stopper.clone(), tz);
     tools.push(builtin(Slow(release.clone()), ToolTraits::read()));
@@ -268,7 +268,6 @@ async fn world() -> World {
         .await
         .unwrap()
         .id;
-    let events = Arc::new(Events::default());
     let (ended, failed) = (Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())));
     let mut subscribers = Subscribers::default();
     let e = ended.clone();
@@ -281,7 +280,7 @@ async fn world() -> World {
         f.lock().unwrap().push(x.clone());
         Ok(())
     });
-    events.subscribe(subscribers);
+    let events = Arc::new(Events::new(subscribers));
     let bus = Arc::new(Bus::new(1000));
     let live = Live::new(bus.clone());
     let core = Arc::new(Core {
@@ -291,10 +290,7 @@ async fn world() -> World {
         agents,
         live: live.clone(),
         events: events.clone(),
-        notes: OriginNotes::new([
-            (crate::origins::Origin::Trigger, "A trigger started this.".to_owned()),
-            (crate::origins::Origin::Issue, "An issue started this.".to_owned()),
-        ]),
+        notes: OriginNotes { trigger: "A trigger started this.", issue: "An issue started this." },
         waker: waker.clone(),
         compactor: Compactor { db: db.clone(), runtime, threshold_tokens: 1_000_000, keep_steps: 10 },
         renders: toolbox.renders(),
@@ -303,7 +299,7 @@ async fn world() -> World {
         bus: bus.clone(),
     });
     let actors = Actors::start(core, wakes);
-    stopper.bind(actors.clone());
+    stopper_binder.bind(actors.clone());
     actors.resume().await.unwrap();
     let service = SessionService::new(db.clone(), waker, actors.clone(), events, live, toolbox.renders(), 1_000_000);
     World {

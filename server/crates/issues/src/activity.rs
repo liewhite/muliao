@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::model::{Actor, Assignee, By, Priority, Recorded};
+use muliao_platform::db::Tx;
 use muliao_platform::errors::{Result, broken};
 
 /// 属性从什么改成什么（存为 `{"from": ..., "to": ...}`）。
@@ -168,7 +169,7 @@ fn activity(r: &Row<'_>) -> rusqlite::Result<std::result::Result<Activity, Strin
 }
 
 /// 记一条动态，返回记下的那一条。
-pub(crate) fn record_in(c: &Connection, issue_id: IssueId, by: &By, what: Happening) -> Result<Activity> {
+pub(crate) fn record_in(c: &Tx<'_>, issue_id: IssueId, by: &By, what: Happening) -> Result<Activity> {
     let (kind, body, change) = what.stored();
     let now = Utc::now();
     c.execute(
@@ -198,7 +199,7 @@ pub fn timeline_in(c: &Connection, issue_id: IssueId) -> Result<Vec<Activity>> {
 }
 
 /// 时间线上来自被删会话的动态保留，只是不再指向它。
-pub(crate) fn forget_session_in(c: &Connection, session_id: &SessionId) -> Result<()> {
+pub(crate) fn forget_session_in(c: &Tx<'_>, session_id: &SessionId) -> Result<()> {
     c.execute("UPDATE issue_activities SET session_id = NULL WHERE session_id = ?1", [session_id])?;
     Ok(())
 }

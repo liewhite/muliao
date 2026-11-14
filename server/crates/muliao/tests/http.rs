@@ -54,7 +54,7 @@ struct World {
     cookie: String,
     script: Script,
     _model: MockServer,
-    _app: Arc<muliao_server::App>,
+    _app: Arc<muliao_server::Serving>,
 }
 
 async fn world() -> World {
@@ -78,8 +78,7 @@ async fn world() -> World {
         model.uri()
     );
     let config = muliao_server::Config::parse(&config, dir.path().join("config.toml")).unwrap();
-    let app = Arc::new(muliao_server::assemble(config, web).await.unwrap());
-    app.start().await.unwrap();
+    let app = Arc::new(muliao_server::assemble(config, web).await.unwrap().start().await.unwrap());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let router = app.router();

@@ -19,7 +19,7 @@ export function useStoredState<T>(
 
 /** 存的是 options 里的某一个：不是时取 fallback */
 export function oneOf<T extends string>(options: readonly T[], fallback: T): (saved: string | null) => T {
-  return (saved) => ((options as readonly string[]).includes(saved ?? '') ? (saved as T) : fallback)
+  return (saved) => options.find((o) => o === saved) ?? fallback
 }
 
 /** 存的是字符串数组（JSON）：解析不了或形状不对时为空 */

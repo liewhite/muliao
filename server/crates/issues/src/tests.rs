@@ -68,7 +68,7 @@ async fn world() -> World {
         db.clone(),
         SenderInbox::new(waker),
         notifications.clone(),
-        Stopper::default(),
+        Stopper::pending().0,
         chrono_tz::Asia::Shanghai,
     );
     let mut subscribers = Subscribers::default();

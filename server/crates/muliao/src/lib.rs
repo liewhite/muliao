@@ -39,13 +39,13 @@ use muliao_sessions::compaction::Compactor;
 use muliao_sessions::events::{Events, Subscribers};
 use muliao_sessions::inbound::SenderInbox;
 use muliao_sessions::live::Live;
-use muliao_sessions::origins::{Origin, OriginNotes};
+use muliao_sessions::origins::OriginNotes;
 use muliao_sessions::run::Core;
 use muliao_sessions::service::SessionService;
 use muliao_sessions::tools::Stopper;
 use muliao_sessions::work::SessionWork;
 use muliao_speech::config::TranscriptionConfig;
-use muliao_triggers::{TriggerDeps, TriggerDomain};
+use muliao_triggers::{Activation, TriggerDeps, TriggerDomain};
 use muliao_usage::UsageLog;
 use muliao_web::config::WebConfig;
 use muliao_workspace::{ScriptGrants, Workspace, WorkspaceDeps};
@@ -157,8 +157,7 @@ pub async fn assemble(config: Config, web_dir: PathBuf) -> anyhow::Result<App> {
 
     // ---- 会话领域先给出的端口（别的领域与工具要用） ----
     let (waker, wakes) = Waker::channel();
-    let stopper = Stopper::default();
-    let events = Arc::new(Events::default());
+    let (stopper, stopper_binder) = Stopper::pending();
 
     // ---- 工作区 ----
     let home = std::env::home_dir().context("the service user has no home directory")?;
@@ -200,6 +199,13 @@ pub async fn assemble(config: Config, web_dir: PathBuf) -> anyhow::Result<App> {
         precheck_timeout_seconds: rt.precheck_timeout_seconds,
     });
 
+    // ---- 跨领域的反应：会话事件的订阅者一次收齐，建发布点 ----
+    let mut subscribers = Subscribers::default();
+    notifications.subscribe(&mut subscribers);
+    board.subscribe(&mut subscribers);
+    workspace.subscribe(&mut subscribers);
+    let events = Arc::new(Events::new(subscribers));
+
     // ---- agent 的删除与归档：各领域登记的清理与检查 ----
     let lifecycle = Arc::new(AgentLifecycle::new(
         source.clone(),
@@ -238,18 +244,9 @@ pub async fn assemble(config: Config, web_dir: PathBuf) -> anyhow::Result<App> {
         usage: usage.clone(),
         tz,
     }));
-    // 跨领域的反应：会话事件的订阅者一次登记齐
-    let mut subscribers = Subscribers::default();
-    notifications.subscribe(&mut subscribers);
-    board.subscribe(&mut subscribers);
-    workspace.subscribe(&mut subscribers);
-    events.subscribe(subscribers);
     let live = Live::new(bus.clone());
-    // 会话领域自己的来源说明由它自己合进来；这里给别的领域开出的会话的说明
-    let notes = OriginNotes::new([
-        TriggerDomain::origin_note(),
-        (Origin::Issue, muliao_issues::rules::SESSION_NOTE.to_owned()),
-    ]);
+    // 会话领域自己开出的来源的说明由它自己写；这里填别的领域开出的会话的说明
+    let notes = OriginNotes { trigger: TriggerDomain::origin_note(), issue: muliao_issues::rules::SESSION_NOTE };
     let threshold = rt.compaction_threshold_tokens;
     let core = Arc::new(Core {
         db: db.clone(),
@@ -272,7 +269,7 @@ pub async fn assemble(config: Config, web_dir: PathBuf) -> anyhow::Result<App> {
         bus: bus.clone(),
     });
     let actors = Actors::start(core, wakes);
-    stopper.bind(actors.clone());
+    stopper_binder.bind(actors.clone());
     let sessions = SessionService::new(db.clone(), waker, actors.clone(), events, live, toolbox.renders(), threshold);
 
     let services = Services {
@@ -312,31 +309,41 @@ pub async fn assemble(config: Config, web_dir: PathBuf) -> anyhow::Result<App> {
     Ok(App { bus, state, source, lifecycle, workspace, triggers, actors })
 }
 
+/// 在对外服务的应用：只能由 [`App::start`] 得到，所以常驻的东西只起一次。
+pub struct Serving {
+    pub bus: Arc<Bus>,
+    state: AppState,
+    workspace: Workspace,
+    triggers: Activation,
+}
+
 impl App {
     /// 对外服务之前：确保全局记忆在、接着删上次没删完的 agent、收掉上次没收尾的后台任务并起运行中
     /// 检查、接着跑停在半路或有信没处理的会话、起触发器、起资源目录的监听。
-    pub async fn start(&self) -> anyhow::Result<()> {
+    pub async fn start(self) -> anyhow::Result<Serving> {
         self.source.ensure_global_memory().await.context("the global memory")?;
         self.lifecycle.resume_deletions().await.context("resuming agent deletions")?;
         self.workspace.jobs.run().await.context("starting background jobs")?;
         self.actors.resume().await.context("resuming sessions")?;
-        self.triggers.start();
-        let (source, bus) = (self.source.clone(), self.bus.clone());
+        let triggers = self.triggers.start();
+        let (source, bus) = (self.source, self.bus.clone());
         tokio::spawn(async move {
             if let Err(e) = source.watch(move || bus.changed()).await {
                 tracing::error!(error = %e, "watching the asset tree failed: the UI will not refresh on file changes");
             }
         });
-        Ok(())
+        Ok(Serving { bus: self.bus, state: self.state, workspace: self.workspace, triggers })
     }
+}
 
+impl Serving {
     pub fn router(&self) -> axum::Router {
         muliao_http::router(self.state.clone())
     }
 
     /// HTTP 排空之后：停掉触发器的常驻循环与流式命令，再结束后台任务的进程（记为被中断，下次启动时交回会话）。正在跑的
     /// 会话运行随进程结束，下次启动时从上一步续跑。
-    pub async fn shutdown(&self) {
+    pub async fn shutdown(self) {
         self.triggers.shutdown().await;
         self.workspace.jobs.shutdown().await;
     }

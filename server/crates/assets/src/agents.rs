@@ -10,7 +10,7 @@ use muliao_platform::ids::AgentId;
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
-use muliao_platform::db::{Database, Migration};
+use muliao_platform::db::{Database, Migration, Tx};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use crate::naming::AgentName;
@@ -213,7 +213,7 @@ pub(crate) async fn identities(db: &Database) -> Result<(BTreeMap<AgentId, Agent
 
 // ---- agent 领域自己的写入（服务与删除、归档流程用） ----
 
-pub(crate) fn insert_in(c: &Connection, agent_id: &AgentId, name: &AgentName) -> Result<AgentInfo> {
+pub(crate) fn insert_in(c: &Tx<'_>, agent_id: &AgentId, name: &AgentName) -> Result<AgentInfo> {
     let now = Utc::now();
     c.execute(
         "INSERT INTO agents (id, name, name_key, is_default, created_at, updated_at) VALUES (?1, ?2, ?3, 0, ?4, ?4)",
@@ -222,7 +222,7 @@ pub(crate) fn insert_in(c: &Connection, agent_id: &AgentId, name: &AgentName) ->
     agent_in(c, agent_id)
 }
 
-pub(crate) fn rename_in(c: &Connection, agent_id: &AgentId, name: &AgentName) -> Result<AgentInfo> {
+pub(crate) fn rename_in(c: &Tx<'_>, agent_id: &AgentId, name: &AgentName) -> Result<AgentInfo> {
     active_agent_in(c, agent_id)?;
     c.execute(
         "UPDATE agents SET name = ?2, name_key = ?3, updated_at = ?4 WHERE id = ?1",
@@ -252,7 +252,7 @@ pub(crate) fn deletable_in(c: &Connection, agent_id: &AgentId) -> Result<AgentIn
     Ok(agent)
 }
 
-pub(crate) fn mark_deleting_in(c: &Connection, agent_id: &AgentId) -> Result<()> {
+pub(crate) fn mark_deleting_in(c: &Tx<'_>, agent_id: &AgentId) -> Result<()> {
     deletable_in(c, agent_id)?;
     c.execute(
         "UPDATE agents SET deleting = 1, is_default = 0, updated_at = ?2 WHERE id = ?1",
@@ -274,12 +274,12 @@ pub(crate) fn being_deleted_in(c: &Connection, agent_id: &AgentId) -> Result<Opt
 }
 
 /// 删除正在删除的 agent 的行（它的文件已删）；已不在时什么都不做（删除重做）。
-pub(crate) fn remove_in(c: &Connection, agent_id: &AgentId) -> Result<bool> {
+pub(crate) fn remove_in(c: &Tx<'_>, agent_id: &AgentId) -> Result<bool> {
     Ok(c.execute("DELETE FROM agents WHERE id = ?1 AND deleting", [agent_id])? > 0)
 }
 
 /// 归档或取消归档还可用的 agent；已是目标状态时不改。归档要求它不是系统默认 agent。返回改之前与之后的它。
-pub(crate) fn set_archived_in(c: &Connection, agent_id: &AgentId, archived: bool) -> Result<(AgentInfo, AgentInfo)> {
+pub(crate) fn set_archived_in(c: &Tx<'_>, agent_id: &AgentId, archived: bool) -> Result<(AgentInfo, AgentInfo)> {
     let before = active_agent_in(c, agent_id)?;
     if before.archived() != archived {
         if archived && before.is_default() {
@@ -299,7 +299,7 @@ pub(crate) fn set_archived_in(c: &Connection, agent_id: &AgentId, archived: bool
 
 /// 设为（或取消）系统默认 agent。设为默认时先清掉旧的，始终最多一个；归档的不能设为默认（新对话会默认选中一个不能
 /// 运行的 agent）。
-pub(crate) fn set_default_in(c: &Connection, agent_id: &AgentId, is_default: bool) -> Result<AgentInfo> {
+pub(crate) fn set_default_in(c: &Tx<'_>, agent_id: &AgentId, is_default: bool) -> Result<AgentInfo> {
     if is_default {
         runnable_agent_in(c, agent_id)?;
         c.execute("UPDATE agents SET is_default = 0 WHERE is_default AND id != ?1", [agent_id])?;

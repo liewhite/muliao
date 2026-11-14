@@ -104,8 +104,9 @@ pub fn keyed_states_in(
     c: &Connection,
     keys: &[(Sender, AgentId)],
 ) -> Result<BTreeMap<(Sender, AgentId), Option<WorkState>>> {
-    let senders: Vec<Sender> = keys.iter().map(|(s, _)| *s).collect::<BTreeSet<_>>().into_iter().collect();
-    let found = keyed_among(c, &senders, None)?;
+    let senders: Vec<(Sender, Sender)> =
+        keys.iter().map(|(s, _)| *s).collect::<BTreeSet<_>>().into_iter().map(|s| (s, s)).collect();
+    let found = keyed_among(c, &senders)?;
     let ids: Vec<SessionId> = found.values().map(|s| s.id.clone()).collect();
     let states = work_states_in(c, &ids)?;
     Ok(keys.iter().map(|k| (k.clone(), found.get(k).map(|s| states[&s.id]))).collect())
