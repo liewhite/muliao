@@ -48,9 +48,8 @@ pub enum Delivered {
     Gone,
 }
 
-/// 交回这项占用的结局并释放它，唯一出口。hold 为 None：会话已删除。answer 是（调用 id, 结果）：会话还停在这次调用上、
-/// 且挂起的种类与结果相符时作为那次调用的结果；否则作为事件信件（「迟到的回答改为事件」只在这里）。已经释放过的再交回
-/// 是 bug，当场报错。
+/// 交回这项占用的结局并释放它，唯一出口。hold 为 None：会话已删除。answer 是（调用 id, 结果）：会话还停在这次调用上时
+/// 作为那次调用的结果；否则作为事件信件（「迟到的回答改为事件」只在这里）。已经释放过的再交回是 bug，当场报错。
 pub(crate) fn deliver_in(
     tx: &mut Tx<'_>,
     waker: &Waker,
@@ -75,9 +74,8 @@ pub(crate) fn deliver_in(
         HoldStatus::Active => {}
     }
     let at = position_in(tx, session_id)?;
-    let waiting_on = |call_id: &str| at.paused().and_then(|p| p.get(call_id)).map(|p| p.kind);
     let delivered = match answer {
-        Some((call_id, answer)) if waiting_on(call_id) == Some(answer.kind()) => {
+        Some((call_id, answer)) if at.paused().is_some_and(|p| p.get(call_id).is_some()) => {
             post_in(tx, waker, session_id, NewMail::answer(call_id.to_owned(), answer, false, hold.awaited))?;
             Delivered::Answer
         }
