@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use muliao_platform::config::WebConfig;
 use muliao_platform::errors::Error;
+use muliao_web::config::WebConfig;
 use muliao_web::{Page, WebProvider};
 use wiremock::matchers::{body_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};

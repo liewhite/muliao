@@ -1,17 +1,18 @@
 //! 真推一条测试通知到本机线上库里订阅着的每台设备（会在用户的手机、电脑上弹出，默认跳过）：
-//! `cargo test -p muliao-notifications --test live -- --ignored --nocapture`；只推某个推送服务的设备时设
+//! `cargo test -p muliao-server --test live_push -- --ignored --nocapture`；只推某个推送服务的设备时设
 //! `MULIAO_PUSH_HOST`（如 fcm.googleapis.com）。
 //! 用线上的 VAPID 私钥（与 Python 版同一把，设备不用重新订阅）；只读打开线上库（失效的订阅只报告不删）。读私钥走
 //! `load_or_create`：私钥权限过宽时会收回到 0600。
 
 use muliao_notifications::webpush::{Sent, Subscription, VapidKeys, send};
-use muliao_platform::config::{DEFAULT_CONFIG_PATH, Settings, expand_home};
+use muliao_platform::config::{DEFAULT_CONFIG_PATH, expand_home};
 use rusqlite::{Connection, OpenFlags};
 
 #[tokio::test]
 #[ignore = "pushes a real notification to the user's devices"]
 async fn live_push_to_current_subscriptions() {
-    let settings = Settings::load(&expand_home(DEFAULT_CONFIG_PATH)).expect("the live config parses");
+    let config = muliao_server::Config::load(&expand_home(DEFAULT_CONFIG_PATH)).expect("the live config parses");
+    let settings = &config.settings;
     let keys = VapidKeys::load_or_create(&settings.vapid_key_path()).expect("the live VAPID key loads");
     let db = Connection::open_with_flags(settings.db_path(), OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
     let devices: Vec<Subscription> = db
@@ -40,7 +41,7 @@ async fn live_push_to_current_subscriptions() {
     for device in
         devices.iter().map(|d| d.parse().unwrap()).filter(|d| only.as_ref().is_none_or(|h| d.host() == h.as_str()))
     {
-        let sent = send(&client, &keys, &settings.push.vapid_subject, &device, payload.as_bytes()).await;
+        let sent = send(&client, &keys, &config.push.vapid_subject, &device, payload.as_bytes()).await;
         eprintln!("{}: {sent:?}", device.host());
         delivered += usize::from(sent == Sent::Delivered);
     }

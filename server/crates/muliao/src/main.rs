@@ -6,7 +6,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, bail};
-use muliao_platform::config::Settings;
 use tokio::sync::Notify;
 
 const DEFAULT_CONFIG: &str = "~/.muliao/config.toml";
@@ -62,7 +61,8 @@ async fn terminated() {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let Some(args) = parse_args()? else { return Ok(()) };
-    let settings = Settings::load(&args.config)?;
+    let config = muliao_server::Config::load(&args.config)?;
+    let settings = &config.settings;
     muliao_platform::logging::init(
         settings.log_level,
         settings.log_file.as_deref(),
@@ -78,9 +78,9 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!(web_dir = %web_dir.display(), "web UI not built, serving API only");
     }
     // 先占端口：同一个库上已有服务在跑时当场退出，不先续跑会话（同一个工具调用会被执行两次）
-    let addr = format!("{}:{}", settings.server.host, settings.server.port);
+    let addr = format!("{}:{}", config.server.host, config.server.port);
     let listener = tokio::net::TcpListener::bind(&addr).await.with_context(|| format!("binding {addr}"))?;
-    let app = muliao_server::assemble(settings, web_dir).await?;
+    let app = muliao_server::assemble(config, web_dir).await?;
     app.start().await?;
     // pid：部署自检（deploy/selfcheck.sh）凭它认出本进程的启动行
     tracing::info!(%addr, pid = std::process::id(), "muliao is serving");

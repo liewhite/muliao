@@ -7,11 +7,12 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use crate::config::{LlmConfig, Protocol};
 use agenter::anthropic::AnthropicModel;
 use agenter::openai_responses::OpenAIResponsesModel;
 use agenter::{Effort, Limit, Model};
 use muliao_assets::formats::agent_file::Thinking;
-use muliao_platform::config::{LlmConfig, ModelRef, Protocol};
+use muliao_platform::config::ModelRef;
 use muliao_platform::errors::{DomainError, Error};
 
 /// 各协议的官方地址：配置不写 base_url 时用（永远显式给地址，不让 SDK 读环境变量）。
@@ -134,21 +135,12 @@ impl ModelRegistry {
 
 #[cfg(test)]
 mod tests {
-    use muliao_platform::config::Settings;
+    use muliao_platform::config::ConfigFile;
 
     use super::*;
 
     fn registry() -> ModelRegistry {
         let text = r#"
-            [server]
-            public_url = "http://127.0.0.1:1080"
-            [auth]
-            password = "12345678"
-            secret_key = "0123456789abcdef0123456789abcdef"
-            [vault]
-            key = "k"
-            [push]
-            vapid_subject = "mailto:a@b.c"
             [llm]
             default_model = "claude:m"
             [llm.providers.claude]
@@ -160,8 +152,8 @@ mod tests {
             api_key = "k2"
             base_url = "http://127.0.0.1:1/v1"
         "#;
-        let s = Settings::parse(text, "/tmp/c.toml".into()).unwrap();
-        ModelRegistry::new(&s.llm, reqwest::Client::new())
+        let llm: LlmConfig = ConfigFile::parse(text, "/tmp/c.toml".into()).unwrap().required().unwrap();
+        ModelRegistry::new(&llm, reqwest::Client::new())
     }
 
     #[test]

@@ -1,9 +1,9 @@
-//! 对本机线上数据的只读检查（没有 `~/.muliao/config.toml` 的机器上跳过）：线上配置能被读懂、vault 能解开现有的每个
-//! secret。只比对能不能解开，不打印、不比较明文。
+//! 对本机线上数据的只读检查（没有 `~/.muliao/config.toml` 的机器上跳过）：线上配置能被读懂（各领域的段由组合根汇总，
+//! 所以在这里查）、vault 能解开现有的每个 secret。只比对能不能解开，不打印、不比较明文。
 
 use std::path::{Path, PathBuf};
 
-use muliao_platform::config::{DEFAULT_CONFIG_PATH, Settings, expand_home};
+use muliao_platform::config::{DEFAULT_CONFIG_PATH, expand_home};
 use muliao_platform::vault::Vault;
 
 fn secret_files(assets: &Path) -> Vec<PathBuf> {
@@ -23,7 +23,8 @@ fn live_config_loads_and_vault_decrypts_every_secret() {
         eprintln!("skipped: no {}", path.display());
         return;
     }
-    let settings = Settings::load(&path).expect("the live config parses");
+    let config = muliao_server::Config::load(&path).expect("the live config parses");
+    let settings = &config.settings;
     let vault = Vault::new(settings.vault.key.expose()).expect("the live vault key is valid");
     let files = secret_files(&settings.assets_dir);
     assert!(!files.is_empty(), "no secrets under {}", settings.assets_dir.display());

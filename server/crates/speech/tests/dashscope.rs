@@ -3,10 +3,10 @@
 use muliao_platform::ids::MediaType;
 use std::sync::Arc;
 
-use muliao_platform::config::TranscriptionConfig;
 use muliao_platform::errors::Error;
 use muliao_platform::errors::ErrorKind;
 use muliao_speech::Transcriber;
+use muliao_speech::config::TranscriptionConfig;
 use wiremock::matchers::{body_partial_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 

@@ -19,7 +19,7 @@ use muliao_assets::secrets::Secrets;
 use muliao_assets::service::{AgentService, AgentSpec};
 use muliao_assets::source::AssetSource;
 use muliao_files::FileStore;
-use muliao_platform::config::Settings;
+use muliao_platform::config::ConfigFile;
 use muliao_platform::db::{Database, migrate};
 use muliao_platform::sandbox::{Category, Confinement, Sandbox, WritablePaths};
 use muliao_platform::tooling::{Audience, RunScope, ToolTraits, builtin};
@@ -165,8 +165,9 @@ base_url = "{}"
 "#,
         server.uri()
     );
-    let settings = Settings::parse(&config, dir.path().join("config.toml")).unwrap();
-    let models = Arc::new(ModelRegistry::new(&settings.llm, reqwest::Client::new()));
+    let llm: muliao_runtime::config::LlmConfig =
+        ConfigFile::parse(config, dir.path().join("config.toml")).unwrap().required().unwrap();
+    let models = Arc::new(ModelRegistry::new(&llm, reqwest::Client::new()));
     let (table, binder) = ToolTable::pending();
     let source = Arc::new(AssetSource::new(db.clone(), root.clone(), 4000, models.model_check(), table.clone()));
     let agents = Arc::new(AgentService::new(

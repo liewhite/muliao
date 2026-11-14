@@ -10,6 +10,7 @@
 //! - [`runner`]：组装一次运行（[`runner::Runtime::start`]）与逐步驱动（[`runner::Run::respond`] 请求模型、[`runner::Run::run_tools`] 执行工具），压缩用的文本生成。
 
 pub mod attachments;
+pub mod config;
 pub mod conventions;
 pub mod images;
 pub mod instructions;

@@ -1,12 +1,14 @@
 //! 真调一次本机配置的网页服务（花钱、要联网，默认跳过）：`cargo test -p muliao-web --test live -- --ignored`。
 
-use muliao_platform::config::{DEFAULT_CONFIG_PATH, Settings, expand_home};
+use muliao_platform::config::{ConfigFile, DEFAULT_CONFIG_PATH, expand_home};
+use muliao_web::config::WebConfig;
 
 #[tokio::test]
 #[ignore = "calls the configured web service"]
 async fn live_search_and_fetch() {
-    let settings = Settings::load(&expand_home(DEFAULT_CONFIG_PATH)).expect("the live config parses");
-    let web = muliao_web::build(settings.web.as_ref().expect("[web] is configured"), reqwest::Client::new());
+    let mut file = ConfigFile::load(&expand_home(DEFAULT_CONFIG_PATH)).expect("the live config parses");
+    let config: WebConfig = file.required().expect("[web] is configured");
+    let web = muliao_web::build(&config, reqwest::Client::new());
 
     let hits = web.search("Rust programming language", 3).await.unwrap();
     assert!(!hits.is_empty());

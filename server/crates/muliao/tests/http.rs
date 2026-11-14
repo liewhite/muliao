@@ -7,7 +7,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures::StreamExt;
-use muliao_platform::config::Settings;
 use reqwest::{Method, StatusCode, header};
 use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
@@ -78,8 +77,8 @@ async fn world() -> World {
          type = \"anthropic\"\napi_key = \"k\"\nbase_url = \"{}\"\n",
         model.uri()
     );
-    let settings = Settings::parse(&config, dir.path().join("config.toml")).unwrap();
-    let app = Arc::new(muliao_server::assemble(settings, web).await.unwrap());
+    let config = muliao_server::Config::parse(&config, dir.path().join("config.toml")).unwrap();
+    let app = Arc::new(muliao_server::assemble(config, web).await.unwrap());
     app.start().await.unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());

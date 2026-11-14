@@ -4,16 +4,15 @@
 use muliao_platform::ids::MediaType;
 use std::process::Command;
 
-use muliao_platform::config::{DEFAULT_CONFIG_PATH, Settings, expand_home};
+use muliao_platform::config::{ConfigFile, DEFAULT_CONFIG_PATH, expand_home};
+use muliao_speech::config::TranscriptionConfig;
 
 #[tokio::test]
 #[ignore = "calls the configured transcription service"]
 async fn live_transcribe() {
-    let settings = Settings::load(&expand_home(DEFAULT_CONFIG_PATH)).expect("the live config parses");
-    let t = muliao_speech::build(
-        settings.transcription.as_ref().expect("[transcription] is configured"),
-        reqwest::Client::new(),
-    );
+    let mut file = ConfigFile::load(&expand_home(DEFAULT_CONFIG_PATH)).expect("the live config parses");
+    let config: TranscriptionConfig = file.required().expect("[transcription] is configured");
+    let t = muliao_speech::build(&config, reqwest::Client::new());
     let dir = std::env::temp_dir().join(format!("muliao-speech-live-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let (aiff, wav) = (dir.join("a.aiff"), dir.join("a.wav"));

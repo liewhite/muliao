@@ -8,6 +8,7 @@
 //! 组合根：`VapidKeys::load_or_create(settings.vapid_key_path())` → `Push::new` → `Notifications::new`；
 //! `Notifications::subscribe` 登记进会话事件的订阅者；`tools::tools` 进工具箱。
 
+pub mod config;
 pub mod inbox;
 pub mod push;
 pub mod tools;

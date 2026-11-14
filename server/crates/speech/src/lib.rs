@@ -7,14 +7,16 @@
 //! 转写是用户在界面上同步等待的一次调用：服务出错或不可达时报 [`Error::Upstream`]（HTTP 层映射成 502），原因原样
 //! 交给界面，由用户决定重录，不重试。
 
+pub mod config;
+
 use muliao_platform::ids::MediaType;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::config::{TranscriptionConfig, TranscriptionType};
 use base64::Engine;
 use futures::future::BoxFuture;
-use muliao_platform::config::{TranscriptionConfig, TranscriptionType};
 use muliao_platform::errors::{DomainError, Error};
 use serde::Deserialize;
 

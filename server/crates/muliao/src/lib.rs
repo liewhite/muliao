@@ -3,7 +3,7 @@
 //! [`assemble`] 建好全部对象；[`App::start`] 做对外服务之前必须做的（续删、收尾上次的后台任务、续跑会话、起触发器）；
 //! [`App::router`] 是 HTTP 路由；[`App::shutdown`] 在 HTTP 排空之后停掉常驻的东西。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -19,14 +19,17 @@ use muliao_assets::skills::SkillStore;
 use muliao_assets::source::AssetSource;
 use muliao_files::FileStore;
 use muliao_history::History;
+use muliao_http::config::{AuthConfig, ServerConfig};
 use muliao_http::{AppState, HttpConfig, Services};
 use muliao_issues::Board;
+use muliao_notifications::config::PushConfig;
 use muliao_notifications::{Notifications, Push, VapidKeys};
 use muliao_platform::bus::Bus;
-use muliao_platform::config::Settings;
+use muliao_platform::config::{ConfigError, ConfigFile, Settings};
 use muliao_platform::db::{Database, migrate};
 use muliao_platform::retry::Retry;
 use muliao_platform::vault::Vault;
+use muliao_runtime::config::LlmConfig;
 use muliao_runtime::mcp::McpConnector;
 use muliao_runtime::models::ModelRegistry;
 use muliao_runtime::toolbox::Toolbox;
@@ -41,8 +44,10 @@ use muliao_sessions::run::Core;
 use muliao_sessions::service::SessionService;
 use muliao_sessions::tools::Stopper;
 use muliao_sessions::work::SessionWork;
+use muliao_speech::config::TranscriptionConfig;
 use muliao_triggers::{TriggerDeps, TriggerDomain};
 use muliao_usage::UsageLog;
+use muliao_web::config::WebConfig;
 use muliao_workspace::{ScriptGrants, Workspace, WorkspaceDeps};
 
 /// 每个 SSE 连接最多积压的事件数，再多就断开它（前端重连后重新拉取）
@@ -61,6 +66,41 @@ const MIGRATIONS: [muliao_platform::db::Migration; 9] = [
     muliao_history::MIGRATION,
 ];
 
+/// 整个配置文件：平台自己的部分（[`Settings`]）加各领域的段，段的类型各在自己的领域里。
+pub struct Config {
+    pub settings: Settings,
+    pub server: ServerConfig,
+    pub auth: AuthConfig,
+    pub push: PushConfig,
+    pub llm: LlmConfig,
+    pub web: Option<WebConfig>,
+    pub transcription: Option<TranscriptionConfig>,
+}
+
+impl Config {
+    /// 读配置文件（`~/` 开头的按家目录展开）。
+    pub fn load(path: &Path) -> Result<Self, ConfigError> {
+        Self::from_file(ConfigFile::load(path)?)
+    }
+
+    /// 解析配置文本；file 是它所在的文件（相对路径以它所在目录为基准）。
+    pub fn parse(text: &str, file: PathBuf) -> Result<Self, ConfigError> {
+        Self::from_file(ConfigFile::parse(text, file)?)
+    }
+
+    fn from_file(mut f: ConfigFile) -> Result<Self, ConfigError> {
+        Ok(Self {
+            server: f.required()?,
+            auth: f.required()?,
+            push: f.required()?,
+            llm: f.required()?,
+            web: f.section()?,
+            transcription: f.section()?,
+            settings: f.finish()?,
+        })
+    }
+}
+
 /// 装配好的服务。
 pub struct App {
     pub bus: Arc<Bus>,
@@ -73,7 +113,8 @@ pub struct App {
 }
 
 /// 建好全部对象（不对外服务、不跑常驻的东西，之后调 [`App::start`]）。必须在 tokio 运行时里调用。web_dir：前端构建目录。
-pub async fn assemble(settings: Settings, web_dir: PathBuf) -> anyhow::Result<App> {
+pub async fn assemble(config: Config, web_dir: PathBuf) -> anyhow::Result<App> {
+    let settings = &config.settings;
     let tz = settings.timezone;
     let rt = &settings.runtime;
     std::fs::create_dir_all(&settings.data_dir).with_context(|| format!("creating {}", settings.data_dir.display()))?;
@@ -87,7 +128,7 @@ pub async fn assemble(settings: Settings, web_dir: PathBuf) -> anyhow::Result<Ap
     let client = muliao_platform::net::client().context("building the HTTP client")?;
 
     // ---- 资源目录、agent、分发 ----
-    let models = Arc::new(ModelRegistry::new(&settings.llm, client.clone()));
+    let models = Arc::new(ModelRegistry::new(&config.llm, client.clone()));
     // 工具表：资源快照要用，工具又要用资源目录构造，所以先建待填的表、装好工具箱后填
     let (table, binder) = ToolTable::pending();
     let source = Arc::new(AssetSource::new(
@@ -100,7 +141,7 @@ pub async fn assemble(settings: Settings, web_dir: PathBuf) -> anyhow::Result<Ap
     let vault = Arc::new(Vault::new(settings.vault.key.expose()).context("the vault key")?);
     let secrets = Arc::new(Secrets::new(source.clone(), vault));
     let agents =
-        Arc::new(AgentService::new(source.clone(), settings.workspaces_dir(), settings.llm.default_model.clone()));
+        Arc::new(AgentService::new(source.clone(), settings.workspaces_dir(), config.llm.default_model.clone()));
     let distribution = Arc::new(Distribution::new(source.clone()));
     let memory = Arc::new(MemoryStore::new(source.clone()));
     let skills = Arc::new(SkillStore::new(source.clone()));
@@ -111,8 +152,8 @@ pub async fn assemble(settings: Settings, web_dir: PathBuf) -> anyhow::Result<Ap
         Arc::new(FileStore::open(db.clone(), settings.files_dir(), rt.upload_max_bytes).context("file storage")?);
     let usage = Arc::new(UsageLog::new(db.clone(), tz));
     let history = History::new(db.clone(), tz);
-    let web = settings.web.as_ref().map(|c| muliao_web::build(c, client.clone()));
-    let transcriber = settings.transcription.as_ref().map(|c| muliao_speech::build(c, client.clone()));
+    let web = config.web.as_ref().map(|c| muliao_web::build(c, client.clone()));
+    let transcriber = config.transcription.as_ref().map(|c| muliao_speech::build(c, client.clone()));
 
     // ---- 会话领域先给出的端口（别的领域与工具要用） ----
     let (waker, wakes) = Waker::channel();
@@ -143,7 +184,7 @@ pub async fn assemble(settings: Settings, web_dir: PathBuf) -> anyhow::Result<Ap
     // ---- 通知 ----
     let keys = VapidKeys::load_or_create(&settings.vapid_key_path()).context("the VAPID key")?;
     let push =
-        Arc::new(Push::new(db.clone(), keys, settings.push.vapid_subject.clone(), client.clone(), Retry::default()));
+        Arc::new(Push::new(db.clone(), keys, config.push.vapid_subject.clone(), client.clone(), Retry::default()));
     let notifications = Notifications::new(db.clone(), bus.clone(), push);
 
     // ---- issue 看板 ----
@@ -262,9 +303,9 @@ pub async fn assemble(settings: Settings, web_dir: PathBuf) -> anyhow::Result<Ap
     let state = AppState::new(
         services,
         HttpConfig {
-            password: settings.auth.password.expose().to_owned(),
-            secret_key: settings.auth.secret_key.expose().to_owned(),
-            public_url: settings.server.public_url.clone(),
+            password: config.auth.password.expose().to_owned(),
+            secret_key: config.auth.secret_key.expose().to_owned(),
+            public_url: config.server.public_url.clone(),
             web_dir,
         },
     );

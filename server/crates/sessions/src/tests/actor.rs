@@ -30,7 +30,7 @@ use muliao_assets::service::{AgentService, AgentSpec};
 use muliao_assets::source::AssetSource;
 use muliao_files::FileStore;
 use muliao_platform::bus::Bus;
-use muliao_platform::config::Settings;
+use muliao_platform::config::ConfigFile;
 use muliao_platform::db::{Database, migrate};
 use muliao_platform::tooling::{RunScope, ToolTraits, builtin};
 use muliao_platform::vault::Vault;
@@ -225,8 +225,9 @@ async fn world() -> World {
          default_model = \"claude:m\"\n[llm.providers.claude]\ntype = \"anthropic\"\napi_key = \"k\"\nbase_url = \"{}\"\n",
         server.uri()
     );
-    let settings = Settings::parse(&config, dir.path().join("config.toml")).unwrap();
-    let models = Arc::new(ModelRegistry::new(&settings.llm, reqwest::Client::new()));
+    let llm: muliao_runtime::config::LlmConfig =
+        ConfigFile::parse(config, dir.path().join("config.toml")).unwrap().required().unwrap();
+    let models = Arc::new(ModelRegistry::new(&llm, reqwest::Client::new()));
     let (table, binder) = ToolTable::pending();
     let source = Arc::new(AssetSource::new(db.clone(), root.clone(), 4000, models.model_check(), table.clone()));
     let agents = Arc::new(AgentService::new(

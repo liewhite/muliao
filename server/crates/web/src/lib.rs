@@ -4,14 +4,15 @@
 //! 各服务自己的输入限制（query 长度、条数上限、URL 规则）以服务端校验为唯一来源，这里不重复一份：服务端拒绝时把它的
 //! 原因交还模型修正。
 
+pub mod config;
 mod deepseek;
 mod direct;
 pub mod tools;
 
 use std::sync::Arc;
 
+use crate::config::{WebConfig, WebProviderType};
 use futures::future::BoxFuture;
-use muliao_platform::config::{WebConfig, WebProviderType};
 use muliao_platform::errors::Result;
 use serde::{Deserialize, Serialize};
 
