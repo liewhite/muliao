@@ -9,7 +9,6 @@
 //! Service Worker 按会话替换通知，锁屏上就停在前一条。罕见、点开会话即看到全部，不为它加队列。最终失败（被拒、重试放弃）
 //! 只记 error 日志，由错误监控看见（Python 版是任务页上的失败任务）。
 
-use muliao_platform::ids::SessionId;
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -32,11 +31,8 @@ const BODY_MAX_CHARS: usize = 600;
 struct Payload<'a> {
     title: String,
     body: String,
-    /// 点开打开的页面；系统通知点开看通知页
+    /// 点开打开的页面（也是通知的分组：同一页面的新通知替换旧的）；系统通知点开看通知页
     url: &'a str,
-    session_id: Option<&'a SessionId>,
-    /// 有它时 Service Worker 给通知加「通过」「打回」按钮
-    issue_id: Option<i64>,
     /// 发出那一刻的未读通知数，用作应用角标
     badge: i64,
 }
@@ -46,8 +42,6 @@ fn payload(m: &PushMessage) -> Vec<u8> {
         title: truncate(&m.title, TITLE_MAX_CHARS),
         body: truncate(&m.body, BODY_MAX_CHARS),
         url: m.url.as_deref().unwrap_or("/notifications"),
-        session_id: m.session_id.as_ref(),
-        issue_id: m.issue_id,
         badge: m.unread,
     };
     serde_json::to_vec(&p).expect("the push payload serializes")
@@ -201,20 +195,11 @@ pub(crate) mod tests {
 
     #[test]
     fn payload_follows_the_service_worker_contract() {
-        let m = PushMessage {
-            notification_id: 1,
-            title: "t".into(),
-            body: "长".repeat(1000),
-            url: None,
-            session_id: None,
-            issue_id: Some(7),
-            unread: 3,
-        };
+        let m = PushMessage { notification_id: 1, title: "t".into(), body: "长".repeat(1000), url: None, unread: 3 };
         let v: serde_json::Value = serde_json::from_slice(&payload(&m)).unwrap();
         assert_eq!(v["url"], "/notifications");
-        assert_eq!(v["issue_id"], 7);
         assert_eq!(v["badge"], 3);
-        assert!(v["session_id"].is_null());
+        assert_eq!(v.as_object().unwrap().len(), 4, "title, body, url, badge: {v}");
         assert!(v["body"].as_str().unwrap().ends_with("…[truncated: 400 more chars]"));
     }
 }

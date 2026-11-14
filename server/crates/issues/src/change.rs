@@ -313,7 +313,7 @@ impl Changes {
                 title: format!("#{} 指派给你：{}", issue.id, issue.title),
                 body: format!("状态 {}", issue.status),
                 session_id: by.session_id.clone(),
-                issue_id: Some(issue.id),
+                link: Some(crate::route(issue.id)),
             };
             self.notifications.notify_in(tx, &notice)?;
         }
@@ -340,7 +340,7 @@ impl Changes {
                     title: format!("#{} 的动态没交给 {}：它已归档", issue.id, names.name(&to)),
                     body: "取消归档后它用 issue_show 能看到这些动态；也可以把 issue 改指派给别的 agent。".into(),
                     session_id: None,
-                    issue_id: Some(issue.id),
+                    link: Some(crate::route(issue.id)),
                 };
                 self.notifications.notify_in(tx, &notice)?;
                 tracing::info!(issue_id = issue.id, %detail, "issue activity not delivered");

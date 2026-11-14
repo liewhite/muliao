@@ -686,7 +686,7 @@ fn waiting_notice(t: &Trigger, queued: usize, session_id: &SessionId) -> Notify 
             "上一次触发的会话在等待（后台任务、委派或你的回答），它结束前新事件都排着，现在有 {queued} 条。点开看它在等什么。"
         ),
         session_id: Some(session_id.to_owned()),
-        issue_id: None,
+        link: None,
     }
 }
 

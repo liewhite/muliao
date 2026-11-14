@@ -4,20 +4,20 @@ self.addEventListener('install', () => self.skipWaiting())
 self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()))
 
 self.addEventListener('push', (event) => {
-  // 服务端契约：payload 为 {title, body, url, session_id, issue_id, badge}，badge 是投递时的未读通知数；
-  // issue_id 不为 null 是交给用户审核的 issue（url 是它的详情页，在那里通过或打回）
+  // 服务端契约：payload 为 {title, body, url, badge}，url 是点开打开的页面，badge 是投递时的未读通知数
   const data = event.data.json()
+  const issueId = reviewedIssue(data.url)
   // iOS Safari 要求每个 push 都展示通知（userVisibleOnly），否则可能吊销订阅，所以不做「正在查看时静默」
   const shown = self.registration.showNotification(data.title, {
     body: data.body,
     icon: '/icon-192.png',
     badge: '/icon-192.png',
-    // 同一会话的新通知替换旧的；待审核的 issue 各自一条，不被同一会话后来的通知替掉
-    tag: data.issue_id !== null ? `issue-${data.issue_id}` : data.session_id || 'muliao',
-    data: { url: data.url, issueId: data.issue_id },
+    // 同一页面（会话、issue）的新通知替换旧的；待审核的 issue 各自一条，不被同一会话后来的通知替掉
+    tag: data.url,
+    data: { url: data.url, issueId },
     // 只有 Chromium 显示按钮（Safari、iOS 忽略，点开就是详情页的审核栏）
     actions:
-      data.issue_id === null
+      issueId === null
         ? []
         : [
             { action: 'approve', title: '通过' },
@@ -35,6 +35,12 @@ self.addEventListener('push', (event) => {
     })(),
   )
 })
+
+// 点开是 issue 页的通知（交给用户审核的 issue）：它的编号，其余为 null。issue 页的路由是 issues.ts 的 issueRoute
+function reviewedIssue(url) {
+  const m = /^\/issues\/(\d+)$/.exec(url)
+  return m ? Number(m[1]) : null
+}
 
 // 待跳转的页面存在 Cache Storage（页面与 SW 同源共用，SW 被系统终止也不丢），每次点击一条，由页面取走（取走即删、只认最新的），见 swNavigate.ts。
 // 不只靠消息：iOS 主屏应用在后台被挂起或冷启动时消息会丢，页面停在原处。
@@ -91,7 +97,12 @@ async function approve(issueId, url) {
   }
   // 在通知上处理了就是看过了：标已读，按服务端的未读数更新角标（失败只影响角标，下次打开应用时纠正）
   try {
-    const read = await fetch(`/api/notifications/issues/${issueId}/read`, { method: 'POST', credentials: 'same-origin' })
+    const read = await fetch('/api/notifications/read-link', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ link: url }),
+    })
     if (!read.ok) throw new Error(`HTTP ${read.status}`)
     const unread = await (await fetch('/api/notifications/unread', { credentials: 'same-origin' })).json()
     if ('setAppBadge' in self.navigator) await self.navigator.setAppBadge(unread.count)

@@ -23,5 +23,10 @@ pub use inbox::{Notification, Notifications, Notify};
 pub use push::Push;
 pub use webpush::{Subscription, VapidKeys};
 
-pub const MIGRATION: Migration =
-    Migration { domain: "notifications", steps: &[include_str!("../migrations/001_notifications.sql")] };
+pub const MIGRATION: Migration = Migration {
+    domain: "notifications",
+    steps: &[
+        include_str!("../migrations/001_notifications.sql"),
+        include_str!("../migrations/002_notification_links.sql"),
+    ],
+};

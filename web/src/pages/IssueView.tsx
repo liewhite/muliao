@@ -384,7 +384,7 @@ export default function IssueView() {
   // 看到了 issue 就看到了请你审核它的通知（与打开会话一样）
   useEffect(() => {
     void api
-      .markIssueNotificationsRead(issueId)
+      .markLinkRead(issueRoute(issueId))
       .catch((e) => console.error('marking issue notifications read failed', e))
   }, [issueId])
   return (

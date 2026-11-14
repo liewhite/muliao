@@ -9,7 +9,7 @@ use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
 use crate::error::{ApiResult, ErrorOut};
-use crate::extract::{Json, Path, Query};
+use crate::extract::{Json, Query};
 use crate::state::AppState;
 
 pub fn routes() -> OpenApiRouter<AppState> {
@@ -17,7 +17,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(list_notifications))
         .routes(routes!(unread))
         .routes(routes!(mark_notifications_read))
-        .routes(routes!(mark_issue_read))
+        .routes(routes!(mark_link_read))
         .routes(routes!(vapid_key))
         .routes(routes!(subscribe))
         .routes(routes!(test_push))
@@ -64,10 +64,17 @@ async fn mark_notifications_read(State(s): State<AppState>, Json(body): Json<Mar
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// 打开了 issue：请用户审核它的通知标为已读。
-#[utoipa::path(post, path = "/api/notifications/issues/{issue_id}/read", tag = "notifications", responses((status = 204)))]
-async fn mark_issue_read(State(s): State<AppState>, Path(issue_id): Path<i64>) -> ApiResult<StatusCode> {
-    s.services.notifications.mark_issue_read(issue_id).await?;
+#[derive(Deserialize, ToSchema)]
+pub struct MarkLinkReadIn {
+    /// 用户打开的页面（通知的 url）
+    pub link: String,
+}
+
+/// 打开了一个页面：点开就是它的通知标为已读（如请用户审核 issue 的通知）。
+#[utoipa::path(post, path = "/api/notifications/read-link", tag = "notifications", request_body = MarkLinkReadIn,
+    responses((status = 204)))]
+async fn mark_link_read(State(s): State<AppState>, Json(body): Json<MarkLinkReadIn>) -> ApiResult<StatusCode> {
+    s.services.notifications.mark_link_read(&body.link).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

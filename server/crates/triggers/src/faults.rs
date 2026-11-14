@@ -129,7 +129,7 @@ impl Faults {
                     title: format!("触发器 {} {title}", t.name),
                     body: truncate(summary, SUMMARY_MAX),
                     session_id: None,
-                    issue_id: None,
+                    link: None,
                 },
             )?;
         }

@@ -8,8 +8,8 @@
 //! - [`board`]：门面（查询、命令、对会话事件与删除 agent 的反应）；[`tools`]：issue_* 工具。
 //!
 //! 组合根：`Board::new(db, SenderInbox, notifications, stopper, tz)`；`board.subscribe` 登记进会话事件的订阅者；`board.deletion_hook()` 交给 `AgentLifecycle`；`tools::tools` 进
-//! 工具箱；`(Origin::Issue, rules::SESSION_NOTE)` 交给 `OriginNotes`。打开 issue 时 HTTP 层调通知领域的
-//! `mark_issue_read`。
+//! 工具箱；`(Origin::Issue, rules::SESSION_NOTE)` 交给 `OriginNotes`。交给用户的通知点开是 issue 页（[`route`]），
+//! 界面打开 issue 页时按这个地址把通知标已读。
 
 pub mod activity;
 pub mod board;
@@ -31,6 +31,12 @@ pub use board::{
 };
 pub use change::Patch;
 pub use model::{Actor, Assignee, By, Issue, Priority, Status};
+
+/// issue 页（前端路由，与 web/src/issues.ts 的 issueRoute 一致，由 crates/muliao/tests/frontend_contract.rs 核对）：交给
+/// 用户的通知点开打开它。
+pub fn route(issue_id: i64) -> String {
+    format!("/issues/{issue_id}")
+}
 
 pub const MIGRATION: Migration = Migration {
     domain: "issues",

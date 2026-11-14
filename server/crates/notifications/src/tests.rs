@@ -108,7 +108,7 @@ impl Harness {
                 title: title.into(),
                 body: "b".into(),
                 session_id: session.map(SessionId::new),
-                issue_id: None,
+                link: None,
             })
             .await
             .unwrap()
@@ -180,7 +180,7 @@ async fn inbox_unread_and_marking() {
             title: "审核".into(),
             body: "b".into(),
             session_id: Some(SessionId::new("s3")),
-            issue_id: Some(42),
+            link: Some("/issues/42".into()),
         })
         .await
         .unwrap();
@@ -192,7 +192,7 @@ async fn inbox_unread_and_marking() {
 
     let list = h.notifications.list(10).await.unwrap();
     assert_eq!(list.iter().map(|n| n.id).collect::<Vec<_>>(), vec![review, s2, s1, system]);
-    assert_eq!(list[0].url.as_deref(), Some("/issues/42"), "an issue to review opens the issue");
+    assert_eq!(list[0].url.as_deref(), Some("/issues/42"), "the sender's link wins over the session");
     assert_eq!(list[1].url.as_deref(), Some("/sessions/s2"));
     assert_eq!(list[3].url, None);
     assert_eq!(h.notifications.list(2).await.unwrap().len(), 2);
@@ -203,12 +203,12 @@ async fn inbox_unread_and_marking() {
     assert_eq!(unread.into_iter().collect::<Vec<_>>(), ["s1", "s2", "s3"].map(SessionId::new));
 
     h.notifications.mark_session_read(&SessionId::new("s1")).await.unwrap();
-    h.notifications.mark_issue_read(42).await.unwrap();
+    h.notifications.mark_link_read("/issues/42").await.unwrap();
     let unread = h.notifications.unread_sessions(ids).await.unwrap();
     assert_eq!(
         unread.into_iter().collect::<Vec<_>>(),
         [SessionId::new("s2")],
-        "reading the issue also reads its session's notice"
+        "opening the linked page also reads its session's notice"
     );
     assert_eq!(h.notifications.unread_count().await.unwrap(), 2);
 
@@ -351,9 +351,7 @@ async fn delivers_an_encrypted_signed_message_after_commit() {
     let payloads: Vec<serde_json::Value> = got.iter().map(|r| decrypt(&r.body, &secret)).collect();
     let mine = payloads.iter().find(|p| p["title"] == "你好").unwrap();
     assert_eq!(mine["url"], "/sessions/s9");
-    assert_eq!(mine["session_id"], "s9");
     assert_eq!(mine["badge"], 2, "the badge is the unread count when sent");
-    assert!(mine["issue_id"].is_null());
     let auth = got[0].headers.get("authorization").unwrap().to_str().unwrap();
     assert!(auth.starts_with("vapid t=") && auth.ends_with(h.notifications.push().public_key()));
 }
@@ -427,4 +425,35 @@ async fn deleted_notifications_and_devices_are_not_pushed() {
     assert_eq!(h.notifications.push().deliver_now(id, &device.endpoint).await, None);
     let other = h.quiet(None).await;
     assert_eq!(h.notifications.push().deliver_now(other, "https://gone.example/x").await, None);
+}
+
+#[tokio::test]
+async fn upgrading_turns_issue_ids_into_links() {
+    // 002 之前存的是 issue 编号：换算成 issue 页的地址，点开、标已读都照旧
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.db");
+    let first = muliao_platform::db::Migration { domain: "notifications", steps: &MIGRATION.steps[..1] };
+    migrate(&path, &[first]).unwrap();
+    let c = rusqlite::Connection::open(&path).unwrap();
+    c.execute_batch(
+        "INSERT INTO notifications (title, body, session_id, issue_id, unread, created_at) VALUES \
+         ('审核', 'b', 's1', 7, 1, '2026-11-01T00:00:00Z'), ('会话', 'b', 's2', NULL, 1, '2026-11-01T00:00:00Z');",
+    )
+    .unwrap();
+    drop(c);
+    migrate(&path, &[MIGRATION]).unwrap();
+    let db = Arc::new(Database::open(&path, Arc::new(|| {})).unwrap());
+    let bus = Arc::new(Bus::new(16));
+    let push = Arc::new(Push::new(
+        db.clone(),
+        VapidKeys::load_or_create(&dir.path().join("vapid.pem")).unwrap(),
+        "mailto:a@b.c".into(),
+        reqwest::Client::new(),
+        Retry::default(),
+    ));
+    let n = Notifications::new(db, bus, push);
+    let urls: Vec<Option<String>> = n.list(10).await.unwrap().into_iter().map(|n| n.url).collect();
+    assert_eq!(urls, [Some("/sessions/s2".to_owned()), Some("/issues/7".to_owned())]);
+    n.mark_link_read("/issues/7").await.unwrap();
+    assert_eq!(n.unread_count().await.unwrap(), 1);
 }

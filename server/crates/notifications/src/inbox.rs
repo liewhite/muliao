@@ -3,7 +3,8 @@
 //!
 //! 通知从哪来（docs/architecture.md 第 14 节）：运行结束时用户在等的回答或提问、等批准（订阅 `RunEnded`，规则只在
 //! [`worth_pushing`]）；运行最终失败（`RunFailed`）；agent 主动通知（`notify_user`）；别的领域在自己事务里发的（[`Notifications::notify_in`]：
-//! 触发器告警投不到 agent 时的兜底、定时被挡、issue 交给用户）；开启推送时的测试。
+//! 触发器告警投不到 agent 时的兜底、定时被挡、issue 交给用户）；开启推送时的测试。通知不认识发送方的东西：点开去哪由发送方
+//! 给一个不透明的页面地址（[`Notify::link`]），收件箱只存它、按它标已读。
 //!
 //! 会话的未读不另存：有指向它的未读通知就是未读（[`unread_sessions_in`]），所以正常跑完不通知的定时会话不算未读。
 
@@ -37,8 +38,9 @@ pub struct Notify {
     pub body: String,
     /// 通知关于的会话（打开它即已读、随它删除）；系统通知为 None
     pub session_id: Option<SessionId>,
-    /// 交给用户审核的 issue：点开打开它（而不是会话），可以直接通过或打回；其余为 None
-    pub issue_id: Option<i64>,
+    /// 点开打开的页面（前端路由，发送方定，如交给用户审核的 issue 页）；为 None 时打开 session_id 的会话。用户打开这个页面
+    /// 时界面按它标已读（[`Notifications::mark_link_read`]）
+    pub link: Option<String>,
 }
 
 /// 有新通知了（SSE 事件名 `notification`）：前端刷新通知页与未读数；正看着这个会话时把它标为已读。
@@ -55,35 +57,28 @@ pub struct Notification {
     pub title: String,
     pub body: String,
     pub session_id: Option<SessionId>,
-    pub issue_id: Option<i64>,
     /// 点开打开的页面（推送与通知页共用）；系统通知为 None
     pub url: Option<String>,
     pub unread: bool,
     pub created_at: DateTime<Utc>,
 }
 
-/// 点开通知打开的页面：交给用户审核的 issue，否则通知关于的会话；都没有时为 None（推送点开看通知页）。是前端的路由，
+/// 点开通知打开的页面：发送方给的 link，否则通知关于的会话；都没有时为 None（推送点开看通知页）。会话页是前端的路由，
 /// 由 crates/muliao/tests/frontend_contract.rs 与前端核对。
-pub fn url_of(session_id: Option<&SessionId>, issue_id: Option<i64>) -> Option<String> {
-    match (issue_id, session_id) {
-        (Some(issue), _) => Some(format!("/issues/{issue}")),
-        (None, Some(session)) => Some(format!("/sessions/{session}")),
-        (None, None) => None,
-    }
+pub fn url_of(session_id: Option<&SessionId>, link: Option<String>) -> Option<String> {
+    link.or_else(|| session_id.map(|s| format!("/sessions/{s}")))
 }
 
-const COLUMNS: &str = "id, title, body, session_id, issue_id, unread, created_at";
+const COLUMNS: &str = "id, title, body, session_id, link, unread, created_at";
 
 fn notification(r: &Row<'_>) -> rusqlite::Result<Notification> {
     let session_id: Option<SessionId> = r.get(3)?;
-    let issue_id: Option<i64> = r.get(4)?;
     Ok(Notification {
         id: r.get(0)?,
         title: r.get(1)?,
         body: r.get(2)?,
-        url: url_of(session_id.as_ref(), issue_id),
+        url: url_of(session_id.as_ref(), r.get(4)?),
         session_id,
-        issue_id,
         unread: r.get(5)?,
         created_at: r.get(6)?,
     })
@@ -106,8 +101,6 @@ pub struct PushMessage {
     pub title: String,
     pub body: String,
     pub url: Option<String>,
-    pub session_id: Option<SessionId>,
-    pub issue_id: Option<i64>,
     /// 此刻的未读通知数（应用角标）
     pub unread: i64,
 }
@@ -125,8 +118,6 @@ pub(crate) fn push_message_in(c: &Connection, notification_id: i64) -> rusqlite:
         title: n.title,
         body: n.body,
         url: n.url,
-        session_id: n.session_id,
-        issue_id: n.issue_id,
         unread: unread_count_in(c)?,
     }))
 }
@@ -164,8 +155,8 @@ impl Notifications {
     /// 在调用方的事务里写下一条通知；提交后推给前端（SSE `notification`）并推到每台设备。返回通知的 id。
     pub fn notify_in(&self, tx: &mut Tx<'_>, n: &Notify) -> rusqlite::Result<i64> {
         tx.execute(
-            "INSERT INTO notifications (title, body, session_id, issue_id, unread, created_at) VALUES (?1, ?2, ?3, ?4, 1, ?5)",
-            params![n.title, n.body, n.session_id, n.issue_id, Utc::now()],
+            "INSERT INTO notifications (title, body, session_id, link, unread, created_at) VALUES (?1, ?2, ?3, ?4, 1, ?5)",
+            params![n.title, n.body, n.session_id, n.link, Utc::now()],
         )?;
         let id = tx.last_insert_rowid();
         let (bus, push, session_id) = (self.bus.clone(), self.push.clone(), n.session_id.clone());
@@ -190,10 +181,7 @@ impl Notifications {
     /// 用户在界面上开启推送后发的测试通知（系统通知，不打开会话）。
     pub async fn send_test(&self) -> rusqlite::Result<i64> {
         self.notify(Notify {
-            title: "Muliao".into(),
-            body: "推送通知已开启。".into(),
-            session_id: None,
-            issue_id: None,
+            title: "Muliao".into(), body: "推送通知已开启。".into(), session_id: None, link: None
         })
         .await
     }
@@ -215,7 +203,7 @@ impl Notifications {
             title: format!("{} · {}", e.agent_name, e.session_title),
             body: e.end.text().to_owned(),
             session_id: Some(e.session_id.clone()),
-            issue_id: None,
+            link: None,
         };
         self.notify_in(tx, &n)?;
         Ok(())
@@ -230,7 +218,7 @@ impl Notifications {
             title: format!("{} · {} 运行失败", e.agent_name, session.title),
             body: truncate(e.error.trim(), FAILURE_BODY_MAX),
             session_id: Some(e.session_id.clone()),
-            issue_id: None,
+            link: None,
         };
         self.notify_in(tx, &n)?;
         Ok(())
@@ -266,9 +254,9 @@ impl Notifications {
         self.mark("session_id = ?1", session_id.to_string().into()).await
     }
 
-    /// 用户打开了 issue：请他审核它的通知已读。
-    pub async fn mark_issue_read(&self, issue_id: i64) -> rusqlite::Result<()> {
-        self.mark("issue_id = ?1", issue_id.into()).await
+    /// 用户打开了一个页面：点开就是它的通知已读（如请他审核 issue 的通知，在 issue 页上标）。
+    pub async fn mark_link_read(&self, link: &str) -> rusqlite::Result<()> {
+        self.mark("link = ?1", link.to_owned().into()).await
     }
 
     async fn mark(&self, filter: &'static str, value: rusqlite::types::Value) -> rusqlite::Result<()> {

@@ -563,7 +563,7 @@ async fn issues_triggers_notifications_usage_and_history() {
     assert_eq!(list[0]["url"], Value::Null);
     w.call(Method::POST, "/api/notifications/read", Some(json!({"through_id": list[0]["id"]})), 204).await;
     assert_eq!(w.get("/api/notifications/unread").await, json!({"count": 0}));
-    w.call(Method::POST, "/api/notifications/issues/1/read", None, 204).await;
+    w.call(Method::POST, "/api/notifications/read-link", Some(json!({"link": "/issues/1"})), 204).await;
     assert!(w.get("/api/push/vapid").await["public_key"].as_str().unwrap().len() > 40);
     w.call(
         Method::POST,

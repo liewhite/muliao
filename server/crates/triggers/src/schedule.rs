@@ -136,7 +136,7 @@ fn waiting_notice(t: &Trigger, count: u32, session_id: &SessionId) -> Notify {
         ),
         // 点开通知打开挡路的那个会话
         session_id: Some(session_id.to_owned()),
-        issue_id: None,
+        link: None,
     }
 }
 

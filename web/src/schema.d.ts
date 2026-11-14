@@ -970,7 +970,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/notifications/issues/{issue_id}/read": {
+    "/api/notifications/read-link": {
         parameters: {
             query?: never;
             header?: never;
@@ -979,8 +979,8 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** 打开了 issue：请用户审核它的通知标为已读。 */
-        post: operations["mark_issue_read"];
+        /** 打开了一个页面：点开就是它的通知标为已读（如请用户审核 issue 的通知）。 */
+        post: operations["mark_link_read"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1886,6 +1886,10 @@ export interface components {
         };
         /** @enum {string} */
         MailState: "queued" | "consumed" | "discarded";
+        MarkLinkReadIn: {
+            /** @description 用户打开的页面（通知的 url） */
+            link: string;
+        };
         MarkReadIn: {
             /**
              * Format: int64
@@ -1990,8 +1994,6 @@ export interface components {
             title: string;
             body: string;
             session_id: components["schemas"]["SessionId"] | null;
-            /** Format: int64 */
-            issue_id: number | null;
             /** @description 点开打开的页面（推送与通知页共用）；系统通知为 None */
             url: string | null;
             unread: boolean;
@@ -5280,16 +5282,18 @@ export interface operations {
             };
         };
     };
-    mark_issue_read: {
+    mark_link_read: {
         parameters: {
             query?: never;
             header?: never;
-            path: {
-                issue_id: number;
-            };
+            path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MarkLinkReadIn"];
+            };
+        };
         responses: {
             204: {
                 headers: {

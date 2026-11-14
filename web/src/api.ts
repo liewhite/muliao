@@ -398,9 +398,8 @@ export const api = {
   unreadNotifications: () => call('get', '/api/notifications/unread'),
   /** 标记到 throughId（用户看到的最新一条）为止已读，之后才到的保持未读 */
   markNotificationsRead: (throughId: number) => call('post', '/api/notifications/read', { body: { through_id: throughId } }),
-  /** 打开了 issue：请用户审核它的通知标为已读 */
-  markIssueNotificationsRead: (issue_id: number) =>
-    call('post', '/api/notifications/issues/{issue_id}/read', { path: { issue_id } }),
+  /** 打开了一个页面：点开就是它的通知标为已读（如 issue 页：请用户审核它的通知） */
+  markLinkRead: (link: string) => call('post', '/api/notifications/read-link', { body: { link } }),
   /** 停止正在进行的运行；停止前已经产生的部分照常保存 */
   stop: (session_id: SessionId) => call('post', '/api/sessions/{session_id}/stop', { path: { session_id } }),
   /** 做完才返回（不设时限，可用 stop 打断）；会话在运行、已在压缩或压缩中被停止时 409 */

@@ -3379,24 +3379,23 @@
         }
       }
     },
-    "/api/notifications/issues/{issue_id}/read": {
+    "/api/notifications/read-link": {
       "post": {
         "tags": [
           "notifications"
         ],
-        "summary": "打开了 issue：请用户审核它的通知标为已读。",
-        "operationId": "mark_issue_read",
-        "parameters": [
-          {
-            "name": "issue_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int64"
+        "summary": "打开了一个页面：点开就是它的通知标为已读（如请用户审核 issue 的通知）。",
+        "operationId": "mark_link_read",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MarkLinkReadIn"
+              }
             }
-          }
-        ],
+          },
+          "required": true
+        },
         "responses": {
           "204": {}
         }
@@ -6653,6 +6652,18 @@
           "discarded"
         ]
       },
+      "MarkLinkReadIn": {
+        "type": "object",
+        "required": [
+          "link"
+        ],
+        "properties": {
+          "link": {
+            "type": "string",
+            "description": "用户打开的页面（通知的 url）"
+          }
+        }
+      },
       "MarkReadIn": {
         "type": "object",
         "required": [
@@ -7034,7 +7045,6 @@
           "title",
           "body",
           "session_id",
-          "issue_id",
           "url",
           "unread",
           "created_at"
@@ -7059,13 +7069,6 @@
                 "type": "null"
               }
             ]
-          },
-          "issue_id": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int64"
           },
           "url": {
             "type": [

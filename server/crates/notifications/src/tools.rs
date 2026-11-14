@@ -32,7 +32,7 @@ impl Tool<RunScope> for NotifyUser {
     }
 
     async fn call(&self, ctx: ToolCtx<'_, RunScope>, a: NotifyArgs) -> Result<ToolOutput, ToolError> {
-        let n = Notify { title: a.title, body: a.body, session_id: Some(ctx.deps.session_id.clone()), issue_id: None };
+        let n = Notify { title: a.title, body: a.body, session_id: Some(ctx.deps.session_id.clone()), link: None };
         // 写库失败是系统自己的问题（模块说明里的统一规则）：整次运行失败，让人看见
         self.notifications.notify(n).await.map_err(|e| ToolError::Abort(e.into()))?;
         Ok(agenter::tool::text("queued notification to the user"))
