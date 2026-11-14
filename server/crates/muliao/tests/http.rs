@@ -500,30 +500,19 @@ async fn issues_triggers_notifications_usage_and_history() {
     let kinds = w.get("/api/trigger-kinds").await;
     let names: Vec<&str> = kinds.as_array().unwrap().iter().map(|k| k["name"].as_str().unwrap()).collect();
     assert_eq!(names, ["schedule", "once", "stream"]);
-    // 接口描述按 kind 写出的形状与登记的方式一一对应（加一种方式忘了补描述时这里挂）
-    let doc = serde_json::to_value(muliao_http::openapi()).unwrap();
-    for schema in ["KindOutDoc", "KindInDoc"] {
-        let described: Vec<&str> = doc["components"]["schemas"][schema]["oneOf"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v["properties"]["kind"]["enum"][0].as_str().unwrap())
-            .collect();
-        assert_eq!(described, names, "{schema}");
-    }
     let t = w
         .call(Method::POST, "/api/triggers", Some(json!({"name": "daily", "agent_id": id, "kind": "schedule", "prompt": "日报", "config": {"cron": "0 9 * * *"}})), 201)
         .await;
     assert!(t["status"]["next_run_at"].is_string());
     assert_eq!(t["precheck"], Value::Null);
     let tid = t["id"].as_i64().unwrap();
-    w.call(
-        Method::POST,
-        "/api/triggers",
-        Some(json!({"name": "bad", "agent_id": id, "kind": "schedule", "prompt": "x", "config": {"cron": "nope"}})),
-        422,
-    )
-    .await;
+    for bad in [
+        json!({"name": "bad", "agent_id": id, "kind": "schedule", "prompt": "x", "config": {"cron": "nope"}}),
+        json!({"name": "bad", "agent_id": id, "kind": "schedule", "prompt": " ", "config": {"cron": "0 9 * * *"}}),
+        json!({"name": "bad", "agent_id": id, "kind": "nope", "prompt": "x", "config": {}}),
+    ] {
+        w.call(Method::POST, "/api/triggers", Some(bad), 422).await;
+    }
     let with_check = w
         .call(Method::PATCH, &format!("/api/triggers/{tid}"), Some(json!({"precheck": {"command": "echo hi"}})), 200)
         .await;

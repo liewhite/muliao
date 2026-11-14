@@ -31,11 +31,12 @@ use muliao_sessions::work::SessionWork;
 use muliao_workspace::{Workspace, WorkspaceDeps};
 use serde_json::{Value, json};
 
-use crate::precheck::{FireWhen, Precheck};
-use crate::service::{NewSpec, PrecheckChange, Update};
+use crate::kinds::{Kind, NewConfig};
+use crate::precheck::{FireWhen, Precheck, Script};
+use crate::service::{NewSpec, PrecheckChange, Prompt, Update};
 use crate::store::{Listing, Trigger};
 use crate::*;
-use muliao_platform::errors::Error;
+use muliao_platform::errors::{Error, invalid};
 
 struct World {
     dir: tempfile::TempDir,
@@ -145,13 +146,13 @@ impl World {
         config: Value,
         precheck: Option<Precheck>,
     ) -> Result<Trigger, Error> {
+        let kind: Kind = serde_json::from_value(json!(kind)).map_err(|e| invalid(e.to_string()))?;
         self.svc()
             .create(NewSpec {
                 name: name.into(),
                 agent_id: self.me.clone(),
-                kind: kind.into(),
-                prompt: format!("do {name}"),
-                config,
+                prompt: Prompt::new(format!("do {name}")).unwrap(),
+                config: NewConfig::parse(kind, config)?,
                 precheck,
             })
             .await
@@ -162,7 +163,7 @@ impl World {
     }
 
     async fn status(&self, id: i64) -> Value {
-        self.svc().view(self.get(id).await).await.unwrap().status.unwrap()
+        serde_json::from_str(&self.svc().view(self.get(id).await).await.unwrap().kind.status_json()).unwrap()
     }
 
     /// 这个触发器开出的会话：(id, 标题)，按建立顺序
@@ -251,7 +252,12 @@ impl World {
 }
 
 fn check(command: &str, fire_when: FireWhen) -> Option<Precheck> {
-    Some(Precheck { command: command.into(), secrets: vec![], fire_when })
+    Some(Precheck { command: Script::new(command).unwrap(), secrets: vec![], fire_when })
+}
+
+/// 存下的配置（JSON）
+fn config_of(t: &Trigger) -> Value {
+    serde_json::to_value(&t.mode).unwrap()["config"].clone()
 }
 
 fn kind_of(e: Error) -> ErrorKind {
@@ -265,7 +271,7 @@ fn kind_of(e: Error) -> ErrorKind {
 async fn schedule_fires_advances_and_skips_while_the_previous_session_is_busy() {
     let w = world().await;
     let t = w.create("tick", "schedule", json!({"cron": " */5 * * * * "}), None).await;
-    assert_eq!(t.config, json!({"cron": "*/5 * * * *"}));
+    assert_eq!(config_of(&t), json!({"cron": "*/5 * * * *"}));
     let next = at(w.status(t.id).await["next_run_at"].as_str().unwrap());
     assert!(next > Utc::now() && next <= Utc::now() + chrono::Duration::minutes(5));
 
@@ -303,6 +309,7 @@ async fn schedule_fires_advances_and_skips_while_the_previous_session_is_busy() 
     let notes = w.notifications().await;
     assert_eq!(notes.len(), 1, "{notes:?}");
     assert_eq!(notes[0], ("定时触发器 tick 在跳过".to_owned(), Some(sessions[0].0.clone())));
+    assert_eq!(w.get(t.id).await.waiting_notified.as_ref(), Some(&sessions[0].0));
 
     // 空闲了：照常触发，跳过记录清掉
     let sid = sessions[0].0.clone();
@@ -337,8 +344,16 @@ async fn bad_configs_and_names_are_refused() {
     let e = w.try_create("t", "schedule", json!({"cron": "0 9 * * *"}), None).await.unwrap_err();
     assert_eq!(kind_of(e), ErrorKind::Conflict);
     // 前置检查的 secret 不存在：建的时候就报
-    let p = Some(Precheck { command: "true".into(), secrets: vec!["NOPE".into()], fire_when: FireWhen::Output });
+    let p = Some(Precheck {
+        command: Script::new("true").unwrap(),
+        secrets: vec!["NOPE".into()],
+        fire_when: FireWhen::Output,
+    });
     assert!(matches!(w.try_create("u", "schedule", json!({"cron": "0 9 * * *"}), p).await, Err(Error::Domain(_))));
+    // 空说明、空命令、超长命令构造不出来
+    assert!(Prompt::new(" \n").is_err());
+    assert!(Script::new(" ").is_err() && Script::new("x".repeat(4001)).is_err());
+    assert!(serde_json::from_value::<Precheck>(json!({"command": ""})).is_err());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -347,7 +362,7 @@ async fn once_fires_once_then_finishes_and_leaves_the_list() {
     let when = (Utc::now() + chrono::Duration::hours(1)).with_timezone(&chrono_tz::Asia::Shanghai);
     let t = w.create("later", "once", json!({"at": when.format("%Y-%m-%dT%H:%M").to_string()}), None).await;
     let run_at = at(w.status(t.id).await["run_at"].as_str().unwrap());
-    assert!(t.config["at"].as_str().unwrap().ends_with("+08:00"));
+    assert!(config_of(&t)["at"].as_str().unwrap().ends_with("+08:00"));
 
     // 立即运行不消耗那一次
     assert!(w.svc().run(t.id).await.unwrap().is_some());
@@ -364,7 +379,11 @@ async fn once_fires_once_then_finishes_and_leaves_the_list() {
     assert_eq!(w.svc().list(Listing { finished: true, ..Listing::default() }).await.unwrap().len(), 1);
     assert_eq!(kind_of(w.svc().get_by_name("later").await.unwrap_err()), ErrorKind::Conflict);
     assert_eq!(kind_of(w.svc().run(t.id).await.unwrap_err()), ErrorKind::Conflict);
-    let e = w.svc().update(t.id, Update { prompt: Some("x".into()), ..Update::default() }).await.unwrap_err();
+    let e = w
+        .svc()
+        .update(t.id, Update { prompt: Some(Prompt::new("x").unwrap()), ..Update::default() })
+        .await
+        .unwrap_err();
     assert_eq!(kind_of(e), ErrorKind::Conflict);
     // 名字可以再用
     w.create("later", "once", json!({"at": when.to_rfc3339()}), None).await;
@@ -477,14 +496,20 @@ async fn update_rederives_only_on_real_changes_and_reenabling() {
     w.svc().fire_activated(t.id, None).await.unwrap();
     assert_eq!(w.get(t.id).await.faults.len(), 1);
     // 同样的配置（规范化后）：不重新推导，出错留着
-    let same = Update { config: Some(json!({"cron": " 0 9 * * * "})), prompt: Some("new".into()), ..Update::default() };
+    let same = Update {
+        config: Some(json!({"cron": " 0 9 * * * "})),
+        prompt: Some(Prompt::new("new").unwrap()),
+        ..Update::default()
+    };
     let u = w.svc().update(t.id, same).await.unwrap();
-    assert_eq!((u.prompt.as_str(), u.faults.len(), &u.state), ("new", 1, &t.state));
-    // 停用再启用：出错清掉，停用原因清掉
-    w.svc().disable(t.id, "broken".into()).await.unwrap();
-    assert_eq!(w.get(t.id).await.disabled_reason.as_deref(), Some("broken"));
+    assert_eq!((u.prompt.as_str(), u.faults.len(), &u.mode), ("new", 1, &t.mode));
+    // 停用再启用：出错清掉
+    w.svc().update(t.id, Update { enabled: Some(false), ..Update::default() }).await.unwrap();
     let u = w.svc().update(t.id, Update { enabled: Some(true), ..Update::default() }).await.unwrap();
-    assert!(u.enabled && u.faults.is_empty() && u.disabled_reason.is_none());
+    assert!(u.enabled && u.faults.is_empty());
+    // 改配置：按已存的种类解析，不合法的报输入错误
+    let bad = Update { config: Some(json!({"at": "2030-01-01T00:00"})), ..Update::default() };
+    assert_eq!(kind_of(w.svc().update(t.id, bad).await.unwrap_err()), ErrorKind::InvalidInput);
     // 去掉检查
     let u = w.svc().update(t.id, Update { precheck: PrecheckChange::Remove, ..Update::default() }).await.unwrap();
     assert!(u.precheck.is_none());
@@ -492,23 +517,16 @@ async fn update_rederives_only_on_real_changes_and_reenabling() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn corrupt_stored_state_disables_only_that_trigger() {
+async fn a_corrupt_stored_row_fails_the_read_visibly() {
     let w = world().await;
     let bad = w.create("bad", "schedule", json!({"cron": "0 9 * * *"}), None).await;
-    let good =
-        w.create("good", "once", json!({"at": (Utc::now() + chrono::Duration::hours(1)).to_rfc3339()}), None).await;
     let id = bad.id;
     w.db.write(move |tx| tx.execute("UPDATE triggers SET state = '{\"next_run_at\": 5}' WHERE id = ?1", [id]))
         .await
         .unwrap();
-    w.fire_due(Utc::now() + chrono::Duration::hours(2)).await;
-    let bad = w.get(bad.id).await;
-    assert!(!bad.enabled);
-    assert!(bad.disabled_reason.unwrap().contains("invalid stored state"));
-    // 列表照常：坏的那一行的状态是报错
-    let listed: Value = serde_json::from_str(&w.call("trigger_list", json!({})).await.unwrap()).unwrap();
-    assert!(listed[0]["status"]["error"].as_str().unwrap().contains("invalid stored state"), "{listed}");
-    assert_eq!(w.sessions(good.id).await.len(), 1);
+    // 读不出来就报错，不当作没有、不自动停用
+    assert!(w.svc().get(id).await.is_err());
+    assert!(w.svc().list(Listing::default()).await.is_err());
 }
 
 #[tokio::test(flavor = "multi_thread")]

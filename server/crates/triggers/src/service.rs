@@ -1,7 +1,7 @@
 //! 触发器的管理与触发（docs/architecture.md 第 14 节）。
 //!
-//! - 管理（HTTP 与工具共用）：建、改、停用、删、列、按名字找、「立即运行」。改配置、重新启用由这种方式的
-//!   [`TriggerKind::configure`] 重新推导；换检查、改配置、重新启用是人工干预，清掉脚本的出错。
+//! - 管理（HTTP 与工具共用）：建、改、删、列、按名字找、「立即运行」。改配置、重新启用由 [`NewConfig::configure`] 重新推导；
+//!   换检查、改配置、重新启用是人工干预，清掉脚本的出错。
 //! - 触发只有一个出口（[`TriggerService::fire_activated`]，激活机制用；「立即运行」[`TriggerService::run`] 同一条路）：先看
 //!   触发器自己能不能触发（停用、agent 归档或正在删除），有前置检查就在事务外跑，再在一个事务里认账并投信——记下触发与
 //!   投信在同一事务，恰好一次。每次触发新开触发器 agent 的一个会话，信没有用户在等（处理它的运行不推送，要通知时 agent
@@ -19,6 +19,7 @@ use chrono_tz::Tz;
 use muliao_assets::agents::runnable_agent_in;
 use muliao_assets::lifecycle::DeletionHook;
 use muliao_assets::secrets::SecretUse;
+use muliao_notifications::{Notifications, Notify};
 use muliao_platform::db::{Database, Tx};
 use muliao_sessions::activity::{WorkState, states_of_in};
 use muliao_sessions::inbound::{Refusal, Refused, SenderInbox, SenderMail, SenderTarget};
@@ -30,11 +31,12 @@ use serde_json::Value;
 use tokio::sync::watch;
 
 use crate::faults::{FaultSource, Faults, TriggerFault, local_minute, reset};
-use crate::kinds::{Configured, Kinds};
+use crate::kinds::{KindView, Mode, NewConfig};
 use crate::precheck::{Failed, Precheck, PrecheckRunner, alert_letter, decide, failed, passed_in, set_in};
 use crate::store::{
-    Corrupt, Listing, NewTrigger, Trigger, baseline_in, delete_in, insert_in, list_in, load_in, named_in, save_in,
+    Listing, NewTrigger, Trigger, baseline_in, delete_in, insert_in, list_in, load_in, named_in, save_in,
 };
+use crate::stream::Hosting;
 use muliao_platform::errors::{Error, Result, conflict, invalid, not_found};
 
 /// 事件内容（流式命令的输出、前置检查的输出）原样进 prompt，过大的应由来源裁剪或改为传引用
@@ -67,6 +69,40 @@ pub fn event_prompt(instructions: &str, payload: Option<&str>) -> String {
     }
 }
 
+/// 交给 agent 的说明：不能是空的。只经 [`Prompt::new`] 构造（反序列化也走它）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(into = "String", try_from = "String")]
+#[schema(value_type = String)]
+pub struct Prompt(String);
+
+impl Prompt {
+    pub fn new(text: impl Into<String>) -> std::result::Result<Self, String> {
+        let text = text.into();
+        if text.trim().is_empty() {
+            return Err("trigger prompt must not be empty".into());
+        }
+        Ok(Self(text))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for Prompt {
+    type Error = String;
+
+    fn try_from(text: String) -> std::result::Result<Self, String> {
+        Self::new(text)
+    }
+}
+
+impl From<Prompt> for String {
+    fn from(p: Prompt) -> String {
+        p.0
+    }
+}
+
 /// 上一次触发开出的会话还没做完时它在干什么（不会是 idle）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -95,6 +131,24 @@ pub(crate) fn busy_previous_in(c: &Connection, t: &Trigger) -> Result<Option<(Se
         Some(WorkState::Waiting) => Some((session_id, Busy::Waiting)),
         Some(WorkState::Idle) | None => None,
     })
+}
+
+/// 挡路的会话在等待（可能永远等不到）时通知用户，每个挡路会话只通知一次（记在 `waiting_notified`，重启后仍记得）。
+/// 在运行的不通知：运行偶尔长过一个周期是常态。定时与流式共用；通知的内容由各自给出。调用方写回这一行。
+pub(crate) fn notify_waiting_in(
+    tx: &mut Tx<'_>,
+    notifications: &Notifications,
+    t: &mut Trigger,
+    session_id: &SessionId,
+    busy: Busy,
+    notice: impl FnOnce(&Trigger) -> Notify,
+) -> Result<()> {
+    if busy == Busy::Running || t.waiting_notified.as_ref() == Some(session_id) {
+        return Ok(());
+    }
+    notifications.notify_in(tx, &notice(t))?;
+    t.waiting_notified = Some(session_id.clone());
+    Ok(())
 }
 
 /// 一次触发投出去的信：新开的会话。
@@ -143,12 +197,11 @@ enum By {
     Activation,
 }
 
-/// 触发器的读模型（HTTP 层与工具共用）：行、它的方式给出的运行状态、上一次触发开出的、还在的会话。
+/// 触发器的读模型（HTTP 层与工具共用）：行、它的配置与运行状态、上一次触发开出的、还在的会话。
 #[derive(Debug, Clone)]
 pub struct TriggerView {
     pub trigger: Trigger,
-    /// 这种方式给出的运行状态；存下的状态坏了时是读不出的原因（一行坏数据不连累整个列表）
-    pub status: std::result::Result<Value, String>,
+    pub kind: KindView,
     /// 上一次触发开出的会话，已删除时 None（`trigger.last_session_id` 是记下的原值）
     pub live_session_id: Option<SessionId>,
 }
@@ -158,9 +211,8 @@ pub struct TriggerView {
 pub struct NewSpec {
     pub name: String,
     pub agent_id: AgentId,
-    pub kind: String,
-    pub prompt: String,
-    pub config: Value,
+    pub prompt: Prompt,
+    pub config: NewConfig,
     pub precheck: Option<Precheck>,
 }
 
@@ -173,10 +225,10 @@ pub enum PrecheckChange {
     Set(Precheck),
 }
 
-/// 修改：只改给出的字段。
+/// 修改：只改给出的字段。config 不带种类（种类不能改），按已存的种类解析。
 #[derive(Debug, Clone, Default)]
 pub struct Update {
-    pub prompt: Option<String>,
+    pub prompt: Option<Prompt>,
     pub config: Option<Value>,
     pub enabled: Option<bool>,
     pub precheck: PrecheckChange,
@@ -184,12 +236,12 @@ pub struct Update {
 
 struct Inner {
     db: Arc<Database>,
-    kinds: Kinds,
     tz: Tz,
     commands: Arc<AgentCommands>,
     precheck: PrecheckRunner,
     inbox: SenderInbox,
     faults: Faults,
+    hosting: Hosting,
     changed: watch::Sender<()>,
 }
 
@@ -200,19 +252,16 @@ pub struct TriggerService(Arc<Inner>);
 impl TriggerService {
     pub fn new(
         db: Arc<Database>,
-        kinds: Kinds,
         tz: Tz,
         commands: Arc<AgentCommands>,
         precheck_timeout: Duration,
         inbox: SenderInbox,
         faults: Faults,
+        hosting: Hosting,
     ) -> Self {
         let precheck = PrecheckRunner::new(commands.clone(), precheck_timeout, EVENT_MAX_BYTES);
-        Self(Arc::new(Inner { db, kinds, tz, commands, precheck, inbox, faults, changed: watch::channel(()).0 }))
-    }
-
-    pub fn kinds(&self) -> &Kinds {
-        &self.0.kinds
+        let changed = watch::channel(()).0;
+        Self(Arc::new(Inner { db, tz, commands, precheck, inbox, faults, hosting, changed }))
     }
 
     pub(crate) fn db(&self) -> &Arc<Database> {
@@ -264,28 +313,23 @@ impl TriggerService {
             .await
     }
 
-    /// 读模型：各自方式给出的运行状态，以及上一次触发开出的会话还在不在（一次读）。
+    /// 读模型：各自的配置与运行状态，以及上一次触发开出的会话还在不在（一次读）。
     pub async fn views(&self, triggers: Vec<Trigger>) -> Result<Vec<TriggerView>> {
-        let kinds = self.0.kinds.clone();
+        let hosting = self.0.hosting.clone();
         self.0
             .db
             .read(move |c| {
                 let ids: Vec<SessionId> = triggers.iter().filter_map(|t| t.last_session_id.clone()).collect();
                 let states = states_of_in(c, &ids)?;
-                triggers
-                    .into_iter()
-                    .map(|t| {
-                        let alive = t.last_session_id.clone().filter(|id| states.contains_key(id));
-                        let status = match kinds.get(&t.kind)?.status(&t) {
-                            Ok(s) => Ok(s),
-                            Err(e) => match e.internal_as::<Corrupt>() {
-                                Some(c) => Err(c.0.clone()),
-                                None => return Err(e),
-                            },
-                        };
-                        Ok(TriggerView { trigger: t, status, live_session_id: alive })
-                    })
-                    .collect()
+                Ok::<_, Error>(
+                    triggers
+                        .into_iter()
+                        .map(|t| {
+                            let alive = t.last_session_id.clone().filter(|id| states.contains_key(id));
+                            TriggerView { kind: KindView::of(&t, &hosting), trigger: t, live_session_id: alive }
+                        })
+                        .collect(),
+                )
             })
             .await
     }
@@ -304,27 +348,13 @@ impl TriggerService {
     }
 
     pub async fn create(&self, spec: NewSpec) -> Result<Trigger> {
-        if spec.prompt.trim().is_empty() {
-            return Err(invalid("trigger prompt must not be empty"));
-        }
         validate_name(&spec.name)?;
-        if let Some(p) = &spec.precheck {
-            p.validate()?;
-        }
-        let kind = self.0.kinds.get(&spec.kind)?.clone();
-        let Configured { config, state } = kind.configure(&spec.config, Utc::now())?;
-        let mut keys = kind.secrets(&config);
+        let mode = spec.config.configure(self.0.tz, Utc::now())?;
+        let mut keys = mode.secrets().to_vec();
         keys.extend(spec.precheck.iter().flat_map(|p| p.secrets.clone()));
         self.check_secrets(&spec.agent_id, &keys).await?;
-        let new = NewTrigger {
-            name: spec.name,
-            agent_id: spec.agent_id,
-            prompt: spec.prompt,
-            kind: spec.kind,
-            config,
-            state,
-            precheck: spec.precheck,
-        };
+        let new =
+            NewTrigger { name: spec.name, agent_id: spec.agent_id, prompt: spec.prompt, mode, precheck: spec.precheck };
         let created = self
             .0
             .db
@@ -335,52 +365,35 @@ impl TriggerService {
             })
             .await?;
         self.changed();
-        tracing::info!(trigger = %created.name, kind = %created.kind, agent = %created.agent_id, "trigger created");
+        let kind = created.mode.kind().name();
+        tracing::info!(trigger = %created.name, kind, agent = %created.agent_id, "trigger created");
         Ok(created)
     }
 
-    /// 这次修改要不要按 configure 重新推导：配置变了、或停用后重新启用（定时的下次时间从现在算、流式重起进程）才要；
-    /// 规范化后没变的配置（界面只改说明时也带着原配置）不算改动，运行状态留着。
-    fn rederive(&self, t: &Trigger, config: Option<&Value>, enabled: Option<bool>) -> Result<Option<Configured>> {
-        let reenabled = enabled == Some(true) && !t.enabled;
-        if config.is_none() && !reenabled {
-            return Ok(None);
-        }
-        let derived = self.0.kinds.get(&t.kind)?.configure(config.unwrap_or(&t.config), Utc::now())?;
-        Ok((reenabled || derived.config != t.config).then_some(derived))
-    }
-
-    /// 在一个事务里只改给出的字段。重新启用时清除停用的原因；换检查、改配置或重新启用清掉脚本的出错。
+    /// 在一个事务里只改给出的字段。换检查、改配置或重新启用清掉脚本的出错。
     pub async fn update(&self, trigger_id: i64, update: Update) -> Result<Trigger> {
-        if update.prompt.as_ref().is_some_and(|p| p.trim().is_empty()) {
-            return Err(invalid("trigger prompt must not be empty"));
-        }
-        if let PrecheckChange::Set(p) = &update.precheck {
-            p.validate()?;
-        }
-        if matches!(update.precheck, PrecheckChange::Set(_)) || update.config.is_some() || update.enabled == Some(true)
-        {
-            // 核对 secret 要读 vault，不能放进下面的事务：先按此刻的行算出会生效的配置。中间有并发修改时核对按的是旧行，
-            // 后果只是走回运行时的失败路径（与建好后 secret 才被删一样），有意不加锁
-            let current = self.manageable(trigger_id).await?;
+        let tz = self.0.tz;
+        // 核对 secret 要读 vault，不能放进下面的事务：先按此刻的行算出会生效的配置。中间有并发修改时核对按的是旧行，
+        // 后果只是走回运行时的失败路径（与建好后 secret 才被删一样），有意不加锁
+        let current = self.manageable(trigger_id).await?;
+        let config = update.config.map(|c| NewConfig::parse(current.mode.kind(), c)).transpose()?;
+        if matches!(update.precheck, PrecheckChange::Set(_)) || config.is_some() || update.enabled == Some(true) {
             let mut keys = match &update.precheck {
                 PrecheckChange::Set(p) => p.secrets.clone(),
-                _ => Vec::new(),
+                PrecheckChange::Keep | PrecheckChange::Remove => Vec::new(),
             };
-            if let Some(derived) = self.rederive(&current, update.config.as_ref(), update.enabled)? {
-                keys.extend(self.0.kinds.get(&current.kind)?.secrets(&derived.config));
+            if let Some(mode) = rederive(&current, config.clone(), update.enabled, tz)? {
+                keys.extend_from_slice(mode.secrets());
             }
             self.check_secrets(&current.agent_id, &keys).await?;
         }
-        let this = self.clone();
         let updated = self
             .0
             .db
             .write(move |tx| {
                 let mut t = manageable_in(tx, trigger_id)?;
-                let reenabled = update.enabled == Some(true) && !t.enabled;
-                if let Some(derived) = this.rederive(&t, update.config.as_ref(), update.enabled)? {
-                    (t.config, t.state) = (derived.config, derived.state);
+                if let Some(mode) = rederive(&t, config, update.enabled, tz)? {
+                    t.mode = mode;
                     reset(&mut t);
                 }
                 match update.precheck {
@@ -395,13 +408,10 @@ impl TriggerService {
                     }
                 }
                 if let Some(prompt) = update.prompt {
-                    t.prompt = prompt;
+                    t.prompt = prompt.into();
                 }
                 if let Some(enabled) = update.enabled {
                     t.enabled = enabled;
-                }
-                if reenabled {
-                    t.disabled_reason = None;
                 }
                 save_in(tx, &t)?;
                 Ok::<_, Error>(t)
@@ -414,22 +424,6 @@ impl TriggerService {
 
     async fn manageable(&self, trigger_id: i64) -> Result<Trigger> {
         self.0.db.read(move |c| manageable_in(c, trigger_id)).await
-    }
-
-    /// 系统停用触发器（存下的数据坏了），原因记在 disabled_reason 给用户看；重新启用时清除。已被删除时返回 false。
-    pub async fn disable(&self, trigger_id: i64, reason: String) -> Result<bool> {
-        let found = self
-            .0
-            .db
-            .write(move |tx| {
-                let Some(mut t) = load_in(tx, trigger_id)? else { return Ok::<_, Error>(false) };
-                (t.enabled, t.disabled_reason) = (false, Some(reason));
-                save_in(tx, &t)?;
-                Ok(true)
-            })
-            .await?;
-        self.changed();
-        Ok(found)
     }
 
     pub async fn delete(&self, trigger_id: i64) -> Result<()> {
@@ -472,7 +466,7 @@ impl TriggerService {
     /// 激活机制（到期扫描、流式）的触发：没有调用方等着，按结果逐种处理。不看是否已结束：按到期触发的在调用前已消耗了这次
     /// 到期，一次性的那时已经结束。
     /// - 前置检查失败：已记成出错并告警；脚本的故障往往是暂时的，保持启用。
-    /// - 它的 agent 已归档：跳过，保持启用；一次性的那一次已用掉，告警说任务没做（agent 收不到，退给用户）。
+    /// - 它的 agent 已归档：跳过，保持启用；触发器若已结束（这是它最后一次），告警说任务没做（agent 收不到，退给用户）。
     /// - 停用或删除：只记日志。
     pub async fn fire_activated(&self, trigger_id: i64, payload: Option<String>) -> Result<()> {
         match self.fire(trigger_id, payload, By::Activation).await? {
@@ -480,23 +474,23 @@ impl TriggerService {
             Outcome::Skipped(why, detail) => {
                 tracing::info!(trigger_id, detail, "activated fire skipped");
                 if why == Skip::Archived {
-                    self.once_skipped(trigger_id).await?;
+                    self.finished_unrun(trigger_id).await?;
                 }
             }
         }
         Ok(())
     }
 
-    /// 一次性触发器已用掉它那一次（到期时已结束），任务没做：告警。定时与流式的只是跳过这一次，不告警。
-    async fn once_skipped(&self, trigger_id: i64) -> Result<()> {
+    /// 已结束的触发器最后一次没跑成（agent 已归档）：任务再也不会做了，告警。没结束的只是跳过这一次，不告警。
+    async fn finished_unrun(&self, trigger_id: i64) -> Result<()> {
         let faults = self.0.faults.clone();
         self.0
             .db
             .write(move |tx| {
                 let Some(t) = load_in(tx, trigger_id)?.filter(|t| t.finished_at.is_some()) else { return Ok(()) };
                 let letter = format!(
-                    "Your one-off trigger `{}` came due while you were archived, so its task was NOT done and it has \
-                     finished. Its prompt was:\n<prompt>\n{}\n</prompt>",
+                    "Your trigger `{}` came due for its last time while you were archived, so its task was NOT done \
+                     and it has finished. Its prompt was:\n<prompt>\n{}\n</prompt>",
                     t.name, t.prompt
                 );
                 faults.alert_in(tx, &t, "未执行：它的 agent 已归档", letter, &t.prompt)
@@ -538,8 +532,7 @@ impl TriggerService {
             let decision = decide(&precheck, &output, previous.as_deref(), max_bytes)?;
             Ok((output, decision))
         });
-        let record = by == By::Activation;
-        if let (Err(Failed(error)), false) = (&checked, record) {
+        if let (Err(Failed(error)), By::Run) = (&checked, by) {
             return Ok(Outcome::CheckFailed(error.clone()));
         }
         let this = self.clone();
@@ -555,7 +548,7 @@ impl TriggerService {
                 };
                 let (output, decision) = match checked {
                     Ok(done) => done,
-                    Err(Failed(error)) => return this.check_failed_in(tx, &mut t, &precheck, error, record),
+                    Err(Failed(error)) => return this.check_failed_in(tx, &mut t, &precheck, error, by),
                 };
                 passed_in(tx, &mut t, &precheck, &output, Utc::now())?;
                 match decision.event {
@@ -577,13 +570,16 @@ impl TriggerService {
         t: &mut Trigger,
         precheck: &Precheck,
         error: String,
-        record: bool,
+        by: By,
     ) -> Result<Outcome> {
-        if record {
-            failed(t, Utc::now());
-            let fault = TriggerFault { source: FaultSource::Precheck, error: error.clone() };
-            self.0.faults.report_in(tx, t, fault, |t| alert_letter(t, precheck, &error))?;
-            save_in(tx, t)?;
+        match by {
+            By::Run => {}
+            By::Activation => {
+                failed(t, Utc::now());
+                let fault = TriggerFault { source: FaultSource::Precheck, error: error.clone() };
+                self.0.faults.report_in(tx, t, fault, |t| alert_letter(t, precheck, &error))?;
+                save_in(tx, t)?;
+            }
         }
         Ok(Outcome::CheckFailed(error))
     }
@@ -606,7 +602,7 @@ impl TriggerService {
         };
         (t.last_fired_at, t.last_session_id) = (Some(now), Some(session_id.clone()));
         save_in(tx, t)?;
-        tracing::info!(trigger = %t.name, kind = %t.kind, %session_id, "trigger fired");
+        tracing::info!(trigger = %t.name, kind = t.mode.kind().name(), %session_id, "trigger fired");
         Ok(Outcome::Fired(Fired { session_id }))
     }
 }
@@ -625,6 +621,19 @@ fn manageable_in(c: &Connection, trigger_id: i64) -> Result<Trigger> {
         )));
     }
     Ok(t)
+}
+
+/// 这次修改要不要重新推导：配置变了、或停用后重新启用（定时的下次时间从现在算、流式重起进程）才要；规范化后
+/// 没变的配置（界面只改说明时也带着原配置）不算改动，运行状态留着。
+fn rederive(t: &Trigger, config: Option<NewConfig>, enabled: Option<bool>, tz: Tz) -> Result<Option<Mode>> {
+    let reenabled = enabled == Some(true) && !t.enabled;
+    let input = match config {
+        Some(c) => c,
+        None if reenabled => t.mode.input(),
+        None => return Ok(None),
+    };
+    let derived = input.configure(tz, Utc::now())?;
+    Ok((reenabled || !derived.same_config(&t.mode)).then_some(derived))
 }
 
 /// 触发器这次跑不跑（前置检查之前）：停用的不跑；它的 agent 收不了信的不跑前置检查（能不能收信由会话领域回答）。

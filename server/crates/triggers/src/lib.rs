@@ -1,8 +1,8 @@
 //! 触发器（docs/architecture.md 第 14 节）：具名、持久的事件来源，把外部刺激变成投进会话信箱的信——定时（schedule）、一次性
 //! （once）、流式（stream），前置检查，脚本出错告警。
 //!
-//! - [`kinds`]：触发方式的多态（[`kinds::TriggerKind`] 纯逻辑 + 激活机制）。加一种方式 = 一个实现 + 在 [`TriggerDomain::build`]
-//!   里登记一行，表、工具、入口不用改。
+//! - [`kinds`]：触发方式（[`kinds::Kind`]、存下的 [`kinds::Mode`]）。种类都在本 crate，是 enum：加一种 = 各 enum 加一个变体，
+//!   编译器列出要跟着补的地方，表与工具不用改。
 //! - [`service`]：管理与触发的唯一出口；[`precheck`]：前置检查；[`faults`]：脚本出错的记录与告警。
 //! - 激活机制：[`due::DueRunner`]（定时与一次性共用的到期扫描）、[`stream::StreamRunner`]（托管常驻命令）。
 //!
@@ -35,10 +35,12 @@ use muliao_sessions::origins::Origin;
 use muliao_workspace::commands::AgentCommands;
 use tokio::task::JoinHandle;
 
-pub use service::{Fired, NewSpec, PrecheckChange, TriggerService, TriggerView, Update};
+pub use service::{Fired, NewSpec, PrecheckChange, Prompt, TriggerService, TriggerView, Update};
 
-pub const MIGRATION: Migration =
-    Migration { domain: "triggers", steps: &[include_str!("../migrations/001_triggers.sql")] };
+pub const MIGRATION: Migration = Migration {
+    domain: "triggers",
+    steps: &[include_str!("../migrations/001_triggers.sql"), include_str!("../migrations/002_typed_modes.sql")],
+};
 
 /// 触发器领域要的外部依赖。
 pub struct TriggerDeps {
@@ -66,23 +68,20 @@ impl TriggerDomain {
     }
 
     fn build_with(d: TriggerDeps, timing: stream::Timing) -> Self {
-        // 触发方式在这里登记
-        let schedule = Arc::new(schedule::Schedule::new(d.tz, d.notifications.clone()));
-        let once = Arc::new(once::Once::new(d.tz));
-        let kinds = kinds::Kinds::new(vec![schedule.clone(), once.clone(), Arc::new(stream::Stream)]);
         let faults = faults::Faults::new(d.inbox.clone(), d.notifications.clone(), d.tz);
+        let hosting = stream::Hosting::default();
         let service = TriggerService::new(
             d.db,
-            kinds,
             d.tz,
             d.commands.clone(),
             Duration::from_secs_f64(d.precheck_timeout_seconds),
             d.inbox,
             faults,
+            hosting.clone(),
         );
-        // 按到期时间触发的方式共用一个扫描循环
-        let due = Arc::new(due::DueRunner::new(service.clone(), vec![schedule, once]));
-        let streams = Arc::new(stream::StreamRunner::new(service.clone(), d.commands, d.notifications, timing));
+        let due = Arc::new(due::DueRunner::new(service.clone(), d.tz, d.notifications.clone()));
+        let streams =
+            Arc::new(stream::StreamRunner::new(service.clone(), d.commands, d.notifications, timing, hosting));
         let tools = tools::tools(service.clone(), d.precheck_timeout_seconds);
         Self { service, due, streams, tools, loops: Default::default() }
     }

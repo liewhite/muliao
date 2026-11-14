@@ -41,13 +41,52 @@ pub enum FireWhen {
     Changed,
 }
 
+/// 命令最多这么多字符
+const SCRIPT_MAX_CHARS: usize = 4000;
+
+/// agent 写的一条 bash 命令（前置检查、流式命令）：1 到 4000 个字符、不全是空白。只经 [`Script::new`] 构造（反序列化
+/// 也走它），拿到的就是合法的。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(into = "String", try_from = "String")]
+#[schema(value_type = String)]
+pub struct Script(String);
+
+impl Script {
+    pub fn new(text: impl Into<String>) -> std::result::Result<Self, String> {
+        let text = text.into();
+        let n = text.chars().count();
+        if text.trim().is_empty() || n > SCRIPT_MAX_CHARS {
+            return Err(format!("command must be 1 to {SCRIPT_MAX_CHARS} characters, got {n}"));
+        }
+        Ok(Self(text))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for Script {
+    type Error = String;
+
+    fn try_from(text: String) -> std::result::Result<Self, String> {
+        Self::new(text)
+    }
+}
+
+impl From<Script> for String {
+    fn from(s: Script) -> String {
+        s.0
+    }
+}
+
 /// 一个前置检查（存在触发器上，也是工具与接口的参数）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Precheck {
     /// bash command run before each firing.
-    #[schemars(length(min = 1, max = 4000))]
-    pub command: String,
+    #[schemars(with = "String", length(min = 1, max = 4000))]
+    pub command: Script,
     /// Vault keys exposed to the command as env vars.
     #[serde(default)]
     pub secrets: Vec<String>,
@@ -55,19 +94,6 @@ pub struct Precheck {
     /// only records it).
     #[serde(default)]
     pub fire_when: FireWhen,
-}
-
-impl Precheck {
-    /// 外部输入在边界校验一次（serde 不管长度）。
-    pub fn validate(&self) -> Result<()> {
-        let n = self.command.chars().count();
-        if self.command.trim().is_empty() || n > 4000 {
-            return Err(muliao_platform::errors::invalid(format!(
-                "precheck command must be 1 to 4000 characters, got {n}"
-            )));
-        }
-        Ok(())
-    }
 }
 
 /// 检查本身失败的原因（给用户与 agent 看，可能含脚本的 stderr）。
@@ -143,14 +169,15 @@ pub fn alert_letter(t: &Trigger, p: &Precheck, error: &str) -> String {
         format!(
             "The precheck of your trigger `{}` (kind {}) just started failing, so the trigger did not fire this time. \
              You wrote this check, so it is yours to fix; the user has not been told.",
-            t.name, t.kind
+            t.name,
+            t.mode.kind().name()
         ),
         String::new(),
         format!("fire_when: {}", serde_json::to_value(p.fire_when).expect("serializes").as_str().unwrap_or("")),
         format!("secrets: {}", if p.secrets.is_empty() { "(none)".to_owned() } else { p.secrets.join(", ") }),
         "command:".into(),
         "```bash".into(),
-        p.command.clone(),
+        p.command.as_str().to_owned(),
         "```".into(),
         "error:".into(),
         "```".into(),
@@ -173,11 +200,11 @@ pub fn alert_letter(t: &Trigger, p: &Precheck, error: &str) -> String {
                 .into(),
         ]);
     } else {
-        // 已结束的一次性触发器不能再修改或运行：任务没做，要么自己做，要么重建
+        // 已结束的触发器不会再触发，也不能再修改或运行：任务没做，要么自己做，要么重建
         lines.extend([
-            "- This was a one-off trigger and it has used up its single firing, so its task was NOT done; it has \
-             finished and can no longer be updated or run. If the cause was transient or a bug in the command, do \
-             the task yourself or create a new trigger with a fixed precheck."
+            "- This trigger has finished: this was its last firing, so its task was NOT done, and it can no longer \
+             be updated or run. If the cause was transient or a bug in the command, do the task yourself or create \
+             a new trigger with a fixed precheck."
                 .to_owned(),
             user_only.into(),
             "Its prompt was:".into(),
@@ -224,7 +251,7 @@ impl PrecheckRunner {
             pipefail: true,
             merge_stderr: false,
         };
-        let done = shell.run(&p.command, self.timeout, options).await?;
+        let done = shell.run(p.command.as_str(), self.timeout, options).await?;
         let result = done.result;
         let Some(code) = result.exit_code else {
             return Ok(Err(Failed(format!("precheck timed out after {}s", self.timeout.as_secs_f64()))));
@@ -261,7 +288,7 @@ mod tests {
     use super::*;
 
     fn check(fire_when: FireWhen) -> Precheck {
-        Precheck { command: "x".into(), secrets: vec![], fire_when }
+        Precheck { command: Script::new("x").unwrap(), secrets: vec![], fire_when }
     }
 
     #[test]

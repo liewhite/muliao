@@ -3013,7 +3013,7 @@
         "tags": [
           "triggers"
         ],
-        "summary": "登记的触发方式。",
+        "summary": "全部触发方式。",
         "operationId": "trigger_kinds",
         "responses": {
           "200": {
@@ -5112,6 +5112,15 @@
           }
         }
       },
+      "CronExpr": {
+        "type": "string",
+        "description": "5 段 cron 表达式（分 时 日 月 周），去掉了首尾空白。只经 [`CronExpr::new`] 构造（反序列化也走它）：能解析、\n会到期。带秒的 6 段会每秒到期，所以不收。"
+      },
+      "Debounce": {
+        "type": "number",
+        "format": "double",
+        "description": "防抖窗口的秒数：0 到 3600。只经 [`Debounce::new`] 构造（反序列化也走它），换成时长不会失败。"
+      },
       "Decision": {
         "type": "object",
         "description": "用户对一次等批准的调用的决定。pin：用户批准的是哪一份（请求批准时工具定下、记在挂起记录里的指纹），批准时\n交回工具比对。迁移来的旧信件没有它或为 null（都已处理，不会再交给运行），读入时当作空指纹：工具给的指纹不会是空的，\n比对对不上。",
@@ -6221,65 +6230,16 @@
           "interrupted"
         ]
       },
-      "KindInDoc": {
-        "oneOf": [
-          {
-            "type": "object",
-            "required": [
-              "config",
-              "kind"
-            ],
-            "properties": {
-              "config": {
-                "$ref": "#/components/schemas/ScheduleConfig"
-              },
-              "kind": {
-                "type": "string",
-                "enum": [
-                  "schedule"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
-            "required": [
-              "config",
-              "kind"
-            ],
-            "properties": {
-              "config": {
-                "$ref": "#/components/schemas/OnceConfig"
-              },
-              "kind": {
-                "type": "string",
-                "enum": [
-                  "once"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
-            "required": [
-              "config",
-              "kind"
-            ],
-            "properties": {
-              "config": {
-                "$ref": "#/components/schemas/StreamConfig"
-              },
-              "kind": {
-                "type": "string",
-                "enum": [
-                  "stream"
-                ]
-              }
-            }
-          }
+      "Kind": {
+        "type": "string",
+        "description": "触发方式的种类。",
+        "enum": [
+          "schedule",
+          "once",
+          "stream"
         ]
       },
-      "KindOutDoc": {
+      "KindView": {
         "oneOf": [
           {
             "type": "object",
@@ -6293,14 +6253,7 @@
                 "$ref": "#/components/schemas/ScheduleConfig"
               },
               "status": {
-                "oneOf": [
-                  {
-                    "$ref": "#/components/schemas/ScheduleStatus"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+                "$ref": "#/components/schemas/ScheduleStatus"
               },
               "kind": {
                 "type": "string",
@@ -6322,14 +6275,7 @@
                 "$ref": "#/components/schemas/OnceConfig"
               },
               "status": {
-                "oneOf": [
-                  {
-                    "$ref": "#/components/schemas/OnceStatus"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+                "$ref": "#/components/schemas/OnceStatus"
               },
               "kind": {
                 "type": "string",
@@ -6351,14 +6297,7 @@
                 "$ref": "#/components/schemas/StreamConfig"
               },
               "status": {
-                "oneOf": [
-                  {
-                    "$ref": "#/components/schemas/StreamStatus"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+                "$ref": "#/components/schemas/StreamStatus"
               },
               "kind": {
                 "type": "string",
@@ -6369,7 +6308,7 @@
             }
           }
         ],
-        "description": "config 与 status（这种方式自己给出的运行状态，不含凭证；读不出时为 null，原因在 status_error）按 kind 区分。"
+        "description": "给界面与模型看的配置与运行状态（不含凭证）。"
       },
       "Link": {
         "type": "object",
@@ -6835,6 +6774,65 @@
           }
         }
       },
+      "NewConfig": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "config",
+              "kind"
+            ],
+            "properties": {
+              "config": {
+                "$ref": "#/components/schemas/ScheduleConfig"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "schedule"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "config",
+              "kind"
+            ],
+            "properties": {
+              "config": {
+                "$ref": "#/components/schemas/OnceInput"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "once"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "config",
+              "kind"
+            ],
+            "properties": {
+              "config": {
+                "$ref": "#/components/schemas/StreamConfig"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "stream"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "建、改时交进来的配置（未知字段报错）。"
+      },
       "Notification": {
         "type": "object",
         "description": "一条通知（读模型）。",
@@ -6918,6 +6916,20 @@
       },
       "OnceConfig": {
         "type": "object",
+        "description": "存下的配置：带服务端时区的到期时间。",
+        "required": [
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "OnceInput": {
+        "type": "object",
+        "description": "交进来的配置：时间可以不带时区。",
         "required": [
           "at"
         ],
@@ -6963,7 +6975,7 @@
         ],
         "properties": {
           "command": {
-            "type": "string",
+            "$ref": "#/components/schemas/Script",
             "description": "bash command run before each firing."
           },
           "secrets": {
@@ -6989,6 +7001,10 @@
           "medium",
           "low"
         ]
+      },
+      "Prompt": {
+        "type": "string",
+        "description": "交给 agent 的说明：不能是空的。只经 [`Prompt::new`] 构造（反序列化也走它）。"
       },
       "PushKeys": {
         "type": "object",
@@ -7691,7 +7707,7 @@
         ],
         "properties": {
           "cron": {
-            "type": "string"
+            "$ref": "#/components/schemas/CronExpr"
           }
         },
         "additionalProperties": false
@@ -7719,6 +7735,10 @@
             ]
           }
         }
+      },
+      "Script": {
+        "type": "string",
+        "description": "agent 写的一条 bash 命令（前置检查、流式命令）：1 到 4000 个字符、不全是空白。只经 [`Script::new`] 构造（反序列化\n也走它），拿到的就是合法的。"
       },
       "ScriptGrantOut": {
         "type": "object",
@@ -8432,7 +8452,7 @@
         ],
         "properties": {
           "command": {
-            "type": "string"
+            "$ref": "#/components/schemas/Script"
           },
           "secrets": {
             "type": "array",
@@ -8441,8 +8461,7 @@
             }
           },
           "debounce_seconds": {
-            "type": "number",
-            "format": "double"
+            "$ref": "#/components/schemas/Debounce"
           }
         },
         "additionalProperties": false
@@ -8542,7 +8561,7 @@
       "TriggerCreate": {
         "allOf": [
           {
-            "$ref": "#/components/schemas/KindInDoc"
+            "$ref": "#/components/schemas/NewConfig"
           },
           {
             "type": "object",
@@ -8559,7 +8578,7 @@
                 "$ref": "#/components/schemas/AgentId"
               },
               "prompt": {
-                "type": "string"
+                "$ref": "#/components/schemas/Prompt"
               },
               "precheck": {
                 "oneOf": [
@@ -8575,7 +8594,7 @@
             }
           }
         ],
-        "description": "新建触发器：kind 与 config 按方式区分（有默认值的配置项可以不填），config 原样交给触发方式校验、补默认值。"
+        "description": "新建触发器：kind 与 config 按方式区分（有默认值的配置项可以不填）。"
       },
       "TriggerFault": {
         "type": "object",
@@ -8602,7 +8621,7 @@
         ],
         "properties": {
           "name": {
-            "type": "string"
+            "$ref": "#/components/schemas/Kind"
           },
           "description": {
             "type": "string",
@@ -8613,7 +8632,8 @@
       "TriggerOut": {
         "allOf": [
           {
-            "$ref": "#/components/schemas/KindOutDoc"
+            "$ref": "#/components/schemas/KindView",
+            "description": "config 与 status（这种方式的运行状态，不含凭证）按 kind 区分"
           },
           {
             "type": "object",
@@ -8627,10 +8647,8 @@
               "last_checked_at",
               "last_fired_at",
               "last_session_id",
-              "disabled_reason",
               "faults",
-              "finished_at",
-              "status_error"
+              "finished_at"
             ],
             "properties": {
               "id": {
@@ -8685,13 +8703,6 @@
                   }
                 ]
               },
-              "disabled_reason": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "description": "被自动停用的原因（重新启用时清除）"
-              },
               "faults": {
                 "type": "array",
                 "items": {
@@ -8706,13 +8717,6 @@
                 ],
                 "format": "date-time",
                 "description": "结束的时间：不为空表示它不会再触发了（一次性触发器跑完），只能查看与删除"
-              },
-              "status_error": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "description": "存下的运行状态坏了、读不出时的原因（这时 status 为 null）"
               }
             }
           }
@@ -8724,9 +8728,13 @@
         "description": "只修改给出的字段。precheck 给出 null 表示去掉前置检查，不出现表示不变。",
         "properties": {
           "prompt": {
-            "type": [
-              "string",
-              "null"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Prompt"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "config": {

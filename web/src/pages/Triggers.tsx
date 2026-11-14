@@ -53,11 +53,6 @@ const KIND_LABELS: Record<TriggerKindName, { label: string; summary: string }> =
   stream: { label: '流式', summary: '托管一条常驻命令，它输出的每一行是一个事件' },
 }
 
-/** 界面认识的触发方式：服务端新加了一种而界面还没跟上时不列出 */
-function knownKind(k: Schemas['TriggerKindOut']): k is TriggerKind {
-  return Object.hasOwn(KIND_LABELS, k.name)
-}
-
 /** 新建时的初始配置。在打开表单、切换方式时才算：一次性触发器的默认时间是那时起一小时后 */
 function emptyConfig(kind: TriggerKindName): KindConfig {
   switch (kind) {
@@ -270,16 +265,13 @@ function PrecheckSummary({ trigger }: { trigger: Trigger }) {
 
 /** 这种方式自己的运行状态：下次时间、进程等 */
 function KindStatus({ trigger }: { trigger: Trigger }) {
-  if (trigger.status_error !== null) {
-    return <span className="text-danger">运行状态读不出：{trigger.status_error}</span>
-  }
   switch (trigger.kind) {
     case 'schedule':
       return (
         <span>
           <code className="rounded bg-surface-secondary px-1.5 py-0.5 font-mono text-xs">{trigger.config.cron}</code>
-          {trigger.enabled && trigger.status && <> · 下次 {formatTime(trigger.status.next_run_at)}</>}
-          {trigger.status?.skipped && (
+          {trigger.enabled && <> · 下次 {formatTime(trigger.status.next_run_at)}</>}
+          {trigger.status.skipped && (
             <span className="text-warning">
               {' '}
               · 自 {formatTime(trigger.status.skipped.since)} 起已跳过 {trigger.status.skipped.count} 次：上次的会话
@@ -289,18 +281,16 @@ function KindStatus({ trigger }: { trigger: Trigger }) {
         </span>
       )
     case 'once':
-      return trigger.status && <span>计划 {formatTime(trigger.status.run_at)}</span>
+      return <span>计划 {formatTime(trigger.status.run_at)}</span>
     case 'stream':
       return (
         <span className="flex flex-col gap-1">
           <code className="break-all rounded bg-surface-secondary px-1.5 py-0.5 font-mono text-xs">{trigger.config.command}</code>
-          {trigger.status && (
-            <span>
-              {trigger.status.running_since ? <>运行中，自 {formatTime(trigger.status.running_since)}</> : '未在运行'}
-              {' '}· stderr：<code className="font-mono text-xs">{trigger.status.stderr_log}</code>
-            </span>
-          )}
-          {trigger.status && trigger.status.failures > 0 && (
+          <span>
+            {trigger.status.running_since ? <>运行中，自 {formatTime(trigger.status.running_since)}</> : '未在运行'}
+            {' '}· stderr：<code className="font-mono text-xs">{trigger.status.stderr_log}</code>
+          </span>
+          {trigger.status.failures > 0 && (
             <span className="text-warning">连续很快退出 {trigger.status.failures} 次，按退避重启中</span>
           )}
         </span>
@@ -373,11 +363,11 @@ function EnableSwitch({ trigger }: { trigger: Trigger }) {
 function kindSummary(trigger: Trigger): string {
   switch (trigger.kind) {
     case 'schedule':
-      return trigger.enabled && trigger.status
+      return trigger.enabled
         ? `${trigger.config.cron} · 下次 ${formatTime(trigger.status.next_run_at)}`
         : trigger.config.cron
     case 'once':
-      return trigger.status ? `计划 ${formatTime(trigger.status.run_at)}` : '计划时间读不出'
+      return `计划 ${formatTime(trigger.status.run_at)}`
     case 'stream':
       return trigger.config.command
   }
@@ -398,14 +388,12 @@ function TriggerFaults({ trigger }: { trigger: Trigger }) {
 
 /** 需要人注意的状态，卡片上只给一句话，原因在详情里 */
 function triggerWarning(trigger: Trigger): string | null {
-  if (trigger.disabled_reason) return trigger.finished_at ? '触发失败' : '触发失败，已自动停用'
   if (trigger.faults.length) return FAULT_TITLES[trigger.faults[0].source].short
-  if (trigger.status_error !== null) return '运行状态读不出'
   switch (trigger.kind) {
     case 'schedule':
-      return trigger.status?.skipped ? `已连续跳过 ${trigger.status.skipped.count} 次` : null
+      return trigger.status.skipped ? `已连续跳过 ${trigger.status.skipped.count} 次` : null
     case 'stream':
-      return trigger.status?.failures ? `连续失败 ${trigger.status.failures} 次` : null
+      return trigger.status.failures ? `连续失败 ${trigger.status.failures} 次` : null
     case 'once':
       return null
   }
@@ -521,7 +509,6 @@ function TriggerItem({ trigger }: { trigger: Trigger }) {
           </>
         )}
       </div>
-      {trigger.disabled_reason && <ErrorAlert title="触发失败，已自动停用" error={trigger.disabled_reason} />}
       <TriggerFaults trigger={trigger} />
     </>
   )
@@ -786,7 +773,6 @@ function FinishedTrigger({ trigger }: { trigger: Trigger }) {
             '没有触发会话（前置检查判定没事，或触发失败）'
           )}
         </div>
-        {trigger.disabled_reason && <ErrorAlert title="触发失败" error={trigger.disabled_reason} />}
         <TriggerFaults trigger={trigger} />
         <p className="whitespace-pre-wrap text-sm">{trigger.prompt}</p>
         <TriggerSessions trigger={trigger} />
@@ -832,7 +818,7 @@ function FinishedTriggers() {
 /** 自动发起会话的入口：定时、一次性、流式，方式的差异只在各自的配置。按 agent 分组的卡片网格，点卡片看详情 */
 export default function Triggers() {
   const triggers = useLoad(() => api.triggers(), [])
-  const kinds = useLoad(() => api.triggerKinds().then((list) => list.filter(knownKind)), [], never)
+  const kinds = useLoad(() => api.triggerKinds(), [], never)
   const agents = useAgents()
   // 详情跟着列表走：重新加载后显示最新内容，删掉后自动关闭
   const [openId, setOpenId] = useState<number | null>(null)

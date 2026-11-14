@@ -10,31 +10,29 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::faults::TriggerFault;
+use crate::kinds::{Kind, KindView, NewConfig};
 use crate::precheck::Precheck;
-use crate::service::{NewSpec, PrecheckChange, TriggerService, TriggerView, Update};
+use crate::service::{NewSpec, PrecheckChange, Prompt, TriggerService, TriggerView, Update};
 use crate::store::Listing;
 use muliao_platform::errors::{Error, invalid};
 
 #[derive(Serialize)]
-struct KindInfo<'a> {
-    kind: &'a str,
-    description: &'a str,
+struct KindInfo {
+    kind: Kind,
+    description: &'static str,
 }
 
 /// 给模型看的一个触发器。
 #[derive(Serialize)]
 struct TriggerInfo {
     name: String,
-    kind: String,
+    /// kind、config，以及 status：这种方式的运行状态，如下次触发时间
+    #[serde(flatten)]
+    kind: KindView,
     agent: String,
     prompt: String,
-    config: Value,
-    /// 这种方式的运行状态，如下次触发时间；存下的状态坏了时是 `{"error": 原因}`
-    status: Value,
     enabled: bool,
     precheck: Option<Precheck>,
-    /// 被自动停用的原因（重新启用时清除）
-    disabled_reason: Option<String>,
     faults: Vec<TriggerFault>,
     /// 最近一次触发开出的会话；已结束的（跑完的一次性触发器）在这里能看到它的结果去了哪
     last_session_id: Option<SessionId>,
@@ -47,13 +45,10 @@ fn info(view: TriggerView, names: &AgentNames) -> TriggerInfo {
     TriggerInfo {
         agent: names.name(&t.agent_id),
         name: t.name,
-        kind: t.kind,
+        kind: view.kind,
         prompt: t.prompt,
-        config: t.config,
-        status: status_value(&view.status),
         enabled: t.enabled,
         precheck: t.precheck,
-        disabled_reason: t.disabled_reason,
         faults: t.faults,
         last_session_id: view.live_session_id,
         finished_at: t.finished_at,
@@ -64,21 +59,10 @@ async fn names(service: &TriggerService) -> Result<AgentNames, Error> {
     service.db().read(agent_names_in).await
 }
 
-fn status_value(status: &std::result::Result<Value, String>) -> Value {
-    match status {
-        Ok(status) => status.clone(),
-        Err(e) => serde_json::json!({ "error": e }),
-    }
-}
-
-fn status_json(view: &TriggerView) -> String {
-    status_value(&view.status).to_string()
-}
-
 #[derive(Deserialize, JsonSchema)]
 pub struct NoArgs {}
 
-pub struct TriggerKinds(TriggerService);
+pub struct TriggerKinds;
 
 impl Tool<RunScope> for TriggerKinds {
     type Args = NoArgs;
@@ -93,8 +77,8 @@ impl Tool<RunScope> for TriggerKinds {
     }
 
     async fn call(&self, _ctx: ToolCtx<'_, RunScope>, _a: NoArgs) -> Result<ToolOutput, ToolError> {
-        let kinds: Vec<KindInfo<'_>> =
-            self.0.kinds().all().iter().map(|k| KindInfo { kind: k.name(), description: k.description() }).collect();
+        let kinds: Vec<KindInfo> =
+            Kind::ALL.iter().map(|k| KindInfo { kind: *k, description: k.description() }).collect();
         Ok(agenter::tool::json(&kinds))
     }
 }
@@ -118,9 +102,9 @@ impl Tool<RunScope> for TriggerList {
 
     fn description(&self) -> &str {
         "List triggers: things that wake an agent (schedules, one-offs, streams). Returns a JSON array of triggers, \
-         each with `name`, `kind`, `agent`, `prompt`, `config`, `status` (kind-specific state such as the next firing \
-         time), `enabled`, `precheck`, `disabled_reason`, `faults` (`source`, `error`), `last_session_id` and \
-         `finished_at` (ISO 8601; set once it will not fire again)."
+         each with `name`, `kind`, `config`, `status` (kind-specific state such as the next firing time), `agent`, \
+         `prompt`, `enabled`, `precheck`, `faults` (`source`, `error`), `last_session_id` and `finished_at` (ISO \
+         8601; set once it will not fire again)."
     }
 
     async fn call(&self, _ctx: ToolCtx<'_, RunScope>, a: ListArgs) -> Result<ToolOutput, ToolError> {
@@ -136,9 +120,10 @@ pub struct CreateArgs {
     /// Lowercase letters, digits and `-`, e.g. `daily-report`.
     name: String,
     /// Trigger kind from `trigger_kinds`.
-    kind: String,
+    kind: Kind,
     /// What to do on each firing.
-    prompt: String,
+    #[schemars(with = "String")]
+    prompt: Prompt,
     /// Kind-specific settings, e.g. {"cron": "0 9 * * *"} for a schedule, {"at": "2026-10-22T10:30"} for a one-off
     /// `once` trigger (never a cron expression with a date: that fires again every year and stays in the list).
     config: Map<String, Value>,
@@ -174,18 +159,17 @@ impl Tool<RunScope> for TriggerCreate {
         let spec = NewSpec {
             name: a.name,
             agent_id,
-            kind: a.kind,
             prompt: a.prompt,
-            config: Value::Object(a.config),
+            config: NewConfig::parse(a.kind, Value::Object(a.config))?,
             precheck: a.precheck,
         };
         let created = self.service.create(spec).await?;
         let view = self.service.view(created).await?;
         Ok(agenter::tool::text(format!(
             "created {} trigger {}; status: {}",
-            view.trigger.kind,
+            view.trigger.mode.kind().name(),
             view.trigger.name,
-            status_json(&view)
+            view.kind.status_json()
         )))
     }
 }
@@ -196,7 +180,8 @@ pub struct UpdateArgs {
     name: String,
     /// New instructions for each firing.
     #[serde(default)]
-    prompt: Option<String>,
+    #[schemars(with = "Option<String>")]
+    prompt: Option<Prompt>,
     /// New kind-specific settings (replaces the old config).
     #[serde(default)]
     config: Option<Map<String, Value>>,
@@ -236,7 +221,7 @@ impl Tool<RunScope> for TriggerUpdate {
         let updated = self.0.update(t.id, update).await?;
         let state = if updated.enabled { "enabled" } else { "paused" };
         let view = self.0.view(updated).await?;
-        Ok(agenter::tool::text(format!("updated trigger {} ({state}); status: {}", a.name, status_json(&view))))
+        Ok(agenter::tool::text(format!("updated trigger {} ({state}); status: {}", a.name, view.kind.status_json())))
     }
 }
 
@@ -322,7 +307,7 @@ fn format_seconds(s: f64) -> String {
 pub fn tools(service: TriggerService, precheck_timeout_seconds: f64) -> Vec<BuiltinTool> {
     let create = TriggerCreate { service: service.clone(), description: create_description(precheck_timeout_seconds) };
     vec![
-        builtin(TriggerKinds(service.clone()), ToolTraits::read()),
+        builtin(TriggerKinds, ToolTraits::read()),
         builtin(TriggerList(service.clone()), ToolTraits::read()),
         builtin(create, ToolTraits::write()),
         builtin(TriggerUpdate(service.clone()), ToolTraits::write()),

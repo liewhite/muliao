@@ -1,7 +1,7 @@
 //! 按到期时间触发的方式共用的激活机制：扫描到期的触发器，到点各触发一次。
 //!
-//! 定时与一次性的差别只有两件事：到期时间从哪来、这次到期被用掉之后这一行怎么变，由各方式的 [`DueRule`] 给出；扫描、
-//! 并发触发、坏数据停用与下次唤醒在这里实现一次。
+//! 定时与一次性的差别只有两件事：到期时间从哪来（[`crate::kinds::Mode::due_at`]）、这次到期被用掉之后这一行怎么变
+//! （[`consume_in`]）；扫描、并发触发与下次唤醒在这里实现一次。
 //!
 //! 用最终正确性换简化：消耗这次到期与触发不在一个事务里（触发可能先跑前置检查，不能占着事务）。进程恰好死在两者之间时
 //! 这一次被跳过（至多一次），换来的是检查失败或很慢都不会让同一个时刻反复触发。
@@ -11,12 +11,16 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use chrono_tz::Tz;
+use muliao_notifications::Notifications;
+use muliao_platform::db::Tx;
 use tokio::task::JoinHandle;
 
-use crate::kinds::DueRule;
+use crate::kinds::Mode;
+use crate::schedule;
 use crate::service::TriggerService;
-use crate::store::{Corrupt, Listing, load_in, save_in};
-use muliao_platform::errors::Error;
+use crate::store::{Listing, Trigger, load_in, save_in};
+use muliao_platform::errors::{Error, Result};
 
 /// 没有更早到期的也至少这么久醒一次
 const MAX_SLEEP: Duration = Duration::from_secs(60);
@@ -25,7 +29,8 @@ const MIN_SLEEP: Duration = Duration::from_secs(1);
 
 pub struct DueRunner {
     service: TriggerService,
-    rules: Vec<Arc<dyn DueRule>>,
+    tz: Tz,
+    notifications: Notifications,
     /// 触发还没做完的（前置检查在跑时还没有会话，定时的「上一次会话不空闲就跳过」看不到它）：它再到期时只消耗不触发，同一个
     /// 触发器不重叠。只在内存：服务重启时在跑的触发随进程结束
     firing: Arc<Mutex<HashSet<i64>>>,
@@ -41,12 +46,8 @@ impl Drop for Firing {
 }
 
 impl DueRunner {
-    pub fn new(service: TriggerService, rules: Vec<Arc<dyn DueRule>>) -> Self {
-        Self { service, rules, firing: Arc::default() }
-    }
-
-    fn rule(&self, kind: &str) -> Option<&Arc<dyn DueRule>> {
-        self.rules.iter().find(|r| r.kind() == kind)
+    pub fn new(service: TriggerService, tz: Tz, notifications: Notifications) -> Self {
+        Self { service, tz, notifications, firing: Arc::default() }
     }
 
     /// 常驻：扫描一轮、睡到最早的到期时间（最多一分钟），有触发器改动就提前醒。
@@ -65,26 +66,16 @@ impl DueRunner {
         })
     }
 
-    /// 还会到期的触发器与它们的到期时间。存下的数据坏了、算不出到期时间的停用（原因记在 disabled_reason），不让一行坏数据
-    /// 拖垮整个扫描。列不出来（数据库出错）记 error，这一轮当作没有。
+    /// 还会到期的触发器与它们的到期时间。列不出来（数据库出错）记 error，这一轮当作没有。
     async fn pending(&self) -> Vec<(i64, DateTime<Utc>)> {
         let listing = Listing { enabled_only: true, ..Listing::default() };
-        let triggers = match self.service.list(listing).await {
-            Ok(t) => t,
+        match self.service.list(listing).await {
+            Ok(triggers) => triggers.iter().filter_map(|t| Some((t.id, t.mode.due_at()?))).collect(),
             Err(e) => {
                 tracing::error!(error = %e, "listing due triggers failed");
-                return Vec::new();
-            }
-        };
-        let mut pending = Vec::new();
-        for t in triggers {
-            let Some(rule) = self.rule(&t.kind) else { continue };
-            match rule.due_at(&t) {
-                Ok(at) => pending.push((t.id, at)),
-                Err(e) => self.disable(t.id, e).await,
+                Vec::new()
             }
         }
-        pending
     }
 
     /// 扫描一轮：到期的在这里逐个消耗（短事务，下一轮不会再看到它到期），触发放出去并发跑、不等：一个慢的前置检查既不拖住
@@ -112,27 +103,25 @@ impl DueRunner {
         fired
     }
 
-    /// 按最新的行消耗这次到期，返回是否应当触发。只有这个触发器自己存下的数据坏了才停用它；别的失败（数据库出错）只记日志，
-    /// 没提交的下一轮重来。
+    /// 按最新的行消耗这次到期，返回是否应当触发。失败（数据库出错）只记日志，没提交的下一轮重来。
     async fn consume(&self, trigger_id: i64, now: DateTime<Utc>) -> bool {
-        let rules = self.rules.clone();
+        let (tz, notifications) = (self.tz, self.notifications.clone());
         let consumed = self
             .service
             .db()
             .write(move |tx| {
                 // 列出之后可能已被删除、停用、结束或改了配置：按最新的行重新判断
                 let Some(mut t) = load_in(tx, trigger_id)? else { return Ok::<_, Error>(Some("deleted".to_owned())) };
-                let rule = rules.iter().find(|r| r.kind() == t.kind).expect("listed with a due rule");
                 if t.finished_at.is_some() {
                     return Ok(Some("finished".into()));
                 }
                 if !t.enabled {
                     return Ok(Some("disabled".into()));
                 }
-                if rule.due_at(&t)? > now {
+                if t.mode.due_at().is_none_or(|at| at > now) {
                     return Ok(Some("rescheduled".into()));
                 }
-                let skipped = rule.consume_in(tx, &mut t, now)?;
+                let skipped = consume_in(tx, &mut t, now, tz, &notifications)?;
                 save_in(tx, &t)?;
                 Ok(skipped)
             })
@@ -143,22 +132,10 @@ impl DueRunner {
                 tracing::info!(trigger_id, why, "due fire skipped");
                 false
             }
-            Err(e) if e.internal_as::<Corrupt>().is_some() => {
-                self.disable(trigger_id, e).await;
-                false
-            }
             Err(e) => {
                 tracing::error!(trigger_id, error = %e, "due consume failed");
                 false
             }
-        }
-    }
-
-    async fn disable(&self, trigger_id: i64, error: Error) {
-        match self.service.disable(trigger_id, error.to_string()).await {
-            Ok(true) => tracing::error!(trigger_id, error = %error, "trigger disabled"),
-            Ok(false) => {}
-            Err(e) => tracing::error!(trigger_id, error = %e, cause = %error, "disabling a broken trigger failed"),
         }
     }
 
@@ -170,5 +147,31 @@ impl DueRunner {
             .map(|(_, at)| (at - now).to_std().unwrap_or(Duration::ZERO))
             .min()
             .map_or(MAX_SLEEP, |d| d.clamp(MIN_SLEEP, MAX_SLEEP))
+    }
+}
+
+/// 在到期的事务里消耗这次到期：改这一行（调用方写回），使它不再在 now 到期——定时推进到下次，一次性的结束。返回
+/// Some(原因) 表示这次不触发（记日志）；这次到期无论如何都已被消耗。
+fn consume_in(
+    tx: &mut Tx<'_>,
+    t: &mut Trigger,
+    now: DateTime<Utc>,
+    tz: Tz,
+    notifications: &Notifications,
+) -> Result<Option<String>> {
+    match t.mode.clone() {
+        Mode::Schedule { config, mut state } => {
+            let skipped = schedule::consume_in(tx, t, &config, &mut state, now, tz, notifications)?;
+            t.mode = Mode::Schedule { config, state };
+            Ok(skipped)
+        }
+        // 到点让它结束，这一次就算用掉了
+        Mode::Once { .. } => {
+            t.finished_at = Some(now);
+            tracing::info!(trigger = %t.name, "once trigger finished");
+            Ok(None)
+        }
+        // 没有到期时间，调用方已据此跳过
+        Mode::Stream { .. } => Ok(Some("not due-based".into())),
     }
 }

@@ -76,8 +76,8 @@ export type Wait = SessionDetail['waits'][number]
 
 export type Skill = Schemas['SkillDetail']
 export type Memory = Schemas['MemoryOut']
-/** 界面认识的一种触发方式（接口里 name 是字符串：触发方式由服务端登记） */
-export type TriggerKind = Schemas['TriggerKindOut'] & { name: TriggerKindName }
+/** 一种触发方式与它的说明 */
+export type TriggerKind = Schemas['TriggerKindOut']
 export type Precheck = Schemas['Precheck']
 /** 按 kind 区分的联合：收窄 kind 后 config 与 status 就是这种方式的类型 */
 export type Trigger = Schemas['TriggerOut']

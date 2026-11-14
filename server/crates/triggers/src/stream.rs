@@ -5,14 +5,15 @@
 //!   输出里的 secret 替换掉、自成进程组）。随服务启停；停用、删除、改配置时杀掉整个进程组，改了配置用新配置重起。
 //! - 退出（不论退出码：它本该一直运行）或起不来都算一次失败，按退避重启（1、2、4……秒，最多 5 分钟）。偶尔退出重连是常态，
 //!   连续快速失败达到 [`ALERT_AFTER`] 次才算脚本出错（[`crate::faults`]：原因含 stderr 日志的结尾，被写沙箱拦下的写补上说明，
-//!   新出现时告警一次）；稳定运行 [`STABLE`] 算恢复：清除出错、退避从头算。进程的运行状态（running_since、failures）由这里
-//!   维护，每个托管开始时清零：服务重启、换配置都从头算（出错不随服务重启清除：还坏着就不再告警一次）。创建、改配置、重新
-//!   启用时 configure 换一个新的 generation：托管按它重起（停用再启用来不及被对账看到时也一定重起）。
+//!   新出现时告警一次）；稳定运行 [`STABLE`] 算恢复：清除出错、退避从头算。进程的运行状况（[`Process`]：启动时间、连续失败次数）
+//!   只在内存（[`Hosting`]），每个托管一份、从头算：服务重启、换配置、停用都随旧托管一起没了（出错记在库里，不随服务重启清除：
+//!   还坏着就不再告警一次）。创建、改配置、重新启用时 configure 换一个新的 generation：托管按它重起（停用再启用来不及被
+//!   对账看到时也一定重起）。
 //! - stderr 逐块脱敏后追加进工作目录下的 `trigger-logs/<名称>.stderr.log`（与后台任务共用 `muliao_workspace::output`；每次
 //!   启动前超过 1 MiB 就轮换一份 .1），agent 可以自己读。
 //! - 事件按 debounce 窗口合并：第一行到达后再等 debounce_seconds，期间到达的一起成为一次触发，事件内容是这些行。上一次触发
-//!   开出的会话还没做完时事件排队、不重叠，它结束后合并投递；挡路的会话在等待（可能永远等不到）时通知用户一次（这份托管里
-//!   每个挡路会话一次）。排队的事件以事件上限为界：排满了就不再读命令的输出，管道写满后命令自己阻塞——不丢、不重叠，内存与
+//!   开出的会话还没做完时事件排队、不重叠，它结束后合并投递；挡路的会话在等待（可能永远等不到）时通知用户，每个挡路
+//!   会话一次（[`notify_waiting_in`]，与定时共用）。排队的事件以事件上限为界：排满了就不再读命令的输出，管道写满后命令自己阻塞——不丢、不重叠，内存与
 //!   并行会话都有界。单行超过事件上限的丢弃并记日志。
 //! - 排队的事件只在内存里：服务重启、改配置、停用时丢失；一批开始触发后不再重试（至多一次）；命令退出时管道里没读的输出只
 //!   限时读。命令自己做断线重连、去重与游标，重要的来源另加轮询兜底（skill triggers）。
@@ -31,20 +32,28 @@ use muliao_platform::shell::{DRAIN, KillOnDrop, Output, Spawned, kill_group, red
 use muliao_workspace::commands::{AgentCommands, Options};
 use muliao_workspace::output::{record_output, tail};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use tokio::io::AsyncReadExt;
 use tokio::sync::Notify as Wakeup;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
 use crate::faults::{FaultSource, TriggerFault, recovered};
-use crate::kinds::{Configured, TriggerKind, parse_config};
-use crate::precheck::tail_chars;
-use crate::service::{Busy, EVENT_MAX_BYTES, TriggerService, busy_previous_in};
+use crate::kinds::{Kind, Mode};
+use crate::precheck::{Script, tail_chars};
+use crate::service::{Busy, EVENT_MAX_BYTES, TriggerService, busy_previous_in, notify_waiting_in};
 use crate::store::{Listing, Trigger, load_in, save_in};
-use muliao_platform::errors::{Error, Result, invalid};
+use muliao_platform::errors::{Error, Result};
 
-pub const KIND: &str = "stream";
+pub const DESCRIPTION: &str = "Runs a long-lived command hosted by the platform; every line it prints to stdout is \
+     an event. config: {\"command\": \"<bash command>\", \"secrets\": [\"VAULT_KEY\", ...], \"debounce_seconds\": 5}. \
+     The command runs in the agent's workspace with the secrets as env vars; it is restarted with backoff whenever \
+     it exits, and killed when the trigger is disabled, deleted or reconfigured. To restart it (e.g. after editing \
+     the script it runs), disable and re-enable it; status.running_since is null until the new process has started. \
+     Lines arriving within debounce_seconds of the first one fire together (one conversation, the lines are the \
+     event); while the conversation the previous firing started is still busy, events queue and are delivered \
+     together once it is done. stderr goes to trigger-logs/<name>.stderr.log in the workspace. Queued events are \
+     lost on a restart, so the command handles reconnects, dedup and cursors itself; read skill triggers before \
+     writing one.";
 /// 稳定运行这么久算恢复：清除出错，退避与连续失败计数从头算
 pub const STABLE: Duration = Duration::from_secs(60);
 /// 连续快速失败这么多次才算脚本出错
@@ -59,28 +68,74 @@ const LOG_DIR: &str = "trigger-logs";
 const RECONCILE_RETRY: Duration = Duration::from_secs(10);
 const CHUNK: usize = 65536;
 
-fn default_debounce() -> f64 {
-    5.0
+/// 防抖窗口的秒数：0 到 3600。只经 [`Debounce::new`] 构造（反序列化也走它），换成时长不会失败。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(into = "f64", try_from = "f64")]
+#[schema(value_type = f64)]
+pub struct Debounce(f64);
+
+impl Debounce {
+    pub fn new(seconds: f64) -> std::result::Result<Self, String> {
+        if !(0.0..=3600.0).contains(&seconds) {
+            return Err(format!("debounce_seconds must be between 0 and 3600, got {seconds}"));
+        }
+        Ok(Self(seconds))
+    }
+
+    fn duration(self) -> Duration {
+        Duration::from_secs_f64(self.0)
+    }
+}
+
+impl Default for Debounce {
+    fn default() -> Self {
+        Self(5.0)
+    }
+}
+
+impl TryFrom<f64> for Debounce {
+    type Error = String;
+
+    fn try_from(seconds: f64) -> std::result::Result<Self, String> {
+        Self::new(seconds)
+    }
+}
+
+impl From<Debounce> for f64 {
+    fn from(d: Debounce) -> f64 {
+        d.0
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StreamConfig {
-    pub command: String,
+    pub command: Script,
     #[serde(default)]
     pub secrets: Vec<String>,
-    #[serde(default = "default_debounce")]
-    pub debounce_seconds: f64,
+    #[serde(default)]
+    pub debounce_seconds: Debounce,
 }
 
-/// 托管进程的运行状态（存在 state 里）。
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-struct StreamState {
+/// 存在 state 里的：这份配置的代号。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StreamState {
     /// configure 每次换一个：改配置、重新启用都重起
-    generation: Option<String>,
-    /// 当前进程的启动时间；没在运行时为 null
+    generation: String,
+}
+
+impl StreamState {
+    pub fn fresh() -> Self {
+        Self { generation: uuid::Uuid::new_v4().simple().to_string() }
+    }
+}
+
+/// 一个托管进程的运行状况（只在内存）。没有在托管的（停用、刚启用还没对账到）就是默认值。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Process {
+    /// 当前进程的启动时间；没在运行时为 None
     running_since: Option<DateTime<Utc>>,
-    #[serde(default)]
+    /// 连续快速失败的次数
     failures: u32,
 }
 
@@ -94,72 +149,37 @@ pub struct StreamStatus {
     pub stderr_log: String,
 }
 
+pub fn status(name: &str, p: Process) -> StreamStatus {
+    StreamStatus { running_since: p.running_since, failures: p.failures, stderr_log: stderr_log(name) }
+}
+
 pub fn stderr_log(name: &str) -> String {
     format!("{LOG_DIR}/{name}.stderr.log")
 }
 
-/// 流式这种方式的纯逻辑部分。
-pub struct Stream;
+/// 正在托管的流式触发器（只在内存）：对账按 generation 起停，运行状况给界面看。克隆共享同一份。
+#[derive(Clone, Default)]
+pub struct Hosting(Arc<Mutex<HashMap<i64, Hosted>>>);
 
-impl TriggerKind for Stream {
-    fn name(&self) -> &'static str {
-        KIND
-    }
+struct Hosted {
+    generation: String,
+    task: JoinHandle<()>,
+    /// 这份托管自己的：被取消的旧托管写的是它自己那份，碰不到新托管的
+    process: Arc<Mutex<Process>>,
+}
 
-    fn description(&self) -> &str {
-        "Runs a long-lived command hosted by the platform; every line it prints to stdout is an event. config: \
-         {\"command\": \"<bash command>\", \"secrets\": [\"VAULT_KEY\", ...], \"debounce_seconds\": 5}. The command \
-         runs in the agent's workspace with the secrets as env vars; it is restarted with backoff whenever it exits, \
-         and killed when the trigger is disabled, deleted or reconfigured. To restart it (e.g. after editing the \
-         script it runs), disable and re-enable it; status.running_since is null until the new process has started. \
-         Lines arriving within debounce_seconds of the first one fire together (one conversation, the lines are the \
-         event); while the conversation the previous firing started is still busy, events queue and are delivered \
-         together once it is done. stderr goes to trigger-logs/<name>.stderr.log in the workspace. Queued events are \
-         lost on a restart, so the command handles reconnects, dedup and cursors itself; read skill triggers before \
-         writing one."
-    }
-
-    fn configure(&self, config: &Value, _now: DateTime<Utc>) -> Result<Configured> {
-        let c: StreamConfig = parse_config(KIND, config)?;
-        let n = c.command.chars().count();
-        if c.command.trim().is_empty() || n > 4000 {
-            return Err(invalid(format!("stream command must be 1 to 4000 characters, got {n}")));
-        }
-        if !(0.0..=3600.0).contains(&c.debounce_seconds) {
-            return Err(invalid(format!("debounce_seconds must be between 0 and 3600, got {}", c.debounce_seconds)));
-        }
-        // 创建、改配置、重新启用都要重起进程：换一个 generation，运行状态在同一事务里清零，新进程登记之前不显示旧进程的
-        let state = StreamState { generation: Some(uuid::Uuid::new_v4().simple().to_string()), ..Default::default() };
-        Ok(Configured {
-            config: serde_json::to_value(c).expect("serializes"),
-            state: serde_json::to_value(state).expect("serializes"),
-        })
-    }
-
-    fn secrets(&self, config: &Value) -> Vec<String> {
-        serde_json::from_value::<StreamConfig>(config.clone()).map(|c| c.secrets).unwrap_or_default()
-    }
-
-    fn status(&self, t: &Trigger) -> Result<Value> {
-        let state: StreamState = t.state_as()?;
-        let status = StreamStatus {
-            // 停用时进程已被杀掉（关停时来不及写回，所以按启用状态推导，而不是信存下的值）
-            running_since: if t.enabled { state.running_since } else { None },
-            failures: state.failures,
-            stderr_log: stderr_log(&t.name),
-        };
-        Ok(serde_json::to_value(status).expect("serializes"))
+impl Hosting {
+    /// 这个触发器的托管进程的运行状况。
+    pub fn process(&self, trigger_id: i64) -> Process {
+        let hosted = self.0.lock().expect("hosting lock");
+        hosted.get(&trigger_id).map(|h| *h.process.lock().expect("process lock")).unwrap_or_default()
     }
 }
 
 /// 流式命令连续快速退出、刚算作出错时交给触发器所属 agent 的信。
-fn stream_alert(t: &Trigger, fault: &str) -> String {
-    let config: Option<StreamConfig> = serde_json::from_value(t.config.clone()).ok();
-    let (secrets, command) = match &config {
-        Some(c) if !c.secrets.is_empty() => (c.secrets.join(", "), c.command.as_str()),
-        Some(c) => ("(none)".to_owned(), c.command.as_str()),
-        None => ("(unreadable config)".to_owned(), ""),
-    };
+fn stream_alert(t: &Trigger, config: &StreamConfig, fault: &str) -> String {
+    let secrets = if config.secrets.is_empty() { "(none)".to_owned() } else { config.secrets.join(", ") };
+    let command = config.command.as_str();
     [
         format!(
             "The stream command of your trigger `{}` keeps exiting; the platform keeps restarting it with backoff, but \
@@ -198,24 +218,27 @@ fn stream_alert(t: &Trigger, fault: &str) -> String {
     .join("\n")
 }
 
-/// 一个托管进程由什么决定：其中任何一项变了，就杀掉旧的按新的重起。
-#[derive(Debug, Clone, PartialEq)]
+/// 一个托管进程要的东西。名称、agent 不会改，配置一改 generation 就换：对账只比 generation。
+#[derive(Debug, Clone)]
 struct Spec {
     trigger_id: i64,
     name: String,
     agent_id: AgentId,
-    config: Value,
-    generation: Option<String>,
+    config: StreamConfig,
+    generation: String,
 }
 
 impl Spec {
-    fn of(t: &Trigger) -> Self {
-        Spec {
-            trigger_id: t.id,
-            name: t.name.clone(),
-            agent_id: t.agent_id.clone(),
-            config: t.config.clone(),
-            generation: t.state.get("generation").and_then(Value::as_str).map(str::to_owned),
+    fn of(t: &Trigger) -> Option<Self> {
+        match &t.mode {
+            Mode::Stream { config, state } => Some(Spec {
+                trigger_id: t.id,
+                name: t.name.clone(),
+                agent_id: t.agent_id.clone(),
+                config: config.clone(),
+                generation: state.generation.clone(),
+            }),
+            Mode::Schedule { .. } | Mode::Once { .. } => None,
         }
     }
 }
@@ -290,15 +313,12 @@ impl Pending {
     }
 }
 
-/// 写回托管进程的运行状态。
-#[derive(Debug, Default)]
-struct Record {
-    running_since: Option<Option<DateTime<Utc>>>,
-    failures: Option<u32>,
+/// 脚本的出错状况变了（记在库里的 faults）。
+enum Health {
     /// 稳定运行了一段时间：清掉出错
-    stable: bool,
-    /// 脚本出错（记下，新出现时告警）
-    fault: Option<String>,
+    Stable,
+    /// 连续快速失败到了告警次数：记下，新出现时告警
+    Failing(String),
 }
 
 /// 节奏（测试改短）。
@@ -325,7 +345,7 @@ pub struct StreamRunner {
     commands: Arc<AgentCommands>,
     notifications: Notifications,
     timing: Timing,
-    running: Mutex<HashMap<i64, (Spec, JoinHandle<()>)>>,
+    hosting: Hosting,
 }
 
 impl StreamRunner {
@@ -334,8 +354,9 @@ impl StreamRunner {
         commands: Arc<AgentCommands>,
         notifications: Notifications,
         timing: Timing,
+        hosting: Hosting,
     ) -> Self {
-        Self { service, commands, notifications, timing, running: Mutex::default() }
+        Self { service, commands, notifications, timing, hosting }
     }
 
     /// 常驻：按触发器的变化对账——该运行的起起来，停用、删除或改了配置的取消（取消即杀掉进程组）。每个托管是一个独立的
@@ -357,31 +378,33 @@ impl StreamRunner {
 
     /// 对账一次；列不出触发器时返回 false。
     async fn reconcile(self: &Arc<Self>) -> bool {
-        let listing = Listing { kind: Some(KIND.into()), enabled_only: true, ..Listing::default() };
+        let listing = Listing { kind: Some(Kind::Stream), enabled_only: true, ..Listing::default() };
         let wanted: HashMap<i64, Spec> = match self.service.list(listing).await {
-            Ok(ts) => ts.iter().map(|t| (t.id, Spec::of(t))).collect(),
+            Ok(ts) => ts.iter().filter_map(Spec::of).map(|s| (s.trigger_id, s)).collect(),
             Err(e) => {
                 tracing::error!(error = %e, "listing stream triggers failed; retrying");
                 return false;
             }
         };
-        let mut running = self.running.lock().expect("running lock");
-        running.retain(|id, (spec, handle)| {
-            let keep = wanted.get(id) == Some(spec);
+        let mut hosted = self.hosting.0.lock().expect("hosting lock");
+        hosted.retain(|id, h| {
+            let keep = wanted.get(id).is_some_and(|s| s.generation == h.generation);
             if !keep {
-                handle.abort();
-                tracing::info!(trigger = %spec.name, "stream stopped");
+                h.task.abort();
+                tracing::info!(trigger_id = id, "stream stopped");
             }
             keep
         });
         for (id, spec) in wanted {
-            if !running.contains_key(&id) {
+            if !hosted.contains_key(&id) {
                 let this = self.clone();
-                let handle = tokio::spawn({
-                    let spec = spec.clone();
-                    async move { this.supervise(spec).await }
+                let process = Arc::new(Mutex::new(Process::default()));
+                let generation = spec.generation.clone();
+                let task = tokio::spawn({
+                    let process = process.clone();
+                    async move { this.supervise(spec, process).await }
                 });
-                running.insert(id, (spec, handle));
+                hosted.insert(id, Hosted { generation, task, process });
             }
         }
         true
@@ -389,57 +412,46 @@ impl StreamRunner {
 
     /// 关停：杀掉全部托管的命令（等它们的任务收尾）。
     pub async fn shutdown(&self) {
-        let handles: Vec<JoinHandle<()>> =
-            self.running.lock().expect("running lock").drain().map(|(_, (_, h))| h).collect();
-        for h in &handles {
-            h.abort();
+        let tasks: Vec<JoinHandle<()>> =
+            self.hosting.0.lock().expect("hosting lock").drain().map(|(_, h)| h.task).collect();
+        for t in &tasks {
+            t.abort();
         }
-        for h in handles {
-            let _ = h.await;
+        for t in tasks {
+            let _ = t.await;
         }
     }
 
-    async fn supervise(&self, spec: Spec) {
-        let config: StreamConfig = match serde_json::from_value(spec.config.clone()) {
-            Ok(c) => c,
-            Err(e) => {
-                // 配置只经 configure 写入；存下的坏了是数据问题，只停用这一个
-                let reason = format!("invalid stored stream config: {e}");
-                if let Err(e) = self.service.disable(spec.trigger_id, reason).await {
-                    tracing::error!(trigger = %spec.name, error = %e, "disabling a broken stream trigger failed");
-                }
-                return;
-            }
-        };
+    async fn supervise(&self, spec: Spec, process: Arc<Mutex<Process>>) {
         let pending = Pending::new(EVENT_MAX_BYTES);
-        tokio::join!(self.deliver_loop(&spec, &config, &pending), self.process_loop(&spec, &config, &pending));
+        tokio::join!(self.deliver_loop(&spec, &pending), self.process_loop(&spec, &pending, &process));
     }
 
     // ---- 进程 ----
 
-    async fn process_loop(&self, spec: &Spec, config: &StreamConfig, pending: &Pending) {
-        // 这份托管从头算：服务重启前的进程留下的运行状态清掉（创建、改配置、重新启用时 configure 已清过）
-        self.record(spec, Record { running_since: Some(None), failures: Some(0), ..Record::default() }).await;
+    async fn process_loop(&self, spec: &Spec, pending: &Pending, process: &Mutex<Process>) {
         let mut failures = 0;
         loop {
-            let (error, stable) = self.run_once(spec, config, pending).await;
+            let (error, stable) = self.run_once(spec, pending, process).await;
             // 稳定运行过的不算连续失败，从最短的退避重来
             if stable {
                 failures = 0;
             }
             failures += 1;
+            *process.lock().expect("process lock") = Process { running_since: None, failures };
             tracing::warn!(trigger = %spec.name, failures, error, "stream exited");
-            let fault = (failures >= ALERT_AFTER).then(|| {
-                format!("exited quickly {failures} times in a row, restarting with backoff; last exit: {error}")
-            });
-            self.record(spec, Record { running_since: Some(None), failures: Some(failures), fault, stable: false })
-                .await;
+            if failures >= ALERT_AFTER {
+                let fault =
+                    format!("exited quickly {failures} times in a row, restarting with backoff; last exit: {error}");
+                self.record(spec, Health::Failing(fault)).await;
+            }
             tokio::time::sleep((self.timing.backoff)(failures)).await;
         }
     }
 
     /// 起一次进程并跑到它退出，返回 (退出的原因, 是否稳定运行过)。
-    async fn run_once(&self, spec: &Spec, config: &StreamConfig, pending: &Pending) -> (String, bool) {
+    async fn run_once(&self, spec: &Spec, pending: &Pending, process: &Mutex<Process>) -> (String, bool) {
+        let config = &spec.config;
         let shell = match self.commands.prepare(&spec.agent_id, &config.secrets, SecretUse::AgentCommand).await {
             Ok(shell) => shell,
             Err(e) => return (format!("stream could not start: {e}"), false),
@@ -450,14 +462,15 @@ impl StreamRunner {
             return (format!("stream supervision failed: cannot write {}: {e}", log_file.display()), false);
         }
         let options = Options { pipefail: true, ..Options::default() };
-        let Spawned { mut child, pgid, stdout, stderr, .. } = match shell.spawn(&config.command, false, &options) {
-            Ok(s) => s,
-            Err(e) => return (format!("stream supervision failed: cannot start the command: {e}"), false),
-        };
+        let Spawned { mut child, pgid, stdout, stderr, .. } =
+            match shell.spawn(config.command.as_str(), false, &options) {
+                Ok(s) => s,
+                Err(e) => return (format!("stream supervision failed: cannot start the command: {e}"), false),
+            };
         // spawn 之后的任何一步（包括被取消：停用、删除、改配置、关停）都要杀掉进程组
         let mut guard = KillOnDrop(Some(pgid));
         tracing::info!(trigger = %spec.name, pid = pgid, "stream started");
-        self.record(spec, Record { running_since: Some(Some(Utc::now())), ..Record::default() }).await;
+        process.lock().expect("process lock").running_since = Some(Utc::now());
         let mut stderr = stderr.expect("stderr is not merged");
         let reading = self.read_events(spec, stdout, &shell.secrets, pending);
         let logging = record_output(&mut stderr, &log_file, &shell.secrets);
@@ -470,7 +483,8 @@ impl StreamRunner {
                 s = child.wait() => break s.ok(),
                 _ = &mut stable_timer, if !stable => {
                     stable = true;
-                    self.record(spec, Record { stable: true, failures: Some(0), ..Record::default() }).await;
+                    process.lock().expect("process lock").failures = 0;
+                    self.record(spec, Health::Stable).await;
                 }
                 _ = &mut reading, if !read_done => read_done = true,
                 r = &mut logging, if !log_done => {
@@ -504,7 +518,11 @@ impl StreamRunner {
         let _ = tokio::time::timeout(DRAIN, drain).await;
         let code = status.map(|s| s.code().unwrap_or_else(|| -s.signal().unwrap_or(0)));
         let path = log_file.clone();
-        let logged = tokio::task::spawn_blocking(move || tail(&path).unwrap_or_default()).await.unwrap_or_default();
+        let logged =
+            match tokio::task::spawn_blocking(move || tail(&path)).await.expect("reading the stderr log panicked") {
+                Ok(text) => text,
+                Err(e) => format!("(cannot read {}: {e})", log_file.display()),
+            };
         // 日志是追加的，末尾几行里可能有前几次启动的报错：补说明只看这次的分隔行之后（分隔行已不在末尾时整段都是这次的）
         let this_run = logged.rsplit_once(&started).map_or(logged.as_str(), |(_, after)| after);
         let refusal = shell.refusal(code, this_run).map(|r| format!("\n{r}")).unwrap_or_default();
@@ -565,13 +583,11 @@ impl StreamRunner {
 
     // ---- 投递 ----
 
-    async fn deliver_loop(&self, spec: &Spec, config: &StreamConfig, pending: &Pending) {
-        // 已为哪个挡路的会话通知过用户（这份托管里每个挡路会话只通知一次）
-        let mut notified: Option<SessionId> = None;
-        let debounce = Duration::from_secs_f64(config.debounce_seconds);
+    async fn deliver_loop(&self, spec: &Spec, pending: &Pending) {
+        let debounce = spec.config.debounce_seconds.duration();
         loop {
             pending.ready(debounce).await;
-            if let Err(e) = self.wait_previous(spec, pending, &mut notified).await {
+            if let Err(e) = self.wait_previous(spec, pending).await {
                 // 契约之外的失败（如数据库出错）：事件留在队列里，稍后再试
                 tracing::error!(trigger = %spec.name, error = %e, "stream delivery could not check the previous session");
                 tokio::time::sleep(self.timing.busy_poll).await;
@@ -587,66 +603,62 @@ impl StreamRunner {
     }
 
     /// 上一次触发开出的会话还没做完时等着（事件继续排队，排满后命令阻塞）；挡路的会话在等待时通知用户一次。
-    async fn wait_previous(&self, spec: &Spec, pending: &Pending, notified: &mut Option<SessionId>) -> Result<()> {
+    async fn wait_previous(&self, spec: &Spec, pending: &Pending) -> Result<()> {
+        let trigger_id = spec.trigger_id;
         loop {
-            let (trigger_id, queued, already) = (spec.trigger_id, pending.len(), notified.clone());
-            let notifications = self.notifications.clone();
             // 先只读；只有要通知时才开写事务（忙的时候每轮都查，不占写线程）
             let blocking = self
                 .service
                 .db()
                 .read(move |c| {
                     let Some(t) = load_in(c, trigger_id)? else { return Ok::<_, Error>(None) };
-                    Ok(busy_previous_in(c, &t)?.map(|(session_id, busy)| (t, session_id, busy)))
+                    Ok(busy_previous_in(c, &t)?.map(|(session_id, busy)| (t.waiting_notified, session_id, busy)))
                 })
                 .await?;
-            let Some((t, session_id, busy)) = blocking else { return Ok(()) };
-            if busy == Busy::Waiting && already.as_ref() != Some(&session_id) {
-                let sid = session_id.clone();
+            let Some((notified, session_id, busy)) = blocking else { return Ok(()) };
+            if busy == Busy::Waiting && notified.as_ref() != Some(&session_id) {
+                let (notifications, queued) = (self.notifications.clone(), pending.len());
                 self.service
                     .db()
-                    .write(move |tx| notifications.notify_in(tx, &waiting_notice(&t, queued, &sid)))
+                    .write(move |tx| {
+                        let Some(mut t) = load_in(tx, trigger_id)? else { return Ok::<_, Error>(()) };
+                        notify_waiting_in(tx, &notifications, &mut t, &session_id, busy, |t| {
+                            waiting_notice(t, queued, &session_id)
+                        })?;
+                        save_in(tx, &t)
+                    })
                     .await?;
-                *notified = Some(session_id);
             }
             tokio::time::sleep(self.timing.busy_poll).await;
         }
     }
 
-    // ---- 状态 ----
+    // ---- 出错 ----
 
-    /// 把进程的运行状态写回触发器。只写给还是这份配置、仍启用的触发器：被取消的旧进程不覆盖新进程的状态。写不进去（数据库
-    /// 出错）不影响进程的监督：记日志。
-    async fn record(&self, spec: &Spec, record: Record) {
+    /// 把脚本的出错状况写回触发器。只写给还是这份配置（generation）、仍启用的触发器：刚被取消的旧托管不给新配置记错。
+    /// 写不进去（数据库出错）不影响进程的监督：记日志。
+    async fn record(&self, spec: &Spec, health: Health) {
         let (expected, faults) = (spec.clone(), self.service.faults().clone());
         let written = self
             .service
             .db()
             .write(move |tx| {
                 let Some(mut t) = load_in(tx, expected.trigger_id)? else { return Ok::<_, Error>(()) };
-                if !t.enabled || Spec::of(&t) != expected {
+                if !t.enabled || !Spec::of(&t).is_some_and(|s| s.generation == expected.generation) {
                     return Ok(());
                 }
-                let mut state: StreamState = t.state_as()?;
-                if let Some(since) = record.running_since {
-                    state.running_since = since;
-                }
-                if let Some(failures) = record.failures {
-                    state.failures = failures;
-                }
-                t.set_state(&state);
-                if record.stable {
-                    recovered(&mut t, FaultSource::Stream);
-                }
-                if let Some(error) = record.fault {
-                    let fault = TriggerFault { source: FaultSource::Stream, error: error.clone() };
-                    faults.report_in(tx, &mut t, fault, |t| stream_alert(t, &error))?;
+                match health {
+                    Health::Stable => recovered(&mut t, FaultSource::Stream),
+                    Health::Failing(error) => {
+                        let fault = TriggerFault { source: FaultSource::Stream, error: error.clone() };
+                        faults.report_in(tx, &mut t, fault, |t| stream_alert(t, &expected.config, &error))?;
+                    }
                 }
                 save_in(tx, &t)
             })
             .await;
         if let Err(e) = written {
-            tracing::error!(trigger = %spec.name, error = %e, "stream state could not be recorded");
+            tracing::error!(trigger = %spec.name, error = %e, "stream faults could not be recorded");
         }
     }
 }
