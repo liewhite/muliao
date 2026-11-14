@@ -13,7 +13,7 @@
 //! 附件同时复制进 agent 工作目录的 `uploads/<id>/<名称>`（[`copy_to_workspace`]），供文件工具与 shell 处理。那是派生副本，
 //! agent 可以随意修改；不可变的原件只在文件存储里。
 
-use muliao_platform::ids::MediaType;
+use muliao_platform::ids::{FileId, MediaType};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -40,7 +40,7 @@ pub fn references(files: &[FileMeta]) -> Vec<RequestPart> {
 
 /// 附件在 agent 工作目录里的相对路径：按 id 分目录，同名的不同文件互不覆盖，名称保持原样。
 pub fn workspace_path(meta: &FileMeta) -> PathBuf {
-    Path::new(UPLOADS_DIR).join(&meta.id).join(&meta.name)
+    Path::new(UPLOADS_DIR).join(meta.id.as_str()).join(&meta.name)
 }
 
 /// 每次执行这一轮都重新复制：重试时覆盖成原件，结果总是一样。
@@ -64,7 +64,7 @@ pub fn describe(meta: &FileMeta) -> String {
 }
 
 /// 消息里一个文件引用的 id；不是文件存储的引用（存储形态以外的文件）为 None，原样发出。
-fn ref_id(file: &File) -> Option<String> {
+fn ref_id(file: &File) -> Option<FileId> {
     match &file.source {
         FileSource::Url(uri) => FileRef::parse(uri).map(|r| r.id),
         FileSource::Data(_) => None,
@@ -72,8 +72,8 @@ fn ref_id(file: &File) -> Option<String> {
 }
 
 /// 一条消息里要展开的文件引用：用户的附件、工具结果里存下的图片。
-fn refs_in(request: &Request) -> impl Iterator<Item = String> + '_ {
-    request.parts.iter().flat_map(|p| -> Vec<String> {
+fn refs_in(request: &Request) -> impl Iterator<Item = FileId> + '_ {
+    request.parts.iter().flat_map(|p| -> Vec<FileId> {
         match p {
             RequestPart::File(f) => ref_id(f).into_iter().collect(),
             RequestPart::ToolResult(t) => t
@@ -115,7 +115,7 @@ async fn image_content(store: &FileStore, meta: &FileMeta) -> Result<Vec<Content
 
 /// 这次请求要发出的历史：文件引用展开成模型形态（见模块说明）。历史本身不动。
 pub async fn for_model(store: &FileStore, history: &[Message]) -> Result<Vec<Message>, Error> {
-    let mut ids: Vec<String> = Vec::new();
+    let mut ids: Vec<FileId> = Vec::new();
     for m in history {
         if let Message::User(r) = m {
             for id in refs_in(r) {
@@ -128,7 +128,7 @@ pub async fn for_model(store: &FileStore, history: &[Message]) -> Result<Vec<Mes
     if ids.is_empty() {
         return Ok(history.to_vec());
     }
-    let metas: HashMap<String, FileMeta> =
+    let metas: HashMap<FileId, FileMeta> =
         store.referenced(ids).await?.into_iter().map(|m| (m.id.clone(), m)).collect();
     let mut out = Vec::with_capacity(history.len());
     for m in history {

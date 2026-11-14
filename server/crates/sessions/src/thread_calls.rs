@@ -5,7 +5,7 @@
 //! delegate_task(report_back)）就是一项委派，这一行是它的唯一主体：发起方的占用与 thread 的信件只引用它的 id。
 //! 委派结清没有只看引用它的占用是否还 active。
 
-use muliao_platform::ids::{DelegationId, SessionId};
+use muliao_platform::ids::{CallId, DelegationId, SessionId};
 use std::collections::BTreeMap;
 
 use rusqlite::{Connection, Row, params};
@@ -72,7 +72,7 @@ pub struct CallRecord {
     pub id: DelegationId,
     /// 发起会话
     pub parent_id: SessionId,
-    pub call_id: String,
+    pub call_id: CallId,
     /// 做它的 thread
     pub thread_id: SessionId,
     pub mode: CallMode,
@@ -83,7 +83,7 @@ pub struct CallRecord {
 pub struct Delegation {
     pub id: DelegationId,
     pub parent_id: SessionId,
-    pub call_id: String,
+    pub call_id: CallId,
     pub thread_id: SessionId,
     pub kind: Delegated,
 }
@@ -97,7 +97,7 @@ pub struct Owed {
 
 const COLUMNS: &str = "id, parent_session_id, call_id, thread_session_id, mode, check_seconds";
 
-type RawRecord = (DelegationId, SessionId, String, SessionId, ModeKind, Option<f64>);
+type RawRecord = (DelegationId, SessionId, CallId, SessionId, ModeKind, Option<f64>);
 
 fn raw(r: &Row<'_>) -> rusqlite::Result<RawRecord> {
     Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
@@ -122,7 +122,7 @@ fn query(c: &Connection, filter: &str, params: impl rusqlite::Params) -> Result<
 pub(crate) fn record_call_in(
     c: &Connection,
     parent_id: &SessionId,
-    call_id: &str,
+    call_id: &CallId,
     thread_id: &SessionId,
     mode: CallMode,
 ) -> Result<CallRecord> {
@@ -136,12 +136,12 @@ pub(crate) fn record_call_in(
 }
 
 /// 这次调用记下的那一行（还没记过、或 thread 已删除时为 None）。
-pub(crate) fn call_in(c: &Connection, parent_id: &SessionId, call_id: &str) -> Result<Option<CallRecord>> {
+pub(crate) fn call_in(c: &Connection, parent_id: &SessionId, call_id: &CallId) -> Result<Option<CallRecord>> {
     Ok(query(c, "parent_session_id = ?1 AND call_id = ?2", params![parent_id, call_id])?.pop())
 }
 
 /// 这个会话里每次开出或续写 thread 的调用 → 那个 thread。
-pub(crate) fn call_threads_in(c: &Connection, parent_id: &SessionId) -> Result<BTreeMap<String, SessionId>> {
+pub(crate) fn call_threads_in(c: &Connection, parent_id: &SessionId) -> Result<BTreeMap<CallId, SessionId>> {
     Ok(query(c, "parent_session_id = ?1", [parent_id])?.into_iter().map(|r| (r.call_id, r.thread_id)).collect())
 }
 

@@ -2328,7 +2328,7 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/FileId"
             }
           },
           {
@@ -2503,10 +2503,10 @@
           {
             "name": "grant_id",
             "in": "path",
+            "description": "始终允许的编号",
             "required": true,
             "schema": {
-              "type": "integer",
-              "format": "int64"
+              "$ref": "#/components/schemas/GrantId"
             }
           }
         ],
@@ -4524,6 +4524,10 @@
           "waiting"
         ]
       },
+      "CallId": {
+        "type": "string",
+        "description": "一次工具调用的编号（模型给出，会话里唯一；挂起的调用、委派、提问与审批的回答都按它对应）"
+      },
       "CallItem": {
         "type": "object",
         "required": [
@@ -4540,7 +4544,7 @@
             "type": "string"
           },
           "tool_call_id": {
-            "type": "string"
+            "$ref": "#/components/schemas/CallId"
           },
           "text": {
             "type": "string",
@@ -5129,8 +5133,7 @@
         ],
         "properties": {
           "through_message_id": {
-            "type": "integer",
-            "format": "int64",
+            "$ref": "#/components/schemas/MessageId",
             "description": "这条消息及之前的已由 summary 代替发给模型（原文仍完整展示）"
           },
           "summary": {
@@ -5344,7 +5347,7 @@
             "type": "string"
           },
           "tool_call_id": {
-            "type": "string"
+            "$ref": "#/components/schemas/CallId"
           },
           "text": {
             "type": "string"
@@ -5490,6 +5493,10 @@
           }
         }
       },
+      "FileId": {
+        "type": "string",
+        "description": "上传或交回的文件的编号（files 表的 id）"
+      },
       "FileOut": {
         "type": "object",
         "required": [
@@ -5503,7 +5510,7 @@
         ],
         "properties": {
           "id": {
-            "type": "string"
+            "$ref": "#/components/schemas/FileId"
           },
           "name": {
             "type": "string"
@@ -5559,6 +5566,11 @@
             ]
           }
         }
+      },
+      "GrantId": {
+        "type": "integer",
+        "format": "int64",
+        "description": "一条「始终允许」的编号（script_grants 表的行号）"
       },
       "Happening": {
         "oneOf": [
@@ -6505,12 +6517,15 @@
             "type": "string"
           },
           "after_message_id": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int64",
-            "description": "这一段开始时会话最后一条已保存消息的 id：这之后保存的消息由这一段的事件展示，历史里先不显示"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MessageId",
+                "description": "这一段开始时会话最后一条已保存消息的 id：这之后保存的消息由这一段的事件展示，历史里先不显示"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "events": {
             "type": "array",
@@ -6585,7 +6600,7 @@
             ],
             "properties": {
               "call_id": {
-                "type": "string",
+                "$ref": "#/components/schemas/CallId",
                 "description": "回答的是哪次挂起调用"
               },
               "result": {
@@ -6668,8 +6683,7 @@
         ],
         "properties": {
           "through_id": {
-            "type": "integer",
-            "format": "int64",
+            "$ref": "#/components/schemas/NotificationId",
             "description": "用户看到的最新一条；之后才到的保持未读"
           }
         }
@@ -6959,6 +6973,11 @@
           }
         }
       },
+      "MessageId": {
+        "type": "integer",
+        "format": "int64",
+        "description": "会话里一条消息的编号（messages 表的行号）"
+      },
       "ModelIo": {
         "type": "object",
         "description": "一个模型：哪个 provider（服务端配置的 `[llm.providers]`）的哪个模型；agent.toml 里写作 `<provider>:<model>`。",
@@ -7048,8 +7067,7 @@
         ],
         "properties": {
           "id": {
-            "type": "integer",
-            "format": "int64"
+            "$ref": "#/components/schemas/NotificationId"
           },
           "title": {
             "type": "string"
@@ -7092,8 +7110,7 @@
         ],
         "properties": {
           "notification_id": {
-            "type": "integer",
-            "format": "int64"
+            "$ref": "#/components/schemas/NotificationId"
           },
           "session_id": {
             "oneOf": [
@@ -7106,6 +7123,11 @@
             ]
           }
         }
+      },
+      "NotificationId": {
+        "type": "integer",
+        "format": "int64",
+        "description": "通知的编号（notifications 表的行号）"
       },
       "OnceConfig": {
         "type": "object",
@@ -7427,7 +7449,7 @@
               "attachments": {
                 "type": "array",
                 "items": {
-                  "type": "string"
+                  "$ref": "#/components/schemas/FileId"
                 },
                 "description": "先经 POST /api/files 上传得到的 id"
               },
@@ -7449,7 +7471,7 @@
             ],
             "properties": {
               "call_id": {
-                "type": "string"
+                "$ref": "#/components/schemas/CallId"
               },
               "answers": {
                 "type": "array",
@@ -7475,7 +7497,7 @@
             ],
             "properties": {
               "call_id": {
-                "type": "string"
+                "$ref": "#/components/schemas/CallId"
               },
               "choice": {
                 "$ref": "#/components/schemas/Choice"
@@ -7507,7 +7529,7 @@
             "type": "string"
           },
           "tool_call_id": {
-            "type": "string"
+            "$ref": "#/components/schemas/CallId"
           },
           "text": {
             "type": "string",
@@ -7924,8 +7946,7 @@
         ],
         "properties": {
           "message_id": {
-            "type": "integer",
-            "format": "int64"
+            "$ref": "#/components/schemas/MessageId"
           },
           "item": {
             "$ref": "#/components/schemas/Item"
@@ -7988,8 +8009,7 @@
         ],
         "properties": {
           "id": {
-            "type": "integer",
-            "format": "int64"
+            "$ref": "#/components/schemas/GrantId"
           },
           "agent_id": {
             "$ref": "#/components/schemas/AgentId"
@@ -8470,7 +8490,7 @@
         ],
         "properties": {
           "file_id": {
-            "type": "string"
+            "$ref": "#/components/schemas/FileId"
           },
           "name": {
             "type": "string"
@@ -8648,7 +8668,7 @@
           "attachments": {
             "type": "array",
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/FileId"
             },
             "description": "先经 POST /api/files 上传得到的 id"
           }
@@ -9452,7 +9472,7 @@
             ],
             "properties": {
               "call_id": {
-                "type": "string"
+                "$ref": "#/components/schemas/CallId"
               },
               "headers": {
                 "type": "array",
@@ -9478,7 +9498,7 @@
             ],
             "properties": {
               "call_id": {
-                "type": "string"
+                "$ref": "#/components/schemas/CallId"
               },
               "tool_name": {
                 "type": "string"

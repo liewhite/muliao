@@ -1,6 +1,6 @@
 //! 占用与引用它的表分开查（#804 去掉了联查）：到点唤醒按约的时刻投、没到点的不投；thread 删除后它的委派不再算欠着。
 
-use muliao_platform::ids::{AgentId, SessionId};
+use muliao_platform::ids::{AgentId, CallId, SessionId};
 use std::sync::Arc;
 
 use chrono::{Duration, Utc};
@@ -96,11 +96,11 @@ async fn a_deleted_thread_is_no_longer_owed() {
                 let origin = SessionOrigin::Delegation { thread: t.into(), parent_session_id: Some(p.clone()) };
                 add_in(tx, session(&sid(t), &agent, origin))?;
             }
-            let r1 = record_call_in(tx, &p, "c1", &sid("t1"), CallMode::Delegated(Delegated::Ask))?;
+            let r1 = record_call_in(tx, &p, &CallId::new("c1"), &sid("t1"), CallMode::Delegated(Delegated::Ask))?;
             let r2 = record_call_in(
                 tx,
                 &p,
-                "c2",
+                &CallId::new("c2"),
                 &sid("t2"),
                 CallMode::Delegated(Delegated::ReportBack { check_seconds: 60.0 }),
             )?;

@@ -1318,9 +1318,11 @@ export interface components {
          * @enum {string}
          */
         Busy: "running" | "waiting";
+        /** @description 一次工具调用的编号（模型给出，会话里唯一；挂起的调用、委派、提问与审批的回答都按它对应） */
+        CallId: string;
         CallItem: {
             tool_name: string;
-            tool_call_id: string;
+            tool_call_id: components["schemas"]["CallId"];
             /** @description 调用参数原文 */
             text: string;
             /** @description 开出或续写的 thread（子会话 id），由会话接口按调用 id 填（[`annotate_threads`]） */
@@ -1460,11 +1462,8 @@ export interface components {
             body: string;
         };
         CompactionOut: {
-            /**
-             * Format: int64
-             * @description 这条消息及之前的已由 summary 代替发给模型（原文仍完整展示）
-             */
-            through_message_id: number;
+            /** @description 这条消息及之前的已由 summary 代替发给模型（原文仍完整展示） */
+            through_message_id: components["schemas"]["MessageId"];
             summary: string;
             /** Format: date-time */
             created_at: string;
@@ -1543,7 +1542,7 @@ export interface components {
         /** @description 失败、参数被拒绝交还模型重试的结果。 */
         ErrorItem: {
             tool_name: string;
-            tool_call_id: string;
+            tool_call_id: components["schemas"]["CallId"];
             text: string;
             /** Format: date-time */
             at: string | null;
@@ -1590,8 +1589,10 @@ export interface components {
             label: string;
             value: string;
         };
+        /** @description 上传或交回的文件的编号（files 表的 id） */
+        FileId: string;
         FileOut: {
-            id: string;
+            id: components["schemas"]["FileId"];
             name: string;
             media_type: components["schemas"]["MediaType"];
             /** Format: int64 */
@@ -1609,6 +1610,11 @@ export interface components {
             fired: boolean;
             session_id: components["schemas"]["SessionId"] | null;
         };
+        /**
+         * Format: int64
+         * @description 一条「始终允许」的编号（script_grants 表的行号）
+         */
+        GrantId: number;
         /** @description 时间线上发生的一件事。 */
         Happening: {
             /** @enum {string} */
@@ -1841,11 +1847,7 @@ export interface components {
         };
         LiveSegment: {
             segment_id: string;
-            /**
-             * Format: int64
-             * @description 这一段开始时会话最后一条已保存消息的 id：这之后保存的消息由这一段的事件展示，历史里先不显示
-             */
-            after_message_id: number | null;
+            after_message_id: components["schemas"]["MessageId"] | null;
             events: components["schemas"]["RunEventEnvelope"][];
         };
         LoginIn: {
@@ -1868,7 +1870,7 @@ export interface components {
             kind: "event";
         } | {
             /** @description 回答的是哪次挂起调用 */
-            call_id: string;
+            call_id: components["schemas"]["CallId"];
             /** @description 那次挂起调用的结果（用户的回答，或被问 agent 的结局） */
             result: components["schemas"]["CallResult"];
             /** @enum {string} */
@@ -1890,11 +1892,8 @@ export interface components {
             link: string;
         };
         MarkReadIn: {
-            /**
-             * Format: int64
-             * @description 用户看到的最新一条；之后才到的保持未读
-             */
-            through_id: number;
+            /** @description 用户看到的最新一条；之后才到的保持未读 */
+            through_id: components["schemas"]["NotificationId"];
         };
         McpAssetOut: {
             name: string;
@@ -1967,6 +1966,11 @@ export interface components {
             /** @description content 的版本：保存时交回 */
             version: string;
         };
+        /**
+         * Format: int64
+         * @description 会话里一条消息的编号（messages 表的行号）
+         */
+        MessageId: number;
         /** @description 一个模型：哪个 provider（服务端配置的 `[llm.providers]`）的哪个模型；agent.toml 里写作 `<provider>:<model>`。 */
         ModelIo: {
             provider: string;
@@ -1988,8 +1992,7 @@ export interface components {
         };
         /** @description 一条通知（读模型）。 */
         Notification: {
-            /** Format: int64 */
-            id: number;
+            id: components["schemas"]["NotificationId"];
             title: string;
             body: string;
             session_id: components["schemas"]["SessionId"] | null;
@@ -2001,10 +2004,14 @@ export interface components {
         };
         /** @description 有新通知了（SSE 事件名 `notification`）：前端刷新通知页与未读数；正看着这个会话时把它标为已读。 */
         NotificationEvent: {
-            /** Format: int64 */
-            notification_id: number;
+            notification_id: components["schemas"]["NotificationId"];
             session_id: components["schemas"]["SessionId"] | null;
         };
+        /**
+         * Format: int64
+         * @description 通知的编号（notifications 表的行号）
+         */
+        NotificationId: number;
         /** @description 存下的配置：带服务端时区的到期时间。 */
         OnceConfig: {
             at: string;
@@ -2099,23 +2106,23 @@ export interface components {
         ReplyIn: {
             prompt: string;
             /** @description 先经 POST /api/files 上传得到的 id */
-            attachments?: string[];
+            attachments?: components["schemas"]["FileId"][];
             /** @enum {string} */
             kind: "message";
         } | {
-            call_id: string;
+            call_id: components["schemas"]["CallId"];
             answers: components["schemas"]["QuestionAnswer"][];
             /** @enum {string} */
             kind: "answer";
         } | {
-            call_id: string;
+            call_id: components["schemas"]["CallId"];
             choice: components["schemas"]["Choice"];
             /** @enum {string} */
             kind: "approval";
         };
         ResultItem: {
             tool_name: string;
-            tool_call_id: string;
+            tool_call_id: components["schemas"]["CallId"];
             /** @description 交给模型的文字（各文字段以换行连接） */
             text: string;
             /** @description 工具结果挂上的文件（muliao_attachments） */
@@ -2240,8 +2247,7 @@ export interface components {
         };
         /** @description 历史里的一条：来源消息的数据库 id（用于定位压缩点）与条目。 */
         SavedItem: {
-            /** Format: int64 */
-            message_id: number;
+            message_id: components["schemas"]["MessageId"];
             item: components["schemas"]["Item"];
         };
         ScheduleConfig: {
@@ -2258,8 +2264,7 @@ export interface components {
          */
         Script: string;
         ScriptGrantOut: {
-            /** Format: int64 */
-            id: number;
+            id: components["schemas"]["GrantId"];
             agent_id: components["schemas"]["AgentId"];
             skill: string;
             script: string;
@@ -2371,7 +2376,7 @@ export interface components {
         };
         /** @description 挂给用户的一个文件（存储形态）：文件存储里的哪个文件，以及展示要用的名字与类型。地址、能否内联由它派生（[`Attachment`]）。 */
         SharedFile: {
-            file_id: string;
+            file_id: components["schemas"]["FileId"];
             name: string;
             media_type: components["schemas"]["MediaType"];
         };
@@ -2428,7 +2433,7 @@ export interface components {
             agent_id: components["schemas"]["AgentId"];
             prompt: string;
             /** @description 先经 POST /api/files 上传得到的 id */
-            attachments?: string[];
+            attachments?: components["schemas"]["FileId"][];
         };
         /** @enum {string} */
         Status: "backlog" | "in_progress" | "in_review" | "blocked" | "done" | "cancelled";
@@ -2639,12 +2644,12 @@ export interface components {
             /** @enum {string} */
             kind: "wake";
         } | {
-            call_id: string;
+            call_id: components["schemas"]["CallId"];
             headers: string[];
             /** @enum {string} */
             kind: "ask";
         } | {
-            call_id: string;
+            call_id: components["schemas"]["CallId"];
             tool_name: string;
             /** @enum {string} */
             kind: "approval";
@@ -4481,7 +4486,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                file_id: string;
+                file_id: components["schemas"]["FileId"];
                 name: string;
             };
             cookie?: never;
@@ -4610,7 +4615,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                grant_id: number;
+                /** @description 始终允许的编号 */
+                grant_id: components["schemas"]["GrantId"];
             };
             cookie?: never;
         };

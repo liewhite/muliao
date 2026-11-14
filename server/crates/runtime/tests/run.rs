@@ -180,7 +180,7 @@ base_url = "{}"
     let vault = Arc::new(Vault::new("3QOHdQSfwdIhMog5wkCMiIBXFANh4YdV-XA9xY3RmyY=").unwrap());
     let secrets = Arc::new(Secrets::new(source.clone(), vault));
     let attachment = SharedFile {
-        file_id: "f1".into(),
+        file_id: muliao_platform::ids::FileId::new("f1"),
         name: "report.pdf".into(),
         media_type: MediaType::parse("application/pdf").unwrap(),
     };

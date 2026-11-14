@@ -4,7 +4,7 @@
 //! - [`deliver_in`]：交回结局并释放占用，和一封信件同一个事务；占用已被停止清掉、或会话已删除时不投。唯一出口。
 //! - [`post_check_in`]：运行中检查投信（不推送），这个来源已有信在排着、或占用不再 active 时不投。
 
-use muliao_platform::ids::{JobId, SessionId};
+use muliao_platform::ids::{CallId, JobId, SessionId};
 use std::collections::BTreeMap;
 
 use muliao_platform::db::Tx;
@@ -54,7 +54,7 @@ pub(crate) fn deliver_in(
     hold: &Hold,
     source: &EventSource,
     event_text: &str,
-    answer: Option<(&str, CallResult)>,
+    answer: Option<(&CallId, CallResult)>,
 ) -> Result<Delivered> {
     let session_id = &hold.session_id;
     match holds::release_in(tx, hold)? {
@@ -70,7 +70,7 @@ pub(crate) fn deliver_in(
     let at = position_in(tx, session_id)?;
     let delivered = match answer {
         Some((call_id, answer)) if at.paused().is_some_and(|p| p.get(call_id).is_some()) => {
-            post_in(tx, waker, session_id, NewMail::answer(call_id.to_owned(), answer, hold.awaited))?;
+            post_in(tx, waker, session_id, NewMail::answer(call_id.clone(), answer, hold.awaited))?;
             Delivered::Answer
         }
         _ => {

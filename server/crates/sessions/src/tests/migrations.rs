@@ -4,7 +4,7 @@
 //! 只用程序内置的 SQLite（rusqlite bundled）：命令行 sqlite3 版本不同，对 JSON 子类型的处理也不同，拿它手验看不出 004
 //! 把 muliao_parts 存成字符串的 bug。
 
-use muliao_platform::ids::{JobId, MediaType, RunId, SessionId};
+use muliao_platform::ids::{CallId, JobId, MediaType, RunId, SessionId};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -121,7 +121,7 @@ impl OldDb {
         mail.iter()
             .map(|m| {
                 let (call_id, result) = m.body.answer().expect("an answer");
-                (call_id.to_owned(), result.clone())
+                (call_id.as_str().to_owned(), result.clone())
             })
             .collect()
     }
@@ -169,7 +169,11 @@ fn old_attachment(file_id: &str, quoted_name: &str, name: &str, media_type: &str
 }
 
 fn shared(file_id: &str, name: &str, media_type: &str) -> SharedFile {
-    SharedFile { file_id: file_id.into(), name: name.into(), media_type: MediaType::parse(media_type).unwrap() }
+    SharedFile {
+        file_id: muliao_platform::ids::FileId::new(file_id),
+        name: name.into(),
+        media_type: MediaType::parse(media_type).unwrap(),
+    }
 }
 
 #[test]
@@ -287,17 +291,20 @@ fn pending_calls_move_into_one_table() {
     let kinds = crate::paused_calls::kinds_in(&c, &sid).unwrap();
     let expected =
         [("q1", Waiting::AskUser), ("a1", Waiting::AskAgent), ("g1", Waiting::Approval), ("g2", Waiting::Approval)];
-    assert_eq!(kinds, expected.iter().map(|(k, w)| ((*k).to_owned(), *w)).collect());
+    assert_eq!(kinds, expected.iter().map(|(k, w)| (CallId::new(*k), *w)).collect());
     // 老行没有 pin 的读成空指纹；第二次交给运行的批准不再执行：取走的时间一起搬过来了
     let approve = || CallResult::Approval(Decision { choice: Choice::Approve });
-    let answers = std::collections::HashMap::from([("g1".to_owned(), approve()), ("g2".to_owned(), approve())]);
+    let answers = std::collections::HashMap::from([(CallId::new("g1"), approve()), (CallId::new("g2"), approve())]);
     let decided = crate::paused_calls::take_in(&c, &sid, &answers).unwrap();
     assert_eq!(
-        decided["g1"],
+        decided[&CallId::new("g1")],
         agenter::Resolution::Approved(agenter::Approval { always: false, pin: String::new() }),
         "old rows without a pin read as empty"
     );
-    assert_eq!(decided["g2"], agenter::Resolution::Denied(crate::answers::APPROVAL_INTERRUPTED.to_owned()));
+    assert_eq!(
+        decided[&CallId::new("g2")],
+        agenter::Resolution::Denied(crate::answers::APPROVAL_INTERRUPTED.to_owned())
+    );
     // 会话停在哪：参数不合法的提问与普通调用补「被中断」，其余照旧挂着
     let Position::Interrupted { calls, after: AfterInterrupted::Paused(p) } = position_in(&c, &sid).unwrap() else {
         panic!("expected interrupted calls before the paused ones")
@@ -524,7 +531,7 @@ fn delegation_mode_is_recorded_on_the_call() {
     db.upgrade_to(10);
     let c = db.conn();
     let sid = SessionId::new(SESSION);
-    let mode = |call: &str| call_in(&c, &sid, call).unwrap().unwrap().mode;
+    let mode = |call: &str| call_in(&c, &sid, &CallId::new(call)).unwrap().unwrap().mode;
     assert_eq!(mode("r"), CallMode::Delegated(Delegated::ReportBack { check_seconds: 60.0 }));
     assert_eq!(mode("k"), CallMode::Delegated(Delegated::Ask));
     assert_eq!(mode("p"), CallMode::Plain);
@@ -533,7 +540,10 @@ fn delegation_mode_is_recorded_on_the_call() {
         .query_row("SELECT t.id FROM session_holds h JOIN thread_calls t ON t.id = h.thread_call_id", [], |r| r.get(0))
         .unwrap();
     assert_eq!(held, 1);
-    assert_eq!(record_call_in(&c, &sid, "new", &SessionId::new("t"), CallMode::Plain).unwrap().id.get(), 6);
+    assert_eq!(
+        record_call_in(&c, &sid, &CallId::new("new"), &SessionId::new("t"), CallMode::Plain).unwrap().id.get(),
+        6
+    );
     // 只有 report_back 带间隔
     let bad = c.execute(
         "INSERT INTO thread_calls (parent_session_id, call_id, thread_session_id, mode, check_seconds) \

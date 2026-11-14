@@ -10,7 +10,7 @@ use axum::response::Response;
 use chrono::{DateTime, Utc};
 use futures::TryStreamExt;
 use muliao_files::FileMeta;
-use muliao_platform::ids::MediaType;
+use muliao_platform::ids::{FileId, MediaType};
 use serde::{Deserialize, Serialize};
 use tokio_util::io::StreamReader;
 use utoipa::{IntoParams, ToSchema};
@@ -28,7 +28,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
 
 #[derive(Clone, Serialize, ToSchema)]
 pub struct FileOut {
-    pub id: String,
+    pub id: FileId,
     pub name: String,
     pub media_type: MediaType,
     pub size: u64,
@@ -88,7 +88,7 @@ async fn upload(
 /// 文件内容；每个文件只有一个规范地址（名字对不上 404）。内容按 id 永不改变，可以一直缓存。
 #[utoipa::path(get, path = "/api/files/{file_id}/{name}", tag = "files",
     responses((status = 200, description = "文件内容"), (status = 404, body = ErrorOut)))]
-async fn download(State(s): State<AppState>, Path((file_id, name)): Path<(String, String)>) -> ApiResult<Response> {
+async fn download(State(s): State<AppState>, Path((file_id, name)): Path<(FileId, String)>) -> ApiResult<Response> {
     let files = &s.services.files;
     let meta = files.get(&file_id).await?;
     if name != meta.name {

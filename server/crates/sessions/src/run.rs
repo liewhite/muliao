@@ -12,7 +12,7 @@
 //!   保存。保存一步的事务不被打断。
 //! - 收尾（[`finish_in`]）：记下运行的结局、结清做完的委派、发布 RunEnded。
 
-use muliao_platform::ids::{MailId, RunId, SessionId};
+use muliao_platform::ids::{CallId, MailId, MessageId, RunId, SessionId};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
@@ -444,7 +444,7 @@ struct Driver<'a> {
     /// 见 SessionContext::stale_responses
     stale_responses: Option<usize>,
     /// 挂着这次运行的运行上下文的那条请求：还没挂，或压缩把它切进了摘要时为 None，下一条新请求挂一段
-    run_context_row: Option<i64>,
+    run_context_row: Option<MessageId>,
     /// 压缩不下去了：这次运行不再因为上下文大小停下
     compaction_exhausted: bool,
 }
@@ -664,8 +664,8 @@ impl Driver<'_> {
             ToolsRun::Done(ToolsDone::Paused { results, approvals, .. }) => {
                 // 停在挂起的调用上：已做完的结果与这次请求批准的调用同一个事务记下（分开提交时，进程在两者之间退出会留下
                 // 一个没有结果、又不算在等批准的调用）。交回 Defer 的调用由工具自己在挂起前记过；停在哪些调用上只问 position
-                let requested: Vec<(String, Pause)> =
-                    approvals.into_iter().map(|(c, pin)| (c.id, Pause::Approval { pin })).collect();
+                let requested: Vec<(CallId, Pause)> =
+                    approvals.into_iter().map(|(c, pin)| (CallId::new(c.id), Pause::Approval { pin })).collect();
                 let mut request = results_request(fresh(results));
                 // 继续之后又停在挂起的调用上：开头取走的信也在这一步记为已处理，内容随结果存下（下次随它们交给模型）
                 let mail = match first {
@@ -783,7 +783,7 @@ impl Driver<'_> {
     }
 
     /// 保存这次运行的这些消息，并把它们带上的信件记为已处理。返回写下的消息 id。
-    async fn save(&mut self, messages: Vec<Message>, mail: Vec<MailId>) -> Result<Vec<i64>> {
+    async fn save(&mut self, messages: Vec<Message>, mail: Vec<MailId>) -> Result<Vec<MessageId>> {
         self.save_with(messages, mail, |_| Ok(())).await
     }
 
@@ -792,7 +792,7 @@ impl Driver<'_> {
         messages: Vec<Message>,
         mail: Vec<MailId>,
         also: impl FnOnce(&mut Tx<'_>) -> Result<()> + Send + 'static,
-    ) -> Result<Vec<i64>> {
+    ) -> Result<Vec<MessageId>> {
         // 脱敏只作用于存下的那份；这次运行内存里的历史留明文：下一步执行的就是这些调用，执行时要拿到真的参数（#770）
         let mut stored = messages.clone();
         self.core.redaction.messages(&mut stored);

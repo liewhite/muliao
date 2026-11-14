@@ -6,7 +6,7 @@
 //! - 删除会不会打断工作（[`blocking_deletion_in`]）：挂起的提问没有人在外面做事，不挡删除。
 //! - 等待项（[`waits_of_in`]）：waiting 的原因逐项展开，会话页列出。
 
-use muliao_platform::ids::{AgentId, HoldId, JobId, SessionId};
+use muliao_platform::ids::{AgentId, CallId, HoldId, JobId, SessionId};
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
@@ -136,9 +136,9 @@ pub enum Wait {
     /// 自己约的到点唤醒
     Wake { due_at: DateTime<Utc>, note: String, since: DateTime<Utc> },
     /// 用户回答提问
-    Ask { call_id: String, headers: Vec<String> },
+    Ask { call_id: CallId, headers: Vec<String> },
     /// 用户批准一次工具调用
-    Approval { call_id: String, tool_name: String },
+    Approval { call_id: CallId, tool_name: String },
 }
 
 /// 会话在等的东西逐项展开：占用按登记先后，然后是提问、等批准的调用。

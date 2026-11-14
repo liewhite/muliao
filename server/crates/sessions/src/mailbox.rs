@@ -7,7 +7,7 @@
 //!   保存时（这时同时记为已处理）。
 //! - 用户停止会话、运行最终失败时没交给模型的信件记为被丢弃（[`discard_in`]），留着记录。
 
-use muliao_platform::ids::{DelegationId, MailId, RunId, SessionId};
+use muliao_platform::ids::{CallId, DelegationId, FileId, MailId, RunId, SessionId};
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
@@ -26,10 +26,10 @@ use muliao_platform::errors::{Result, broken, not_found};
 pub enum MailBody {
     /// 交给模型的原文：用户在界面发的消息（可带附件）、触发器事件、另一个 agent 委派来的任务。origin 是经来信入口投进来的
     /// 发送方来源，「用户说了什么」只按它认；delegation_id：委派来的信件是哪项委派（thread_calls 的行）
-    Message { origin: Origin, content: String, attachments: Vec<String>, delegation_id: Option<DelegationId> },
+    Message { origin: Origin, content: String, attachments: Vec<FileId>, delegation_id: Option<DelegationId> },
     /// 对一次挂起调用的回答：作为那次调用的结果交回，不是一段新消息。是用户的回答还是交回的结局由结果的种类定
     /// （[`CallResult::is_from_user`]）
-    Answer { call_id: String, result: CallResult },
+    Answer { call_id: CallId, result: CallResult },
     /// 后台任务、交回的结果、运行中检查（check_in）：套上来源（如 job:12、thread:<会话 id>）交给模型，界面单独显示
     Event { source: EventSource, content: String, check_in: bool },
 }
@@ -70,7 +70,7 @@ impl MailBody {
     }
 
     /// 消息的附件（文件存储 id）。
-    pub fn attachments(&self) -> &[String] {
+    pub fn attachments(&self) -> &[FileId] {
         match self {
             MailBody::Message { attachments, .. } => attachments,
             _ => &[],
@@ -78,7 +78,7 @@ impl MailBody {
     }
 
     /// 回答的调用 id 与结果；不是回答的为 None。
-    pub(crate) fn answer(&self) -> Option<(&str, &CallResult)> {
+    pub(crate) fn answer(&self) -> Option<(&CallId, &CallResult)> {
         match self {
             MailBody::Answer { call_id, result } => Some((call_id, result)),
             _ => None,
@@ -125,7 +125,7 @@ impl NewMail {
     }
 
     /// 对一次挂起调用的回答。
-    pub(crate) fn answer(call_id: String, result: CallResult, awaited: bool) -> Self {
+    pub(crate) fn answer(call_id: CallId, result: CallResult, awaited: bool) -> Self {
         NewMail { body: MailBody::Answer { call_id, result }, awaited }
     }
 }
@@ -183,7 +183,7 @@ impl RawMail {
             },
             (MailKind::Answer, None | Some(Origin::User), None) => {
                 // answers 列存的是 调用 id -> 结果 的表（早先设计成一封可带多个），实际每封只有一个
-                let answers: BTreeMap<String, CallResult> =
+                let answers: BTreeMap<CallId, CallResult> =
                     serde_json::from_str(&self.answers).map_err(|e| bad("answers", e))?;
                 let mut answers = answers.into_iter();
                 let (Some((call_id, result)), None) = (answers.next(), answers.next()) else {

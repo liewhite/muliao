@@ -1,7 +1,7 @@
 //! 界面用的会话门面（HTTP 层只经这里）：会话页、会话列表、发消息、停止、删除、手动压缩、重试最终失败的运行。别的领域
 //! 用各模块的 `*_in` 查询（在自己的事务里）与 [`crate::inbound::SenderInbox`]、[`crate::work::SessionWork`]。
 
-use muliao_platform::ids::SessionId;
+use muliao_platform::ids::{CallId, SessionId};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -207,7 +207,7 @@ impl SessionService {
 }
 
 /// 实时快照里的调用同样挂上它开出或续写的 thread：中途打开会话页时这一段的调用也显示它开出的 thread。
-fn with_threads(mut live: LiveSegment, call_threads: &BTreeMap<String, SessionId>) -> LiveSegment {
+fn with_threads(mut live: LiveSegment, call_threads: &BTreeMap<CallId, SessionId>) -> LiveSegment {
     for e in &mut live.events {
         if let RunEvent::Item { item } = &mut e.event {
             annotate_threads(std::slice::from_mut(&mut **item), call_threads);

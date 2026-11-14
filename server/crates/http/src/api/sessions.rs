@@ -1,6 +1,6 @@
 //! 会话：列表、新建、会话页、发消息（含回答提问与批准调用）、停止、手动压缩、重试最终失败的运行、标记已读、删除。
 
-use muliao_platform::ids::{AgentId, JobId, MailId, SessionId, TriggerId};
+use muliao_platform::ids::{AgentId, CallId, FileId, JobId, MailId, MessageId, SessionId, TriggerId};
 use std::collections::{BTreeMap, BTreeSet};
 
 use axum::extract::State;
@@ -128,7 +128,7 @@ pub struct StartIn {
     pub prompt: String,
     /// 先经 POST /api/files 上传得到的 id
     #[serde(default)]
-    pub attachments: Vec<String>,
+    pub attachments: Vec<FileId>,
 }
 
 /// 新建会话并发出第一条消息。
@@ -175,7 +175,7 @@ pub enum MailKindOut {
     },
     Answer {
         /// 回答的是哪次挂起调用
-        call_id: String,
+        call_id: CallId,
         /// 那次挂起调用的结果（用户的回答，或被问 agent 的结局）
         result: CallResult,
     },
@@ -183,10 +183,10 @@ pub enum MailKindOut {
 
 /// MailOut 的唯一构造入口：一次取齐这些信件的附件。
 async fn mail_outs(s: &AppState, mail: Vec<Mail>) -> ApiResult<Vec<MailOut>> {
-    let mut ids: Vec<String> = mail.iter().flat_map(|m| m.body.attachments().iter().cloned()).collect();
+    let mut ids: Vec<FileId> = mail.iter().flat_map(|m| m.body.attachments().iter().cloned()).collect();
     ids.sort();
     ids.dedup();
-    let files: BTreeMap<String, FileOut> =
+    let files: BTreeMap<FileId, FileOut> =
         s.services.files.referenced(ids).await?.iter().map(|f| (f.id.clone(), FileOut::of(f))).collect();
     Ok(mail
         .into_iter()
@@ -205,7 +205,7 @@ async fn mail_outs(s: &AppState, mail: Vec<Mail>) -> ApiResult<Vec<MailOut>> {
 #[derive(Serialize, ToSchema)]
 pub struct CompactionOut {
     /// 这条消息及之前的已由 summary 代替发给模型（原文仍完整展示）
-    pub through_message_id: i64,
+    pub through_message_id: MessageId,
     pub summary: String,
     pub created_at: DateTime<Utc>,
 }
@@ -233,9 +233,9 @@ pub enum WaitOut {
     /// 自己约的到点唤醒
     Wake { due_at: DateTime<Utc>, note: String, since: DateTime<Utc> },
     /// 用户回答提问
-    Ask { call_id: String, headers: Vec<String> },
+    Ask { call_id: CallId, headers: Vec<String> },
     /// 用户批准一次工具调用
-    Approval { call_id: String, tool_name: String },
+    Approval { call_id: CallId, tool_name: String },
 }
 
 /// WaitOut 的唯一构造入口：后台任务向工作区领域取命令与日志。
@@ -354,13 +354,13 @@ pub enum ReplyIn {
         prompt: String,
         /// 先经 POST /api/files 上传得到的 id
         #[serde(default)]
-        attachments: Vec<String>,
+        attachments: Vec<FileId>,
     },
     /// 回答一次挂起的提问（条目里 ask.status 为 pending 的提问）：每题一个回答
-    Answer { call_id: String, answers: Vec<QuestionAnswer> },
+    Answer { call_id: CallId, answers: Vec<QuestionAnswer> },
     /// 对一次等批准的调用（条目里 approval 为 pending）的决定：approve 批准、deny 拒绝、always 始终允许（批准，以后同样的
     /// 调用不再问）
-    Approval { call_id: String, choice: Choice },
+    Approval { call_id: CallId, choice: Choice },
 }
 
 /// 在会话里发一条消息（续写）、回答一次提问，或批准一次调用。返回信进的会话。

@@ -9,7 +9,7 @@
 //! - 什么时候继续（[`Paused::ready`]）：用户发了新消息（跳过还没回答的），或挂起的调用都有了回答；事件留在信箱里等它们
 //!   一起交给模型。
 
-use muliao_platform::ids::MailId;
+use muliao_platform::ids::{CallId, MailId};
 use std::collections::{HashMap, HashSet};
 
 use agenter::{Message, Resolution, ToolCall, ToolResult};
@@ -39,16 +39,23 @@ pub struct Paused {
     /// 挂起的调用，按出现顺序
     pub pending: Vec<PendingCall>,
     /// 信箱里对它们的回答
-    pub answers: HashMap<String, CallResult>,
+    pub answers: HashMap<CallId, CallResult>,
     /// 带着这些回答的信件：信件 id 与它回答的调用
-    pub answer_mail: Vec<(MailId, String)>,
+    pub answer_mail: Vec<(MailId, CallId)>,
     /// 现在能不能继续
     pub ready: bool,
 }
 
+impl PendingCall {
+    /// 挂起记录、回答信件里认它用的编号
+    pub(crate) fn id(&self) -> CallId {
+        CallId::new(self.call.id.clone())
+    }
+}
+
 impl Paused {
-    pub(crate) fn get(&self, call_id: &str) -> Option<&PendingCall> {
-        self.pending.iter().find(|p| p.call.id == call_id)
+    pub(crate) fn get(&self, call_id: &CallId) -> Option<&PendingCall> {
+        self.pending.iter().find(|p| p.call.id == call_id.as_str())
     }
 }
 
@@ -112,7 +119,7 @@ pub(crate) fn position(history: &[Message], paused: &PausedKinds, queued: &[Mail
     let mut pending: Vec<PendingCall> = Vec::new();
     let mut interrupted: Vec<ToolCall> = Vec::new();
     for c in unanswered_calls(history)? {
-        match paused.get(&c.id) {
+        match paused.get(&CallId::new(c.id.clone())) {
             Some(&kind) => pending.push(PendingCall { call: c, kind }),
             None => interrupted.push(c),
         }
@@ -120,14 +127,14 @@ pub(crate) fn position(history: &[Message], paused: &PausedKinds, queued: &[Mail
     let waiting = if pending.is_empty() {
         None
     } else {
-        let ids: HashSet<&str> = pending.iter().map(|p| p.call.id.as_str()).collect();
-        let on_time: Vec<(MailId, &str, &CallResult)> =
+        let ids: HashSet<CallId> = pending.iter().map(PendingCall::id).collect();
+        let on_time: Vec<(MailId, &CallId, &CallResult)> =
             queued.iter().filter_map(|m| on_time_answer(m, &ids).map(|(c, r)| (m.id, c, r))).collect();
-        let answers: HashMap<String, CallResult> =
-            on_time.iter().map(|(_, c, r)| ((*c).to_owned(), (*r).clone())).collect();
+        let answers: HashMap<CallId, CallResult> =
+            on_time.iter().map(|(_, c, r)| ((*c).clone(), (*r).clone())).collect();
         let ready = queued.iter().any(|m| matches!(m.body, MailBody::Message { .. }))
-            || ids.iter().all(|i| answers.contains_key(*i));
-        let answer_mail = on_time.into_iter().map(|(id, c, _)| (id, c.to_owned())).collect();
+            || ids.iter().all(|i| answers.contains_key(i));
+        let answer_mail = on_time.into_iter().map(|(id, c, _)| (id, c.clone())).collect();
         Some(Paused { pending, answers, answer_mail, ready })
     };
     if !interrupted.is_empty() {
@@ -147,7 +154,7 @@ pub(crate) fn position(history: &[Message], paused: &PausedKinds, queued: &[Mail
 }
 
 /// 这封回答信件针对的调用还挂着：它的回答作为那次调用的结果交回（返回调用 id 与回答）。否则它是迟到的，作为文字交给模型。
-pub(crate) fn on_time_answer<'a>(mail: &'a Mail, pending: &HashSet<&str>) -> Option<(&'a str, &'a CallResult)> {
+pub(crate) fn on_time_answer<'a>(mail: &'a Mail, pending: &HashSet<CallId>) -> Option<(&'a CallId, &'a CallResult)> {
     mail.body.answer().filter(|(c, _)| pending.contains(c))
 }
 
@@ -155,24 +162,25 @@ pub(crate) fn on_time_answer<'a>(mail: &'a Mail, pending: &HashSet<&str>) -> Opt
 /// （decided，每个批准决定都在里面）；其余（来了新消息，或这次只回答了一部分）用那一种自己的「跳过」结果。
 pub(crate) fn deferred_results(
     paused: &Paused,
-    mut decided: HashMap<String, Resolution>,
+    mut decided: HashMap<CallId, Resolution>,
 ) -> Result<HashMap<String, Resolution>> {
     let given: Vec<&CallResult> = paused.answers.values().collect();
     let mut results = HashMap::new();
     for p in &paused.pending {
-        let id = &p.call.id;
-        let r = match (p.kind, paused.answers.get(id)) {
+        let id = p.id();
+        let r = match (p.kind, paused.answers.get(&id)) {
             (_, None) => skipped(p.kind, &given),
             (Waiting::AskUser, Some(CallResult::AskUser(r))) => r.resolution(),
             (Waiting::AskAgent, Some(CallResult::AskAgent(a))) => a.resolution(),
             (Waiting::Approval, Some(CallResult::Approval(_))) => {
-                decided.remove(id).expect("take_in resolves every decision among the answers")
+                decided.remove(&id).expect("take_in resolves every decision among the answers")
             }
             (_, Some(a)) => {
                 return Err(broken(format!("call {id} of {} got an answer for {}", p.call.name, a.kind())));
             }
         };
-        results.insert(id.clone(), r);
+        // 交给运行（agenter）的结果按它的调用 id
+        results.insert(p.call.id.clone(), r);
     }
     Ok(results)
 }
@@ -211,7 +219,7 @@ fn closing_paused(p: &Paused) -> StopClosing {
             closing.stopped.push(pc.call.clone());
             continue;
         }
-        let Some(CallResult::AskUser(answer)) = p.answers.get(&pc.call.id) else { continue };
+        let Some(CallResult::AskUser(answer)) = p.answers.get(&pc.id()) else { continue };
         closing.answered.push(ToolResult {
             call_id: pc.call.id.clone(),
             tool_name: pc.call.name.clone(),
@@ -241,21 +249,21 @@ pub enum OpenAsk {
 /// 还没有结果、等用户的挂起调用（提问与等批准的调用），按出现顺序：现在能回答、能批准的，与已提交、还排着的。界面展示与
 /// 投信校验都经过这里。
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct OpenAsks(pub Vec<(String, OpenAsk)>);
+pub struct OpenAsks(pub Vec<(CallId, OpenAsk)>);
 
 impl OpenAsks {
-    pub(crate) fn get(&self, call_id: &str) -> Option<&OpenAsk> {
+    pub(crate) fn get(&self, call_id: &CallId) -> Option<&OpenAsk> {
         self.0.iter().find(|(k, _)| k == call_id).map(|(_, a)| a)
     }
 
-    pub(crate) fn question(&self, call_id: &str) -> Option<&[Question]> {
+    pub(crate) fn question(&self, call_id: &CallId) -> Option<&[Question]> {
         match self.get(call_id)? {
             OpenAsk::Question(q) => Some(q),
             _ => None,
         }
     }
 
-    pub(crate) fn can_approve(&self, call_id: &str) -> bool {
+    pub(crate) fn can_approve(&self, call_id: &CallId) -> bool {
         matches!(self.get(call_id), Some(OpenAsk::Approval(_)))
     }
 
@@ -267,24 +275,24 @@ impl OpenAsks {
 
 pub(crate) fn open_asks_of(at: &Position, queued: &[Mail]) -> OpenAsks {
     // 已提交的批准只算还挂着的调用（迟到的不算）；提问的「已提交」不看挂没挂着：运行还没停下时也显示已提交
-    let pending = |id: &str| at.paused().is_some_and(|p| p.pending.iter().any(|pc| pc.call.id == id));
-    let submitted: Vec<(String, OpenAsk)> = queued
+    let pending = |id: &CallId| at.paused().is_some_and(|p| p.get(id).is_some());
+    let submitted: Vec<(CallId, OpenAsk)> = queued
         .iter()
         .filter_map(|m| m.body.answer())
         .filter(|(id, r)| r.kind() != Waiting::Approval || pending(id))
-        .map(|(id, r)| (id.to_owned(), OpenAsk::Submitted(r.kind())))
+        .map(|(id, r)| (id.clone(), OpenAsk::Submitted(r.kind())))
         .collect();
-    let is_submitted = |id: &str| submitted.iter().any(|(k, _)| k == id);
+    let is_submitted = |id: &CallId| submitted.iter().any(|(k, _)| k == id);
     let mut open = Vec::new();
     if let Some(p) = at.paused() {
         for pc in &p.pending {
-            let id = &pc.call.id;
+            let id = pc.id();
             match pc.kind {
-                Waiting::AskUser if !is_submitted(id) => {
-                    open.push((id.clone(), OpenAsk::Question(questions_of(&pc.call.args))));
+                Waiting::AskUser if !is_submitted(&id) => {
+                    open.push((id, OpenAsk::Question(questions_of(&pc.call.args))));
                 }
-                Waiting::Approval if !is_submitted(id) => {
-                    open.push((id.clone(), OpenAsk::Approval(pc.call.name.clone())));
+                Waiting::Approval if !is_submitted(&id) => {
+                    open.push((id, OpenAsk::Approval(pc.call.name.clone())));
                 }
                 Waiting::AskUser | Waiting::Approval | Waiting::AskAgent => {}
             }
@@ -353,11 +361,11 @@ mod tests {
     }
 
     fn answered(id: &str) -> MailBody {
-        MailBody::Answer { call_id: id.to_owned(), result: CallResult::AskUser(AskResult::Answered(vec![])) }
+        MailBody::Answer { call_id: CallId::new(id), result: CallResult::AskUser(AskResult::Answered(vec![])) }
     }
 
     fn kinds(of: &[(&str, Waiting)]) -> PausedKinds {
-        of.iter().map(|(id, k)| ((*id).to_owned(), *k)).collect()
+        of.iter().map(|(id, k)| (CallId::new(*id), *k)).collect()
     }
 
     #[test]
@@ -410,7 +418,7 @@ mod tests {
         let asked = kinds(&[("a1", Waiting::AskAgent)]);
         assert!(position(&h, &asked, &[]).unwrap().waiting_for_answers());
         let answer = MailBody::Answer {
-            call_id: "a1".to_owned(),
+            call_id: CallId::new("a1"),
             result: CallResult::AskAgent(AgentAnswer { text: "x".into(), attachments: vec![] }),
         };
         assert!(position(&h, &asked, &[mail(1, answer)]).unwrap().paused().unwrap().ready);
@@ -422,7 +430,7 @@ mod tests {
         // 等批准
         let gated = [response(vec![call("c1", "skill_run", "{}")])];
         let at = position(&gated, &kinds(&[("c1", Waiting::Approval)]), &[]).unwrap();
-        assert_eq!(open_asks_of(&at, &[]).0, vec![("c1".to_owned(), OpenAsk::Approval("skill_run".to_owned()))]);
+        assert_eq!(open_asks_of(&at, &[]).0, vec![(CallId::new("c1"), OpenAsk::Approval("skill_run".to_owned()))]);
         let closing = closing_on_stop(&at);
         assert_eq!(closing.stopped.len(), 1, "stopping does not keep calls waiting for approval");
     }

@@ -1,7 +1,8 @@
 //! 记录的编号与几种规整过的值。
 //!
 //! 各领域的编号各是一个类型（[`AgentId`]、[`SessionId`]、[`RunId`]、[`MailId`]、[`HoldId`]、[`JobId`]、
-//! [`DelegationId`]、[`IssueId`]、[`TriggerId`]）：只是名字，不带领域规则，
+//! [`DelegationId`]、[`IssueId`]、[`TriggerId`]、[`NotificationId`]、[`MessageId`]、[`GrantId`]、[`FileId`]、
+//! [`CallId`]）：只是名字，不带领域规则，
 //! 放在这里因为各层都要传它们（共享内核，docs/architecture.md 第 3 节）。不同编号不能互传，传错位置编译不过。
 //! 只在读入边界构造：读库（`FromSql`）、HTTP 路径与请求体（`Deserialize`）、新建记录（`new`）；序列化、存库、
 //! 接口描述里都与内部的字符串或整数相同（旧数据、前端无感）。
@@ -175,6 +176,26 @@ row_id!(
 row_id!(
     /// 触发器的编号（triggers 表的行号）
     TriggerId
+);
+row_id!(
+    /// 通知的编号（notifications 表的行号）
+    NotificationId
+);
+row_id!(
+    /// 会话里一条消息的编号（messages 表的行号）
+    MessageId
+);
+row_id!(
+    /// 一条「始终允许」的编号（script_grants 表的行号）
+    GrantId
+);
+text_id!(
+    /// 上传或交回的文件的编号（files 表的 id）
+    FileId
+);
+text_id!(
+    /// 一次工具调用的编号（模型给出，会话里唯一；挂起的调用、委派、提问与审批的回答都按它对应）
+    CallId
 );
 
 /// 浏览器可以直接显示、模型也普遍能看的图片类型：只有这些按 inline 返回，并作为图片交给模型。SVG 不在其中：它能带脚本

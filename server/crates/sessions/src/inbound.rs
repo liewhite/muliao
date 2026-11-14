@@ -8,7 +8,7 @@
 //! - 新建会话只有 [`create_session_in`] 一处实现（来信与 thread 都经过它）。会话只为能运行的 agent 新建、继续（在本事务里
 //!   检查 agent 没在删除、没归档）。
 
-use muliao_platform::ids::{AgentId, DelegationId, SessionId, new_id};
+use muliao_platform::ids::{AgentId, CallId, DelegationId, FileId, SessionId, new_id};
 
 use muliao_assets::agents::{Availability, agent_in, availability_in, runnable_agent_in};
 use muliao_files::load_metas;
@@ -78,9 +78,9 @@ pub enum UserTarget {
 /// （后两种只对已有会话）；用户在等它的回答。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UserMessage {
-    Message { session: UserTarget, content: String, attachments: Vec<String> },
-    Answer { session_id: SessionId, call_id: String, answers: Vec<QuestionAnswer> },
-    Approval { session_id: SessionId, call_id: String, choice: Choice },
+    Message { session: UserTarget, content: String, attachments: Vec<FileId> },
+    Answer { session_id: SessionId, call_id: CallId, answers: Vec<QuestionAnswer> },
+    Approval { session_id: SessionId, call_id: CallId, choice: Choice },
 }
 
 /// 别的领域的来信投不进的原因：目标 agent 收不了信（只有收信入口判断，发送方按原因决定自己怎么反应）。发送方只投新会话
@@ -117,7 +117,7 @@ pub struct Accepted {
 /// 一封来信的内部形式，按种类各带自己的字段。
 pub(crate) enum Inbound {
     /// 用户的一条消息（回答与批准不是来信，走 [`reply_in`]）：用户在等它的回答
-    User { session: UserTarget, content: String, attachments: Vec<String> },
+    User { session: UserTarget, content: String, attachments: Vec<FileId> },
     /// 别的领域（触发器、issue）的来信：没有人在等
     Sender(SenderMail),
     /// 委派来的信：发送方是父会话 parent，投给它已开出的 thread
@@ -156,7 +156,7 @@ impl Inbound {
         }
     }
 
-    fn attachments(&self) -> &[String] {
+    fn attachments(&self) -> &[FileId] {
         match self {
             Inbound::User { attachments, .. } => attachments,
             Inbound::Sender(_) | Inbound::Delegated { .. } => &[],
@@ -164,7 +164,7 @@ impl Inbound {
     }
 
     /// 投成信件：(正文, 附件, 委派来的是哪项委派, 用户在不在等)
-    fn into_mail(self) -> (String, Vec<String>, Option<DelegationId>, bool) {
+    fn into_mail(self) -> (String, Vec<FileId>, Option<DelegationId>, bool) {
         match self {
             Inbound::User { content, attachments, .. } => (content, attachments, None, true),
             Inbound::Sender(m) => (m.content, Vec::new(), None, false),
@@ -311,7 +311,7 @@ pub(crate) fn check_in(c: &Connection, inbound: &Inbound) -> Result<std::result:
 }
 
 /// 用户对一次挂起调用的回复：要对应还在等的提问或等批准的调用。返回回答信件里存的结果。
-fn resolve_reply(c: &Connection, session_id: &SessionId, call_id: &str, reply: &CallReply) -> Result<CallResult> {
+fn resolve_reply(c: &Connection, session_id: &SessionId, call_id: &CallId, reply: &CallReply) -> Result<CallResult> {
     let asks = open_asks_of(&position_in(c, session_id)?, &queued_in(c, session_id)?);
     match reply {
         CallReply::Answer(given) => {
@@ -355,7 +355,7 @@ pub(crate) fn reply_in(
     tx: &mut Tx<'_>,
     waker: &Waker,
     session_id: &SessionId,
-    call_id: String,
+    call_id: CallId,
     reply: CallReply,
 ) -> Result<Session> {
     let session =

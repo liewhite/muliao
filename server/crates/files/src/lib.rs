@@ -14,7 +14,7 @@
 //!   引用访问到（只能经元数据按 id 找到），同样内容再次上传时直接复用。
 //! - 代价：孤儿内容只占空间。
 
-use muliao_platform::ids::{MediaType, new_id};
+use muliao_platform::ids::{FileId, MediaType, new_id};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -44,7 +44,7 @@ const NAME_SEGMENT: &AsciiSet = &NON_ALPHANUMERIC.remove(b'-').remove(b'.').remo
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileMeta {
-    pub id: String,
+    pub id: FileId,
     pub name: String,
     pub media_type: MediaType,
     pub size: u64,
@@ -63,14 +63,14 @@ impl FileMeta {
 }
 
 /// 界面显示与下载文件的地址（接口路径）。
-pub fn file_url(file_id: &str, name: &str) -> String {
+pub fn file_url(file_id: &FileId, name: &str) -> String {
     format!("{FILES_PATH}/{file_id}/{}", utf8_percent_encode(name, NAME_SEGMENT))
 }
 
 /// 消息里对文件存储中一个文件的引用：编号与名字（名字随文件不变，存下来显示时不用再查库）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileRef {
-    pub id: String,
+    pub id: FileId,
     pub name: String,
 }
 
@@ -89,7 +89,7 @@ impl FileRef {
             return None;
         }
         let name = percent_decode_str(quoted).decode_utf8().ok()?;
-        Some(FileRef { id: id.to_owned(), name: name.into_owned() })
+        Some(FileRef { id: FileId::new(id), name: name.into_owned() })
     }
 
     /// 界面显示与下载用的地址。
@@ -116,7 +116,7 @@ pub fn check_name(name: &str) -> Result<&str, DomainError> {
 
 /// 按给出的顺序返回元数据；任何一个不存在都报 NotFound。可以在调用方的事务里用（文件写入后不变、不删，没有先查后写的
 /// 竞态）。files 表只经过这里读。
-pub fn load_metas(conn: &Connection, file_ids: &[String]) -> Result<Vec<FileMeta>, Error> {
+pub fn load_metas(conn: &Connection, file_ids: &[FileId]) -> Result<Vec<FileMeta>, Error> {
     let (metas, missing) = lookup(conn, file_ids)?;
     if !missing.is_empty() {
         return Err(DomainError::not_found(format!("files {missing:?} not found")).into());
@@ -125,7 +125,7 @@ pub fn load_metas(conn: &Connection, file_ids: &[String]) -> Result<Vec<FileMeta
 }
 
 /// 找到的元数据（按给出的顺序）与找不到的 id。
-fn lookup(conn: &Connection, file_ids: &[String]) -> rusqlite::Result<(Vec<FileMeta>, Vec<String>)> {
+fn lookup(conn: &Connection, file_ids: &[FileId]) -> rusqlite::Result<(Vec<FileMeta>, Vec<FileId>)> {
     let mut stmt =
         conn.prepare_cached("SELECT id, name, media_type, size, sha256, created_at FROM files WHERE id = ?1")?;
     let mut metas = Vec::with_capacity(file_ids.len());
@@ -245,7 +245,7 @@ impl FileStore {
         tokio::task::spawn_blocking(move || commit_blob(&from, &blob))
             .await
             .unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic()))?;
-        let meta = FileMeta { id: new_id(), name, media_type, size, sha256, created_at: Utc::now() };
+        let meta = FileMeta { id: FileId::new(new_id()), name, media_type, size, sha256, created_at: Utc::now() };
         let row = meta.clone();
         self.db
             .write(move |tx| {
@@ -264,18 +264,18 @@ impl FileStore {
         self.put(name, media_type, file).await
     }
 
-    pub async fn get(&self, file_id: &str) -> Result<FileMeta, Error> {
-        let mut metas = self.get_many(vec![file_id.to_string()]).await?;
+    pub async fn get(&self, file_id: &FileId) -> Result<FileMeta, Error> {
+        let mut metas = self.get_many(vec![file_id.clone()]).await?;
         Ok(metas.remove(0))
     }
 
     /// 调用方给出的 id（可能有误）：不存在报 NotFound。
-    pub async fn get_many(&self, file_ids: Vec<String>) -> Result<Vec<FileMeta>, Error> {
+    pub async fn get_many(&self, file_ids: Vec<FileId>) -> Result<Vec<FileMeta>, Error> {
         self.db.read(move |c| load_metas(c, &file_ids)).await
     }
 
     /// 系统自己存下的引用（消息里的附件）：找不到是数据损坏（内部错误），不是输入错误。
-    pub async fn referenced(&self, file_ids: Vec<String>) -> Result<Vec<FileMeta>, Error> {
+    pub async fn referenced(&self, file_ids: Vec<FileId>) -> Result<Vec<FileMeta>, Error> {
         let (metas, missing) = self.db.read(move |c| lookup(c, &file_ids)).await?;
         if !missing.is_empty() {
             return Err(broken(format!("stored references point to missing files: {missing:?}")));

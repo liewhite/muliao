@@ -5,7 +5,7 @@
 //! 历史里重复显示（after_message_id）。事件带这一段的 segment_id 与递增的 seq，前端据此把快照与之后的 SSE 事件合并、发现缺口。
 //! 生命周期只由运行管：开始时拿一个守卫（[`Live::begin`]），丢掉它就结束；[`Live::step`] 换段。
 
-use muliao_platform::ids::SessionId;
+use muliao_platform::ids::{MessageId, SessionId};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -51,7 +51,7 @@ pub struct RunEventEnvelope {
 pub struct LiveSegment {
     pub segment_id: String,
     /// 这一段开始时会话最后一条已保存消息的 id：这之后保存的消息由这一段的事件展示，历史里先不显示
-    pub after_message_id: Option<i64>,
+    pub after_message_id: Option<MessageId>,
     pub events: Vec<RunEventEnvelope>,
 }
 
@@ -87,7 +87,7 @@ fn publish_saved(bus: &Bus, session_id: &SessionId) {
     bus.publish(ServerEvent { kind: "saved", data: serde_json::to_value(saved).expect("saved events serialize") });
 }
 
-fn new_segment(after: Option<i64>) -> LiveSegment {
+fn new_segment(after: Option<MessageId>) -> LiveSegment {
     LiveSegment { segment_id: uuid::Uuid::new_v4().simple().to_string(), after_message_id: after, events: Vec::new() }
 }
 
@@ -154,13 +154,13 @@ impl Live {
     }
 
     /// 一次运行开始实时展示。同一会话同时只有一次运行（actor 保证）。
-    pub(crate) fn begin(&self, session_id: &SessionId, after_message_id: Option<i64>) -> LiveRun {
+    pub(crate) fn begin(&self, session_id: &SessionId, after_message_id: Option<MessageId>) -> LiveRun {
         self.update(session_id, |s| s.segment = Some(new_segment(after_message_id)));
         LiveRun { live: self.clone(), session_id: session_id.to_owned() }
     }
 
     /// 一次请求已经保存（事务已提交）：之后的事件属于新的一段。
-    pub(crate) fn step(&self, session_id: &SessionId, after_message_id: i64) {
+    pub(crate) fn step(&self, session_id: &SessionId, after_message_id: MessageId) {
         self.update(session_id, |s| s.segment = Some(new_segment(Some(after_message_id))));
         publish_saved(&self.bus, session_id);
     }

@@ -3,6 +3,7 @@
 use axum::extract::State;
 use axum::http::StatusCode;
 use muliao_notifications::{Notification, Subscription};
+use muliao_platform::ids::NotificationId;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::router::OpenApiRouter;
@@ -54,7 +55,7 @@ async fn unread(State(s): State<AppState>) -> ApiResult<axum::Json<UnreadOut>> {
 #[derive(Deserialize, ToSchema)]
 pub struct MarkReadIn {
     /// 用户看到的最新一条；之后才到的保持未读
-    pub through_id: i64,
+    pub through_id: NotificationId,
 }
 
 #[utoipa::path(post, path = "/api/notifications/read", tag = "notifications", request_body = MarkReadIn,

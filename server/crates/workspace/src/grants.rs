@@ -6,7 +6,7 @@
 //! 授权存在 script_grants 表（不放资源目录：agent 能写自己的资源目录）。用户在设置页查看、撤销；点「始终允许」不会顺带放行
 //! 别的会话里已经在等的同一调用（那些各自等用户的决定）。
 
-use muliao_platform::ids::{AgentId, SessionId};
+use muliao_platform::ids::{AgentId, CallId, GrantId, SessionId};
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -24,15 +24,15 @@ pub const GRANTED_NOTE: &str = "(Run without asking: the user always allows this
 /// 一次 skill_run 调用里决定「是不是同一个调用」的部分。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScriptCall {
-    pub agent_id: AgentId,
-    pub skill: String,
+    agent_id: AgentId,
+    skill: String,
     /// 相对 skill 目录的脚本路径（解析后的）
-    pub script: String,
-    pub args: Vec<String>,
+    script: String,
+    args: Vec<String>,
     /// 排序去重：secret 的顺序与重复不影响注入的结果
-    pub secrets: Vec<String>,
+    secrets: Vec<String>,
     /// skill 目录的内容指纹（`SkillScripts::fingerprint`）
-    pub fingerprint: String,
+    fingerprint: String,
 }
 
 impl ScriptCall {
@@ -75,7 +75,7 @@ impl ScriptCall {
 /// 设置页看到的一条始终允许。
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct GrantInfo {
-    pub id: i64,
+    pub id: GrantId,
     pub agent_id: AgentId,
     pub skill: String,
     pub script: String,
@@ -105,7 +105,7 @@ impl ScriptGrants {
     }
 
     /// 这个调用有始终允许时返回它的 id。
-    pub async fn find(&self, call: &ScriptCall) -> Result<Option<i64>> {
+    pub async fn find(&self, call: &ScriptCall) -> Result<Option<GrantId>> {
         let key = call.key();
         self.db
             .read(move |c| {
@@ -115,7 +115,7 @@ impl ScriptGrants {
     }
 
     /// 按这条始终允许直接执行了一次。期间被撤销的不算（行已删，什么也不改）。
-    pub async fn used(&self, grant_id: i64) -> Result<()> {
+    pub async fn used(&self, grant_id: GrantId) -> Result<()> {
         self.db
             .write(move |tx| {
                 tx.execute(
@@ -128,8 +128,8 @@ impl ScriptGrants {
     }
 
     /// 用户对这次调用点了「始终允许」。已有同一调用的始终允许时不再添一条。
-    pub async fn grant(&self, call: ScriptCall, session_id: &SessionId, call_id: &str) -> Result<()> {
-        let (session_id, call_id) = (session_id.to_owned(), call_id.to_owned());
+    pub async fn grant(&self, call: ScriptCall, session_id: &SessionId, call_id: &CallId) -> Result<()> {
+        let (session_id, call_id) = (session_id.to_owned(), call_id.clone());
         self.db
             .write(move |tx| {
                 tx.execute(
@@ -193,7 +193,7 @@ impl ScriptGrants {
     }
 
     /// 撤销一条始终允许：之后同一调用重新要批准。
-    pub async fn revoke(&self, grant_id: i64) -> Result<()> {
+    pub async fn revoke(&self, grant_id: GrantId) -> Result<()> {
         self.db
             .write(move |tx| {
                 if tx.execute("DELETE FROM script_grants WHERE id = ?1", [grant_id])? == 0 {

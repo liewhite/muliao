@@ -4,7 +4,7 @@
 //! 消息上的约定（metadata 键、标记、事后补的结果）登记在 [`crate::conventions`] 与 `muliao_runtime::conventions`（工具交回的
 //! 文件与图片），这里只读它们来展示。
 
-use muliao_platform::ids::SessionId;
+use muliao_platform::ids::{CallId, MessageId, SessionId};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
@@ -89,7 +89,7 @@ pub struct EventItem {
 #[derive(Debug, Clone, PartialEq, Serialize, utoipa::ToSchema)]
 pub struct CallItem {
     pub tool_name: String,
-    pub tool_call_id: String,
+    pub tool_call_id: CallId,
     /// 调用参数原文
     pub text: String,
     /// 开出或续写的 thread（子会话 id），由会话接口按调用 id 填（[`annotate_threads`]）
@@ -105,7 +105,7 @@ pub struct CallItem {
 #[derive(Debug, Clone, PartialEq, Serialize, utoipa::ToSchema)]
 pub struct ResultItem {
     pub tool_name: String,
-    pub tool_call_id: String,
+    pub tool_call_id: CallId,
     /// 交给模型的文字（各文字段以换行连接）
     pub text: String,
     /// 工具结果挂上的文件（muliao_attachments）
@@ -126,7 +126,7 @@ pub struct ResultItem {
 #[derive(Debug, Clone, PartialEq, Serialize, utoipa::ToSchema)]
 pub struct ErrorItem {
     pub tool_name: String,
-    pub tool_call_id: String,
+    pub tool_call_id: CallId,
     pub text: String,
     pub at: Option<DateTime<Utc>>,
 }
@@ -156,7 +156,7 @@ pub enum Item<U = UserItem> {
 /// 历史里的一条：来源消息的数据库 id（用于定位压缩点）与条目。
 #[derive(Debug, Clone, PartialEq, Serialize, utoipa::ToSchema)]
 pub struct SavedItem {
-    pub message_id: i64,
+    pub message_id: MessageId,
     pub item: Item,
 }
 
@@ -220,7 +220,7 @@ fn call_entry<U>(call: &ToolCall, started_at: Option<DateTime<Utc>>, renders: &R
     let questions = if call.name == ASK_USER { questions_of(&call.args) } else { Vec::new() };
     Item::ToolCall(CallItem {
         tool_name: call.name.clone(),
-        tool_call_id: call.id.clone(),
+        tool_call_id: CallId::new(call.id.clone()),
         text: call.args.clone(),
         threads: Vec::new(),
         wait: (!questions.is_empty()).then_some(CallWait::Ask(AskView { questions, state: AskState::Asking })),
@@ -250,7 +250,8 @@ pub(crate) fn result_item(result: &ToolResult, renders: &Renders) -> Result<Item
 }
 
 fn result_entry<U>(result: &ToolResult, renders: &Renders) -> Result<Item<U>> {
-    let (tool_name, tool_call_id, text) = (result.tool_name.clone(), result.call_id.clone(), result_text(result));
+    let (tool_name, tool_call_id, text) =
+        (result.tool_name.clone(), CallId::new(result.call_id.clone()), result_text(result));
     if result.is_error {
         return Ok(Item::ToolError(ErrorItem { tool_name, tool_call_id, text, at: finished_at(result) }));
     }
@@ -411,7 +412,7 @@ pub(crate) fn to_items_with<'a, U>(
 /// - 有工具交回的结果的按结果（[`AskResult`]）：answered / not_answered；
 /// - 没有结果的：现在能回答是 pending，回答已提交、还排着是 submitted，否则运行还没停下（asking）。
 pub(crate) fn annotate_asks(items: &mut [Item], open: &OpenAsks) -> Result<()> {
-    let results: HashMap<String, Option<String>> = items
+    let results: HashMap<CallId, Option<String>> = items
         .iter()
         .filter_map(|i| match i {
             Item::ToolResult(r) if r.tool_name == ASK_USER => {
@@ -462,7 +463,7 @@ pub(crate) fn annotate_approvals(items: &mut [Item], open: &OpenAsks) {
 
 /// 工具调用挂上它开出或续写的 thread（call_threads：调用 id → thread，见 [`crate::thread_calls::call_threads_in`]），界面
 /// 据此把 thread 显示在这次调用处。只看调用 id，不看调用有没有结果、结果是谁补的。
-pub(crate) fn annotate_threads(items: &mut [Item], call_threads: &BTreeMap<String, SessionId>) {
+pub(crate) fn annotate_threads(items: &mut [Item], call_threads: &BTreeMap<CallId, SessionId>) {
     for item in items.iter_mut() {
         if let Item::ToolCall(call) = item
             && let Some(thread) = call_threads.get(&call.tool_call_id)
@@ -576,7 +577,7 @@ mod tests {
         items
             .iter()
             .find_map(|i| match i {
-                Item::ToolCall(c) if c.tool_call_id == id => Some(c.clone()),
+                Item::ToolCall(c) if c.tool_call_id.as_str() == id => Some(c.clone()),
                 _ => None,
             })
             .unwrap()
@@ -688,7 +689,7 @@ mod tests {
             result_item(&err, &r).unwrap(),
             Item::ToolError(ErrorItem {
                 tool_name: "t".into(),
-                tool_call_id: "c2".into(),
+                tool_call_id: CallId::new("c2"),
                 text: "bad args".into(),
                 at: Some(ended)
             })
@@ -742,8 +743,8 @@ mod tests {
         let mut items = to_items([&calls, &results], &Renders::new(), None).unwrap();
         assert!(items.iter().all(|i| !matches!(i, Item::ToolCall(c) if c.wait.is_none())));
         let open = OpenAsks(vec![
-            ("pending".into(), OpenAsk::Question(vec![])),
-            ("submitted".into(), OpenAsk::Submitted(Waiting::AskUser)),
+            (CallId::new("pending"), OpenAsk::Question(vec![])),
+            (CallId::new("submitted"), OpenAsk::Submitted(Waiting::AskUser)),
         ]);
         annotate_asks(&mut items, &open).unwrap();
         let state = |id: &str| match call_of(&items, id).wait {
@@ -779,8 +780,8 @@ mod tests {
         ]);
         let mut items = to_items([&m], &Renders::new(), None).unwrap();
         let open = OpenAsks(vec![
-            ("p".into(), OpenAsk::Approval("t".into())),
-            ("s".into(), OpenAsk::Submitted(Waiting::Approval)),
+            (CallId::new("p"), OpenAsk::Approval("t".into())),
+            (CallId::new("s"), OpenAsk::Submitted(Waiting::Approval)),
         ]);
         annotate_approvals(&mut items, &open);
         assert_eq!(
@@ -791,7 +792,7 @@ mod tests {
                 None
             ]
         );
-        annotate_threads(&mut items, &BTreeMap::from([("n".to_owned(), SessionId::new("child"))]));
+        annotate_threads(&mut items, &BTreeMap::from([(CallId::new("n"), SessionId::new("child"))]));
         assert_eq!(["p", "s", "n"].map(|id| call_of(&items, id).threads.len()), [0, 0, 1]);
         assert_eq!(call_of(&items, "n").threads, [SessionId::new("child")]);
     }

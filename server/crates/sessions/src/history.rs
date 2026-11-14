@@ -1,7 +1,7 @@
 //! 会话历史（`messages`、`message_texts`、`compactions` 的唯一读写处）：发给模型的上下文是最新摘要 + 压缩切点之后的原始
 //! 消息。原始消息不删除，压缩只决定从哪里开始发。
 
-use muliao_platform::ids::{RunId, SessionId};
+use muliao_platform::ids::{MessageId, RunId, SessionId};
 use std::collections::BTreeMap;
 
 use agenter::{Message, Request, RequestPart};
@@ -17,7 +17,7 @@ use muliao_platform::errors::{Result, broken};
 /// 一条存下的消息。
 #[derive(Debug, Clone, PartialEq)]
 pub struct Stored {
-    pub id: i64,
+    pub id: MessageId,
     pub message: Message,
     pub created_at: DateTime<Utc>,
     /// 保存它的运行
@@ -25,7 +25,7 @@ pub struct Stored {
 }
 
 /// 读库边界：消息与它各处的 metadata 都在这里检查一次（[`check_metadata`]），之后不再处理坏数据。
-fn decode(id: i64, payload: &str) -> Result<Message> {
+fn decode(id: MessageId, payload: &str) -> Result<Message> {
     let message: Message =
         serde_json::from_str(payload).map_err(|e| broken(format!("message {id} does not parse: {e}")))?;
     check_metadata(&message).map_err(|e| broken(format!("message {id} has bad {e}")))?;
@@ -36,7 +36,7 @@ fn stored(c: &Connection, filter: &str, params: impl rusqlite::Params) -> Result
     let sql = format!("SELECT id, payload, created_at, run_id FROM messages WHERE {filter}");
     let mut stmt = c.prepare(&sql)?;
     let rows = stmt
-        .query_map(params, |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get(2)?, r.get(3)?)))?
+        .query_map(params, |r| Ok((r.get::<_, MessageId>(0)?, r.get::<_, String>(1)?, r.get(2)?, r.get(3)?)))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
         .map(|(id, payload, created_at, run_id)| Ok(Stored { id, message: decode(id, &payload)?, created_at, run_id }))
@@ -49,7 +49,7 @@ pub(crate) fn append_in(
     session_id: &SessionId,
     run_id: RunId,
     messages: &[Message],
-) -> Result<Vec<i64>> {
+) -> Result<Vec<MessageId>> {
     let now = Utc::now();
     let mut ids = Vec::new();
     for m in messages {
@@ -57,7 +57,7 @@ pub(crate) fn append_in(
             "INSERT INTO messages (session_id, run_id, payload, created_at) VALUES (?1, ?2, ?3, ?4)",
             params![session_id, run_id, serde_json::to_string(m).expect("messages serialize"), now],
         )?;
-        let id = c.last_insert_rowid();
+        let id = MessageId::new(c.last_insert_rowid());
         let text = searchable_text(m);
         if !text.is_empty() {
             c.execute("INSERT INTO message_texts (message_id, text) VALUES (?1, ?2)", params![id, text])?;
@@ -81,7 +81,7 @@ pub(crate) fn mark_last_stopped_in(c: &Connection, session_id: &SessionId) -> Re
     Ok(())
 }
 
-pub(crate) fn last_message_id_in(c: &Connection, session_id: &SessionId) -> Result<Option<i64>> {
+pub(crate) fn last_message_id_in(c: &Connection, session_id: &SessionId) -> Result<Option<MessageId>> {
     Ok(c.query_row("SELECT max(id) FROM messages WHERE session_id = ?1", [session_id], |r| r.get(0))?)
 }
 
@@ -107,23 +107,27 @@ pub(crate) fn transcript_in(
     stored(c, "session_id = ?1 AND (?2 IS NULL OR created_at >= ?2) ORDER BY id", params![session_id, since])
 }
 
-/// id 大于 after 的消息，按顺序。
-pub(crate) fn rows_after(c: &Connection, session_id: &SessionId, after: i64) -> Result<Vec<Stored>> {
-    stored(c, "session_id = ?1 AND id > ?2 ORDER BY id", params![session_id, after])
+/// 在 after 之后的消息（没有 after 为全部），按顺序。
+pub(crate) fn rows_after(c: &Connection, session_id: &SessionId, after: Option<MessageId>) -> Result<Vec<Stored>> {
+    stored(c, "session_id = ?1 AND (?2 IS NULL OR id > ?2) ORDER BY id", params![session_id, after])
 }
 
 /// 从最后一条模型回复起的消息（还没有回复时是全部）。之前每条回复的调用在下一条回复之前都已有结果，所以还没有结果的
 /// 调用只可能在这一段里：查它们不必加载整段上下文。
 pub(crate) fn since_last_response(c: &Connection, session_id: &SessionId) -> Result<Vec<Message>> {
     let mut tail: Vec<Message> = Vec::new();
-    let mut before = i64::MAX;
+    let mut before: Option<MessageId> = None;
     loop {
         // 分批往回读：通常一两条就到最后一条回复
-        let rows = stored(c, "session_id = ?1 AND id < ?2 ORDER BY id DESC LIMIT 4", params![session_id, before])?;
+        let rows = stored(
+            c,
+            "session_id = ?1 AND (?2 IS NULL OR id < ?2) ORDER BY id DESC LIMIT 4",
+            params![session_id, before],
+        )?;
         let n = rows.len();
         for row in rows {
             let is_response = matches!(row.message, Message::Assistant(_));
-            before = row.id;
+            before = Some(row.id);
             tail.push(row.message);
             if is_response {
                 tail.reverse();
@@ -154,7 +158,7 @@ pub(crate) fn since_last_response_among(
     let mut stmt = c.prepare(&sql)?;
     let rows = stmt
         .query_map(rusqlite::params_from_iter(session_ids), |r| {
-            Ok((r.get::<_, SessionId>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?))
+            Ok((r.get::<_, SessionId>(0)?, r.get::<_, MessageId>(1)?, r.get::<_, String>(2)?))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     for (session_id, id, payload) in rows {
@@ -215,9 +219,9 @@ pub(crate) const SESSIONS_MENTIONING: &str = "SELECT m.session_id FROM messages 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Compaction {
     pub id: i64,
-    pub through_message_id: i64,
+    pub through_message_id: MessageId,
     /// 写入时会话最后一条消息：在它之前的回复报告的 token 数反映的是压缩前的上下文
-    pub at_message_id: i64,
+    pub at_message_id: MessageId,
     pub summary: String,
     pub created_at: DateTime<Utc>,
 }
@@ -251,7 +255,7 @@ pub(crate) fn latest_compaction(c: &Connection, session_id: &SessionId) -> Resul
 pub(crate) fn add_compaction_in(
     c: &Connection,
     session_id: &SessionId,
-    through_message_id: i64,
+    through_message_id: MessageId,
     summary: &str,
 ) -> Result<()> {
     let at = last_message_id_in(c, session_id)?
@@ -276,8 +280,8 @@ pub struct SessionContext {
 /// 发给模型的上下文，由最近一次压缩与原始历史（切点之前的可有可无）推导，唯一规则：运行加载上下文与会话页算上下文大小
 /// 都经这里。切点落在一条回复之前时补一条接续的用户消息（提供方要求对话从用户消息开始）。
 pub(crate) fn context_of(compaction: Option<&Compaction>, saved: &[Stored]) -> SessionContext {
-    let after = compaction.map_or(0, |c| c.through_message_id);
-    let kept: Vec<&Stored> = saved.iter().filter(|s| s.id > after).collect();
+    let after = compaction.map(|c| c.through_message_id);
+    let kept: Vec<&Stored> = saved.iter().filter(|s| after.is_none_or(|a| s.id > a)).collect();
     let mut messages: Vec<Message> = kept.iter().map(|s| s.message.clone()).collect();
     let stale = compaction.map(|c| {
         let before: Vec<Message> = kept.iter().filter(|s| s.id <= c.at_message_id).map(|s| s.message.clone()).collect();
@@ -298,6 +302,6 @@ pub(crate) fn context_of(compaction: Option<&Compaction>, saved: &[Stored]) -> S
 
 pub(crate) fn load_context(c: &Connection, session_id: &SessionId) -> Result<SessionContext> {
     let compaction = latest_compaction(c, session_id)?;
-    let rows = rows_after(c, session_id, compaction.as_ref().map_or(0, |x| x.through_message_id))?;
+    let rows = rows_after(c, session_id, compaction.as_ref().map(|x| x.through_message_id))?;
     Ok(context_of(compaction.as_ref(), &rows))
 }

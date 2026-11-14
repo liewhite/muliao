@@ -2,7 +2,7 @@
 //! 回复）。覆盖：一次普通对话、工具调用与每步保存、ask_user 挂起与回答、停止正在执行的工具、重启后被打断的一步补「被中断」、
 //! ask_agent 委派与交回、最终失败与手动重试、删除忙会话被拒、手动压缩（运行中被拒、压缩中停止立即生效）。
 
-use muliao_platform::ids::{AgentId, SessionId};
+use muliao_platform::ids::{AgentId, CallId, SessionId};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -177,7 +177,7 @@ impl Tool<RunScope> for Share {
     }
     async fn call(&self, _ctx: ToolCtx<'_, RunScope>, _a: NoArgs) -> Result<ToolOutput, ToolError> {
         let file = SharedFile {
-            file_id: "f-shared".into(),
+            file_id: muliao_platform::ids::FileId::new("f-shared"),
             name: "report.txt".into(),
             media_type: muliao_platform::ids::MediaType::parse("text/plain").unwrap(),
         };
@@ -441,7 +441,7 @@ async fn ask_user_pauses_until_the_user_answers() {
     w.script.text("你选了 a");
     let answer = UserMessage::Answer {
         session_id: s.clone(),
-        call_id: "q1".to_owned(),
+        call_id: CallId::new("q1"),
         answers: vec![QuestionAnswer { selected: vec!["a".into()], other: None }],
     };
     w.service.receive(answer).await.unwrap();
@@ -559,7 +559,7 @@ async fn ask_agent_delegates_and_hands_the_answer_back() {
         .items
         .iter()
         .find_map(|i| match &i.item {
-            Item::ToolCall(c) if c.tool_call_id == "a1" => Some(c),
+            Item::ToolCall(c) if c.tool_call_id.as_str() == "a1" => Some(c),
             _ => None,
         })
         .unwrap();
@@ -754,7 +754,7 @@ async fn a_question_asked_next_to_another_tool_call_resumes_with_both_results() 
     w.script.text("知道了");
     let answer = UserMessage::Answer {
         session_id: s.clone(),
-        call_id: "q1".to_owned(),
+        call_id: CallId::new("q1"),
         answers: vec![QuestionAnswer { selected: vec!["b".into()], other: None }],
     };
     w.service.receive(answer).await.unwrap();

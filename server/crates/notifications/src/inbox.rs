@@ -8,7 +8,7 @@
 //!
 //! 会话的未读不另存：有指向它的未读通知就是未读（[`unread_sessions_in`]），所以正常跑完不通知的定时会话不算未读。
 
-use muliao_platform::ids::SessionId;
+use muliao_platform::ids::{NotificationId, SessionId};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -47,14 +47,14 @@ pub struct Notify {
 /// 有新通知了（SSE 事件名 `notification`）：前端刷新通知页与未读数；正看着这个会话时把它标为已读。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub struct NotificationEvent {
-    pub notification_id: i64,
+    pub notification_id: NotificationId,
     pub session_id: Option<SessionId>,
 }
 
 /// 一条通知（读模型）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 pub struct Notification {
-    pub id: i64,
+    pub id: NotificationId,
     pub title: String,
     pub body: String,
     pub session_id: Option<SessionId>,
@@ -98,7 +98,7 @@ pub fn worth_pushing(e: &RunEnded) -> bool {
 /// 推到设备上的一条通知（推送时从收件箱取）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PushMessage {
-    pub notification_id: i64,
+    pub notification_id: NotificationId,
     pub title: String,
     pub body: String,
     pub url: Option<String>,
@@ -107,7 +107,10 @@ pub struct PushMessage {
 }
 
 /// 推送时的内容：通知本身与此刻的未读数；通知已被删除时为 None。
-pub(crate) fn push_message_in(c: &Connection, notification_id: i64) -> rusqlite::Result<Option<PushMessage>> {
+pub(crate) fn push_message_in(
+    c: &Connection,
+    notification_id: NotificationId,
+) -> rusqlite::Result<Option<PushMessage>> {
     let Some(n) = c
         .query_row(&format!("SELECT {COLUMNS} FROM notifications WHERE id = ?1"), [notification_id], notification)
         .optional()?
@@ -154,12 +157,12 @@ impl Notifications {
     }
 
     /// 在调用方的事务里写下一条通知；提交后推给前端（SSE `notification`）并推到每台设备。返回通知的 id。
-    pub fn notify_in(&self, tx: &mut Tx<'_>, n: &Notify) -> rusqlite::Result<i64> {
+    pub fn notify_in(&self, tx: &mut Tx<'_>, n: &Notify) -> rusqlite::Result<NotificationId> {
         tx.execute(
             "INSERT INTO notifications (title, body, session_id, link, unread, created_at) VALUES (?1, ?2, ?3, ?4, 1, ?5)",
             params![n.title, n.body, n.session_id, n.link, Utc::now()],
         )?;
-        let id = tx.last_insert_rowid();
+        let id = NotificationId::new(tx.last_insert_rowid());
         let (bus, push, session_id) = (self.bus.clone(), self.push.clone(), n.session_id.clone());
         tx.on_commit(move || {
             // 前端据此刷新通知页与未读数；正看着这个会话时把它标为已读
@@ -174,13 +177,13 @@ impl Notifications {
     }
 
     /// 自己开事务发一条通知。
-    pub async fn notify(&self, n: Notify) -> rusqlite::Result<i64> {
+    pub async fn notify(&self, n: Notify) -> rusqlite::Result<NotificationId> {
         let this = self.clone();
         self.db.write(move |tx| this.notify_in(tx, &n)).await
     }
 
     /// 用户在界面上开启推送后发的测试通知（系统通知，不打开会话）。
-    pub async fn send_test(&self) -> rusqlite::Result<i64> {
+    pub async fn send_test(&self) -> rusqlite::Result<NotificationId> {
         self.notify(Notify {
             title: "Muliao".into(), body: "推送通知已开启。".into(), session_id: None, link: None
         })
@@ -246,8 +249,8 @@ impl Notifications {
     }
 
     /// 通知页：标记到 through_id 为止的通知已读，之后才到的用户还没看到，保持未读。
-    pub async fn mark_read(&self, through_id: i64) -> rusqlite::Result<()> {
-        self.mark("id <= ?1", through_id.into()).await
+    pub async fn mark_read(&self, through_id: NotificationId) -> rusqlite::Result<()> {
+        self.mark("id <= ?1", through_id.get().into()).await
     }
 
     /// 用户看过了会话（打开它、看着它时又来了通知）：指向它的通知已读（会话的未读就是这些通知）。

@@ -162,7 +162,7 @@ impl Compactor {
                 .db
                 .read(move |c| -> Result<_> {
                     let previous = latest_compaction(c, &sid)?;
-                    let rows = rows_after(c, &sid, previous.as_ref().map_or(0, |p| p.through_message_id))?;
+                    let rows = rows_after(c, &sid, previous.as_ref().map(|p| p.through_message_id))?;
                     Ok((previous, rows))
                 })
                 .await?;
@@ -177,7 +177,7 @@ impl Compactor {
             let sid = session_id.to_owned();
             self.db.write(move |tx| add_compaction_in(tx, &sid, through, &summary)).await?;
             compacted += chosen.len();
-            tracing::info!(%session_id, steps = chosen.len(), through_message_id = through, more, "session compacted");
+            tracing::info!(%session_id, steps = chosen.len(), through_message_id = %through, more, "session compacted");
             if !more {
                 break;
             }
@@ -194,7 +194,12 @@ mod tests {
     use super::*;
 
     fn stored(id: i64, message: Message) -> Stored {
-        Stored { id, message, created_at: Utc::now(), run_id: muliao_platform::ids::RunId::new(1) }
+        Stored {
+            id: muliao_platform::ids::MessageId::new(id),
+            message,
+            created_at: Utc::now(),
+            run_id: muliao_platform::ids::RunId::new(1),
+        }
     }
 
     fn user(text: &str) -> Message {
@@ -254,7 +259,7 @@ mod tests {
     }
 
     fn ids(steps: &[Vec<&Stored>]) -> Vec<Vec<i64>> {
-        steps.iter().map(|s| s.iter().map(|r| r.id).collect()).collect()
+        steps.iter().map(|s| s.iter().map(|r| r.id.get()).collect()).collect()
     }
 
     #[test]

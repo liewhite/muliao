@@ -14,6 +14,7 @@ use std::sync::Arc;
 use chrono::Utc;
 use muliao_platform::db::Database;
 use muliao_platform::errors::{Error, invalid};
+use muliao_platform::ids::NotificationId;
 use muliao_platform::retry::Retry;
 use muliao_platform::text::truncate;
 use rusqlite::{Connection, OptionalExtension, params};
@@ -85,18 +86,18 @@ impl Push {
     }
 
     /// 把一条刚提交的通知推到此刻订阅着的每台设备（不等结果）。
-    pub(crate) fn deliver(self: &Arc<Self>, notification_id: i64) {
+    pub(crate) fn deliver(self: &Arc<Self>, notification_id: NotificationId) {
         let push = self.clone();
         tokio::spawn(async move {
             let endpoints = match push.db.read(endpoints_in).await {
                 Ok(endpoints) => endpoints,
                 Err(e) => {
-                    tracing::error!(notification_id, error = %e, "listing push subscriptions failed, notification not pushed");
+                    tracing::error!(notification_id = %notification_id, error = %e, "listing push subscriptions failed, notification not pushed");
                     return;
                 }
             };
             if endpoints.is_empty() {
-                tracing::info!(notification_id, "no push subscriptions, notification not pushed");
+                tracing::info!(notification_id = %notification_id, "no push subscriptions, notification not pushed");
             }
             for endpoint in endpoints {
                 let push = push.clone();
@@ -106,7 +107,7 @@ impl Push {
     }
 
     /// 推到一台设备，暂时失败按 [`Retry`] 重试；返回最后的结局（测试用）。
-    async fn deliver_to(&self, notification_id: i64, endpoint: String) -> Option<Sent> {
+    async fn deliver_to(&self, notification_id: NotificationId, endpoint: String) -> Option<Sent> {
         let mut backoff = self.retry.start();
         loop {
             let target = endpoint.clone();
@@ -121,13 +122,13 @@ impl Push {
                 Ok(None) => {
                     // 通知随会话删了，或设备退订、已失效被删
                     tracing::info!(
-                        notification_id,
+                        notification_id = %notification_id,
                         "notification or push subscription gone before delivery, not pushing"
                     );
                     return None;
                 }
                 Err(e) => {
-                    tracing::error!(notification_id, error = %e, "reading the notification to push failed, not pushing");
+                    tracing::error!(notification_id = %notification_id, error = %e, "reading the notification to push failed, not pushing");
                     return None;
                 }
             };
@@ -135,16 +136,18 @@ impl Push {
                 Ok(device) => device,
                 Err(e) => {
                     // 订阅时解析过，到这里是库里的数据坏了：删不删交给人
-                    tracing::error!(notification_id, error = %e, "stored push subscription is invalid, not pushing");
+                    tracing::error!(notification_id = %notification_id, error = %e, "stored push subscription is invalid, not pushing");
                     return None;
                 }
             };
             let host = device.host().to_owned();
             let sent = webpush::send(&self.client, &self.keys, &self.subject, &device, &payload(&message)).await;
             match &sent {
-                Sent::Delivered => tracing::info!(notification_id, push_host = %host, "web push sent"),
+                Sent::Delivered => {
+                    tracing::info!(notification_id = %notification_id, push_host = %host, "web push sent")
+                }
                 Sent::Gone(status) => {
-                    tracing::info!(notification_id, push_host = %host, status, "push subscription gone, removing it");
+                    tracing::info!(notification_id = %notification_id, push_host = %host, status, "push subscription gone, removing it");
                     let gone = device.endpoint.clone();
                     if let Err(e) = self
                         .db
@@ -155,15 +158,15 @@ impl Push {
                     }
                 }
                 Sent::Rejected(why) => {
-                    tracing::error!(notification_id, push_host = %host, reason = %why, "push service rejected the message")
+                    tracing::error!(notification_id = %notification_id, push_host = %host, reason = %why, "push service rejected the message")
                 }
                 Sent::Transient(why) => {
                     if let Some(delay) = backoff.next_delay() {
-                        tracing::warn!(notification_id, push_host = %host, reason = %why, retry_in = ?delay, "web push failed, will retry");
+                        tracing::warn!(notification_id = %notification_id, push_host = %host, reason = %why, retry_in = ?delay, "web push failed, will retry");
                         tokio::time::sleep(delay).await;
                         continue;
                     }
-                    tracing::error!(notification_id, push_host = %host, reason = %why, "web push kept failing, giving up");
+                    tracing::error!(notification_id = %notification_id, push_host = %host, reason = %why, "web push kept failing, giving up");
                 }
             }
             return Some(sent);
@@ -188,14 +191,20 @@ pub(crate) mod tests {
     use super::*;
 
     impl Push {
-        pub(crate) async fn deliver_now(&self, notification_id: i64, endpoint: &str) -> Option<Sent> {
+        pub(crate) async fn deliver_now(&self, notification_id: NotificationId, endpoint: &str) -> Option<Sent> {
             self.deliver_to(notification_id, endpoint.to_owned()).await
         }
     }
 
     #[test]
     fn payload_follows_the_service_worker_contract() {
-        let m = PushMessage { notification_id: 1, title: "t".into(), body: "长".repeat(1000), url: None, unread: 3 };
+        let m = PushMessage {
+            notification_id: NotificationId::new(1),
+            title: "t".into(),
+            body: "长".repeat(1000),
+            url: None,
+            unread: 3,
+        };
         let v: serde_json::Value = serde_json::from_slice(&payload(&m)).unwrap();
         assert_eq!(v["url"], "/notifications");
         assert_eq!(v["badge"], 3);

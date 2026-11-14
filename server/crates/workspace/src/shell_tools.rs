@@ -13,7 +13,7 @@ use muliao_assets::secrets::SecretUse;
 use muliao_assets::skills::{SkillScripts, SkillStore};
 use muliao_platform::errors::DomainError;
 use muliao_platform::fs::{real, resolve_within};
-use muliao_platform::ids::JobId;
+use muliao_platform::ids::{CallId, GrantId, JobId};
 use muliao_platform::shell::LEFT_RUNNING_NOTE;
 use muliao_platform::text::truncate;
 use muliao_platform::tool_views::{ToolRender, ViewBlock};
@@ -426,7 +426,7 @@ impl Tool<RunScope> for SkillRun {
                             )));
                         }
                         if approval.always {
-                            deps.grants.grant(call, &scope.session_id, &ctx.call.id).await?;
+                            deps.grants.grant(call, &scope.session_id, &CallId::new(ctx.call.id.clone())).await?;
                         }
                         Clearance::Approved
                     }
@@ -469,7 +469,7 @@ enum Clearance {
     /// 要批准、还没批准：停下请用户批准，pin 是请求批准时 skill 目录的指纹
     Needed { pin: String },
     /// 用户「始终允许」过同样的调用（那条记录的 id）
-    Granted(i64),
+    Granted(GrantId),
     /// 用户批准了这次调用
     Approved,
 }

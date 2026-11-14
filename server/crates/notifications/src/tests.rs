@@ -1,7 +1,7 @@
 //! 收件箱与推送的测试：真库，推送服务用 wiremock 扮（发出的请求按 RFC 8291 解密核对内容）。
 
 use muliao_platform::ids::AgentId;
-use muliao_platform::ids::{RunId, SessionId};
+use muliao_platform::ids::{NotificationId, RunId, SessionId};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -102,7 +102,7 @@ impl Harness {
         self.db.read(|c| c.query_row("SELECT count(*) FROM push_subscriptions", [], |r| r.get(0))).await.unwrap()
     }
 
-    async fn notify(&self, title: &str, session: Option<&str>) -> i64 {
+    async fn notify(&self, title: &str, session: Option<&str>) -> NotificationId {
         self.notifications
             .notify(Notify {
                 title: title.into(),
@@ -115,7 +115,7 @@ impl Harness {
     }
 
     /// 直接写一行通知（不经 notify，不会自动推送）：单独测一台设备的投递
-    async fn quiet(&self, session: Option<&str>) -> i64 {
+    async fn quiet(&self, session: Option<&str>) -> NotificationId {
         let session = session.map(String::from);
         self.db
             .write(move |tx| {
@@ -123,7 +123,7 @@ impl Harness {
                     "INSERT INTO notifications (title, body, session_id, created_at) VALUES ('t', 'b', ?1, ?2)",
                     rusqlite::params![session, chrono::Utc::now()],
                 )?;
-                Ok::<_, rusqlite::Error>(tx.last_insert_rowid())
+                Ok::<_, rusqlite::Error>(NotificationId::new(tx.last_insert_rowid()))
             })
             .await
             .unwrap()
@@ -186,7 +186,7 @@ async fn inbox_unread_and_marking() {
         .unwrap();
 
     let e = events.next().await.unwrap();
-    assert_eq!((e.kind, e.data["notification_id"].as_i64()), ("notification", Some(system)));
+    assert_eq!((e.kind, e.data["notification_id"].as_i64()), ("notification", Some(system.get())));
     assert!(e.data["session_id"].is_null());
     assert_eq!(events.next().await.unwrap().data["session_id"], "s1");
 
@@ -249,7 +249,7 @@ async fn session_events_write_and_delete_notifications() {
         SessionDeleted { session_id: SessionId::new("s1"), agent_id: AgentId::new("a1") },
     )
     .await;
-    let left: Vec<i64> = h.notifications.list(10).await.unwrap().iter().map(|n| n.id).collect();
+    let left: Vec<NotificationId> = h.notifications.list(10).await.unwrap().iter().map(|n| n.id).collect();
     assert_eq!(left, vec![other]);
 }
 

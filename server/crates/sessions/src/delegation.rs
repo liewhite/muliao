@@ -10,7 +10,7 @@
 //! - 普通 delegate_task（[`send_in`]）不交回结局：只往 thread 投一封用户在等的信。
 //! - 运行中检查（[`check_threads`]）：report_back 的委派按 heartbeat_seconds 给发起方投检查信件；ask_agent 不设超时。
 
-use muliao_platform::ids::{AgentId, DelegationId, SessionId};
+use muliao_platform::ids::{AgentId, CallId, DelegationId, SessionId};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
@@ -76,7 +76,7 @@ pub(crate) fn send_in(
     agent_id: &AgentId,
     thread: &str,
     prompt: &str,
-    call_id: &str,
+    call_id: &CallId,
     mode: Mode,
 ) -> Result<Session> {
     let child = open_in(tx, parent_id, agent_id, thread)?;
@@ -98,7 +98,7 @@ pub(crate) fn send_in(
                 // 和投信同一个事务：thread 可能在发问方这一步保存完之前就答完，交回时要认得出这是挂起调用的回答
                 paused_calls::record_in(tx, parent_id, call_id, &Pause::AskAgent)?;
             }
-            tracing::info!(session_id = %parent_id, thread_session_id = %child.id, delegation = %call.id, call_id,
+            tracing::info!(session_id = %parent_id, thread_session_id = %child.id, delegation = %call.id, %call_id,
                 "delegation dispatched");
             // 没有人等 thread 的回答：结局交回发起方，由它处理
             Inbound::Delegated {
@@ -164,7 +164,7 @@ pub(crate) fn hand_back_in(
             &o.hold,
             &EventSource::Thread { session_id: child.id.clone() },
             &event_text(name, agent.name.as_str(), ending, text),
-            Some((o.delegation.call_id.as_str(), answer)),
+            Some((&o.delegation.call_id, answer)),
         )?;
         tracing::info!(delegation = %o.delegation.id, session_id = %o.delegation.parent_id, thread_session_id = %child.id,
             ending = ?ending, delivered_as = ?delivered, "delegation handed back");

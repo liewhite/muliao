@@ -2,7 +2,7 @@
 //! 都只经会话领域的接口做事；挂起的调用（ask_user、ask_agent）交回 `ToolError::Defer`，运行停在这里，回答作为结果交回
 //! （[`crate::pending`]）。
 
-use muliao_platform::ids::SessionId;
+use muliao_platform::ids::{CallId, SessionId};
 use std::sync::{Arc, OnceLock};
 
 use agenter::{Tool, ToolCtx, ToolError, ToolOutput};
@@ -59,8 +59,8 @@ pub fn tools(db: Arc<Database>, waker: Waker, stopper: Stopper, tz: Tz) -> Vec<B
     ]
 }
 
-fn call_id<C>(ctx: &ToolCtx<'_, C>) -> String {
-    ctx.call.id.clone()
+fn call_id<C>(ctx: &ToolCtx<'_, C>) -> CallId {
+    CallId::new(ctx.call.id.clone())
 }
 
 // ---- ask_user ----

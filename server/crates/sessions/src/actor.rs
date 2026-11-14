@@ -11,7 +11,7 @@
 //!   actor 里执行停止事务把它们存在最前面；不在跑就直接执行。返回时停止事务已提交。
 //! - 到点唤醒与委派的运行中检查：一个节拍循环（[`Actors::start`]）。
 
-use muliao_platform::ids::SessionId;
+use muliao_platform::ids::{MessageId, SessionId};
 use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, Mutex, Weak};
@@ -252,7 +252,7 @@ async fn has_work(core: &Core, id: &SessionId) -> Result<bool> {
 }
 
 /// 会话最后一条消息（判断一次尝试有没有往前推进）。读不出来时记下错误、当作没有：只影响退避要不要从头算。
-async fn last_message(core: &Core, id: &SessionId) -> Option<i64> {
+async fn last_message(core: &Core, id: &SessionId) -> Option<MessageId> {
     let session_id = id.to_owned();
     match core.db.read(move |c| crate::history::last_message_id_in(c, &session_id)).await {
         Ok(last) => last,

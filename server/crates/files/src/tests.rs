@@ -41,9 +41,9 @@ async fn put_dedups_content_and_keeps_metadata_per_upload() {
 async fn missing_ids_are_not_found_for_callers_and_corrupt_for_stored_references() {
     let (_dir, s) = store(1024).await;
     let a = s.put("a.png", mt("image/png"), &b"x"[..]).await.unwrap();
-    let err = s.get_many(vec![a.id.clone(), "nope".into()]).await.unwrap_err();
+    let err = s.get_many(vec![a.id.clone(), FileId::new("nope")]).await.unwrap_err();
     assert!(matches!(err, Error::Domain(ref e) if e.kind == ErrorKind::NotFound), "{err}");
-    let err = s.referenced(vec![a.id.clone(), "nope".into()]).await.unwrap_err();
+    let err = s.referenced(vec![a.id.clone(), FileId::new("nope")]).await.unwrap_err();
     assert!(matches!(err, Error::Internal(_)) && err.to_string().contains("nope"), "{err}");
     assert!(a.media_type.is_inline_image());
 }
@@ -100,11 +100,11 @@ async fn cancelled_upload_leaves_no_temp_file() {
 
 #[test]
 fn references_round_trip_and_derive_the_url() {
-    let r = FileRef { id: "abc".into(), name: "报告 v1/2?.pdf".into() };
+    let r = FileRef { id: FileId::new("abc"), name: "报告 v1/2?.pdf".into() };
     assert_eq!(r.uri(), "muliao-file:abc/%E6%8A%A5%E5%91%8A%20v1%2F2%3F.pdf");
     assert_eq!(FileRef::parse(&r.uri()), Some(r.clone()));
     assert_eq!(r.url(), "/api/files/abc/%E6%8A%A5%E5%91%8A%20v1%2F2%3F.pdf");
-    assert_eq!(file_url("i", "a-b_c.~d"), "/api/files/i/a-b_c.~d");
+    assert_eq!(file_url(&FileId::new("i"), "a-b_c.~d"), "/api/files/i/a-b_c.~d");
     // 接口路径不是存储写法
     for bad in ["/api/files/abc/x", "muliao-file:abc", "muliao-file:/x", "muliao-filex:a/b", "muliao-file:a/"] {
         assert_eq!(FileRef::parse(bad), None, "{bad}");

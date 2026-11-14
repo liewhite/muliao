@@ -7,7 +7,7 @@
 //! 请求批准时定下的 pin（批准的是哪一份只存在这里，#847）。批准第一次交给运行去执行时记下时间，再交就是可能执行过一半，
 //! 改给「被中断」。
 
-use muliao_platform::ids::SessionId;
+use muliao_platform::ids::{CallId, SessionId};
 use std::collections::{BTreeMap, HashMap};
 
 use agenter::Resolution;
@@ -19,7 +19,7 @@ use muliao_platform::db::placeholders;
 use muliao_platform::errors::Result;
 
 /// 一个会话里挂起过的调用（调用 id → 种类）；行永久保留，没结果的才在等。
-pub(crate) type PausedKinds = HashMap<String, Waiting>;
+pub(crate) type PausedKinds = HashMap<CallId, Waiting>;
 
 /// 一次调用挂起成哪一种。等批准独有被批准对象的指纹 pin。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,7 +43,7 @@ impl Pause {
 }
 
 /// 这次调用挂起了。每次调用只挂起一次（被打断的调用不重做），表上的唯一索引挡住重复。
-pub(crate) fn record_in(c: &Connection, session_id: &SessionId, call_id: &str, pause: &Pause) -> Result<()> {
+pub(crate) fn record_in(c: &Connection, session_id: &SessionId, call_id: &CallId, pause: &Pause) -> Result<()> {
     let pin = match pause {
         Pause::Approval { pin } => Some(pin.as_str()),
         Pause::AskUser | Pause::AskAgent => None,
@@ -67,7 +67,7 @@ pub(crate) fn kinds_among(c: &Connection, session_ids: &[SessionId]) -> Result<B
     );
     let mut stmt = c.prepare(&sql)?;
     let rows = stmt.query_map(rusqlite::params_from_iter(session_ids), |r| {
-        Ok((r.get::<_, SessionId>(0)?, r.get::<_, String>(1)?, r.get::<_, Waiting>(2)?))
+        Ok((r.get::<_, SessionId>(0)?, r.get::<_, CallId>(1)?, r.get::<_, Waiting>(2)?))
     })?;
     for row in rows {
         let (s, call, kind) = row?;
@@ -86,8 +86,8 @@ pub(crate) fn kinds_in(c: &Connection, session_id: &SessionId) -> Result<PausedK
 pub(crate) fn take_in(
     c: &Connection,
     session_id: &SessionId,
-    answers: &HashMap<String, CallResult>,
-) -> Result<HashMap<String, Resolution>> {
+    answers: &HashMap<CallId, CallResult>,
+) -> Result<HashMap<CallId, Resolution>> {
     let mut results = HashMap::new();
     for (call_id, r) in answers {
         let CallResult::Approval(d) = r else { continue };

@@ -11,7 +11,7 @@
 
 use agenter::{Content, File, FileSource, ToolOutput, ToolResult};
 use muliao_files::{FileMeta, FileRef, file_url};
-use muliao_platform::ids::MediaType;
+use muliao_platform::ids::{FileId, MediaType};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -26,7 +26,7 @@ pub struct ResultFiles {
 /// 挂给用户的一个文件（存储形态）：文件存储里的哪个文件，以及展示要用的名字与类型。地址、能否内联由它派生（[`Attachment`]）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SharedFile {
-    pub file_id: String,
+    pub file_id: FileId,
     pub name: String,
     pub media_type: MediaType,
 }

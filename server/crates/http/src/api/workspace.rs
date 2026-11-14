@@ -8,7 +8,7 @@ use axum::extract::State;
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::Response;
 use chrono::{DateTime, Utc};
-use muliao_platform::ids::{AgentId, JobId, SessionId};
+use muliao_platform::ids::{AgentId, GrantId, JobId, SessionId};
 use muliao_workspace::browse::{Entry, EntryKind, WorkspaceFile};
 use muliao_workspace::grants::GrantInfo;
 use serde::{Deserialize, Serialize};
@@ -104,7 +104,7 @@ async fn read_workspace_file(
 
 #[derive(Serialize, ToSchema)]
 pub struct ScriptGrantOut {
-    pub id: i64,
+    pub id: GrantId,
     pub agent_id: AgentId,
     pub skill: String,
     pub script: String,
@@ -143,8 +143,9 @@ async fn list_script_grants(State(s): State<AppState>) -> ApiResult<axum::Json<V
 
 /// 撤销一条始终允许：之后同一调用重新要批准。
 #[utoipa::path(delete, path = "/api/script-grants/{grant_id}", tag = "workspace",
+    params(("grant_id" = GrantId, Path, description = "始终允许的编号")),
     responses((status = 204), (status = 404, body = ErrorOut)))]
-async fn revoke_script_grant(State(s): State<AppState>, Path(grant_id): Path<i64>) -> ApiResult<StatusCode> {
+async fn revoke_script_grant(State(s): State<AppState>, Path(grant_id): Path<GrantId>) -> ApiResult<StatusCode> {
     s.services.grants.revoke(grant_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
