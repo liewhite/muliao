@@ -274,6 +274,7 @@ Web / 触发器 / delegate_task / ask_agent        后台任务与委派的结�
 - **安装布局**：二进制 `muliao [-c 配置] [--web-dir 前端构建目录]`，默认在可执行文件旁边的 `web/` 找前端构建；`muliao openapi` 打印接口描述。日志由进程自己按大小轮转（`log_file`、`log_max_mb`、`log_backups`），并把 stdout/stderr 指到当前文件（launchd 的 StandardOutPath 只在启动时打开一次）。
 - **外部消息**：能保持长连接的由流式触发器监听，只能拉取的由定时触发器拉取；#645 删了 webhook。
 - **压缩的覆盖范围**：按上一次请求报告的 token 在步间压缩，不预估下一次：一步的工具结果直接超出模型上限时运行失败可见，手动压缩后重试。不识别各提供方的超限错误，因为格式各异、无法可靠识别。
+- **外网访问的传输量**：用户经代理从 MacBook、iPhone 访问，响应按 Accept-Encoding 压缩（`http/src/lib.rs` 的 `CompressionLayer`，默认规则不压 SSE 事件流、图片和很小的响应：压了事件流会被缓冲）；整份下发的列表不带只在详情里看的大字段（issue 列表不带描述，`ListedIssue`，#843）。
 ## 17. 前后端契约
 - **接口类型只有一份**：后端的请求、响应类型与 SSE 事件类型就是契约，用 utoipa 从同一份声明生成路由与 OpenAPI（`http/src/api` 各模块）。`muliao openapi` 导出的描述提交为 `web/openapi.json`，前端类型 `web/src/schema.d.ts` 由它生成（openapi-typescript），两边测试各保证一致（后端 `crates/muliao/tests/frontend_contract.rs`）；改接口先重新生成再改前端。响应里每个字段都必有（值可能是 null），前端不必处处判 undefined。前端每个调用只写一次路径模板，参数与响应类型都从生成的类型推出（唯一例外是上传文件）。前端不解析工具结果文本，结构化状态（如 `ask_user`，见第 7 节）由后端给出；会话来源是按 `kind` 区分的判别联合，来源编号的存储格式只有会话领域认识。错误响应一律 `{"detail": "<原因>"}`：领域错误按种类映射成 4xx，外部服务出错 502 带原因，其余记 error 日志、对外只说 500（`http/src/error.rs`）。
 - **数据库是唯一事实源，SSE 只是展示加速**：服务端在写过表的事务提交后发一条 `changed`；资源目录里的文件有改动（不论平台、agent 的 shell 还是用户在别处改的）也发。它不分类别，服务端不逐处通知「谁改了什么」，前端也不列「哪些操作改了什么」：不论谁改，正在显示的页面都刷新。
