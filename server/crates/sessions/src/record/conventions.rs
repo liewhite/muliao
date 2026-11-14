@@ -321,7 +321,6 @@ pub(crate) fn attach_run_context(request: &mut Request, text: &str) {
     let at = request.parts.iter().position(|p| !matches!(p, RequestPart::ToolResult(_))).unwrap_or(request.parts.len());
     request.parts.insert(at, RequestPart::Text { text: text.to_owned() });
     edit(&mut request.metadata, |m: &mut RequestMeta| {
-        assert!(m.run_context.is_none(), "request already carries a run context");
         for mark in &mut m.parts {
             if mark.part >= at {
                 mark.part += 1;

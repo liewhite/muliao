@@ -166,15 +166,13 @@ pub(crate) fn deferred_results(
     let mut results = HashMap::new();
     for p in &paused.pending {
         let id = &p.id;
-        let r = match (p.kind, paused.answers.get(id)) {
-            (_, None) => skipped(p.kind, &given),
-            (Waiting::AskUser, Some(CallResult::AskUser(r))) => r.resolution(),
-            (Waiting::AskAgent, Some(CallResult::AskAgent(a))) => a.resolution(),
-            (Waiting::Approval, Some(CallResult::Approval(_))) => {
-                decided.remove(id).expect("take_in resolves every decision among the answers")
-            }
-            (_, Some(a)) => {
-                return Err(broken(format!("call {id} of {} got an answer for {}", p.call.name, a.kind())));
+        let r = match (p.kind, paused.answers.get(id), decided.remove(id)) {
+            (_, None, _) => skipped(p.kind, &given),
+            (Waiting::AskUser, Some(CallResult::AskUser(r)), _) => r.resolution(),
+            (Waiting::AskAgent, Some(CallResult::AskAgent(a)), _) => a.resolution(),
+            (Waiting::Approval, Some(CallResult::Approval(_)), Some(r)) => r,
+            (_, Some(a), _) => {
+                return Err(broken(format!("call {id} of {} cannot take the {} answer it got", p.call.name, a.kind())));
             }
         };
         // 交给运行（agenter）的结果按它的调用 id

@@ -132,10 +132,18 @@ pub(crate) fn record_call_in(
          VALUES (?1, ?2, ?3, ?4, ?5)",
         params![parent_id, call_id, thread_id, mode_column, check_seconds],
     )?;
-    Ok(call_in(c, parent_id, call_id)?.expect("just recorded"))
+    let id = DelegationId::new(c.last_insert_rowid());
+    Ok(CallRecord {
+        id,
+        parent_id: parent_id.to_owned(),
+        call_id: call_id.to_owned(),
+        thread_id: thread_id.to_owned(),
+        mode,
+    })
 }
 
 /// 这次调用记下的那一行（还没记过、或 thread 已删除时为 None）。
+#[cfg(test)]
 pub(crate) fn call_in(c: &Connection, parent_id: &SessionId, call_id: &CallId) -> Result<Option<CallRecord>> {
     Ok(query(c, "parent_session_id = ?1 AND call_id = ?2", params![parent_id, call_id])?.pop())
 }

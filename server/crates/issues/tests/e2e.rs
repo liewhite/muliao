@@ -218,7 +218,7 @@ async fn world() -> World {
 impl World {
     async fn session(&self, issue_id: IssueId) -> SessionId {
         for _ in 0..200 {
-            if let Some(s) = self.board.get(issue_id).await.unwrap().work.sessions.get(&self.me) {
+            if let Some(s) = self.board.detail(issue_id).await.unwrap().issue.work.sessions.get(&self.me) {
                 return s.clone();
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
@@ -266,7 +266,7 @@ async fn an_agent_that_stops_without_settling_is_asked_until_it_hands_the_issue_
     w.script.text("我看完了");
     w.script.call("u1", "issue_update", json!({"issue_id": 1, "status": "in_review", "assignee": "user"}));
     w.script.text("交给用户了");
-    let i = w.board.create_many(By::user(), vec![work_for_me(&w, "要表态")]).await.unwrap().remove(0);
+    let i = w.board.create_many(By::user(), vec![work_for_me(&w, "要表态")]).await.unwrap().remove(0).issue;
     assert_eq!(i.id, IssueId::new(1));
     let s = w.session(i.id).await;
     w.settled(&s).await;
@@ -279,7 +279,7 @@ async fn an_agent_that_stops_without_settling_is_asked_until_it_hands_the_issue_
         asked[1].to_string().contains("a comment alone does not settle it"),
         "the second run is the request to settle"
     );
-    let issue = w.board.get(i.id).await.unwrap().issue;
+    let issue = w.board.detail(i.id).await.unwrap().issue.issue;
     assert_eq!((issue.status, issue.assignee), (Status::InReview, Some(Assignee::User)));
     let notices = w.notifications.list(10).await.unwrap();
     assert_eq!(notices.len(), 1);
@@ -290,7 +290,7 @@ async fn an_agent_that_stops_without_settling_is_asked_until_it_hands_the_issue_
 async fn issue_stop_stops_the_running_session_and_delivers_the_message_there() {
     let w = world().await;
     w.script.call("c1", "slow", json!({}));
-    let i = w.board.create_many(By::user(), vec![work_for_me(&w, "做到一半")]).await.unwrap().remove(0);
+    let i = w.board.create_many(By::user(), vec![work_for_me(&w, "做到一半")]).await.unwrap().remove(0).issue;
     let s = w.session(i.id).await;
     for _ in 0..200 {
         if w.script.left() == 0 {

@@ -9,10 +9,10 @@ use chrono::{DateTime, Utc};
 use muliao_sessions::RunRecord;
 use muliao_sessions::SavedItem;
 use muliao_sessions::activity::{Delegated, Wait, WorkState};
-use muliao_sessions::directory::{Listing, Session};
+use muliao_sessions::directory::{ListedFrom, Listing, Session};
 use muliao_sessions::mailbox::EventSource;
 use muliao_sessions::mailbox::{Mail, MailBody, MailState};
-use muliao_sessions::{CallResult, Choice, QuestionAnswer};
+use muliao_sessions::{CallResult, Choice, ManualCompaction, QuestionAnswer};
 use muliao_sessions::{LiveSegment, Retrying};
 use muliao_sessions::{Origin, Sender, SessionOrigin, ThreadName};
 use muliao_sessions::{UserMessage, UserTarget};
@@ -109,13 +109,14 @@ async fn list_sessions(
     State(s): State<AppState>,
     Query(q): Query<ListQuery>,
 ) -> ApiResult<axum::Json<Vec<SessionListItem>>> {
-    let sender = match (q.trigger_id, &q.origin) {
+    let from = match (q.trigger_id, q.origin) {
         (Some(_), Some(_)) => return Err(ApiError::invalid("give either trigger_id or origin, not both")),
-        (Some(trigger_id), None) => Some(Sender::Trigger { trigger_id }),
-        (None, _) => None,
+        (Some(trigger_id), None) => Some(ListedFrom::Sender(Sender::Trigger { trigger_id })),
+        (None, Some(origins)) => Some(ListedFrom::Origins(origins)),
+        (None, None) => None,
     };
     let limit = q.limit.unwrap_or(muliao_sessions::service::LIST_DEFAULT);
-    let listing = Listing { agent_id: q.agent_id, origins: q.origin, sender, keyword: q.q };
+    let listing = Listing { agent_id: q.agent_id, from, keyword: q.q };
     let listed = s.services.sessions.list(listing, limit, q.offset.unwrap_or(0)).await?;
     let states: Vec<WorkState> = listed.iter().map(|x| x.state).collect();
     let outs = session_outs(&s, listed.into_iter().map(|x| x.session).collect()).await?;
@@ -394,14 +395,29 @@ async fn stop(State(s): State<AppState>, Path(session_id): Path<SessionId>) -> A
     Ok(StatusCode::ACCEPTED)
 }
 
-/// 手动压缩上下文，做完才返回（几秒到几十秒）。没有可压缩的（都在保留的最近几步里）时什么都不变。会话在运行（运行中超阈值
-/// 会自动压缩）、已在压缩，或压缩中被停止时 409；模型调用失败时报错，之前写下的批次保留。
+/// 手动压缩的结局
+#[derive(Serialize, ToSchema)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum CompactOut {
+    /// 做完了
+    Compacted {
+        /// 压缩的步数；0 是都在保留的最近几步里，没有可压缩的
+        steps: usize,
+    },
+    /// 压缩中用户点了停止，这一批作废
+    Stopped,
+}
+
+/// 手动压缩上下文，做完或被停止才返回（几秒到几十秒）。会话在运行（运行中超阈值会自动压缩）或已在压缩时 409；模型调用
+/// 失败时报错，之前写下的批次保留。
 #[utoipa::path(post, path = "/api/sessions/{session_id}/compact", tag = "sessions",
-    responses((status = 204), (status = 404, body = ErrorOut), (status = 409, body = ErrorOut)),
+    responses((status = 200, body = CompactOut), (status = 404, body = ErrorOut), (status = 409, body = ErrorOut)),
     params(("session_id" = SessionId, Path, description = "会话的编号")))]
-async fn compact(State(s): State<AppState>, Path(session_id): Path<SessionId>) -> ApiResult<StatusCode> {
-    s.services.sessions.compact(&session_id).await?;
-    Ok(StatusCode::NO_CONTENT)
+async fn compact(State(s): State<AppState>, Path(session_id): Path<SessionId>) -> ApiResult<axum::Json<CompactOut>> {
+    Ok(axum::Json(match s.services.sessions.compact(&session_id).await? {
+        ManualCompaction::Compacted { steps } => CompactOut::Compacted { steps },
+        ManualCompaction::Stopped => CompactOut::Stopped,
+    }))
 }
 
 /// 重试最近一次最终失败的运行（同一次运行接着跑）。会话在跑、或最近一次运行没有失败时 409。

@@ -10,7 +10,7 @@
 
 use muliao_platform::ids::{AgentId, CallId, DelegationId, FileId, SessionId, new_id};
 
-use muliao_assets::agents::{Availability, agent_in, availability_in, runnable_agent_in};
+use muliao_assets::agents::{Availability, availability_in, runnable_agent_in};
 use muliao_files::load_metas;
 use muliao_platform::db::Tx;
 use rusqlite::Connection;
@@ -226,14 +226,11 @@ pub(crate) fn create_session_in(c: &Tx<'_>, opener: Opener<'_>, agent_id: &Agent
 /// 收不了信的 agent 跑前置检查）也用它（[`SenderInbox::refusal_in`]）。
 fn agent_refusal_in(c: &Connection, agent_id: &AgentId) -> Result<Option<Refused>> {
     Ok(match availability_in(c, agent_id)? {
-        Availability::Runnable => None,
-        Availability::Archived => {
-            let name = agent_in(c, agent_id)?.name;
-            Some(Refused {
-                reason: Refusal::Archived,
-                detail: format!("agent {name:?} is archived; unarchive it first"),
-            })
-        }
+        Availability::Runnable(_) => None,
+        Availability::Archived(agent) => Some(Refused {
+            reason: Refusal::Archived,
+            detail: format!("agent {:?} is archived; unarchive it first", agent.name),
+        }),
         Availability::Gone => Some(Refused { reason: Refusal::Gone, detail: format!("agent {agent_id:?} not found") }),
     })
 }

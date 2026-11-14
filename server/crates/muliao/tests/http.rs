@@ -266,7 +266,8 @@ async fn a_conversation_over_http_with_live_events() {
     assert_eq!(detail["items"].as_array().unwrap().len(), 4);
     w.call(Method::POST, &format!("/api/sessions/{id}/retry"), None, 409).await;
     w.call(Method::POST, &format!("/api/sessions/{id}/read"), None, 204).await;
-    w.call(Method::POST, &format!("/api/sessions/{id}/compact"), None, 204).await;
+    let compacted = w.call(Method::POST, &format!("/api/sessions/{id}/compact"), None, 200).await;
+    assert_eq!(compacted, json!({"outcome": "compacted", "steps": 0}), "nothing beyond the kept steps");
     w.call(Method::POST, &format!("/api/sessions/{id}/stop"), None, 202).await;
     w.call(Method::GET, "/api/sessions/nope", None, 404).await;
     w.call(Method::POST, "/api/sessions", Some(json!({"agent_id": agent})), 422).await;

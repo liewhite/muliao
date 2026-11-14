@@ -102,7 +102,7 @@ impl World {
     }
 
     async fn create(&self, by: By, item: NewIssue) -> Issue {
-        self.board.create_many(by, vec![item]).await.unwrap().remove(0)
+        self.board.create_many(by, vec![item]).await.unwrap().remove(0).issue
     }
 
     /// agent 在这个 issue 上的会话
@@ -236,10 +236,10 @@ async fn dependencies_hold_back_delivery_until_the_last_upstream_finishes() {
         )
         .await
         .unwrap();
-    let (one, two, parent) = (created[0].id, created[1].id, created[2].id);
+    let (one, two, parent) = (created[0].issue.id, created[1].issue.id, created[2].issue.id);
     assert_eq!(w.letters(one, A).await.len(), 1);
     assert!(w.session(parent, A).await.is_none(), "the parent waits for its steps");
-    let work = w.board.get(parent).await.unwrap().work;
+    let work = w.board.detail(parent).await.unwrap().issue.work;
     assert_eq!(work.waiting_on, vec![one, two]);
     assert!(!work.stalled, "waiting on dependencies is not stalled");
     w.board.update(by_agent(A, "x"), one, Patch { status: Some(Status::Done), ..Patch::default() }).await.unwrap();
@@ -301,7 +301,7 @@ async fn handing_to_the_user_notifies_and_the_user_approves_or_sends_back() {
     assert_eq!(notices[0].title, format!("#{} 指派给你：交审", i.id));
     assert_eq!(notices[0].body, "状态 in_review");
     assert_eq!(notices[0].session_id.as_ref(), Some(&its));
-    assert!(w.board.get(i.id).await.unwrap().work.reviewable);
+    assert!(w.board.detail(i.id).await.unwrap().issue.work.reviewable);
     // 打回：回到交出它的 agent，三条动态一封信
     w.consume_all().await;
     w.board.reject(i.id, "再改改".into()).await.unwrap();
@@ -319,7 +319,7 @@ async fn handing_to_the_user_notifies_and_the_user_approves_or_sends_back() {
     assert!(err.to_string().contains("is not assigned to you"), "{err}");
     w.board.update(by_agent(A, its.as_str()), i.id, hand).await.unwrap();
     let done = w.board.approve(i.id).await.unwrap();
-    assert_eq!(done.status, Status::Done);
+    assert_eq!(done.issue.status, Status::Done);
     assert!(w.board.approve(i.id).await.unwrap_err().to_string().contains("already done"));
     // 用户自己指派给自己的，打回时没有交出它的 agent
     let mine = w.create(By::user(), new(A, "我的", Status::InReview, Some(Assignee::User))).await;
@@ -333,9 +333,9 @@ async fn handing_to_the_user_notifies_and_the_user_approves_or_sends_back() {
 async fn starting_a_backlog_issue_assigns_its_owner() {
     let w = world().await;
     let i = w.create(By::user(), new(B, "开工", Status::Backlog, None)).await;
-    assert!(w.board.get(i.id).await.unwrap().work.startable);
+    assert!(w.board.detail(i.id).await.unwrap().issue.work.startable);
     let started = w.board.start(i.id).await.unwrap();
-    assert_eq!((started.status, started.assignee), (Status::InProgress, agent(B)));
+    assert_eq!((started.issue.status, started.issue.assignee), (Status::InProgress, agent(B)));
     assert_eq!(w.letters(i.id, B).await.len(), 1);
     assert!(w.board.start(i.id).await.unwrap_err().to_string().contains("not in the backlog"));
 }
@@ -434,7 +434,7 @@ async fn failures_deleted_sessions_and_deleted_agents_are_recorded_without_deliv
     // 删除 agent：指派人、负责人置空，以系统身份记
     let hook = w.board.deletion_hook();
     w.db.write(move |tx| hook(tx, &AgentId::new(A))).await.unwrap();
-    let after = w.board.get(i.id).await.unwrap().issue;
+    let after = w.board.detail(i.id).await.unwrap().issue.issue;
     assert_eq!((after.owner, after.assignee), (None, None));
     let t = w.timeline(i.id).await;
     let n = t.len();
@@ -457,7 +457,7 @@ async fn deleting_an_issue_releases_its_downstream() {
     let letters = w.letters(down.id, A).await;
     assert_eq!(letters.len(), 1);
     assert!(letters[0].contains(&format!("changed depends_on: #{} -> none", up.id)), "{}", letters[0]);
-    assert!(w.board.get(up.id).await.unwrap_err().to_string().contains("not found"));
+    assert!(w.board.detail(up.id).await.unwrap_err().to_string().contains("not found"));
 }
 
 #[tokio::test]
@@ -493,8 +493,8 @@ async fn issue_show_lists_and_stop_rules() {
     assert!(!found[0].work.stalled, "its session has mail to run");
     assert_eq!(found[0].work.sessions.keys().collect::<Vec<_>>(), [&AgentId::new(B)]);
     w.consume_all().await;
-    assert!(w.board.get(i.id).await.unwrap().work.stalled);
-    let json = serde_json::to_value(w.board.get(i.id).await.unwrap()).unwrap();
+    assert!(w.board.detail(i.id).await.unwrap().issue.work.stalled);
+    let json = serde_json::to_value(w.board.detail(i.id).await.unwrap().issue).unwrap();
     assert_eq!(
         (&json["assignee"], json["status"].as_str(), json["assignee_state"].as_str()),
         (&serde_json::json!({"kind": "agent", "agent_id": B}), Some("in_progress"), Some("idle"))

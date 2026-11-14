@@ -146,30 +146,14 @@ async fn agent_defaults(State(s): State<AppState>) -> axum::Json<AgentDefaults> 
 #[derive(Serialize, ToSchema)]
 pub struct ToolOut {
     pub name: String,
-    pub access: Access,
+    pub access: ToolAccess,
     /// 管理类工具：base 角色没有
     pub admin: bool,
 }
 
-#[derive(Serialize, ToSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum Access {
-    Read,
-    Write,
-}
-
 impl ToolOut {
     pub fn of(t: &ToolSpec) -> Self {
-        ToolOut { name: t.name.clone(), access: Access::of(t.access), admin: t.admin }
-    }
-}
-
-impl Access {
-    pub fn of(a: ToolAccess) -> Self {
-        match a {
-            ToolAccess::Read => Access::Read,
-            ToolAccess::Write => Access::Write,
-        }
+        ToolOut { name: t.name.clone(), access: t.access, admin: t.admin }
     }
 }
 

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Button, Chip, toast } from '@heroui/react'
 import { Archive, ArrowDown, CornerLeftUp, Trash2 } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
@@ -90,8 +90,6 @@ export default function SessionView() {
   const action = useAction()
   // 压缩单独一个：它要做完才返回（几秒到几分钟），期间停止等其他操作照常可用
   const compaction = useAction()
-  // 压缩中用户点了停止：压缩请求随后以「已停止」结束，那是用户要的结果，不当错误显示
-  const stoppedCompaction = useRef(false)
   const bottom = useFollowBottom()
   // 说完就发：转写出的文字接在已输入的内容后面，连同附件一起发出；暂时发不了（附件还在上传、上一条还在发）
   // 或发送失败时留在输入框里，不丢
@@ -163,13 +161,10 @@ export default function SessionView() {
             isDisabled={action.busy}
             isPending={compaction.busy}
             onPress={() => {
-              stoppedCompaction.current = false
-              void compaction.run(() =>
-                api.compact(id).catch((e: unknown) => {
-                  if (stoppedCompaction.current) toast('压缩已停止')
-                  else throw e
-                }),
-              )
+              void compaction.run(async () => {
+                const r = await api.compact(id)
+                if (r.outcome === 'stopped') toast('压缩已停止')
+              })
             }}
             aria-description="把早期对话压缩成摘要，减少发给模型的上下文"
           >
@@ -209,10 +204,7 @@ export default function SessionView() {
               // 压缩中也能停止（会话此时是空闲的）
               active={compaction.busy || (detail.data !== undefined && detail.data.state !== 'idle')}
               onSend={() => void send()}
-              onStop={() => {
-                if (compaction.busy) stoppedCompaction.current = true
-                void action.run(() => api.stop(id))
-              }}
+              onStop={() => void action.run(() => api.stop(id))}
             />
           </div>
         </div>

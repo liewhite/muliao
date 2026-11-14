@@ -12,7 +12,6 @@
 
 use muliao_platform::ids::{AgentId, CallId, DelegationId, SessionId};
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
 use muliao_assets::agents::{AgentInfo, agent_in};
@@ -192,51 +191,49 @@ pub(crate) fn threads_in(c: &Connection, parent_id: &SessionId) -> Result<Vec<Th
 }
 
 /// 委派的运行中检查：只看还没结清、report_back 的委派，每过一个间隔给发起方投一封检查信件，说 thread 在做什么。
-pub(crate) async fn check_threads(
-    db: &Database,
-    waker: &Waker,
-    beats: &Arc<Mutex<CheckBeats<DelegationId>>>,
-) -> Result<usize> {
-    let (waker, beats) = (waker.clone(), beats.clone());
-    db.write(move |tx| {
-        let now = Utc::now();
-        let reporting: Vec<(Owed, f64)> = owed_in(tx, None, None)?
-            .into_iter()
-            .filter_map(|o| match o.delegation.kind {
-                Delegated::ReportBack { check_seconds } => Some((o, check_seconds)),
-                Delegated::Ask => None,
-            })
-            .collect();
-        let mut beats = beats.lock().expect("beats lock");
-        beats.keep(&reporting.iter().map(|(o, _)| o.delegation.id).collect::<BTreeSet<_>>());
-        // (发起会话, thread) -> 到期的委派与它的间隔：同一个发起方对同一个 thread 的几项委派同时到期，检查一次
-        let mut due: BTreeMap<(SessionId, SessionId), (Owed, f64)> = BTreeMap::new();
-        for (o, interval) in reporting {
-            if !beats.due(&o.delegation.id, o.hold.created_at, interval, now) {
-                continue;
+/// 节拍按值交给写事务、随结果交回，提交了才换上：事务回滚时节拍也不前进，下一轮照常检查。
+pub(crate) async fn check_threads(db: &Database, waker: &Waker, beats: &mut CheckBeats<DelegationId>) -> Result<usize> {
+    let (waker, mut next) = (waker.clone(), beats.clone());
+    let (posted, next): (usize, _) = db
+        .write(move |tx| -> Result<_> {
+            let now = Utc::now();
+            let reporting: Vec<(Owed, f64)> = owed_in(tx, None, None)?
+                .into_iter()
+                .filter_map(|o| match o.delegation.kind {
+                    Delegated::ReportBack { check_seconds } => Some((o, check_seconds)),
+                    Delegated::Ask => None,
+                })
+                .collect();
+            next.keep(&reporting.iter().map(|(o, _)| o.delegation.id).collect::<BTreeSet<_>>());
+            // (发起会话, thread) -> 到期的委派与它的间隔：同一个发起方对同一个 thread 的几项委派同时到期，检查一次
+            let mut due: BTreeMap<(SessionId, SessionId), (Owed, f64)> = BTreeMap::new();
+            for (o, interval) in reporting {
+                if !next.due(&o.delegation.id, o.hold.created_at, interval, now) {
+                    continue;
+                }
+                next.checked(o.delegation.id, now);
+                due.entry((o.delegation.parent_id.clone(), o.delegation.thread_id.clone())).or_insert((o, interval));
             }
-            beats.checked(o.delegation.id, now);
-            due.entry((o.delegation.parent_id.clone(), o.delegation.thread_id.clone())).or_insert((o, interval));
-        }
-        drop(beats);
-        let child_ids: Vec<SessionId> =
-            due.keys().map(|(_, c)| c.clone()).collect::<BTreeSet<_>>().into_iter().collect();
-        let states = work_states_in(tx, &child_ids)?;
-        let runs = latest_among(tx, &child_ids)?;
-        let children = directory::among_in(tx, &child_ids)?;
-        let mut posted = 0;
-        for ((_, child_id), (o, interval)) in &due {
-            // 同上：委派引用的 thread 由外键保证存在
-            let child = &children[child_id];
-            let agent = agent_in(tx, &child.agent_id)?;
-            let text = check_text(child, &agent, states[child_id], runs.get(child_id), now, *interval)?;
-            if post_check_in(tx, &waker, &o.hold, &EventSource::Thread { session_id: child_id.clone() }, &text)? {
-                posted += 1;
+            let child_ids: Vec<SessionId> =
+                due.keys().map(|(_, c)| c.clone()).collect::<BTreeSet<_>>().into_iter().collect();
+            let states = work_states_in(tx, &child_ids)?;
+            let runs = latest_among(tx, &child_ids)?;
+            let children = directory::among_in(tx, &child_ids)?;
+            let mut posted = 0;
+            for ((_, child_id), (o, interval)) in &due {
+                // 同上：委派引用的 thread 由外键保证存在
+                let child = &children[child_id];
+                let agent = agent_in(tx, &child.agent_id)?;
+                let text = check_text(child, &agent, states[child_id], runs.get(child_id), now, *interval)?;
+                if post_check_in(tx, &waker, &o.hold, &EventSource::Thread { session_id: child_id.clone() }, &text)? {
+                    posted += 1;
+                }
             }
-        }
-        Ok(posted)
-    })
-    .await
+            Ok((posted, next))
+        })
+        .await?;
+    *beats = next;
+    Ok(posted)
 }
 
 /// 还没结清的委派的检查信件，按 thread 的工作状态说；run 是它最近一次运行，只用来补充细节。

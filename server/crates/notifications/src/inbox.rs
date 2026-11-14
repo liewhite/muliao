@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use muliao_platform::bus::{Bus, ServerEvent};
-use muliao_platform::db::{Database, Tx};
+use muliao_platform::db::{Database, Tx, placeholders};
 use muliao_platform::errors::{Result, broken};
 use muliao_platform::text::truncate;
 use muliao_sessions::Waiting;
@@ -133,7 +133,7 @@ pub fn unread_count_in(c: &Connection) -> rusqlite::Result<i64> {
 /// 这些会话里未读的：有指向它的未读通知（会话列表、会话页用）。
 pub fn unread_sessions_in(c: &Connection, session_ids: &[SessionId]) -> rusqlite::Result<BTreeSet<SessionId>> {
     // 调用方一次传一页会话列表，远小于 SQLite 一条语句的参数上限（32766）
-    let marks = vec!["?"; session_ids.len()].join(", ");
+    let marks = placeholders(session_ids.len());
     let mut stmt =
         c.prepare(&format!("SELECT DISTINCT session_id FROM notifications WHERE unread AND session_id IN ({marks})"))?;
     stmt.query_map(params_from_iter(session_ids), |r| r.get::<_, SessionId>(0))?.collect()

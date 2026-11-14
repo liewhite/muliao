@@ -162,8 +162,7 @@ impl Tool<RunScope> for TriggerCreate {
             config: NewConfig::parse(a.kind, Value::Object(a.config))?,
             precheck: a.precheck,
         };
-        let created = self.service.create(spec).await?;
-        let view = self.service.view(created).await?;
+        let view = self.service.create(spec).await?;
         Ok(agenter::tool::text(format!(
             "created {} trigger {}; status: {}",
             view.trigger.mode.kind(),
@@ -216,9 +215,8 @@ impl Tool<RunScope> for TriggerUpdate {
         };
         let t = self.0.get_by_name(&a.name).await?;
         let update = Update { prompt: a.prompt, config: a.config.map(Value::Object), enabled: a.enabled, precheck };
-        let updated = self.0.update(t.id, update).await?;
-        let state = if updated.enabled { "enabled" } else { "paused" };
-        let view = self.0.view(updated).await?;
+        let view = self.0.update(t.id, update).await?;
+        let state = if view.trigger.enabled { "enabled" } else { "paused" };
         Ok(agenter::tool::text(format!("updated trigger {} ({state}); status: {}", a.name, view.kind.status_json())))
     }
 }

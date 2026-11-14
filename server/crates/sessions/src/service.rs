@@ -9,7 +9,7 @@ use crate::Core;
 use crate::activity::{Wait, WorkState, statuses_in, waits_of_in};
 use crate::deletion::delete_sessions_in;
 use crate::directory::{self, Listing, Session, Thread};
-use crate::execution::actor::Actors;
+use crate::execution::actor::{Actors, ManualCompaction};
 use crate::execution::halt::Halted;
 use crate::execution::live::{LiveSegment, Retrying, RunEvent};
 use crate::execution::runs::{self, RunRecord};
@@ -190,8 +190,8 @@ impl SessionService {
             .await
     }
 
-    /// 用户手动压缩上下文，做完返回压缩的步数（0 是保留窗口之外没有可压缩的）。会话在跑时拒绝，压缩中可以停止（见 actor）。
-    pub async fn compact(&self, session_id: &SessionId) -> Result<usize> {
+    /// 用户手动压缩上下文，做完或被停止才返回。会话在跑时拒绝，压缩中可以停止（见 actor）。
+    pub async fn compact(&self, session_id: &SessionId) -> Result<ManualCompaction> {
         self.actors.compact(session_id).await
     }
 

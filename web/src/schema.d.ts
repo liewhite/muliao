@@ -587,8 +587,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * 手动压缩上下文，做完才返回（几秒到几十秒）。没有可压缩的（都在保留的最近几步里）时什么都不变。会话在运行（运行中超阈值
-         *     会自动压缩）、已在压缩，或压缩中被停止时 409；模型调用失败时报错，之前写下的批次保留。
+         * 手动压缩上下文，做完或被停止才返回（几秒到几十秒）。会话在运行（运行中超阈值会自动压缩）或已在压缩时 409；模型调用
+         *     失败时报错，之前写下的批次保留。
          */
         post: operations["compact"];
         delete?: never;
@@ -1113,8 +1113,6 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        /** @enum {string} */
-        Access: "read" | "write";
         /** @description 时间线上记下的一条：谁、什么时候、在哪个会话里，发生了什么。 */
         Activity: components["schemas"]["Happening"] & {
             /** Format: int64 */
@@ -1379,7 +1377,7 @@ export interface components {
             transferable: boolean;
         };
         CatalogDetail: {
-            access: components["schemas"]["Access"];
+            access: components["schemas"]["ToolAccess"];
             /** @description 管理类工具：base 角色没有 */
             admin: boolean;
             /** @enum {string} */
@@ -1471,6 +1469,16 @@ export interface components {
         Choice: "approve" | "deny" | "always";
         CommentIn: {
             body: string;
+        };
+        /** @description 手动压缩的结局 */
+        CompactOut: {
+            /** @description 压缩的步数；0 是都在保留的最近几步里，没有可压缩的 */
+            steps: number;
+            /** @enum {string} */
+            outcome: "compacted";
+        } | {
+            /** @enum {string} */
+            outcome: "stopped";
         };
         CompactionOut: {
             /** @description 这条消息及之前的已由 summary 代替发给模型（原文仍完整展示） */
@@ -2475,7 +2483,7 @@ export interface components {
          * @description 存成文件的四种：可以新建、改、删、转移 owner（记忆不转移）。
          * @enum {string}
          */
-        StoredKind: "skill" | "mcp" | "secret" | "memory";
+        StoredKind: "mcp" | "memory" | "secret" | "skill";
         StreamConfig: {
             command: components["schemas"]["Script"];
             secrets?: string[];
@@ -2512,10 +2520,15 @@ export interface components {
         ThreadOut: components["schemas"]["SessionOut"] & {
             thread: components["schemas"]["ThreadName"];
         };
+        /**
+         * @description 内置工具读还是写（界面、get_agent 展示）。
+         * @enum {string}
+         */
+        ToolAccess: "read" | "write";
         /** @description 一个内置工具（当前配置下注册的，工具自己声明读写与是否管理类），在规则里写作 `tool:<name>`。 */
         ToolOut: {
             name: string;
-            access: components["schemas"]["Access"];
+            access: components["schemas"]["ToolAccess"];
             /** @description 管理类工具：base 角色没有 */
             admin: boolean;
         };
@@ -4394,11 +4407,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            204: {
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["CompactOut"];
+                };
             };
             404: {
                 headers: {

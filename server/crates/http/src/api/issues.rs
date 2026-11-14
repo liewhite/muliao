@@ -88,7 +88,6 @@ async fn create_issue(
     State(s): State<AppState>,
     Json(body): Json<IssueCreate>,
 ) -> ApiResult<(StatusCode, axum::Json<BoardIssue>)> {
-    let board = &s.services.board;
     let new = NewIssue {
         owner: body.owner,
         title: body.title,
@@ -99,9 +98,8 @@ async fn create_issue(
         depends_on: body.depends_on.into_iter().map(Upstream::Issue).collect(),
         key: None,
     };
-    let created = board.create_many(By::user(), vec![new]).await?;
-    let id = created.first().expect("one issue was created").id;
-    Ok((StatusCode::CREATED, axum::Json(board.get(id).await?)))
+    let created = s.services.board.create_many(By::user(), vec![new]).await?.remove(0);
+    Ok((StatusCode::CREATED, axum::Json(created)))
 }
 
 #[utoipa::path(get, path = "/api/issues/{issue_id}", tag = "issues",
@@ -151,9 +149,7 @@ async fn update_issue(
         assignee: body.assignee,
         depends_on: body.depends_on,
     };
-    let board = &s.services.board;
-    let issue = board.update(By::user(), issue_id, patch).await?;
-    Ok(axum::Json(board.get(issue.id).await?))
+    Ok(axum::Json(s.services.board.update(By::user(), issue_id, patch).await?))
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -177,9 +173,7 @@ async fn comment_issue(
     params(("issue_id" = IssueId, Path, description = "issue 的编号")),
     responses((status = 200, body = BoardIssue), (status = 404, body = ErrorOut), (status = 409, body = ErrorOut)))]
 async fn approve_issue(State(s): State<AppState>, Path(issue_id): Path<IssueId>) -> ApiResult<axum::Json<BoardIssue>> {
-    let board = &s.services.board;
-    let issue = board.approve(issue_id).await?;
-    Ok(axum::Json(board.get(issue.id).await?))
+    Ok(axum::Json(s.services.board.approve(issue_id).await?))
 }
 
 /// 开工 backlog 里的 issue：指派给 owner 并进入 in_progress。不在 backlog 或没有 owner 时 409。
@@ -187,9 +181,7 @@ async fn approve_issue(State(s): State<AppState>, Path(issue_id): Path<IssueId>)
     params(("issue_id" = IssueId, Path, description = "issue 的编号")),
     responses((status = 200, body = BoardIssue), (status = 404, body = ErrorOut), (status = 409, body = ErrorOut)))]
 async fn start_issue(State(s): State<AppState>, Path(issue_id): Path<IssueId>) -> ApiResult<axum::Json<BoardIssue>> {
-    let board = &s.services.board;
-    let issue = board.start(issue_id).await?;
-    Ok(axum::Json(board.get(issue.id).await?))
+    Ok(axum::Json(s.services.board.start(issue_id).await?))
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -208,9 +200,7 @@ async fn reject_issue(
     Path(issue_id): Path<IssueId>,
     Json(body): Json<RejectIn>,
 ) -> ApiResult<axum::Json<BoardIssue>> {
-    let board = &s.services.board;
-    let issue = board.reject(issue_id, body.reason).await?;
-    Ok(axum::Json(board.get(issue.id).await?))
+    Ok(axum::Json(s.services.board.reject(issue_id, body.reason).await?))
 }
 
 #[utoipa::path(delete, path = "/api/issues/{issue_id}", tag = "issues",

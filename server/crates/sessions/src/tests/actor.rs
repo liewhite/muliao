@@ -10,7 +10,7 @@ use std::time::Duration;
 use crate::SessionDeps;
 use crate::activity::{WorkState, work_state_in};
 use crate::events::{Events, RunEnd, RunEnded, RunFailed, Subscribers};
-use crate::execution::actor::{Actors, Waker};
+use crate::execution::actor::{Actors, ManualCompaction, Waker};
 use crate::execution::runs::{self, RunState};
 use crate::intake::inbound::{UserMessage, UserTarget};
 use crate::intake::origins::OriginNotes;
@@ -698,14 +698,13 @@ async fn stopping_a_manual_compaction_takes_effect_at_once() {
     let compaction = tokio::spawn(async move { service.compact(&s2).await });
     tokio::time::sleep(Duration::from_millis(300)).await;
     tokio::time::timeout(Duration::from_secs(5), w.service.stop(&s)).await.expect("stop is not held up").unwrap();
-    let e = compaction.await.unwrap().unwrap_err();
-    assert!(e.to_string().contains("stopped"), "{e}");
+    assert_eq!(compaction.await.unwrap().unwrap(), ManualCompaction::Stopped);
     let s3 = s.clone();
     let compactions = w.db.read(move |c| history::compactions_in(c, &s3)).await.unwrap();
     assert!(compactions.is_empty(), "the unfinished batch is dropped");
     // 再压一次：这次等到做完才返回
     w.script.text("摘要");
-    assert_eq!(w.service.compact(&s).await.unwrap(), 2);
+    assert_eq!(w.service.compact(&s).await.unwrap(), ManualCompaction::Compacted { steps: 2 });
     let s3 = s.clone();
     let compactions = w.db.read(move |c| history::compactions_in(c, &s3)).await.unwrap();
     assert_eq!(compactions.len(), 1);

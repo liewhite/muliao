@@ -22,7 +22,7 @@ pub mod testing;
 mod tests;
 
 // 子领域是内部分组：别的领域用到的接口从这里导出，内部怎么分不影响它们
-pub use crate::execution::actor::{Actors, Waker};
+pub use crate::execution::actor::{Actors, ManualCompaction, Waker};
 pub use crate::execution::halt::Halted;
 pub use crate::execution::live::{LiveSegment, Retrying, RunEventEnvelope, SavedEvent};
 pub use crate::execution::runs::{Outcome, RunRecord};

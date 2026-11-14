@@ -298,26 +298,7 @@ impl TriggerService {
     /// 读模型：各自的配置与运行状态，以及上一次触发开出的会话还在不在（一次读）。
     pub async fn views(&self, triggers: Vec<Trigger>) -> Result<Vec<TriggerView>> {
         let hosting = self.0.hosting.clone();
-        self.0
-            .db
-            .read(move |c| {
-                let ids: Vec<SessionId> = triggers.iter().filter_map(|t| t.last_session_id.clone()).collect();
-                let states = states_of_in(c, &ids)?;
-                Ok::<_, Error>(
-                    triggers
-                        .into_iter()
-                        .map(|t| {
-                            let alive = t.last_session_id.clone().filter(|id| states.contains_key(id));
-                            TriggerView { kind: KindView::of(&t, &hosting), trigger: t, live_session_id: alive }
-                        })
-                        .collect(),
-                )
-            })
-            .await
-    }
-
-    pub async fn view(&self, t: Trigger) -> Result<TriggerView> {
-        Ok(self.views(vec![t]).await?.remove(0))
+        self.0.db.read(move |c| views_in(c, &hosting, triggers)).await
     }
 
     // ---- 管理 ----
@@ -329,29 +310,35 @@ impl TriggerService {
         Ok(())
     }
 
-    pub async fn create(&self, spec: NewSpec) -> Result<Trigger> {
+    /// 建好后交回读模型（同一个事务里读）。
+    pub async fn create(&self, spec: NewSpec) -> Result<TriggerView> {
         let mode = spec.config.configure(self.0.tz, Utc::now())?;
         let mut keys = mode.secrets().to_vec();
         keys.extend(spec.precheck.iter().flat_map(|p| p.secrets.clone()));
         self.check_secrets(&spec.agent_id, &keys).await?;
         let new =
             NewTrigger { name: spec.name, agent_id: spec.agent_id, prompt: spec.prompt, mode, precheck: spec.precheck };
+        let hosting = self.0.hosting.clone();
         let created = self
             .0
             .db
             .write(move |tx| {
                 // 正在删除的 agent 按不存在处理（否则删除流程清理过之后又建的触发器没人认领）；归档的拒绝（它不能运行）
                 runnable_agent_in(tx, &new.agent_id)?;
-                insert_in(tx, &new)?.ok_or_else(|| conflict(format!("trigger {:?} already exists", new.name)))
+                let t =
+                    insert_in(tx, &new)?.ok_or_else(|| conflict(format!("trigger {:?} already exists", new.name)))?;
+                Ok::<_, Error>(views_in(tx, &hosting, vec![t])?.remove(0))
             })
             .await?;
         self.changed();
-        tracing::info!(trigger = %created.name, kind = %created.mode.kind(), agent = %created.agent_id, "trigger created");
+        let t = &created.trigger;
+        tracing::info!(trigger = %t.name, kind = %t.mode.kind(), agent = %t.agent_id, "trigger created");
         Ok(created)
     }
 
     /// 在一个事务里只改给出的字段。换检查、改配置或重新启用清掉脚本的出错。
-    pub async fn update(&self, trigger_id: TriggerId, update: Update) -> Result<Trigger> {
+    /// 改好后交回读模型（同一个事务里读）。
+    pub async fn update(&self, trigger_id: TriggerId, update: Update) -> Result<TriggerView> {
         let tz = self.0.tz;
         // 核对 secret 要读 vault，不能放进下面的事务：先按此刻的行算出会生效的配置。中间有并发修改时核对按的是旧行，
         // 后果只是走回运行时的失败路径（与建好后 secret 才被删一样），有意不加锁
@@ -367,6 +354,7 @@ impl TriggerService {
             }
             self.check_secrets(&current.agent_id, &keys).await?;
         }
+        let hosting = self.0.hosting.clone();
         let updated = self
             .0
             .db
@@ -394,11 +382,11 @@ impl TriggerService {
                     t.enabled = enabled;
                 }
                 save_in(tx, &t)?;
-                Ok::<_, Error>(t)
+                Ok::<_, Error>(views_in(tx, &hosting, vec![t])?.remove(0))
             })
             .await?;
         self.changed();
-        tracing::info!(trigger = %updated.name, enabled = updated.enabled, "trigger updated");
+        tracing::info!(trigger = %updated.trigger.name, enabled = updated.trigger.enabled, "trigger updated");
         Ok(updated)
     }
 
@@ -635,4 +623,17 @@ fn skipped(t: &Trigger, refused: Refused) -> Outcome {
         Refusal::Gone => Skip::Deleted,
     };
     Outcome::Skipped(why, format!("trigger {:?}: {}", t.name, refused.detail))
+}
+
+/// 读模型：各自的配置与运行状态，以及上一次触发开出的会话还在不在（[`TriggerService::views`]，也给命令在自己的事务里交回）。
+fn views_in(c: &Connection, hosting: &Hosting, triggers: Vec<Trigger>) -> Result<Vec<TriggerView>> {
+    let ids: Vec<SessionId> = triggers.iter().filter_map(|t| t.last_session_id.clone()).collect();
+    let states = states_of_in(c, &ids)?;
+    Ok(triggers
+        .into_iter()
+        .map(|t| {
+            let alive = t.last_session_id.clone().filter(|id| states.contains_key(id));
+            TriggerView { kind: KindView::of(&t, hosting), trigger: t, live_session_id: alive }
+        })
+        .collect())
 }

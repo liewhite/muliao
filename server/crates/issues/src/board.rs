@@ -193,6 +193,13 @@ fn work_in(c: &Connection, issues: &[Issue]) -> Result<BTreeMap<IssueId, IssueWo
     Ok(work)
 }
 
+/// 一个 issue 连同谁在做：命令在自己的事务里用它交回读模型，界面不用再查一次。
+fn board_one_in(c: &Connection, issue: Issue) -> Result<BoardIssue> {
+    let mut work = work_in(c, std::slice::from_ref(&issue))?;
+    let work = work.remove(&issue.id).expect("work for every issue");
+    Ok(BoardIssue { issue, work })
+}
+
 fn board_in(c: &Connection, issues: Vec<Issue>) -> Result<Vec<BoardIssue>> {
     let mut work = work_in(c, &issues)?;
     Ok(issues
@@ -391,11 +398,6 @@ impl Board {
             .await
     }
 
-    /// 一个 issue 连同谁在做（命令做完后返回给界面）。
-    pub async fn get(&self, issue_id: IssueId) -> Result<BoardIssue> {
-        self.db.read(move |c| Ok(board_in(c, vec![issue_in(c, issue_id)?])?.remove(0))).await
-    }
-
     /// issue 的完整文本（issue_show）。
     pub async fn render(&self, issue_id: IssueId) -> Result<String> {
         let tz = self.changes.tz;
@@ -413,7 +415,7 @@ impl Board {
     /// 一次建一批 issue（按给出的顺序编号），可以互相依赖：depends_on 里的 key 指同批的另一项。整批一个事务，任何一项不合法
     /// 整批不建；全部建好、依赖连好之后才各开一个变更单元记「创建」、结算投递：先开工的子 issue 看得到同批的父 issue（blocks），
     /// 也不会在依赖补上之前就被投递。
-    pub async fn create_many(&self, by: By, new: Vec<NewIssue>) -> Result<Vec<Issue>> {
+    pub async fn create_many(&self, by: By, new: Vec<NewIssue>) -> Result<Vec<BoardIssue>> {
         if new.is_empty() {
             return Err(invalid("no issues to create"));
         }
@@ -469,28 +471,28 @@ impl Board {
                     tracing::info!(issue_id = id.get(), actor = by.actor.as_str(), "issue created");
                     created.push(issue);
                 }
-                Ok::<_, Error>(created)
+                board_in(tx, created)
             })
             .await?;
         Ok(created)
     }
 
     /// 只改给出的字段。每个真正变了的字段记一条时间线；issue 进入 done / cancelled 时由变更单元放行下游。
-    pub async fn update(&self, by: By, issue_id: IssueId, patch: Patch) -> Result<Issue> {
+    pub async fn update(&self, by: By, issue_id: IssueId, patch: Patch) -> Result<BoardIssue> {
         let changes = self.changes.clone();
         let issue = self
             .db
             .write(move |tx| {
                 let ((), issue) = changes.open_in(tx, issue_id, &by, Routing::ByRules, |c| c.apply(patch))?;
                 tracing::info!(issue_id = issue_id.get(), actor = by.actor.as_str(), status = %issue.status, "issue updated");
-                Ok::<_, Error>(issue)
+                board_one_in(tx, issue)
             })
             .await?;
         Ok(issue)
     }
 
     /// 用户审核通过交给自己的 issue：设为 done（有下游时照常放行）。
-    pub async fn approve(&self, issue_id: IssueId) -> Result<Issue> {
+    pub async fn approve(&self, issue_id: IssueId) -> Result<BoardIssue> {
         self.as_user(issue_id, move |c| {
             refuse(issue_id, cannot_review(c.issue().status, c.issue().assignee.as_ref()))?;
             c.set_status(Status::Done)
@@ -500,7 +502,7 @@ impl Board {
 
     /// 用户开工一个 backlog issue：指派给负责项目的 agent 并进入 in_progress，按规则投递。已不在 backlog（连点、两台设备）
     /// 或没有 owner 时拒绝。
-    pub async fn start(&self, issue_id: IssueId) -> Result<Issue> {
+    pub async fn start(&self, issue_id: IssueId) -> Result<BoardIssue> {
         self.as_user(issue_id, move |c| {
             let issue = c.issue();
             let owner = start_assignee(issue.status, issue.owner.as_ref())
@@ -517,7 +519,7 @@ impl Board {
 
     /// 用户打回交给自己的 issue：理由记成评论，回到 in_progress，指派给把它交给用户的那个 agent。三条动态一起投进那个 agent 的
     /// issue 会话（一封信）。
-    pub async fn reject(&self, issue_id: IssueId, reason: String) -> Result<Issue> {
+    pub async fn reject(&self, issue_id: IssueId, reason: String) -> Result<BoardIssue> {
         if reason.trim().is_empty() {
             return Err(invalid("the reason for sending an issue back must not be empty"));
         }
@@ -552,16 +554,16 @@ impl Board {
         &self,
         issue_id: IssueId,
         f: impl FnOnce(&mut crate::change::IssueChange<'_>) -> Result<()> + Send + 'static,
-    ) -> Result<Issue> {
+    ) -> Result<BoardIssue> {
         let changes = self.changes.clone();
         let issue = self
             .db
             .write(move |tx| {
                 let ((), issue) = changes.open_in(tx, issue_id, &By::user(), Routing::ByRules, f)?;
-                Ok::<_, Error>(issue)
+                board_one_in(tx, issue)
             })
             .await?;
-        tracing::info!(issue_id = issue_id.get(), status = %issue.status, "issue changed by the user");
+        tracing::info!(issue_id = issue_id.get(), status = %issue.issue.status, "issue changed by the user");
         Ok(issue)
     }
 

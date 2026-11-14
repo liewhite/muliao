@@ -25,11 +25,11 @@ use utoipa::ToSchema;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
-use crate::api::agents::Access;
 use crate::api::workspace::{EntryOut, PathQuery, browse_file};
 use crate::error::{ApiResult, ErrorOut};
 use crate::extract::{Json, Path, Query};
 use crate::state::AppState;
+use muliao_platform::tooling::ToolAccess;
 
 pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -88,7 +88,7 @@ pub struct StoredFileOut {
 pub enum CatalogDetail {
     /// 内置工具：归平台、代码里定义，没有文件，不能改
     Tool {
-        access: Access,
+        access: ToolAccess,
         /// 管理类工具：base 角色没有
         admin: bool,
     },
@@ -116,7 +116,7 @@ pub enum CatalogDetail {
 
 fn catalog_out(e: CatalogAsset) -> CatalogAssetOut {
     let detail = match e.detail {
-        Detail::Tool(t) => CatalogDetail::Tool { access: Access::of(t.access), admin: t.admin },
+        Detail::Tool(t) => CatalogDetail::Tool { access: t.access, admin: t.admin },
         Detail::Stored { file, shown } => {
             let file = StoredFileOut {
                 description: file.description,

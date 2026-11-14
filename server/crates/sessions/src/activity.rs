@@ -42,13 +42,13 @@ muliao_platform::serde_names!(WorkState);
 
 /// 一个会话为什么在 waiting（唯一定义）：active 占用，与还能回答的提问、还能批准的调用。
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct Waiting {
+pub struct WaitReasons {
     /// 按登记先后
     pub holds: Vec<Hold>,
     pub asks: OpenAsks,
 }
 
-impl Waiting {
+impl WaitReasons {
     pub(crate) fn any(&self) -> bool {
         !self.holds.is_empty() || self.asks.any_open()
     }
@@ -57,7 +57,7 @@ impl Waiting {
 /// 一批会话的状态，查询次数与会话数无关。
 pub struct Status {
     pub state: WorkState,
-    pub waiting: Waiting,
+    pub waiting: WaitReasons,
 }
 
 pub(crate) fn statuses_in(c: &Connection, session_ids: &[SessionId]) -> Result<BTreeMap<SessionId, Status>> {
@@ -71,7 +71,7 @@ pub(crate) fn statuses_in(c: &Connection, session_ids: &[SessionId]) -> Result<B
     for id in session_ids {
         let queued = queued.remove(id).unwrap_or_default();
         let at = position(&tails.remove(id).unwrap_or_default(), &paused.remove(id).unwrap_or_default(), &queued)?;
-        let waiting = Waiting { holds: held.remove(id).unwrap_or_default(), asks: open_asks_of(&at, &queued) };
+        let waiting = WaitReasons { holds: held.remove(id).unwrap_or_default(), asks: open_asks_of(&at, &queued) };
         let state = if unfinished.contains(id) || should_run(&queued, latest.get(id), &at) {
             WorkState::Running
         } else if waiting.any() {
@@ -143,7 +143,7 @@ pub enum Wait {
 }
 
 /// 会话在等的东西逐项展开：占用按登记先后，然后是提问、等批准的调用。
-pub(crate) fn waits_of_in(c: &Connection, session_id: &SessionId, waiting: &Waiting) -> Result<Vec<Wait>> {
+pub(crate) fn waits_of_in(c: &Connection, session_id: &SessionId, waiting: &WaitReasons) -> Result<Vec<Wait>> {
     // (占用 id, 等待项)：委派与唤醒的详情各自和占用联查，后台任务的占用本身就够
     let mut held: Vec<(HoldId, Wait)> = waiting
         .holds

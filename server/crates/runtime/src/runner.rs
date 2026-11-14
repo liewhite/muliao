@@ -8,7 +8,7 @@
 
 use muliao_platform::ids::{AgentId, SessionId};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use agenter::{
     Agent, Message, Request, RequestPart, Resolution, Response, RunError, RunEvent, Settings, ToolDef, ToolResult,
@@ -287,22 +287,6 @@ impl Run {
     }
 }
 
-impl Drop for Run {
-    fn drop(&mut self) {
-        let spent = *self.meter.spent.lock().expect("meter lock");
-        tracing::info!(
-            agent = %self.scope.agent_id,
-            session_id = %self.scope.session_id,
-            requests = spent.requests,
-            input_tokens = spent.input_tokens,
-            output_tokens = spent.output_tokens,
-            cache_read_tokens = spent.cache_read_tokens,
-            cache_write_tokens = spent.cache_write_tokens,
-            "agent run finished"
-        );
-    }
-}
-
 /// 一次运行的计量：每次模型回复后记一笔（会话的累计随步骤更新，服务被硬杀只丢在途那次请求的）。用量是账目，不是运行的
 /// 一部分：记不上只记一条带数目的 error 日志（便于人工补记），不改变运行的结果。交出去之后调用方被取消的，这笔照样会
 /// 入账（UsageLog::record 的约定），按已入账算。
@@ -312,20 +296,11 @@ struct Meter {
     session_id: SessionId,
     model: String,
     kind: RunKind,
-    /// 整次运行花掉的（日志用）
-    spent: Mutex<UsageTotals>,
 }
 
 impl Meter {
     fn new(usage: Arc<UsageLog>, agent_id: &AgentId, session_id: &SessionId, model: &str, kind: RunKind) -> Self {
-        Self {
-            usage,
-            agent_id: agent_id.to_owned(),
-            session_id: session_id.to_owned(),
-            model: model.to_owned(),
-            kind,
-            spent: Mutex::default(),
-        }
+        Self { usage, agent_id: agent_id.to_owned(), session_id: session_id.to_owned(), model: model.to_owned(), kind }
     }
 
     async fn bill(&self, u: agenter::Usage) {
@@ -336,7 +311,6 @@ impl Meter {
             cache_read_tokens: u.cache_read_tokens,
             cache_write_tokens: u.cache_write_tokens,
         };
-        *self.spent.lock().expect("meter lock") += totals;
         let entry = UsageEntry {
             agent_id: self.agent_id.clone(),
             session_id: self.session_id.clone(),

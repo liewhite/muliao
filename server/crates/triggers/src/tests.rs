@@ -160,6 +160,7 @@ impl World {
                 precheck,
             })
             .await
+            .map(|v| v.trigger)
     }
 
     async fn get(&self, id: TriggerId) -> Trigger {
@@ -167,7 +168,8 @@ impl World {
     }
 
     async fn status(&self, id: TriggerId) -> Value {
-        serde_json::from_str(&self.svc().view(self.get(id).await).await.unwrap().kind.status_json()).unwrap()
+        serde_json::from_str(&self.svc().views(vec![self.get(id).await]).await.unwrap().remove(0).kind.status_json())
+            .unwrap()
     }
 
     /// 这个触发器开出的会话：(id, 标题)，按建立顺序
@@ -509,17 +511,18 @@ async fn update_rederives_only_on_real_changes_and_reenabling() {
         prompt: Some(Prompt::parse("new").unwrap()),
         ..Update::default()
     };
-    let u = w.svc().update(t.id, same).await.unwrap();
+    let u = w.svc().update(t.id, same).await.unwrap().trigger;
     assert_eq!((u.prompt.as_str(), u.faults.len(), &u.mode), ("new", 1, &t.mode));
     // 停用再启用：出错清掉
     w.svc().update(t.id, Update { enabled: Some(false), ..Update::default() }).await.unwrap();
-    let u = w.svc().update(t.id, Update { enabled: Some(true), ..Update::default() }).await.unwrap();
+    let u = w.svc().update(t.id, Update { enabled: Some(true), ..Update::default() }).await.unwrap().trigger;
     assert!(u.enabled && u.faults.is_empty());
     // 改配置：按已存的种类解析，不合法的报输入错误
     let bad = Update { config: Some(json!({"at": "2030-01-01T00:00"})), ..Update::default() };
     assert_eq!(kind_of(w.svc().update(t.id, bad).await.unwrap_err()), ErrorKind::InvalidInput);
     // 去掉检查
-    let u = w.svc().update(t.id, Update { precheck: PrecheckChange::Remove, ..Update::default() }).await.unwrap();
+    let u =
+        w.svc().update(t.id, Update { precheck: PrecheckChange::Remove, ..Update::default() }).await.unwrap().trigger;
     assert!(u.precheck.is_none());
     assert!(w.svc().run(t.id).await.unwrap().is_some());
 }

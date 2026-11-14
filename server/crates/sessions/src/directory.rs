@@ -187,14 +187,20 @@ pub(crate) fn threads_named_in(c: &Connection, parent_id: &SessionId, thread: &T
     query(c, "parent_session_id = ?1 AND thread = ?2 ORDER BY created_at, id", params![parent_id, thread])
 }
 
-/// 会话列表的筛选：按 agent、来源、发送方身份、关键字；都不给就是全部会话。
+/// 会话列表的筛选：按 agent、来源、关键字；都不给就是全部会话。
 #[derive(Debug, Clone, Default)]
 pub struct Listing {
     pub agent_id: Option<AgentId>,
-    pub origins: Option<Vec<Origin>>,
-    pub sender: Option<Sender>,
+    pub from: Option<ListedFrom>,
     /// 标题或任一条消息的可搜索文字含有它（不区分 ASCII 大小写）
     pub keyword: Option<String>,
+}
+
+/// 按来源筛：几种来源之一，或某一个发送方（如某个触发器）发起的。两者只能选一种。
+#[derive(Debug, Clone)]
+pub enum ListedFrom {
+    Origins(Vec<Origin>),
+    Sender(Sender),
 }
 
 impl Listing {
@@ -205,17 +211,20 @@ impl Listing {
             values.push(a.to_string());
             conditions.push("agent_id = ?".into());
         }
-        if let Some(origins) = &self.origins {
-            conditions.push(format!("origin IN ({})", placeholders(origins.len().max(1))));
-            if origins.is_empty() {
-                values.push(String::new());
+        match &self.from {
+            None => {}
+            Some(ListedFrom::Origins(origins)) => {
+                conditions.push(format!("origin IN ({})", placeholders(origins.len().max(1))));
+                if origins.is_empty() {
+                    values.push(String::new());
+                }
+                values.extend(origins.iter().map(Origin::to_string));
             }
-            values.extend(origins.iter().map(Origin::to_string));
-        }
-        if let Some(s) = &self.sender {
-            conditions.push("origin = ? AND origin_ref = ?".into());
-            values.push(s.origin().to_string());
-            values.push(s.reference());
+            Some(ListedFrom::Sender(s)) => {
+                conditions.push("origin = ? AND origin_ref = ?".into());
+                values.push(s.origin().to_string());
+                values.push(s.reference());
+            }
         }
         if let Some(k) = &self.keyword {
             conditions.push(format!("(title LIKE ? ESCAPE '\\' OR id IN ({SESSIONS_MENTIONING}))"));

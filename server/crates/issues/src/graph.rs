@@ -7,7 +7,7 @@ use rusqlite::{Connection, params, params_from_iter};
 use serde::{Deserialize, Serialize};
 
 use crate::model::Status;
-use muliao_platform::db::Tx;
+use muliao_platform::db::{Tx, placeholders};
 use muliao_platform::errors::{Result, invalid};
 use muliao_platform::ids::IssueId;
 
@@ -115,17 +115,13 @@ pub(crate) fn check_batch(items: &[(Option<&str>, &[Upstream])]) -> Result<()> {
     Ok(())
 }
 
-fn marks(n: usize) -> String {
-    vec!["?"; n].join(", ")
-}
-
 /// 一批 issue 的上游与下游（带对方的当前状态）：两次查询，与 issue 数无关。
 pub fn links_in(c: &Connection, issue_ids: &[IssueId]) -> Result<BTreeMap<IssueId, Links>> {
     let mut links: BTreeMap<IssueId, Links> = issue_ids.iter().map(|&i| (i, Links::default())).collect();
     if issue_ids.is_empty() {
         return Ok(links);
     }
-    let m = marks(issue_ids.len());
+    let m = placeholders(issue_ids.len());
     let sides = [
         (
             format!(
@@ -178,7 +174,7 @@ pub(crate) fn set_depends_on_in(
     let existing: BTreeSet<IssueId> = if wanted.is_empty() {
         BTreeSet::new()
     } else {
-        let mut stmt = c.prepare(&format!("SELECT id FROM issues WHERE id IN ({})", marks(wanted.len())))?;
+        let mut stmt = c.prepare(&format!("SELECT id FROM issues WHERE id IN ({})", placeholders(wanted.len())))?;
         stmt.query_map(params_from_iter(&wanted), |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
     };
     let missing: Vec<String> = wanted.iter().filter(|u| !existing.contains(u)).map(|u| format!("#{u}")).collect();

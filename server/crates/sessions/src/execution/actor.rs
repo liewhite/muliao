@@ -100,10 +100,19 @@ pub(crate) fn should_run(queued: &[Mail], latest: Option<&RunRecord>, at: &Posit
     !at.waiting_for_answers()
 }
 
+/// 手动压缩的结局。停止是用户要的结果，不是错误；真失败（模型调用失败等）走 `Err`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManualCompaction {
+    /// 做完了：steps 是压缩的步数，0 是保留窗口之外没有可压缩的
+    Compacted { steps: usize },
+    /// 压缩中用户点了停止，这一批作废
+    Stopped,
+}
+
 enum Command {
     Wake,
     Stop(oneshot::Sender<Result<Halted>>),
-    Compact(oneshot::Sender<Result<usize>>),
+    Compact(oneshot::Sender<Result<ManualCompaction>>),
     Retry(oneshot::Sender<Result<()>>),
 }
 
@@ -142,7 +151,7 @@ impl Actors {
         });
         let weak = Arc::downgrade(&actors.inner);
         tokio::spawn(async move {
-            let beats = Arc::new(Mutex::new(CheckBeats::default()));
+            let mut beats = CheckBeats::default();
             loop {
                 tokio::time::sleep(TICK).await;
                 let Some(inner) = weak.upgrade() else { return };
@@ -150,7 +159,7 @@ impl Actors {
                 if let Err(e) = wakeups::deliver_due(&core.d.db, &core.d.waker, core.d.tz).await {
                     tracing::error!(error = %e, "delivering due wake-ups failed");
                 }
-                if let Err(e) = check_threads(&core.d.db, &core.d.waker, &beats).await {
+                if let Err(e) = check_threads(&core.d.db, &core.d.waker, &mut beats).await {
                     tracing::error!(error = %e, "checking delegated threads failed");
                 }
             }
@@ -187,8 +196,8 @@ impl Actors {
         rx.await.map_err(|_| broken("the session actor went away while stopping"))?
     }
 
-    /// 手动压缩，做完才返回压缩的步数（0 是保留窗口之外没有可压缩的）。会话在跑、在压缩，或压缩中被停止时 Conflict。
-    pub(crate) async fn compact(&self, session_id: &SessionId) -> Result<usize> {
+    /// 手动压缩，做完（或被停止）才返回。会话在跑、在压缩时 Conflict。
+    pub(crate) async fn compact(&self, session_id: &SessionId) -> Result<ManualCompaction> {
         let (tx, rx) = oneshot::channel();
         self.send(session_id, Command::Compact(tx));
         rx.await.map_err(|_| broken("the session actor went away while compacting"))?
@@ -465,7 +474,7 @@ async fn reopen(core: &Core, id: &SessionId) -> Result<()> {
         .await
 }
 
-fn refuse_compaction_while_running(reply: oneshot::Sender<Result<usize>>) {
+fn refuse_compaction_while_running(reply: oneshot::Sender<Result<ManualCompaction>>) {
     let _ = reply.send(Err(conflict(
         "the session is running; it compacts automatically when its context grows over the threshold, \
          compact by hand after the run ends",
@@ -473,12 +482,12 @@ fn refuse_compaction_while_running(reply: oneshot::Sender<Result<usize>>) {
 }
 
 /// 没在跑时的手动压缩，期间收到停止就丢掉它（没提交的这一批作废；写事务在写线程上，不会被打断一半），回复发起压缩的一方
-/// 「已停止」，再照常执行停止事务。
+/// [`ManualCompaction::Stopped`]，再照常执行停止事务。
 async fn compact_until_stopped(
     inner: &Arc<Inner>,
     id: &SessionId,
     rx: &mut mpsc::UnboundedReceiver<Command>,
-    reply: oneshot::Sender<Result<usize>>,
+    reply: oneshot::Sender<Result<ManualCompaction>>,
 ) {
     let stop = {
         let compaction = compact(&inner.core, id);
@@ -486,7 +495,7 @@ async fn compact_until_stopped(
         loop {
             tokio::select! {
                 r = &mut compaction => {
-                    let _ = reply.send(r);
+                    let _ = reply.send(r.map(|steps| ManualCompaction::Compacted { steps }));
                     return;
                 }
                 cmd = rx.recv() => match cmd {
@@ -500,7 +509,7 @@ async fn compact_until_stopped(
         // 离开这个块时压缩被丢掉
     };
     tracing::info!(session_id = %id, "manual compaction stopped");
-    let _ = reply.send(Err(conflict("compaction stopped")));
+    let _ = reply.send(Ok(ManualCompaction::Stopped));
     let halted = halt(&inner.core, id, Vec::new(), Actors::stop_thread(Arc::downgrade(inner))).await;
     let _ = stop.send(halted);
 }

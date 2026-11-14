@@ -122,7 +122,6 @@ async fn create_trigger(
     State(s): State<AppState>,
     Json(body): Json<TriggerCreate>,
 ) -> ApiResult<(StatusCode, axum::Json<TriggerOut>)> {
-    let t = &s.services.triggers;
     let spec = NewSpec {
         name: body.name,
         agent_id: body.agent_id,
@@ -130,8 +129,7 @@ async fn create_trigger(
         config: body.config,
         precheck: body.precheck,
     };
-    let created = t.create(spec).await?;
-    Ok((StatusCode::CREATED, axum::Json(TriggerOut::of(t.view(created).await?))))
+    Ok((StatusCode::CREATED, axum::Json(TriggerOut::of(s.services.triggers.create(spec).await?))))
 }
 
 /// 只修改给出的字段。precheck 给出 null 表示去掉前置检查，不出现表示不变。
@@ -159,15 +157,13 @@ async fn update_trigger(
     Path(trigger_id): Path<TriggerId>,
     Json(body): Json<TriggerPatch>,
 ) -> ApiResult<axum::Json<TriggerOut>> {
-    let t = &s.services.triggers;
     let precheck = match body.precheck {
         None => PrecheckChange::Keep,
         Some(None) => PrecheckChange::Remove,
         Some(Some(p)) => PrecheckChange::Set(p),
     };
     let update = Update { prompt: body.prompt, config: body.config, enabled: body.enabled, precheck };
-    let updated = t.update(trigger_id, update).await?;
-    Ok(axum::Json(TriggerOut::of(t.view(updated).await?)))
+    Ok(axum::Json(TriggerOut::of(s.services.triggers.update(trigger_id, update).await?)))
 }
 
 #[utoipa::path(delete, path = "/api/triggers/{trigger_id}", tag = "triggers",

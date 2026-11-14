@@ -149,7 +149,7 @@ pub(crate) fn is_no_progress(text: &str) -> bool {
 pub const TICK: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// 运行中检查的节拍：每项工作上一次检查的时刻（还没检查过的以工作开始的时刻算）。只是节拍，重启后从开始的时刻重新算。
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CheckBeats<K: Ord + Clone> {
     last: BTreeMap<K, chrono::DateTime<chrono::Utc>>,
 }

@@ -2165,7 +2165,7 @@
         "tags": [
           "sessions"
         ],
-        "summary": "手动压缩上下文，做完才返回（几秒到几十秒）。没有可压缩的（都在保留的最近几步里）时什么都不变。会话在运行（运行中超阈值\n会自动压缩）、已在压缩，或压缩中被停止时 409；模型调用失败时报错，之前写下的批次保留。",
+        "summary": "手动压缩上下文，做完或被停止才返回（几秒到几十秒）。会话在运行（运行中超阈值会自动压缩）或已在压缩时 409；模型调用\n失败时报错，之前写下的批次保留。",
         "operationId": "compact",
         "parameters": [
           {
@@ -2179,7 +2179,15 @@
           }
         ],
         "responses": {
-          "204": {},
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompactOut"
+                }
+              }
+            }
+          },
           "404": {
             "content": {
               "application/json": {
@@ -3735,13 +3743,6 @@
   },
   "components": {
     "schemas": {
-      "Access": {
-        "type": "string",
-        "enum": [
-          "read",
-          "write"
-        ]
-      },
       "Activity": {
         "allOf": [
           {
@@ -4769,7 +4770,7 @@
             ],
             "properties": {
               "access": {
-                "$ref": "#/components/schemas/Access"
+                "$ref": "#/components/schemas/ToolAccess"
               },
               "admin": {
                 "type": "boolean",
@@ -5136,6 +5137,47 @@
             "type": "string"
           }
         }
+      },
+      "CompactOut": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "做完了",
+            "required": [
+              "steps",
+              "outcome"
+            ],
+            "properties": {
+              "steps": {
+                "type": "integer",
+                "description": "压缩的步数；0 是都在保留的最近几步里，没有可压缩的",
+                "minimum": 0
+              },
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "compacted"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "压缩中用户点了停止，这一批作废",
+            "required": [
+              "outcome"
+            ],
+            "properties": {
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "stopped"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "手动压缩的结局"
       },
       "CompactionOut": {
         "type": "object",
@@ -8730,10 +8772,10 @@
         "type": "string",
         "description": "存成文件的四种：可以新建、改、删、转移 owner（记忆不转移）。",
         "enum": [
-          "skill",
           "mcp",
+          "memory",
           "secret",
-          "memory"
+          "skill"
         ]
       },
       "StreamConfig": {
@@ -8843,6 +8885,14 @@
         ],
         "description": "会话开出的一个 thread：子会话与它的名字（与 origin 里的同一个，列 thread 时不用再按来源收窄）。"
       },
+      "ToolAccess": {
+        "type": "string",
+        "description": "内置工具读还是写（界面、get_agent 展示）。",
+        "enum": [
+          "read",
+          "write"
+        ]
+      },
       "ToolOut": {
         "type": "object",
         "description": "一个内置工具（当前配置下注册的，工具自己声明读写与是否管理类），在规则里写作 `tool:<name>`。",
@@ -8856,7 +8906,7 @@
             "type": "string"
           },
           "access": {
-            "$ref": "#/components/schemas/Access"
+            "$ref": "#/components/schemas/ToolAccess"
           },
           "admin": {
             "type": "boolean",

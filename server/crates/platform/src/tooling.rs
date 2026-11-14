@@ -76,7 +76,8 @@ impl RunScope {
 }
 
 /// 内置工具读还是写（界面、get_agent 展示）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase")]
 pub enum ToolAccess {
     Read,
     Write,

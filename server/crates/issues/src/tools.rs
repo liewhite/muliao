@@ -369,14 +369,14 @@ impl Tool<RunScope> for IssueCreate {
         let keys: Vec<Option<String>> = new.iter().map(|i| i.key.clone()).collect();
         let created = self.0.create_many(by(&ctx), new).await?;
         if a.issues.is_empty() {
-            return Ok(agenter::tool::text(format!("created issue #{}", created[0].id)));
+            return Ok(agenter::tool::text(format!("created issue #{}", created[0].issue.id)));
         }
         let lines: Vec<String> = created
             .iter()
             .zip(keys)
             .map(|(i, key)| match key {
-                Some(k) => format!("#{} (key {k}): {}", i.id, i.title),
-                None => format!("#{}: {}", i.id, i.title),
+                Some(k) => format!("#{} (key {k}): {}", i.issue.id, i.issue.title),
+                None => format!("#{}: {}", i.issue.id, i.issue.title),
             })
             .collect();
         Ok(agenter::tool::text(format!("created issues:\n{}", lines.join("\n"))))
@@ -487,7 +487,7 @@ impl Tool<RunScope> for IssueUpdate {
             assignee,
             depends_on: a.depends_on,
         };
-        let issue = self.0.update(by(&ctx), a.issue_id, patch).await?;
+        let issue = self.0.update(by(&ctx), a.issue_id, patch).await?.issue;
         Ok(agenter::tool::text(format!("updated issue #{} (status: {})", issue.id, issue.status)))
     }
 }
