@@ -1,19 +1,24 @@
-//! 网页搜索与抓取（配置了 `[web]` 才有）。[`WebProvider`] 是 web 工具（[`tools`]）依赖的唯一接口，具体服务是它的实现，
-//! 由配置 `[web].type` 选择（[`build`]）。网页内容是不可信输入（docs/architecture.md 第 15 节）。
+//! 网页搜索与抓取（配置了 `[web]` 才有）。web 工具（[`tools`]）经 [`DeepSeekWeb`] 完成（现在只有这一种服务，配置
+//! `[web].type` 选它，见 [`build`]）。网页内容是不可信输入（docs/architecture.md 第 15 节）。
 //!
 //! 各服务自己的输入限制（query 长度、条数上限、URL 规则）以服务端校验为唯一来源，这里不重复一份：服务端拒绝时把它的
 //! 原因交还模型修正。
+//!
+//! 搜索、抓取没有交回结果时按平台的错误分类（[`muliao_platform::errors::Error`]）报，由工具层按统一规则处理：
+//! - 领域错误（InvalidInput）：输入被服务拒绝（模型改了再试），或页面经服务和直连都拿不到（原因里写着两边各自的原因，
+//!   由模型决定稍后重试、换 URL 还是改用浏览器）；交还模型。
+//! - 暂时性的外部服务错误：服务暂时不可用（连不上、超时、429、5xx），稍后重试。
+//! - 非暂时性的外部服务错误：配置或账户问题（key 无效、余额不足）、契约之外的响应，模型改不了，让这一轮失败可见。
 
 pub mod config;
 mod deepseek;
 mod direct;
 pub mod tools;
 
+pub use crate::deepseek::DeepSeekWeb;
 use std::sync::Arc;
 
 use crate::config::{WebConfig, WebProviderType};
-use futures::future::BoxFuture;
-use muliao_platform::errors::Result;
 use serde::{Deserialize, Serialize};
 
 /// 交给模型的是它的 JSON；界面展示时从那段 JSON 还原（Deserialize）。
@@ -36,20 +41,10 @@ pub struct Page {
     pub content: String,
 }
 
-/// 搜索、抓取没有交回结果时按平台的错误分类（[`muliao_platform::errors::Error`]）报，由工具层按统一规则处理：
-/// - 领域错误（InvalidInput）：输入被服务拒绝（模型改了再试），或页面经服务和直连都拿不到（原因里写着两边各自的原因，
-///   由模型决定稍后重试、换 URL 还是改用浏览器）；交还模型。
-/// - 暂时性的外部服务错误：服务暂时不可用（连不上、超时、429、5xx），稍后重试。
-/// - 非暂时性的外部服务错误：配置或账户问题（key 无效、余额不足）、契约之外的响应，模型改不了，让这一轮失败可见。
-pub trait WebProvider: Send + Sync {
-    fn search<'a>(&'a self, query: &'a str, limit: u32) -> BoxFuture<'a, Result<Vec<SearchHit>>>;
-    fn fetch<'a>(&'a self, url: &'a str) -> BoxFuture<'a, Result<Page>>;
-}
-
-/// 按配置选实现。`client` 是共用的出站 HTTP 客户端（由组合根创建；要跟随重定向，即 reqwest 的默认设置）。
-pub fn build(cfg: &WebConfig, client: reqwest::Client) -> Arc<dyn WebProvider> {
+/// 按配置建。`client` 是共用的出站 HTTP 客户端（由组合根创建；要跟随重定向，即 reqwest 的默认设置）。
+pub fn build(cfg: &WebConfig, client: reqwest::Client) -> Arc<DeepSeekWeb> {
     match cfg.kind {
-        WebProviderType::Deepseek => Arc::new(deepseek::DeepSeekWeb::new(
+        WebProviderType::Deepseek => Arc::new(DeepSeekWeb::new(
             cfg.api_key.expose(),
             cfg.base_url.as_deref().unwrap_or(deepseek::BASE_URL),
             client,

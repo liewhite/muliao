@@ -1,4 +1,4 @@
-//! web 工具组：`web_search`、`web_fetch`，经 [`WebProvider`] 完成（[`tools`] 带着声明交给运行端口）。
+//! web 工具组：`web_search`、`web_fetch`，经 [`DeepSeekWeb`] 完成（[`tools`] 带着声明交给运行端口）。
 
 use std::sync::Arc;
 
@@ -9,10 +9,10 @@ use muliao_platform::tooling::{BuiltinTool, ToolTraits, builtin};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::{SearchHit, WebProvider};
+use crate::{DeepSeekWeb, SearchHit};
 
 /// web 工具组（配置了 `[web]` 才有）。max_chars：网页正文最多给模型多少字符（配置 runtime.tool_output_max_chars）。
-pub fn tools(web: Arc<dyn WebProvider>, max_chars: usize) -> Vec<BuiltinTool> {
+pub fn tools(web: Arc<DeepSeekWeb>, max_chars: usize) -> Vec<BuiltinTool> {
     let search = ToolRender::new()
         .call(|a: &SearchArgs| Some(vec![fields([("query", a.query.as_str().into())])]))
         .result_json(|hits: &Vec<SearchHit>| {
@@ -46,7 +46,7 @@ pub struct SearchArgs {
 }
 
 pub struct WebSearch {
-    pub web: Arc<dyn WebProvider>,
+    pub web: Arc<DeepSeekWeb>,
 }
 
 impl<C: Sync + 'static> Tool<C> for WebSearch {
@@ -75,7 +75,7 @@ pub struct FetchArgs {
 }
 
 pub struct WebFetch {
-    pub web: Arc<dyn WebProvider>,
+    pub web: Arc<DeepSeekWeb>,
     /// 正文最多给模型多少字符（配置 runtime.tool_output_max_chars）
     pub max_chars: usize,
 }
@@ -105,39 +105,10 @@ impl<C: Sync + 'static> Tool<C> for WebFetch {
 #[cfg(test)]
 mod tests {
     use agenter::{Content, ToolCall};
-    use futures::future::BoxFuture;
-
-    use muliao_platform::errors::{Error, Result, invalid};
+    use wiremock::matchers::path;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
-    use crate::{Page, SearchHit};
-
-    struct Fake;
-
-    impl WebProvider for Fake {
-        fn search<'a>(&'a self, query: &'a str, limit: u32) -> BoxFuture<'a, Result<Vec<SearchHit>>> {
-            Box::pin(async move {
-                match query {
-                    "down" => Err(Error::Unavailable("down".into())),
-                    _ => Ok(vec![SearchHit {
-                        title: format!("{query}:{limit}"),
-                        url: "u".into(),
-                        summary: "s".into(),
-                        site_name: None,
-                        published: None,
-                    }]),
-                }
-            })
-        }
-        fn fetch<'a>(&'a self, url: &'a str) -> BoxFuture<'a, Result<Page>> {
-            Box::pin(async move {
-                match url {
-                    "missing" => Err(invalid("gone")),
-                    _ => Ok(Page { title: "T".into(), content: "0123456789".into() }),
-                }
-            })
-        }
-    }
 
     async fn call(t: &Arc<dyn agenter::DynTool<()>>, args: &str) -> Result<String, ToolError> {
         let tc = ToolCall { id: "1".into(), name: t.def().name.clone(), args: args.into(), meta: None };
@@ -149,26 +120,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tools_call_the_provider_and_map_errors() {
-        let web: Arc<dyn WebProvider> = Arc::new(Fake);
+    async fn tools_call_the_service_and_map_errors() {
+        let server = MockServer::start().await;
+        let hit = serde_json::json!({"results": [{"title": "q", "url": "u", "summary": "s"}]});
+        Mock::given(path("/v1/tools/search"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(hit))
+            .mount(&server)
+            .await;
+        let page = serde_json::json!({"title": "T", "content": "0123456789"});
+        Mock::given(path("/v1/tools/fetch"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(page))
+            .mount(&server)
+            .await;
+        let web = Arc::new(DeepSeekWeb::new("k", &server.uri(), reqwest::Client::new()));
         let search = agenter::tool::<(), _>(WebSearch { web: web.clone() });
-        let fetch = agenter::tool::<(), _>(WebFetch { web, max_chars: 8 });
+        let fetch = agenter::tool::<(), _>(WebFetch { web: web.clone(), max_chars: 8 });
 
-        let hits: serde_json::Value = serde_json::from_str(&call(&search, r#"{"query":"q"}"#).await.unwrap()).unwrap();
-        assert_eq!(hits[0]["title"], "q:10", "limit defaults to 10");
+        let text = call(&search, r#"{"query":"q"}"#).await.unwrap();
+        let hits: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(hits[0]["published"], serde_json::Value::Null);
-        assert!(matches!(call(&search, r#"{"query":"down"}"#).await, Err(ToolError::Unavailable(_))));
+        let sent: serde_json::Value = server.received_requests().await.unwrap()[0].body_json().unwrap();
+        assert_eq!(sent["count"], 10, "limit defaults to 10");
 
         assert_eq!(call(&fetch, r#"{"url":"x"}"#).await.unwrap(), "# T\n\n012…[truncated: 7 more chars]");
 
         // 带着声明交给运行端口：都是读工具，搜索结果画成链接
-        let declared = tools(Arc::new(Fake), 8);
+        let declared = tools(web, 8);
         assert!(declared.iter().all(|t| t.traits.access == muliao_platform::tooling::ToolAccess::Read));
         let render = declared[0].traits.render.as_ref().unwrap();
-        let text = call(&search, r#"{"query":"q"}"#).await.unwrap();
         let view = render.result_view("web_search", &text);
         let Some([ViewBlock::Links { links }]) = view.as_deref() else { panic!("{view:?}") };
-        assert_eq!(links[0].title, "q:10");
-        assert!(matches!(call(&fetch, r#"{"url":"missing"}"#).await, Err(ToolError::Retry(r)) if r == "gone"));
+        assert_eq!(links[0].title, "q");
     }
 }

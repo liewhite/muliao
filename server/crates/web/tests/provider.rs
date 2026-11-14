@@ -4,17 +4,17 @@ use std::sync::Arc;
 
 use muliao_platform::errors::Error;
 use muliao_web::config::WebConfig;
-use muliao_web::{Page, WebProvider};
+use muliao_web::{DeepSeekWeb, Page};
 use wiremock::matchers::{body_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-fn provider_at(base_url: &str) -> Arc<dyn WebProvider> {
+fn provider_at(base_url: &str) -> Arc<DeepSeekWeb> {
     let cfg: WebConfig =
         toml::from_str(&format!("type = \"deepseek\"\napi_key = \"k\"\nbase_url = \"{base_url}/\"")).unwrap();
     muliao_web::build(&cfg, reqwest::Client::new())
 }
 
-async fn provider(server: &MockServer) -> Arc<dyn WebProvider> {
+async fn provider(server: &MockServer) -> Arc<DeepSeekWeb> {
     provider_at(&server.uri())
 }
 

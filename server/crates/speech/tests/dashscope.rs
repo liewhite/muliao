@@ -1,7 +1,6 @@
 //! 百炼转写的离线测试：用 wiremock 扮演百炼。真调一次见 tests/live.rs（默认跳过）。
 
 use muliao_platform::ids::MediaType;
-use std::sync::Arc;
 
 use muliao_platform::errors::Error;
 use muliao_platform::errors::ErrorKind;
@@ -10,7 +9,7 @@ use muliao_speech::config::TranscriptionConfig;
 use wiremock::matchers::{body_partial_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-fn transcriber(base_url: &str, extra: &str) -> Arc<dyn Transcriber> {
+fn transcriber(base_url: &str, extra: &str) -> Transcriber {
     let cfg: TranscriptionConfig = toml::from_str(&format!(
         "type = \"dashscope\"\napi_key = \"k\"\nmodel = \"asr\"\nbase_url = \"{base_url}/\"\n{extra}"
     ))

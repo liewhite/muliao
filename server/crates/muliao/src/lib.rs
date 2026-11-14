@@ -151,7 +151,7 @@ pub async fn assemble(config: Config, web_dir: PathBuf) -> anyhow::Result<App> {
     let usage = Arc::new(UsageLog::new(db.clone(), tz));
     let history = History::new(db.clone(), tz);
     let web = config.web.as_ref().map(|c| muliao_web::build(c, client.clone()));
-    let transcriber = config.transcription.as_ref().map(|c| muliao_speech::build(c, client.clone()));
+    let transcriber = config.transcription.as_ref().map(|c| Arc::new(muliao_speech::build(c, client.clone())));
 
     // ---- 会话领域先给出的端口（别的领域与工具要用） ----
     let (waker, wakes) = Waker::channel();

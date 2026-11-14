@@ -2,13 +2,12 @@
 
 use std::time::Duration;
 
-use futures::future::BoxFuture;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
 use muliao_platform::errors::{Error, Result, invalid};
 
-use crate::{Page, SearchHit, WebProvider, direct, host_of};
+use crate::{Page, SearchHit, direct, host_of};
 
 pub const BASE_URL: &str = "https://api.deepseek.com";
 /// 抓取要等对方站点，给足时间；挂起时及时报错，而不是一直占着这次运行
@@ -79,6 +78,7 @@ impl Failure {
     }
 }
 
+/// 网页搜索与抓取服务（DeepSeek）。出错怎么分类见 crate 文档。
 pub struct DeepSeekWeb {
     client: reqwest::Client,
     base_url: String,
@@ -137,46 +137,42 @@ fn preview(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).chars().take(500).collect()
 }
 
-impl WebProvider for DeepSeekWeb {
-    fn search<'a>(&'a self, query: &'a str, limit: u32) -> BoxFuture<'a, Result<Vec<SearchHit>>> {
-        Box::pin(async move {
-            let resp: SearchResponse = self
-                .post("search", serde_json::json!({"query": query, "count": limit}))
-                .await
-                .map_err(Failure::into_error)?;
-            tracing::info!(provider = "deepseek", count = resp.results.len(), "web search");
-            Ok(resp
-                .results
-                .into_iter()
-                .map(|r| SearchHit {
-                    title: r.title,
-                    url: r.url,
-                    summary: r.summary,
-                    site_name: r.site_name,
-                    published: r.date,
-                })
-                .collect())
-        })
+impl DeepSeekWeb {
+    pub async fn search(&self, query: &str, limit: u32) -> Result<Vec<SearchHit>> {
+        let resp: SearchResponse = self
+            .post("search", serde_json::json!({"query": query, "count": limit}))
+            .await
+            .map_err(Failure::into_error)?;
+        tracing::info!(provider = "deepseek", count = resp.results.len(), "web search");
+        Ok(resp
+            .results
+            .into_iter()
+            .map(|r| SearchHit {
+                title: r.title,
+                url: r.url,
+                summary: r.summary,
+                site_name: r.site_name,
+                published: r.date,
+            })
+            .collect())
     }
 
-    fn fetch<'a>(&'a self, url: &'a str) -> BoxFuture<'a, Result<Page>> {
-        Box::pin(async move {
-            let failure = match self.post::<FetchResponse>("fetch", serde_json::json!({"url": url})).await {
-                Ok(page) => {
-                    tracing::info!(provider = "deepseek", host = %host_of(url), bytes = page.content.len(), "web fetch");
-                    return Ok(Page { title: page.title, content: page.content });
-                }
-                Err(f) => f,
-            };
-            // 服务说目标抓不到，或服务本身暂时不可用：都直连一次作备用（#309）。400/413（URL 本身无效）与 key、余额
-            // 等配置问题不在此列，照旧交还模型或让这一轮失败
-            if failure.target_unavailable() {
-                return direct::fetch(&self.client, url, &failure.reason).await;
+    pub async fn fetch(&self, url: &str) -> Result<Page> {
+        let failure = match self.post::<FetchResponse>("fetch", serde_json::json!({"url": url})).await {
+            Ok(page) => {
+                tracing::info!(provider = "deepseek", host = %host_of(url), bytes = page.content.len(), "web fetch");
+                return Ok(Page { title: page.title, content: page.content });
             }
-            match failure.into_error() {
-                e if e.is_transient() => direct::fetch(&self.client, url, &e.to_string()).await,
-                other => Err(other),
-            }
-        })
+            Err(f) => f,
+        };
+        // 服务说目标抓不到，或服务本身暂时不可用：都直连一次作备用（#309）。400/413（URL 本身无效）与 key、余额
+        // 等配置问题不在此列，照旧交还模型或让这一轮失败
+        if failure.target_unavailable() {
+            return direct::fetch(&self.client, url, &failure.reason).await;
+        }
+        match failure.into_error() {
+            e if e.is_transient() => direct::fetch(&self.client, url, &e.to_string()).await,
+            other => Err(other),
+        }
     }
 }

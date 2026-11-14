@@ -63,7 +63,7 @@ pub struct Services {
     /// agent 在工作目录 site/ 下写的网页
     pub sites: Arc<Sites>,
     /// 语音转文字；没配置 [transcription] 时为 None，界面不显示语音输入
-    pub transcriber: Option<Arc<dyn Transcriber>>,
+    pub transcriber: Option<Arc<Transcriber>>,
 }
 
 /// HTTP 层自己的配置。

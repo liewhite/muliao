@@ -9,7 +9,6 @@ muliao-platform = { workspace = true }
 agenter = { workspace = true }
 dom_smoothie = "0.19"
 encoding_rs = "0.8"
-futures = { workspace = true }
 reqwest = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true }
