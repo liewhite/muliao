@@ -172,7 +172,7 @@ async fn world() -> World {
     let secrets = Arc::new(Secrets::new(source.clone(), vault));
     let tz = chrono_tz::Asia::Shanghai;
     let (waker, wakes) = Waker::channel();
-    let (stopper, stopper_binder) = Stopper::pending();
+    let (stopper, stops) = Stopper::channel();
     let keys = VapidKeys::load_or_create(&dir.path().join("vapid.pem")).unwrap();
     let push = Push::new(db.clone(), keys, "mailto:t@example.com".into(), reqwest::Client::new(), Retry::default());
     let notifications = Notifications::new(db.clone(), Arc::new(Bus::new(16)), Arc::new(push));
@@ -209,8 +209,7 @@ async fn world() -> World {
         tz,
         bus,
     });
-    let actors = Actors::start(core, wakes);
-    stopper_binder.bind(actors.clone());
+    let actors = Actors::start(core, wakes, stops);
     actors.resume().await.unwrap();
     World { _dir: dir, db, script, _server: server, board, _actors: actors, me, other, notifications }
 }

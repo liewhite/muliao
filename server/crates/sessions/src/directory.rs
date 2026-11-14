@@ -127,7 +127,7 @@ pub fn keyed_in(c: &Connection, sender: Sender, agent_id: &AgentId) -> Result<Op
     Ok(query(c, filter, params![sender.origin().to_string(), sender.reference(), agent_id])?.pop())
 }
 
-/// 同一规则（[`keyed_in`]）一次查多个发送方给各个 agent 开的会话，按调用方给每个发送方起的键返回：(键, agent id) -> 会话。
+/// 同一规则（[`keyed_in`]）一次查多个发送方给各个 agent 开的会话，按调用方给每个发送方起的键返回：(键, agent id) -> 会话。每个发送方一个键。
 pub fn keyed_among<K: Ord + Copy>(c: &Connection, senders: &[(K, Sender)]) -> Result<BTreeMap<(K, AgentId), Session>> {
     let mut found = BTreeMap::new();
     if senders.is_empty() {

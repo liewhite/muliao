@@ -469,18 +469,20 @@ function MailContent({ mail, pending, ctx }: { mail: Mail; pending: boolean; ctx
         <EventNote lead={<SourceLabel source={mail.source} ctx={ctx} />} text={mail.content} />
       )
     case 'answer':
-      switch (mail.result.tool) {
-        case 'ask_user':
-          return <AnsweredQuestions answers={mail.result.result.answers} />
-        case 'approval':
-          return <QuestionNote text={CHOICE_TEXT[mail.result.result.choice]} />
-        case 'ask_agent':
-          return (
-            <EventNote lead={<span className="shrink-0 text-foreground">agent 的回答</span>} text={mail.result.result.text} />
-          )
-      }
+      return <AnswerContent result={mail.result} />
     case 'message':
       return <UserBubble text={mail.content} attachments={mail.attachments} pending={pending} />
+  }
+}
+
+function AnswerContent({ result }: { result: Extract<Mail, { kind: 'answer' }>['result'] }) {
+  switch (result.tool) {
+    case 'ask_user':
+      return <AnsweredQuestions answers={result.result.answers} />
+    case 'approval':
+      return <QuestionNote text={CHOICE_TEXT[result.result.choice]} />
+    case 'ask_agent':
+      return <EventNote lead={<span className="shrink-0 text-foreground">agent 的回答</span>} text={result.result.text} />
   }
 }
 

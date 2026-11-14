@@ -241,7 +241,7 @@ async fn world() -> World {
     let secrets = Arc::new(Secrets::new(source.clone(), vault));
     let tz = chrono_tz::Asia::Shanghai;
     let (waker, wakes) = Waker::channel();
-    let (stopper, stopper_binder) = Stopper::pending();
+    let (stopper, stops) = Stopper::channel();
     let release = Arc::new(tokio::sync::Notify::new());
     let mut tools = crate::tools::tools(db.clone(), waker.clone(), stopper.clone(), tz);
     tools.push(builtin(Slow(release.clone()), ToolTraits::read()));
@@ -298,8 +298,7 @@ async fn world() -> World {
         tz,
         bus: bus.clone(),
     });
-    let actors = Actors::start(core, wakes);
-    stopper_binder.bind(actors.clone());
+    let actors = Actors::start(core, wakes, stops);
     actors.resume().await.unwrap();
     let service = SessionService::new(db.clone(), waker, actors.clone(), events, live, toolbox.renders(), 1_000_000);
     World {

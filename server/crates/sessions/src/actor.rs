@@ -58,6 +58,31 @@ impl Waker {
     }
 }
 
+/// 停止会话的句柄：可以先于 actor 系统构造（工具先于 actor 系统：工具 → 运行端口 → actor 系统），停止请求经通道交给
+/// [`Actors::start`] 起的分发循环，在那之前发出的请求排在通道里。
+#[derive(Clone)]
+pub struct Stopper {
+    tx: mpsc::UnboundedSender<StopRequest>,
+}
+
+/// 一个停止请求：会话与回信口。
+pub struct StopRequest(SessionId, oneshot::Sender<Result<Halted>>);
+
+impl Stopper {
+    /// 一个停止句柄与它的接收端（交给 [`Actors::start`]）。
+    pub fn channel() -> (Self, mpsc::UnboundedReceiver<StopRequest>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        (Self { tx }, rx)
+    }
+
+    /// 停止会话：返回时停止事务已提交（同 [`Actors::stop`]）。
+    pub async fn stop(&self, session_id: &SessionId) -> Result<Halted> {
+        let (reply, answer) = oneshot::channel();
+        self.tx.send(StopRequest(session_id.to_owned(), reply)).map_err(|_| broken("the session actors are gone"))?;
+        answer.await.map_err(|_| broken("the session actor went away while stopping"))?
+    }
+}
+
 /// 唤醒规则（唯一一处）：会话没有没结束的运行时，要不要开始一次。信箱里有排着的信，并且不是这两种情况：
 /// - 排着的信都已经交给过最近一次最终失败的运行：由它被手动重试、或之后新到的信唤醒的运行处理，不因同一批信反复失败；
 /// - 停在挂起的调用上、还不能继续：等回答或新消息，事件等它们一起交给模型。
@@ -92,14 +117,25 @@ pub struct Actors {
 }
 
 impl Actors {
-    /// 起叫醒的分发与节拍循环。之后调 [`Actors::resume`] 接着跑重启前没做完的。
-    pub fn start(core: Arc<Core>, mut wakes: mpsc::UnboundedReceiver<SessionId>) -> Self {
+    /// 起叫醒与停止的分发和节拍循环。之后调 [`Actors::resume`] 接着跑重启前没做完的。
+    pub fn start(
+        core: Arc<Core>,
+        mut wakes: mpsc::UnboundedReceiver<SessionId>,
+        mut stops: mpsc::UnboundedReceiver<StopRequest>,
+    ) -> Self {
         let actors = Actors { inner: Arc::new(Inner { core, actors: Mutex::default() }) };
         let weak = Arc::downgrade(&actors.inner);
         tokio::spawn(async move {
             while let Some(id) = wakes.recv().await {
                 let Some(inner) = weak.upgrade() else { return };
                 Actors { inner }.send(&id, Command::Wake);
+            }
+        });
+        let weak = Arc::downgrade(&actors.inner);
+        tokio::spawn(async move {
+            while let Some(StopRequest(id, reply)) = stops.recv().await {
+                let Some(inner) = weak.upgrade() else { return };
+                Actors { inner }.send(&id, Command::Stop(reply));
             }
         });
         let weak = Arc::downgrade(&actors.inner);

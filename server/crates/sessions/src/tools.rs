@@ -2,8 +2,8 @@
 //! 都只经会话领域的接口做事；挂起的调用（ask_user、ask_agent）交回 `ToolError::Defer`，运行停在这里，回答作为结果交回
 //! （[`crate::pending`]）。
 
-use muliao_platform::ids::{CallId, SessionId};
-use std::sync::{Arc, OnceLock};
+use muliao_platform::ids::CallId;
+use std::sync::Arc;
 
 use agenter::{Tool, ToolCtx, ToolError, ToolOutput};
 use chrono::{DateTime, Utc};
@@ -17,7 +17,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::activity::WorkState;
-use crate::actor::{Actors, Waker};
+use crate::actor::Waker;
 use crate::answers::AskArgs;
 use crate::delegation::{Mode, send_in, threads_in};
 use crate::halt::Halted;
@@ -26,34 +26,9 @@ use crate::paused_calls::{self, Pause};
 use crate::thread_calls::Delegated;
 use crate::wakeups::{WAKE_ME, cancel_in, local_time, schedule_in};
 use crate::work::{check_interval, no_progress_hint};
-use muliao_platform::errors::{Error, Result, invalid, not_found};
+use muliao_platform::errors::{Error, invalid, not_found};
 
-/// 停止会话的入口，在 actor 系统起来之后接上（工具先于 actor 系统构造：工具 → 运行端口 → actor 系统）：组合根先拿到
-/// 一个待接的入口与接它的凭据（[`Stopper::pending`]），actor 系统起来后用凭据接一次（凭据被消耗，接不了第二次）。
-#[derive(Clone)]
-pub struct Stopper(Arc<OnceLock<Actors>>);
-
-/// 接上一个待接的 [`Stopper`] 的唯一凭据。
-pub struct StopperBinder(Arc<OnceLock<Actors>>);
-
-impl StopperBinder {
-    pub fn bind(self, actors: Actors) {
-        // 凭据只有一个且被消耗，接不了第二次
-        let _ = self.0.set(actors);
-    }
-}
-
-impl Stopper {
-    /// 一个待接的入口与接它的凭据。
-    pub fn pending() -> (Self, StopperBinder) {
-        let slot = Arc::new(OnceLock::new());
-        (Self(slot.clone()), StopperBinder(slot))
-    }
-
-    pub async fn stop(&self, session_id: &SessionId) -> Result<Halted> {
-        self.0.get().expect("session actors are started before any run").stop(session_id).await
-    }
-}
+pub use crate::actor::Stopper;
 
 pub(crate) const ASK_USER: &str = "ask_user";
 const ASK_AGENT: &str = "ask_agent";

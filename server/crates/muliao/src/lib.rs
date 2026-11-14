@@ -157,7 +157,7 @@ pub async fn assemble(config: Config, web_dir: PathBuf) -> anyhow::Result<App> {
 
     // ---- 会话领域先给出的端口（别的领域与工具要用） ----
     let (waker, wakes) = Waker::channel();
-    let (stopper, stopper_binder) = Stopper::pending();
+    let (stopper, stops) = Stopper::channel();
 
     // ---- 工作区 ----
     let home = std::env::home_dir().context("the service user has no home directory")?;
@@ -268,8 +268,7 @@ pub async fn assemble(config: Config, web_dir: PathBuf) -> anyhow::Result<App> {
         tz,
         bus: bus.clone(),
     });
-    let actors = Actors::start(core, wakes);
-    stopper_binder.bind(actors.clone());
+    let actors = Actors::start(core, wakes, stops);
     let sessions = SessionService::new(db.clone(), waker, actors.clone(), events, live, toolbox.renders(), threshold);
 
     let services = Services {

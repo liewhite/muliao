@@ -75,8 +75,16 @@ export type Mail = Schemas['SessionDetail']['mail'][number]
 /** 事件的来源：后台任务、thread 或到点唤醒（后端解析好的种类） */
 export type ItemSource = Schemas['EventSource']
 /** 同一来源的事件归在一起用的键 */
-export const sourceKey = (s: ItemSource): string =>
-  s.kind === 'job' ? `job:${s.job_id}` : s.kind === 'thread' ? `thread:${s.session_id}` : 'wake'
+export function sourceKey(s: ItemSource): string {
+  switch (s.kind) {
+    case 'job':
+      return `job:${s.job_id}`
+    case 'thread':
+      return `thread:${s.session_id}`
+    case 'wake':
+      return 'wake'
+  }
+}
 export type SessionDetail = Schemas['SessionDetail']
 export type LiveSegment = Schemas['LiveSegment']
 /** 会话在等的东西（按 kind 区分）：后台任务（job 字段带详情）、委派、到点唤醒、提问、等批准 */

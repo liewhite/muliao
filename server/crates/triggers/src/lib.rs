@@ -110,7 +110,7 @@ impl TriggerDomain {
         service::SESSION_NOTE
     }
 
-    /// 起激活机制（到期扫描、流式托管）。对外服务时调用一次（组合根的 `App::start` 消耗自身，调不了第二次）。
+    /// 起激活机制（到期扫描、流式托管）。对外服务时调用一次：生产里由组合根的 `App::start` 消耗 App 保证只起一次。
     pub fn start(&self) -> Activation {
         Activation { loops: [self.due.clone().run(), self.streams.clone().run()], streams: self.streams.clone() }
     }
