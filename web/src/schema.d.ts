@@ -842,7 +842,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** 登记的触发方式。 */
+        /** 全部触发方式。 */
         get: operations["trigger_kinds"];
         put?: never;
         post?: never;
@@ -1461,6 +1461,16 @@ export interface components {
             threshold_tokens: number;
         };
         /**
+         * @description 5 段 cron 表达式（分 时 日 月 周），去掉了首尾空白。只经 [`CronExpr::new`] 构造（反序列化也走它）：能解析、
+         *     会到期。带秒的 6 段会每秒到期，所以不收。
+         */
+        CronExpr: string;
+        /**
+         * Format: double
+         * @description 防抖窗口的秒数：0 到 3600。只经 [`Debounce::new`] 构造（反序列化也走它），换成时长不会失败。
+         */
+        Debounce: number;
+        /**
          * @description 用户对一次等批准的调用的决定。pin：用户批准的是哪一份（请求批准时工具定下、记在挂起记录里的指纹），批准时
          *     交回工具比对。迁移来的旧信件没有它或为 null（都已处理，不会再交给运行），读入时当作空指纹：工具给的指纹不会是空的，
          *     比对对不上。
@@ -1754,33 +1764,25 @@ export interface components {
          * @enum {string}
          */
         JobStatus: "running" | "exited" | "killed" | "interrupted";
-        KindInDoc: {
+        /**
+         * @description 触发方式的种类。
+         * @enum {string}
+         */
+        Kind: "schedule" | "once" | "stream";
+        /** @description 给界面与模型看的配置与运行状态（不含凭证）。 */
+        KindView: {
             config: components["schemas"]["ScheduleConfig"];
+            status: components["schemas"]["ScheduleStatus"];
             /** @enum {string} */
             kind: "schedule";
         } | {
             config: components["schemas"]["OnceConfig"];
+            status: components["schemas"]["OnceStatus"];
             /** @enum {string} */
             kind: "once";
         } | {
             config: components["schemas"]["StreamConfig"];
-            /** @enum {string} */
-            kind: "stream";
-        };
-        /** @description config 与 status（这种方式自己给出的运行状态，不含凭证；读不出时为 null，原因在 status_error）按 kind 区分。 */
-        KindOutDoc: {
-            config: components["schemas"]["ScheduleConfig"];
-            status: components["schemas"]["ScheduleStatus"] | null;
-            /** @enum {string} */
-            kind: "schedule";
-        } | {
-            config: components["schemas"]["OnceConfig"];
-            status: components["schemas"]["OnceStatus"] | null;
-            /** @enum {string} */
-            kind: "once";
-        } | {
-            config: components["schemas"]["StreamConfig"];
-            status: components["schemas"]["StreamStatus"] | null;
+            status: components["schemas"]["StreamStatus"];
             /** @enum {string} */
             kind: "stream";
         };
@@ -1907,6 +1909,20 @@ export interface components {
             /** @description content 的版本：保存时交回 */
             version: string;
         };
+        /** @description 建、改时交进来的配置（未知字段报错）。 */
+        NewConfig: {
+            config: components["schemas"]["ScheduleConfig"];
+            /** @enum {string} */
+            kind: "schedule";
+        } | {
+            config: components["schemas"]["OnceInput"];
+            /** @enum {string} */
+            kind: "once";
+        } | {
+            config: components["schemas"]["StreamConfig"];
+            /** @enum {string} */
+            kind: "stream";
+        };
         /** @description 一条通知（读模型）。 */
         Notification: {
             /** Format: int64 */
@@ -1928,7 +1944,12 @@ export interface components {
             notification_id: number;
             session_id: components["schemas"]["SessionId"] | null;
         };
+        /** @description 存下的配置：带服务端时区的到期时间。 */
         OnceConfig: {
+            at: string;
+        };
+        /** @description 交进来的配置：时间可以不带时区。 */
+        OnceInput: {
             at: string;
         };
         OnceStatus: {
@@ -1940,7 +1961,7 @@ export interface components {
         /** @description 一个前置检查（存在触发器上，也是工具与接口的参数）。 */
         Precheck: {
             /** @description bash command run before each firing. */
-            command: string;
+            command: components["schemas"]["Script"];
             /** @description Vault keys exposed to the command as env vars. */
             secrets?: string[];
             /**
@@ -1951,6 +1972,8 @@ export interface components {
         };
         /** @enum {string} */
         Priority: "none" | "urgent" | "high" | "medium" | "low";
+        /** @description 交给 agent 的说明：不能是空的。只经 [`Prompt::new`] 构造（反序列化也走它）。 */
+        Prompt: string;
         PushKeys: {
             p256dh: string;
             auth: string;
@@ -2143,13 +2166,18 @@ export interface components {
             item: components["schemas"]["Item"];
         };
         ScheduleConfig: {
-            cron: string;
+            cron: components["schemas"]["CronExpr"];
         };
         /** @description 界面与模型看到的状态。 */
         ScheduleStatus: {
             next_run_at: string;
             skipped: components["schemas"]["SkippedFires"] | null;
         };
+        /**
+         * @description agent 写的一条 bash 命令（前置检查、流式命令）：1 到 4000 个字符、不全是空白。只经 [`Script::new`] 构造（反序列化
+         *     也走它），拿到的就是合法的。
+         */
+        Script: string;
         ScriptGrantOut: {
             /** Format: int64 */
             id: number;
@@ -2333,10 +2361,9 @@ export interface components {
          */
         StoredKind: "skill" | "mcp" | "secret" | "memory";
         StreamConfig: {
-            command: string;
+            command: components["schemas"]["Script"];
             secrets?: string[];
-            /** Format: double */
-            debounce_seconds?: number;
+            debounce_seconds?: components["schemas"]["Debounce"];
         };
         StreamStatus: {
             /**
@@ -2372,11 +2399,11 @@ export interface components {
             /** @description 听不到人说话时为空字符串 */
             text: string;
         };
-        /** @description 新建触发器：kind 与 config 按方式区分（有默认值的配置项可以不填），config 原样交给触发方式校验、补默认值。 */
-        TriggerCreate: components["schemas"]["KindInDoc"] & {
+        /** @description 新建触发器：kind 与 config 按方式区分（有默认值的配置项可以不填）。 */
+        TriggerCreate: components["schemas"]["NewConfig"] & {
             name: string;
             agent_id: components["schemas"]["AgentId"];
-            prompt: string;
+            prompt: components["schemas"]["Prompt"];
             precheck?: components["schemas"]["Precheck"] | null;
         };
         /** @description 一条出错：来源、原因。 */
@@ -2385,12 +2412,12 @@ export interface components {
             error: string;
         };
         TriggerKindOut: {
-            name: string;
+            name: components["schemas"]["Kind"];
             /** @description 什么时候触发、config 的格式 */
             description: string;
         };
         /** @description 一个触发器：各方式共有的字段，加上按 kind 区分的 config 与 status。 */
-        TriggerOut: components["schemas"]["KindOutDoc"] & {
+        TriggerOut: components["schemas"]["KindView"] & {
             /** Format: int64 */
             id: number;
             name: string;
@@ -2403,8 +2430,6 @@ export interface components {
             /** Format: date-time */
             last_fired_at: string | null;
             last_session_id: components["schemas"]["SessionId"] | null;
-            /** @description 被自动停用的原因（重新启用时清除） */
-            disabled_reason: string | null;
             /** @description 脚本出错：前置检查失败、流式命令反复退出 */
             faults: components["schemas"]["TriggerFault"][];
             /**
@@ -2412,12 +2437,10 @@ export interface components {
              * @description 结束的时间：不为空表示它不会再触发了（一次性触发器跑完），只能查看与删除
              */
             finished_at: string | null;
-            /** @description 存下的运行状态坏了、读不出时的原因（这时 status 为 null） */
-            status_error: string | null;
         };
         /** @description 只修改给出的字段。precheck 给出 null 表示去掉前置检查，不出现表示不变。 */
         TriggerPatch: {
-            prompt?: string | null;
+            prompt?: components["schemas"]["Prompt"] | null;
             /** @description 修改请求不带 kind：按已存的 kind 校验，格式同新建时这种方式的 config */
             config?: Record<string, unknown> | null;
             enabled?: boolean | null;
