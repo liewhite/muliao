@@ -7,14 +7,15 @@ use std::sync::Arc;
 use crate::access::{Actor, Grants, Reach, Source, WriteScope, grants_for, holders_of, reach_of, write_scope};
 use crate::access_file;
 use crate::kinds::{Shown, StoredKind};
-use crate::rules::{Action, AgentRules, BUILTIN_ROLES, Role, Rule, RuleSource, Rules};
+use crate::roles::{AgentRules, Role, RoleName, RuleSource};
+use crate::rules::{Action, Rule, Rules};
 use crate::source::AssetSource;
 use crate::tree::{Owner, Snapshot};
 use muliao_platform::errors::{Result, conflict, invalid, not_found};
 
 #[derive(Debug, Clone)]
 pub struct RoleSpec {
-    pub name: String,
+    pub name: RoleName,
     pub description: String,
     pub rules: Rules,
 }
@@ -44,7 +45,11 @@ pub struct UsedAsset {
 /// 预览还没建的 agent 或角色时，在 plan 里给它的那一节用的名字（只算、不写）
 const PREVIEW_SECTION: &str = "preview";
 
-fn role<'s>(snapshot: &'s Snapshot, name: &str) -> Result<&'s Role> {
+fn preview_name() -> RoleName {
+    RoleName::parse(PREVIEW_SECTION).expect("the preview section name is a valid role name")
+}
+
+fn role<'s>(snapshot: &'s Snapshot, name: &RoleName) -> Result<&'s Role> {
     snapshot.roles.get(name).ok_or_else(|| not_found(format!("role {name:?} not found")))
 }
 
@@ -124,10 +129,9 @@ impl Distribution {
             Some((id, name)) => (id.clone(), name.clone()),
             None => (crate::naming::new_agent_id(), crate::naming::AgentName::stored(PREVIEW_SECTION.to_owned())),
         };
-        // plan 与下面的计算都从同一份快照出发：plan 认的角色快照里都有
         access_file::plan(&snapshot, |doc| access_file::set_agent_rules(doc, &section, &name, rules))?;
         // 还没建的 agent 没有自己的资源，只看规则
-        let grants = Grants::new(agent_id.cloned(), rules.sources(&snapshot.roles));
+        let grants = Grants::new(agent_id.cloned(), snapshot.roles.bind(rules)?.sources());
         Ok(reach_of(&snapshot, &grants))
     }
 
@@ -137,14 +141,14 @@ impl Distribution {
         Ok(self.source.snapshot().await?.roles.values().cloned().collect())
     }
 
-    pub async fn get(&self, name: &str) -> Result<Role> {
+    pub async fn get(&self, name: &RoleName) -> Result<Role> {
         Ok(role(&*self.source.snapshot().await?, name)?.clone())
     }
 
     pub async fn create(&self, spec: &RoleSpec) -> Result<Role> {
         {
             let w = self.source.writing().await?;
-            if w.snapshot.roles.contains_key(&spec.name) {
+            if w.snapshot.roles.get(&spec.name).is_some() {
                 return Err(conflict(format!("role {:?} already exists", spec.name)));
             }
             write_role(&w.snapshot, spec)?;
@@ -156,7 +160,7 @@ impl Distribution {
     /// 可以（固定的部分不变）。改动从带这个角色的 agent 的下一次运行起生效。
     pub async fn patch(
         &self,
-        name: &str,
+        name: &RoleName,
         description: Option<String>,
         allow: Option<Vec<Rule>>,
         deny: Option<Vec<Rule>>,
@@ -165,7 +169,7 @@ impl Distribution {
             let w = self.source.writing().await?;
             let current = role(&w.snapshot, name)?;
             let spec = RoleSpec {
-                name: name.to_owned(),
+                name: name.clone(),
                 description: description.unwrap_or_else(|| current.description.clone()),
                 rules: Rules::new(
                     allow.unwrap_or_else(|| current.rules.allow.clone()),
@@ -177,8 +181,8 @@ impl Distribution {
         self.get(name).await
     }
 
-    pub async fn delete(&self, name: &str) -> Result<()> {
-        if BUILTIN_ROLES.contains(&name) {
+    pub async fn delete(&self, name: &RoleName) -> Result<()> {
+        if name.builtin() {
             return Err(invalid(format!("role {name:?} is built in and cannot be deleted")));
         }
         let w = self.source.writing().await?;
@@ -199,19 +203,19 @@ impl Distribution {
         Ok(snapshot.roles.values().map(|r| role_view(&snapshot, r)).collect())
     }
 
-    pub async fn view(&self, name: &str) -> Result<RoleView> {
+    pub async fn view(&self, name: &RoleName) -> Result<RoleView> {
         let snapshot = self.source.snapshot().await?;
         Ok(role_view(&snapshot, role(&snapshot, name)?))
     }
 
     /// 角色（None 为还没建的）按还没保存的规则能用的（界面预览），与写入时同样校验（只 plan、不写）；内置角色加上它固定
     /// 的部分。
-    pub async fn preview_role(&self, name: Option<&str>, rules: &Rules) -> Result<Reach> {
+    pub async fn preview_role(&self, name: Option<&RoleName>, rules: &Rules) -> Result<Reach> {
         let snapshot = self.source.snapshot().await?;
         let current = name.map(|n| role(&snapshot, n)).transpose()?;
         // 还没建的没有名字与描述：都不影响规则的校验
         let spec = RoleSpec {
-            name: current.map_or(PREVIEW_SECTION, |r| r.name.as_str()).to_owned(),
+            name: current.map_or_else(preview_name, |r| r.name.clone()),
             description: current.map_or(PREVIEW_SECTION, |r| r.description.as_str()).to_owned(),
             rules: rules.clone(),
         };

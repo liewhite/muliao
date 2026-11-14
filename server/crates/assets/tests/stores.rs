@@ -14,7 +14,8 @@ use muliao_assets::formats::mcp::{McpConfig, McpTransport};
 use muliao_assets::kinds::{Kind, StoredKind};
 use muliao_assets::mcp::McpRegistry;
 use muliao_assets::memory::{MemoryAccess, MemoryStore};
-use muliao_assets::rules::{AgentRules, Rules};
+use muliao_assets::roles::AgentRules;
+use muliao_assets::rules::Rules;
 use muliao_assets::secrets::{SecretUse, Secrets};
 use muliao_assets::skills::SkillStore;
 use muliao_assets::tree::Owner;
@@ -148,7 +149,7 @@ async fn catalog_transfer_and_roles() {
     let roles = Distribution::new(w.source.clone());
     roles
         .create(&RoleSpec {
-            name: "team".into(),
+            name: role("team"),
             description: "团队".into(),
             rules: Rules::new(vec!["use:skill:s".parse().unwrap()], vec![]),
         })
@@ -156,27 +157,27 @@ async fn catalog_transfer_and_roles() {
         .unwrap();
     let all = catalog.catalog().await.unwrap();
     let s = all.iter().find(|c| c.kind() == Kind::Skill && c.name == "s").unwrap();
-    assert_eq!(s.roles, vec!["team".to_owned()]);
+    assert_eq!(s.roles, vec![role("team")]);
     assert!(!s.shared, "a role held by nobody does not share it");
     assert!(matches!(all[0].detail, Detail::Tool(_)));
     // 能不能删和删除入口是同一条规则：skill 能删；内置工具、全局记忆、私有记忆不能
     assert!(s.deletable && !all[0].deletable);
     let memories: Vec<_> = all.iter().filter(|c| c.kind() == Kind::Memory).collect();
     assert!(memories.iter().any(|m| m.name == "global") && memories.iter().all(|m| !m.deletable));
-    assert!(roles.delete("base").await.is_err());
+    assert!(roles.delete(&role("base")).await.is_err());
     let w2 = w.service.clone();
-    w2.update(&a, muliao_assets::service::AgentPatch { roles: Some(vec!["team".into()]), ..Default::default() })
+    w2.update(&a, muliao_assets::service::AgentPatch { roles: Some(vec![role("team")]), ..Default::default() })
         .await
         .unwrap();
-    assert!(roles.delete("team").await.unwrap_err().to_string().contains("used by agents"));
-    let view = roles.view("team").await.unwrap();
+    assert!(roles.delete(&role("team")).await.unwrap_err().to_string().contains("used by agents"));
+    let view = roles.view(&role("team")).await.unwrap();
     assert_eq!(view.holders, vec![a.clone()]);
     assert_eq!(view.reach.asset_patterns(), vec!["skill:s".to_owned()]);
     let used = roles.assets(&a).await.unwrap();
     let s_used = used.iter().find(|u| u.name == "s").unwrap();
-    assert!(s_used.source.own && s_used.source.roles == vec!["team".to_owned()]);
+    assert!(s_used.source.own && s_used.source.roles == vec![role("team")]);
     let preview =
-        roles.preview_agent(None, &AgentRules { roles: vec!["admin".into()], ..Default::default() }).await.unwrap();
+        roles.preview_agent(None, &AgentRules { roles: vec![role("admin")], ..Default::default() }).await.unwrap();
     assert!(preview.tool_names().contains(&"create_agent"));
     assert!(roles.preview_role(None, &Rules::new(vec!["use:skill:typo".parse().unwrap()], vec![])).await.is_err());
 
@@ -234,4 +235,8 @@ async fn watch_reports_visible_changes() {
     let n = 1 + drain(&mut rx).await;
     assert!((1..=2).contains(&n), "a burst is reported once or twice, got {n}");
     task.abort();
+}
+
+fn role(name: &str) -> muliao_assets::roles::RoleName {
+    muliao_assets::roles::RoleName::parse(name).unwrap()
 }

@@ -9,7 +9,8 @@ use muliao_assets::distribution::{RoleSpec, RoleView, UsedAsset};
 use muliao_assets::formats::agent_file::{AgentConfig, Grouping, Thinking};
 use muliao_assets::formats::mcp::McpTransport;
 use muliao_assets::kinds::Shown;
-use muliao_assets::rules::{AgentRules, RuleList, Rules, ToolSpec, texts};
+use muliao_assets::roles::{AgentRules, RoleName};
+use muliao_assets::rules::{RuleList, Rules, ToolSpec, texts};
 use muliao_assets::service::{AgentPatch, AgentSpec, AgentView};
 use muliao_platform::config::ModelRef;
 use muliao_platform::errors::DomainError;
@@ -73,7 +74,7 @@ pub struct AgentOut {
     pub name: String,
     /// null：它的目录没加载（agent.toml 坏了等，见资源问题），不能运行，修好文件或删掉它
     pub config: Option<AgentConfigOut>,
-    pub roles: Vec<String>,
+    pub roles: Vec<RoleName>,
     pub allow: Vec<String>,
     pub deny: Vec<String>,
     pub created_at: DateTime<Utc>,
@@ -117,7 +118,7 @@ pub struct AgentDefaults {
     pub name: String,
     pub description: String,
     pub model: ModelIo,
-    pub roles: Vec<String>,
+    pub roles: Vec<RoleName>,
     pub allow: Vec<String>,
     pub deny: Vec<String>,
     pub thinking: Thinking,
@@ -189,7 +190,7 @@ impl ReachOut {
 pub struct AgentPreviewIn {
     /// 已有的 agent（它自己的资产总能用）；null 为还没建的
     pub agent_id: Option<AgentId>,
-    pub roles: Vec<String>,
+    pub roles: Vec<RoleName>,
     pub allow: RuleList,
     pub deny: RuleList,
 }
@@ -206,7 +207,7 @@ async fn preview_agent(State(s): State<AppState>, Json(body): Json<AgentPreviewI
 
 #[derive(Serialize, ToSchema)]
 pub struct RoleOut {
-    pub name: String,
+    pub name: RoleName,
     pub description: String,
     /// 内置角色（base、admin）代码里固定的规则，不可改
     pub fixed_allow: Vec<String>,
@@ -227,8 +228,8 @@ impl RoleOut {
     fn of(v: RoleView) -> Self {
         let RoleView { role, reach, holders } = v;
         RoleOut {
-            builtin: role.builtin(),
-            assignable: role.assignable(),
+            builtin: role.name.builtin(),
+            assignable: role.name.assignable(),
             name: role.name,
             description: role.description,
             fixed_allow: texts(&role.fixed.allow),
@@ -249,7 +250,7 @@ async fn list_roles(State(s): State<AppState>) -> ApiResult<axum::Json<Vec<RoleO
 #[derive(Deserialize, ToSchema)]
 pub struct RolePreviewIn {
     /// 已有的角色（内置的加上固定规则）；null 为还没建的
-    pub name: Option<String>,
+    pub name: Option<RoleName>,
     pub allow: RuleList,
     pub deny: RuleList,
 }
@@ -259,7 +260,7 @@ pub struct RolePreviewIn {
     responses((status = 200, body = ReachOut), (status = 422, body = ErrorOut)))]
 async fn preview_role(State(s): State<AppState>, Json(body): Json<RolePreviewIn>) -> ApiResult<axum::Json<ReachOut>> {
     let reach =
-        s.services.distribution.preview_role(body.name.as_deref(), &Rules::new(body.allow.0, body.deny.0)).await?;
+        s.services.distribution.preview_role(body.name.as_ref(), &Rules::new(body.allow.0, body.deny.0)).await?;
     Ok(axum::Json(ReachOut::of(reach)))
 }
 
@@ -270,11 +271,12 @@ pub struct RoleIn {
     pub deny: RuleList,
 }
 
-#[utoipa::path(post, path = "/api/roles/{name}", tag = "roles", request_body = RoleIn,
+#[utoipa::path(post, path = "/api/roles/{name}", tag = "roles",
+    params(("name" = RoleName, Path, description = "角色名")), request_body = RoleIn,
     responses((status = 201, body = RoleOut), (status = 409, body = ErrorOut), (status = 422, body = ErrorOut)))]
 async fn create_role(
     State(s): State<AppState>,
-    Path(name): Path<String>,
+    Path(name): Path<RoleName>,
     Json(body): Json<RoleIn>,
 ) -> ApiResult<(StatusCode, axum::Json<RoleOut>)> {
     let d = &s.services.distribution;
@@ -299,11 +301,12 @@ pub struct RoleUpdate {
 }
 
 /// 改角色的描述与可编辑的规则（内置角色也可以，固定的部分不变）；从带它的 agent 的下一次运行起生效。
-#[utoipa::path(patch, path = "/api/roles/{name}", tag = "roles", request_body = RoleUpdate,
+#[utoipa::path(patch, path = "/api/roles/{name}", tag = "roles",
+    params(("name" = RoleName, Path, description = "角色名")), request_body = RoleUpdate,
     responses((status = 200, body = RoleOut), (status = 404, body = ErrorOut), (status = 422, body = ErrorOut)))]
 async fn update_role(
     State(s): State<AppState>,
-    Path(name): Path<String>,
+    Path(name): Path<RoleName>,
     Json(body): Json<RoleUpdate>,
 ) -> ApiResult<axum::Json<RoleOut>> {
     let d = &s.services.distribution;
@@ -315,8 +318,9 @@ async fn update_role(
 
 /// 有 agent 引用时 409。
 #[utoipa::path(delete, path = "/api/roles/{name}", tag = "roles",
+    params(("name" = RoleName, Path, description = "角色名")),
     responses((status = 204), (status = 409, body = ErrorOut), (status = 422, body = ErrorOut)))]
-async fn delete_role(State(s): State<AppState>, Path(name): Path<String>) -> ApiResult<StatusCode> {
+async fn delete_role(State(s): State<AppState>, Path(name): Path<RoleName>) -> ApiResult<StatusCode> {
     s.services.distribution.delete(&name).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -335,7 +339,7 @@ pub struct AgentCreate {
     pub model: Option<ModelIo>,
     /// 角色，不含每个 agent 隐含的 base
     #[serde(default)]
-    pub roles: Vec<String>,
+    pub roles: Vec<RoleName>,
     #[serde(default)]
     pub allow: RuleList,
     #[serde(default)]
@@ -384,7 +388,7 @@ pub struct AgentUpdate {
     #[serde(default)]
     pub model: Option<ModelIo>,
     #[serde(default)]
-    pub roles: Option<Vec<String>>,
+    pub roles: Option<Vec<RoleName>>,
     #[serde(default)]
     pub allow: Option<RuleList>,
     #[serde(default)]
@@ -434,7 +438,7 @@ async fn delete_agent(State(s): State<AppState>, Path(agent_id): Path<AgentId>) 
 #[derive(Serialize, ToSchema)]
 pub struct AssetSourceOut {
     pub own: bool,
-    pub roles: Vec<String>,
+    pub roles: Vec<RoleName>,
     pub allow: bool,
 }
 

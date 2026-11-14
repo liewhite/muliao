@@ -27,22 +27,14 @@ use std::path::{Path, PathBuf};
 use toml_edit::{Array, DocumentMut, Item, Table, TableLike, Value};
 
 use crate::kinds::Kind;
-use crate::naming::{AgentName, is_agent_id, validate_slug};
-use crate::rules::{ADMIN, AgentRules, BASE, Role, Roles, Rule, RuleList, Rules, ToolTable, fixed_rules, texts};
+use crate::naming::{AgentName, is_agent_id};
+use crate::roles::{AgentRules, BoundRules, RoleName, Roles};
+use crate::rules::{Rule, RuleList, Rules, ToolTable, builtin_roles, texts};
 use crate::tree::{Expect, Snapshot};
 use muliao_platform::errors::{Result, conflict, invalid};
 use serde::Deserialize;
 
 pub const ACCESS_FILE: &str = "access.toml";
-
-/// 内置角色没写描述时的描述
-fn builtin_description(name: &str) -> Option<&'static str> {
-    match name {
-        BASE => Some("每个 agent 都有：全部非管理工具与全局记忆，加上这里收录的 skill、MCP server、secret、记忆"),
-        ADMIN => Some("全部工具（含管理 agent 与角色），并且能改任何 AI 资源"),
-        _ => None,
-    }
-}
 
 /// 读出的一处只收窄的问题（引用了不存在的东西）。agent_id：与它相关的 agent（报给它），平台的为 None。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,7 +48,12 @@ pub struct AccessProblem {
 pub enum Access {
     /// 合法：全部角色、各 agent 的规则（按 id，没写的 agent 只有 base）、只收窄的问题，与读出它们的原文（没有文件
     /// 为 None）
-    Valid { roles: Roles, rules: BTreeMap<AgentId, AgentRules>, problems: Vec<AccessProblem>, text: Option<String> },
+    Valid {
+        roles: Box<Roles>,
+        rules: BTreeMap<AgentId, BoundRules>,
+        problems: Vec<AccessProblem>,
+        text: Option<String>,
+    },
     /// 读不出或不合法，整份作废：每一处的原因
     Invalid(Vec<String>),
 }
@@ -94,18 +91,7 @@ struct Parser<'a> {
     /// 形式不合法的各处：有一处整份就作废
     invalid: Vec<String>,
     roles: Roles,
-    rules: BTreeMap<AgentId, AgentRules>,
-}
-
-/// 内置角色，只有代码里固定的部分（access.toml 还没读成功过时就只有它们）。
-pub fn builtin_roles(tools: &ToolTable) -> Roles {
-    fixed_rules(tools)
-        .into_iter()
-        .map(|(name, fixed)| {
-            let description = builtin_description(name).unwrap_or_default().to_owned();
-            (name.to_owned(), Role { name: name.to_owned(), description, rules: Rules::default(), fixed })
-        })
-        .collect()
+    rules: BTreeMap<AgentId, BoundRules>,
 }
 
 /// 文件的样子：读入只经它（未知的表与键、类型不对、规则形式不对都在这里报出）。节按名字排。
@@ -171,7 +157,12 @@ impl<'a> Parser<'a> {
         if !self.invalid.is_empty() {
             return Access::Invalid(self.invalid);
         }
-        Access::Valid { roles: self.roles, rules: self.rules, problems: self.problems, text: text.map(str::to_owned) }
+        Access::Valid {
+            roles: Box::new(self.roles),
+            rules: self.rules,
+            problems: self.problems,
+            text: text.map(str::to_owned),
+        }
     }
 
     fn parse(mut self, text: Option<&str>) -> Access {
@@ -194,19 +185,24 @@ impl<'a> Parser<'a> {
 
     fn role(&mut self, name: &str, entry: StoredRole) {
         let what = format!("role {name:?}");
-        if let Err(e) = validate_slug("role", name) {
-            self.invalid(e.message);
-        }
+        let parsed = match RoleName::parse(name) {
+            Ok(n) => Some(n),
+            Err(e) => {
+                self.invalid(e.message);
+                None
+            }
+        };
         let mut description = entry.description.trim().to_owned();
         if description.is_empty() {
-            description = builtin_description(name).unwrap_or_default().to_owned();
+            description = parsed.as_ref().and_then(RoleName::default_description).unwrap_or_default().to_owned();
         }
         if description.is_empty() {
             self.invalid(format!("{what}: description must not be empty"));
         }
         let rules = Rules::new(self.patterns(entry.allow, &what, None), self.patterns(entry.deny, &what, None));
-        let fixed = self.roles.get(name).filter(|r| r.builtin()).map(|r| r.fixed.clone()).unwrap_or_default();
-        self.roles.insert(name.to_owned(), Role { name: name.to_owned(), description, rules, fixed });
+        if let Some(name) = parsed {
+            self.roles.define(name, description, rules);
+        }
     }
 
     fn agent(&mut self, id: &str, entry: StoredAgent) {
@@ -222,32 +218,37 @@ impl<'a> Parser<'a> {
         let agent_id = Some(AgentId::new(id)).filter(|a| self.agents.contains(a));
         let allow = self.patterns(entry.allow, &what, agent_id.clone());
         let deny = self.patterns(entry.deny, &what, agent_id.clone());
-        // 角色定义与对它的引用在同一个文件里：引用了没定义的角色是文件自相矛盾（拼错、手删了定义），跳过它会丢掉那个
-        // 角色的 deny，所以整份作废；写了隐含的 base 只是多余
-        let unknown: Vec<&String> = entry.roles.iter().filter(|r| !self.roles.contains_key(*r)).collect();
-        if !unknown.is_empty() {
-            self.invalid(format!("{what}: roles {unknown:?} are not defined in [roles]"));
+        let mut roles = Vec::new();
+        for raw in &entry.roles {
+            match RoleName::parse(raw) {
+                Ok(name) => roles.push(name),
+                Err(e) => self.invalid(format!("{what}: {}", e.message)),
+            }
         }
+        let implicit: Vec<RoleName> = roles.iter().filter(|r| !r.assignable()).cloned().collect();
+        // 角色定义与对它的引用在同一个文件里：引用了没定义的角色是文件自相矛盾（拼错、手删了定义），跳过它会丢掉那个
+        // 角色的 deny，所以整份作废；写了隐含的 base、写重复的只是多余
+        let bound = match self.roles.bind(&AgentRules { roles, allow, deny }) {
+            Ok(bound) => Some(bound),
+            Err(e) => {
+                self.invalid(format!("{what}: {} in [roles]", e.message));
+                None
+            }
+        };
         let Some(agent_id) = agent_id else {
             // 那个 agent 本来就跑不了（不存在或目录没加载），这一节暂时不起作用
             self.problem(format!("{what}: no loaded agent has this id"), None);
             return;
         };
-        let implicit: Vec<&String> =
-            entry.roles.iter().filter(|r| self.roles.get(*r).is_some_and(|role| !role.assignable())).collect();
         if !implicit.is_empty() {
             self.problem(
                 format!("{what}: roles {implicit:?} are implicit for every agent; skipped"),
                 Some(agent_id.clone()),
             );
         }
-        let mut kept = Vec::new();
-        for r in &entry.roles {
-            if self.roles.get(r).is_some_and(Role::assignable) && !kept.contains(r) {
-                kept.push(r.clone());
-            }
+        if let Some(bound) = bound {
+            self.rules.insert(agent_id, bound);
         }
-        self.rules.insert(agent_id, AgentRules { roles: kept, allow, deny });
     }
 
     /// 一个工具都匹配不上的只是引用了不存在的工具（留着也什么都不匹配），记一条问题；重复的去重。
@@ -439,7 +440,7 @@ fn distinct<T: Eq + std::hash::Hash + std::fmt::Display>(what: &str, values: &[T
     Ok(())
 }
 
-pub fn set_role(doc: &mut DocumentMut, name: &str, description: &str, rules: &Rules) -> Result<()> {
+pub fn set_role(doc: &mut DocumentMut, name: &RoleName, description: &str, rules: &Rules) -> Result<()> {
     distinct("rules", &rules.allow)?;
     distinct("rules", &rules.deny)?;
     let mut fields =
@@ -447,29 +448,32 @@ pub fn set_role(doc: &mut DocumentMut, name: &str, description: &str, rules: &Ru
     if !rules.deny.is_empty() {
         fields.push(("deny", FieldValue::List(texts(&rules.deny))));
     }
-    replace(section(doc, "roles"), name, rules_table(&fields));
+    replace(section(doc, "roles"), name.as_str(), rules_table(&fields));
     Ok(())
 }
 
-pub fn delete_role(doc: &mut DocumentMut, name: &str) {
-    section(doc, "roles").remove(name);
+pub fn delete_role(doc: &mut DocumentMut, name: &RoleName) {
+    section(doc, "roles").remove(name.as_str());
 }
 
 /// agent（id，名字写进行尾注释）的规则；全空时去掉这一节（只有 base）。roles 不能写 base（每个 agent 隐含），角色有没有
 /// 定义由 vet 查。
 pub fn set_agent_rules(doc: &mut DocumentMut, agent_id: &AgentId, name: &AgentName, rules: &AgentRules) -> Result<()> {
-    if rules.roles.iter().any(|r| r == BASE) {
-        return Err(invalid(format!("role {BASE:?} is implicit for every agent; do not list it in roles")));
+    if let Some(implicit) = rules.roles.iter().find(|r| !r.assignable()) {
+        return Err(invalid(format!("role {implicit:?} is implicit for every agent; do not list it in roles")));
     }
     distinct("roles", &rules.roles)?;
     distinct("rules", &rules.allow)?;
     distinct("rules", &rules.deny)?;
-    let fields: Vec<(&str, FieldValue<'_>)> =
-        [("roles", rules.roles.clone()), ("allow", texts(&rules.allow)), ("deny", texts(&rules.deny))]
-            .into_iter()
-            .filter(|(_, v)| !v.is_empty())
-            .map(|(k, v)| (k, FieldValue::List(v)))
-            .collect();
+    let fields: Vec<(&str, FieldValue<'_>)> = [
+        ("roles", rules.roles.iter().map(RoleName::to_string).collect()),
+        ("allow", texts(&rules.allow)),
+        ("deny", texts(&rules.deny)),
+    ]
+    .into_iter()
+    .filter(|(_, v)| !v.is_empty())
+    .map(|(k, v)| (k, FieldValue::List(v)))
+    .collect();
     let agents = section(doc, "agents");
     if fields.is_empty() {
         agents.remove(agent_id.as_str());
@@ -504,6 +508,10 @@ mod tests {
         Rule::parse(s).unwrap()
     }
 
+    fn role(s: &str) -> RoleName {
+        RoleName::parse(s).unwrap()
+    }
+
     #[test]
     fn reads_roles_and_agents() {
         let agents = BTreeSet::from([AgentId::new(A1)]);
@@ -522,11 +530,12 @@ allow = []
         let Access::Valid { roles, rules, problems, .. } = parse(Some(text), &agents, &tools()) else {
             panic!("valid")
         };
-        assert_eq!(roles.keys().collect::<Vec<_>>(), ["base", "admin", "trading"]);
-        assert_eq!(roles["base"].description, builtin_description("base").unwrap());
-        assert!(roles["base"].fixed.allow.contains(&rule("use:tool:read_file")));
-        assert!(!roles["base"].fixed.allow.contains(&rule("use:tool:create_agent")));
-        assert_eq!(rules[&AgentId::new(A1)].roles, ["trading"]);
+        assert_eq!(roles.values().map(|r| r.name.as_str()).collect::<Vec<_>>(), ["base", "admin", "trading"]);
+        let base = roles.base();
+        assert_eq!(base.description, RoleName::Base.default_description().unwrap());
+        assert!(base.fixed.allow.contains(&rule("use:tool:read_file")));
+        assert!(!base.fixed.allow.contains(&rule("use:tool:create_agent")));
+        assert_eq!(rules[&AgentId::new(A1)].written().roles, [role("trading")]);
         assert_eq!(problems.len(), 3, "{problems:?}");
 
         for bad in [
@@ -561,12 +570,12 @@ allow = []
     fn edits_keep_comments() {
         let mut doc: DocumentMut =
             "# 头注释\n[roles.r]\n# 角色注释\ndescription = \"d\"\nallow = []\n".parse().unwrap();
-        let rules = AgentRules { roles: vec!["r".into()], allow: vec![], deny: vec![] };
+        let rules = AgentRules { roles: vec![role("r")], allow: vec![], deny: vec![] };
         let name = |n: &str| AgentName::parse(n).unwrap();
         set_agent_rules(&mut doc, &AgentId::new(A1), &name("交易"), &rules).unwrap();
         set_role(
             &mut doc,
-            "s",
+            &role("s"),
             "desc",
             &Rules::new(vec![rule("use:skill:a"), rule("use:skill:b"), rule("use:skill:c")], vec![]),
         )
@@ -585,7 +594,7 @@ allow = []
         let Access::Valid { rules: back, .. } = parse(Some(&out), &BTreeSet::from([AgentId::new(A1)]), &tools()) else {
             panic!("valid")
         };
-        assert_eq!(back[&AgentId::new(A1)].roles, ["r"]);
+        assert_eq!(back[&AgentId::new(A1)].written().roles, [role("r")]);
         set_agent_rules(&mut doc, &AgentId::new(A1), &name("交易员"), &AgentRules::default()).unwrap();
         assert!(!doc.to_string().contains("交易员"));
         let x = name("x");
@@ -594,7 +603,7 @@ allow = []
                 &mut doc,
                 &AgentId::new(A1),
                 &x,
-                &AgentRules { roles: vec!["base".into()], ..Default::default() }
+                &AgentRules { roles: vec![RoleName::Base], ..Default::default() }
             )
             .is_err()
         );
@@ -603,7 +612,7 @@ allow = []
                 &mut doc,
                 &AgentId::new(A1),
                 &x,
-                &AgentRules { roles: vec!["r".into(), "r".into()], ..Default::default() }
+                &AgentRules { roles: vec![role("r"), role("r")], ..Default::default() }
             )
             .is_err()
         );

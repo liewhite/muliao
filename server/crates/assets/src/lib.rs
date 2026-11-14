@@ -26,6 +26,7 @@ pub mod mcp;
 pub mod memory;
 pub mod naming;
 pub mod prompt;
+pub mod roles;
 pub mod rules;
 pub mod run_assets;
 pub mod secrets;

@@ -17,7 +17,8 @@ use crate::access_file::{self, AccessEdit};
 use crate::agents::{self, AgentInfo, AgentNames};
 use crate::formats::agent_file::{self, AGENT_FILE, AgentConfig, AgentFile, Grouping, Thinking};
 use crate::naming::{AgentName, new_agent_id};
-use crate::rules::{AgentRules, Rule};
+use crate::roles::{AgentRules, RoleName};
+use crate::rules::Rule;
 use crate::run_assets::RunAssets;
 use crate::source::AssetSource;
 use crate::tree::{AgentDir, PRIVATE_MEMORY_FILE, Snapshot, move_to, remove};
@@ -40,7 +41,7 @@ pub struct AgentSpec {
 pub struct AgentPatch {
     pub name: Option<String>,
     pub config: AgentConfig,
-    pub roles: Option<Vec<String>>,
+    pub roles: Option<Vec<RoleName>>,
     pub allow: Option<Vec<Rule>>,
     pub deny: Option<Vec<Rule>>,
 }
@@ -56,7 +57,7 @@ pub struct AgentView {
 
 fn view_of(snapshot: &Snapshot, info: AgentInfo) -> AgentView {
     let config = snapshot.agents.get(&info.id).cloned();
-    let rules = snapshot.rules_of(&info.id);
+    let rules = snapshot.rules_of(&info.id).written();
     AgentView { info, config, rules }
 }
 
@@ -152,7 +153,7 @@ impl AgentService {
         self.source.check_agent(&file)?;
         let (id, n) = (agent_id.to_owned(), name.clone());
         self.db.read(move |c| agents::check_name_free_in(c, &n, Some(&id))).await?;
-        let before = w.snapshot.rules_of(agent_id);
+        let before = w.snapshot.rules_of(agent_id).written();
         let rules = AgentRules {
             roles: patch.roles.unwrap_or(before.roles),
             allow: patch.allow.unwrap_or(before.allow),

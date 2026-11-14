@@ -10,7 +10,7 @@ use muliao_assets::agents;
 use muliao_assets::formats::agent_file::{AgentConfig, Grouping, Thinking};
 use muliao_assets::kinds::StoredKind;
 use muliao_assets::lifecycle::{AgentLifecycle, ArchiveBlocker, DeletionHook};
-use muliao_assets::rules::AgentRules;
+use muliao_assets::roles::AgentRules;
 use muliao_assets::service::{AgentPatch, AgentSpec};
 use muliao_assets::tree::Owner;
 use muliao_platform::errors::Error;
@@ -74,7 +74,7 @@ async fn create_writes_files_rules_and_row() {
     })
     .await
     .unwrap();
-    let rules = AgentRules { roles: vec!["admin".into()], ..Default::default() };
+    let rules = AgentRules { roles: vec![role("admin")], ..Default::default() };
     assert!(again("dave", rules, None).await.is_err());
     assert!(!w.root().join("dave").exists());
     assert_eq!(read(w.root().join("platform/access.toml")), before);
@@ -103,7 +103,7 @@ async fn update_renames_and_rolls_back() {
     let text = read(access.clone());
     assert!(text.starts_with("# 人写的注释\n") && text.contains(&format!("[agents.{id}] # alice2\n")), "{text}");
     let view = w.service.view(&id).await.unwrap();
-    assert_eq!(view.rules.roles, vec!["admin".to_owned()]);
+    assert_eq!(view.rules.roles, vec![role("admin")]);
     assert_eq!(view.config.unwrap().file.description(), "新描述");
 
     // 只改大小写也行（同一个目录）
@@ -245,4 +245,8 @@ async fn failed_file_removal_is_reported_and_resumed() {
 
 fn access(root: &std::path::Path) -> std::path::PathBuf {
     root.join("platform/access.toml")
+}
+
+fn role(name: &str) -> muliao_assets::roles::RoleName {
+    muliao_assets::roles::RoleName::parse(name).unwrap()
 }

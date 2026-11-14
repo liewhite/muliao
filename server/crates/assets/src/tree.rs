@@ -34,7 +34,8 @@ use crate::access_file::{self, ACCESS_FILE, Access, AccessText};
 use crate::formats::agent_file::{self, AGENT_FILE, AgentFile};
 use crate::kinds::{Content, Kind, KindContent, Section, StoredKind};
 use crate::naming::{AgentName, PLATFORM};
-use crate::rules::{Action, AgentRules, Roles, Target, ToolTable};
+use crate::roles::{BoundRules, Roles};
+use crate::rules::{Action, Target, ToolTable};
 use muliao_platform::errors::{Result, conflict, not_found};
 
 pub const PRIVATE_MEMORY_FILE: &str = "memory.md";
@@ -243,7 +244,7 @@ pub struct Snapshot {
     private: BTreeMap<AgentId, Asset>,
     pub roles: Roles,
     /// access.toml 里各 agent 的规则，按 id；没写的 agent 只有 base
-    rules: BTreeMap<AgentId, AgentRules>,
+    rules: BTreeMap<AgentId, BoundRules>,
     /// 读出 roles 与 rules 的 access.toml 原文（读坏时沿用上一份规则，这里记着读坏的原因）
     pub access_text: access_file::AccessText,
     /// 读这棵树时用的内置工具表
@@ -256,8 +257,9 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
-    pub fn rules_of(&self, agent_id: &AgentId) -> AgentRules {
-        self.rules.get(agent_id).cloned().unwrap_or_default()
+    /// agent 的规则（access.toml 里没写的只有 base）。
+    pub fn rules_of(&self, agent_id: &AgentId) -> BoundRules {
+        self.rules.get(agent_id).cloned().unwrap_or_else(|| self.roles.base_only())
     }
 
     /// 按名字认的资源（私有记忆不在其中）。
@@ -384,7 +386,7 @@ impl Snapshot {
 
     /// admin：规则放行不限种类的写（`write:*`）。整棵树都能写；平台的问题报给它，平台的私有文件只有它能读写。
     pub fn administers(&self, agent_id: &AgentId) -> bool {
-        self.rules_of(agent_id).effective(&self.roles).allows_every(Action::Write)
+        self.rules_of(agent_id).effective().allows_every(Action::Write)
     }
 
     /// 报给这个 agent 的问题：它自己目录里的；平台的（platform/、根目录、access.toml）只报给 admin（免得几十个 agent
@@ -719,7 +721,7 @@ pub fn load_tree(
             for p in problems {
                 r.problem(path.clone(), p.reason, p.agent_id.as_ref());
             }
-            (roles, rules, AccessText::Valid(text))
+            (*roles, rules, AccessText::Valid(text))
         }
         Access::Invalid(reasons) => {
             let (roles, rules, consequence) = match last {
@@ -731,7 +733,7 @@ pub fn load_tree(
                     "; the rules last read successfully stay in effect until it is fixed",
                 ),
                 None => (
-                    access_file::builtin_roles(&tools),
+                    crate::rules::builtin_roles(&tools),
                     BTreeMap::new(),
                     "; no earlier version was read since the service started, so only the fixed parts of built-in \
                      roles apply (no agent has admin)",

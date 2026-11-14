@@ -1171,7 +1171,7 @@ export interface components {
             description: string;
             model?: components["schemas"]["ModelIo"] | null;
             /** @description 角色，不含每个 agent 隐含的 base */
-            roles?: string[];
+            roles?: components["schemas"]["RoleName"][];
             allow?: components["schemas"]["RuleList"];
             deny?: components["schemas"]["RuleList"];
             /** @description 思考档位："default" 不指定，按模型与服务端的默认 */
@@ -1184,7 +1184,7 @@ export interface components {
             name: string;
             description: string;
             model: components["schemas"]["ModelIo"];
-            roles: string[];
+            roles: components["schemas"]["RoleName"][];
             allow: string[];
             deny: string[];
             thinking: components["schemas"]["Thinking"];
@@ -1199,7 +1199,7 @@ export interface components {
             id: components["schemas"]["AgentId"];
             name: string;
             config: components["schemas"]["AgentConfigOut"] | null;
-            roles: string[];
+            roles: components["schemas"]["RoleName"][];
             allow: string[];
             deny: string[];
             /** Format: date-time */
@@ -1214,7 +1214,7 @@ export interface components {
         };
         AgentPreviewIn: {
             agent_id?: components["schemas"]["AgentId"] | null;
-            roles: string[];
+            roles: components["schemas"]["RoleName"][];
             allow: components["schemas"]["RuleList"];
             deny: components["schemas"]["RuleList"];
         };
@@ -1223,7 +1223,7 @@ export interface components {
             name?: string | null;
             description?: string | null;
             model?: components["schemas"]["ModelIo"] | null;
-            roles?: string[] | null;
+            roles?: components["schemas"]["RoleName"][] | null;
             allow?: components["schemas"]["RuleList"] | null;
             deny?: components["schemas"]["RuleList"] | null;
             thinking?: components["schemas"]["Thinking"] | null;
@@ -1286,7 +1286,7 @@ export interface components {
         /** @description 为什么能用：它名下的、放行它的角色（含 base）、它自己的 allow 规则（至少一项）。 */
         AssetSourceOut: {
             own: boolean;
-            roles: string[];
+            roles: components["schemas"]["RoleName"][];
             allow: boolean;
         };
         /**
@@ -1364,7 +1364,7 @@ export interface components {
             name: string;
             owner: components["schemas"]["AgentId"] | null;
             /** @description 收录它的角色（allow 放行、deny 没拦，含内置的 base、admin） */
-            roles: string[];
+            roles: components["schemas"]["RoleName"][];
             /**
              * @description 分发出去了：base 收录它，或某个不是 owner 的 agent 的规则（角色或自己的 allow）放行它；否则只有 owner 能用（归平台的
              *     就谁也用不了）。与删除 agent 时把资产转给平台同一个定义
@@ -2153,8 +2153,9 @@ export interface components {
             allow: components["schemas"]["RuleList"];
             deny: components["schemas"]["RuleList"];
         };
+        RoleName: string;
         RoleOut: {
-            name: string;
+            name: components["schemas"]["RoleName"];
             description: string;
             /** @description 内置角色（base、admin）代码里固定的规则，不可改 */
             fixed_allow: string[];
@@ -2171,8 +2172,7 @@ export interface components {
             agents: components["schemas"]["AgentId"][];
         };
         RolePreviewIn: {
-            /** @description 已有的角色（内置的加上固定规则）；null 为还没建的 */
-            name?: string | null;
+            name?: components["schemas"]["RoleName"] | null;
             allow: components["schemas"]["RuleList"];
             deny: components["schemas"]["RuleList"];
         };
@@ -2876,7 +2876,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                name: string;
+                /** @description 角色名 */
+                name: components["schemas"]["RoleName"];
             };
             cookie?: never;
         };
@@ -2917,7 +2918,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                name: string;
+                /** @description 角色名 */
+                name: components["schemas"]["RoleName"];
             };
             cookie?: never;
         };
@@ -2952,7 +2954,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                name: string;
+                /** @description 角色名 */
+                name: components["schemas"]["RoleName"];
             };
             cookie?: never;
         };

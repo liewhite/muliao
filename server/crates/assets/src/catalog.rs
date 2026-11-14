@@ -8,6 +8,7 @@ use chrono::{DateTime, Utc};
 
 use crate::access::Sharing;
 use crate::kinds::{Kind, Shown, StoredKind};
+use crate::roles::RoleName;
 use crate::rules::{GLOBAL_MEMORY, Target, ToolSpec, rule_candidates};
 use crate::source::AssetSource;
 use crate::tree::{AssetKey, Owner, remove};
@@ -34,7 +35,7 @@ pub struct CatalogAsset {
     pub name: String,
     pub owner: Owner,
     /// 收录它的角色（含内置的）
-    pub roles: Vec<String>,
+    pub roles: Vec<RoleName>,
     /// 分发出去了：否则只有 owner 能用（归平台的就没有 agent 能用）
     pub shared: bool,
     /// 用户能在界面上删它（[`undeletable`]）

@@ -8,13 +8,12 @@
 //! - agent 的规则 = 内置角色 base（每个 agent 隐含）+ 它的各个角色 + 它自己的 allow / deny（各自取并集）。
 //! - admin 就是规则放行不限种类的写（`write:*`，[`Rules::allows_every`]）：内置角色 admin 固定带它。
 //! - 本机可写目录（`write:path:<目录>`）：字面目录、不带通配符、不经 fnmatch，`write:*` 不含路径（[`Rules::paths`]）。
-//! - 内置角色的规则 = 代码里固定的部分（[`fixed_rules`]，按工具表算，新加的工具自动归入）∪ access.toml 里可编辑的部分。
+//! - 内置角色的规则 = 代码里固定的部分（[`builtin_roles`]，按工具表算，新加的工具自动归入）∪ access.toml 里可编辑的部分。
 
 use std::sync::OnceLock;
 
-use indexmap::IndexMap;
-
 use crate::kinds::Kind;
+use crate::roles::Roles;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Action {
@@ -428,94 +427,17 @@ pub fn permits(allow: &[Rule], deny: &[Rule], action: Action, target: Target<'_>
     allow.iter().any(|r| r.grants(action, target)) && !deny.iter().any(|r| r.blocks(action, target))
 }
 
-pub const BASE: &str = "base";
-pub const ADMIN: &str = "admin";
-/// 内置角色，按定义顺序
-pub const BUILTIN_ROLES: [&str; 2] = [BASE, ADMIN];
 /// 全局记忆：所有 agent 共享的那块记忆，由 base 收录
 pub const GLOBAL_MEMORY: &str = "global";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Role {
-    pub name: String,
-    pub description: String,
-    /// 可编辑的规则（access.toml 的 [roles.<名>]）
-    pub rules: Rules,
-    /// 内置角色在代码里固定的规则（自建角色为空）
-    pub fixed: Rules,
-}
-
-impl Role {
-    pub fn builtin(&self) -> bool {
-        BUILTIN_ROLES.contains(&self.name.as_str())
-    }
-
-    /// 能写进 agent 的 roles：base 每个 agent 隐含，不能写。
-    pub fn assignable(&self) -> bool {
-        self.name != BASE
-    }
-
-    /// roles 是一个 agent 的 roles 字段：base 每个 agent 都有（隐含），别的要写在里面。
-    pub fn held_by(&self, roles: &[String]) -> bool {
-        !self.assignable() || roles.contains(&self.name)
-    }
-
-    pub fn effective(&self) -> Rules {
-        Rules::union([&self.fixed, &self.rules])
-    }
-}
-
-/// 全部角色：内置在前（按定义顺序），自建的按名称。
-pub type Roles = IndexMap<String, Role>;
-
-/// 内置角色固定的规则（顺序同 [`BUILTIN_ROLES`]）：base 是 tools 里全部非管理工具与全局记忆（写成纯 allow：deny 优先于
-/// 一切 allow，写成 deny 的话 admin 也放不开）；admin 是全部工具，并能改任何资产。
-pub fn fixed_rules(tools: &ToolTable) -> [(&'static str, Rules); 2] {
+/// 只有内置角色、只有代码里固定的规则（access.toml 还没读成功过时就是它们）：base 是 tools 里全部非管理工具与全局记忆
+/// （写成纯 allow：deny 优先于一切 allow，写成 deny 的话 admin 也放不开）；admin 是全部工具，并能改任何资产。
+pub fn builtin_roles(tools: &ToolTable) -> Roles {
     let named = |kind, glob: &str| Rule::Named { actions: Actions::One(Action::Use), kind, glob: glob.to_owned() };
     let mut base: Vec<Rule> = tools.specs().iter().filter(|t| !t.admin).map(|t| named(Kind::Tool, &t.name)).collect();
     base.push(named(Kind::Memory, GLOBAL_MEMORY));
     let admin = vec![named(Kind::Tool, "*"), Rule::Every(Actions::One(Action::Write))];
-    [(BASE, Rules::new(base, vec![])), (ADMIN, Rules::new(admin, vec![]))]
-}
-
-/// agent 的分发规则：角色（不含每个 agent 隐含的 base）与它自己的 allow / deny。
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct AgentRules {
-    pub roles: Vec<String>,
-    pub allow: Vec<Rule>,
-    pub deny: Vec<Rule>,
-}
-
-impl AgentRules {
-    /// 它自己的 allow / deny（不含角色）。
-    pub fn own(&self) -> Rules {
-        Rules::new(self.allow.clone(), self.deny.clone())
-    }
-
-    /// 最终规则：各来源（[`AgentRules::sources`]）的并集。
-    pub fn effective(&self, known: &Roles) -> Rules {
-        let sources = self.sources(known);
-        Rules::union(sources.iter().map(|(_, r)| r))
-    }
-
-    /// 最终规则的各个来源：base 在前、再按它的 roles，最后是它自己的 allow / deny。
-    /// 不存在的角色读树时已跳过，这里再遇到是代码错误。
-    pub fn sources(&self, known: &Roles) -> Vec<(RuleSource, Rules)> {
-        let missing: Vec<&String> = self.roles.iter().filter(|r| !known.contains_key(*r)).collect();
-        assert!(missing.is_empty(), "agent references unknown roles {missing:?}");
-        std::iter::once(BASE)
-            .chain(self.roles.iter().map(String::as_str))
-            .map(|r| (RuleSource::Role(r.to_owned()), known[r].effective()))
-            .chain(std::iter::once((RuleSource::Own, self.own())))
-            .collect()
-    }
-}
-
-/// 一组规则从哪里来：某个角色（含 base），或 agent 自己的 allow / deny。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RuleSource {
-    Role(String),
-    Own,
+    Roles::builtin(Rules::new(base, vec![]), Rules::new(admin, vec![]))
 }
 
 #[cfg(test)]

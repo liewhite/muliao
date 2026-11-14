@@ -115,7 +115,7 @@ async fn snapshot_is_cached_and_access_toml_survives_breakage() {
     assert!(err.is_ok());
     let err = muliao_assets::distribution::Distribution::new(w.source.clone())
         .create(&muliao_assets::distribution::RoleSpec {
-            name: "r".into(),
+            name: role("r"),
             description: "d".into(),
             rules: Default::default(),
         })
@@ -233,4 +233,8 @@ async fn grants_and_write_scope() {
     assert!(scope.admin);
     assert_eq!(scope.assets, vec![root.clone()]);
     assert_eq!(scope.withheld, vec![root.join("platform/memory/global.md")]);
+}
+
+fn role(name: &str) -> muliao_assets::roles::RoleName {
+    muliao_assets::roles::RoleName::parse(name).unwrap()
 }

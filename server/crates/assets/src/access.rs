@@ -14,9 +14,8 @@ use muliao_platform::fs::{is_within, real};
 use crate::access_file::ACCESS_FILE;
 use crate::kinds::{KindContent, StoredKind};
 use crate::naming::{AgentName, PLATFORM};
-use crate::rules::{
-    Action, Actions, BASE, Role, Rule, RuleSource, Rules, Target, ToolSpec, pattern_of, permission_of, permits,
-};
+use crate::roles::{Role, RoleName, RuleSource};
+use crate::rules::{Action, Actions, Rule, Rules, Target, ToolSpec, pattern_of, permission_of, permits};
 use crate::tree::{Asset, AssetKey, Owner, Snapshot, dir_owner};
 use muliao_platform::errors::{Result, forbidden};
 
@@ -49,7 +48,7 @@ pub struct Grants {
 }
 
 impl Grants {
-    /// sources：规则的各个来源（[`AgentRules::sources`] 的形状）。
+    /// sources：规则的各个来源（[`crate::roles::BoundRules::sources`] 的形状）。
     pub fn new(agent_id: Option<AgentId>, sources: Vec<(RuleSource, Rules)>) -> Self {
         let rules = Rules::union(sources.iter().map(|(_, r)| r));
         Self { agent_id, allows: sources.into_iter().map(|(n, r)| (n, r.allow)).collect(), rules }
@@ -104,7 +103,7 @@ impl Grants {
 pub fn grants_for(snapshot: &Snapshot, actor: &Actor) -> Grants {
     match actor {
         Actor::User => Grants::user(),
-        Actor::Agent(id) => Grants::new(Some(id.clone()), snapshot.rules_of(id).sources(&snapshot.roles)),
+        Actor::Agent(id) => Grants::new(Some(id.clone()), snapshot.rules_of(id).sources()),
     }
 }
 
@@ -112,7 +111,7 @@ pub fn grants_for(snapshot: &Snapshot, actor: &Actor) -> Grants {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Source {
     pub own: bool,
-    pub roles: Vec<String>,
+    pub roles: Vec<RoleName>,
     pub allow: bool,
 }
 
@@ -124,7 +123,7 @@ impl Source {
 
 /// 资产的分发情况，一次读出角色与全部 agent 的规则后算多项。
 pub struct Sharing {
-    roles: Vec<(String, Rules)>,
+    roles: Vec<(RoleName, Rules)>,
     base: Rules,
     /// 每个加载了的 agent 的最终规则
     agents: Vec<(AgentId, Rules)>,
@@ -135,8 +134,8 @@ impl Sharing {
         let known = &snapshot.roles;
         Self {
             roles: known.values().map(|r| (r.name.clone(), r.effective())).collect(),
-            base: known[BASE].effective(),
-            agents: snapshot.agents.keys().map(|a| (a.clone(), snapshot.rules_of(a).effective(known))).collect(),
+            base: known.base().effective(),
+            agents: snapshot.agents.keys().map(|a| (a.clone(), snapshot.rules_of(a).effective())).collect(),
         }
     }
 
@@ -147,7 +146,7 @@ impl Sharing {
     }
 
     /// 收录它的角色（含内置的）。
-    pub fn including(&self, target: Target<'_>) -> Vec<String> {
+    pub fn including(&self, target: Target<'_>) -> Vec<RoleName> {
         self.roles.iter().filter(|(_, r)| r.includes(target)).map(|(n, _)| n.clone()).collect()
     }
 }
@@ -339,5 +338,5 @@ pub fn reach_of(snapshot: &Snapshot, grants: &Grants) -> Reach {
 
 /// 带这个角色的 agent 的 id（base 每个 agent 都有）。
 pub fn holders_of(snapshot: &Snapshot, role: &Role) -> Vec<AgentId> {
-    snapshot.agents.keys().filter(|a| role.held_by(&snapshot.rules_of(a).roles)).cloned().collect()
+    snapshot.agents.keys().filter(|a| snapshot.rules_of(a).holds(&role.name)).cloned().collect()
 }

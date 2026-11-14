@@ -17,6 +17,7 @@ use muliao_assets::formats::mcp::{McpConfig, McpTransport};
 use muliao_assets::kinds::{Shown, StoredKind};
 use muliao_assets::mcp::McpServer;
 use muliao_assets::memory::MemoryInfo;
+use muliao_assets::roles::RoleName;
 use muliao_assets::tree::Owner;
 use muliao_platform::errors::DomainError;
 use serde::{Deserialize, Serialize};
@@ -62,7 +63,7 @@ pub struct CatalogAssetOut {
     /// agent 的 id；null 归平台（内置工具、界面上建的、迁移前的公共资产）
     pub owner: Option<AgentId>,
     /// 收录它的角色（allow 放行、deny 没拦，含内置的 base、admin）
-    pub roles: Vec<String>,
+    pub roles: Vec<RoleName>,
     /// 分发出去了：base 收录它，或某个不是 owner 的 agent 的规则（角色或自己的 allow）放行它；否则只有 owner 能用（归平台的
     /// 就谁也用不了）。与删除 agent 时把资产转给平台同一个定义
     pub shared: bool,
