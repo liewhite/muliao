@@ -4,7 +4,6 @@ mod common;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use common::{world, write};
@@ -191,26 +190,48 @@ async fn catalog_transfer_and_roles() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn watch_reports_visible_changes() {
+    use tokio::sync::mpsc::UnboundedReceiver;
+    use tokio::time::timeout;
+    // 收齐一阵通知：直到安静 1 秒，返回收到几次。只靠「等到事件」推进，不赌固定 sleep 够不够（#840：
+    // 机器忙时 FSEvents 起监听和投递都可能晚一两秒）
+    async fn drain(rx: &mut UnboundedReceiver<()>) -> usize {
+        let mut n = 0;
+        while timeout(Duration::from_secs(1), rx.recv()).await.is_ok_and(|m| m.is_some()) {
+            n += 1;
+        }
+        n
+    }
     let w = world().await;
-    let count = Arc::new(AtomicUsize::new(0));
-    let seen = count.clone();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let source = w.source.clone();
     let task = tokio::spawn(async move {
         source
             .watch(move || {
-                seen.fetch_add(1, Ordering::SeqCst);
+                let _ = tx.send(());
             })
             .await
     });
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    // 监听何时生效没有信号：反复写一个可见探针，收到第一次通知即就绪，再等它的余波散尽
+    let probe = w.root().join("platform/memory/probe.md");
+    timeout(Duration::from_secs(20), async {
+        loop {
+            write(&probe, "x");
+            if timeout(Duration::from_millis(500), rx.recv()).await.is_ok() {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("watcher never reported the probe");
+    drain(&mut rx).await;
+
     write(&w.root().join(".hidden"), "x");
-    tokio::time::sleep(Duration::from_millis(800)).await;
-    assert_eq!(count.load(Ordering::SeqCst), 0, "hidden files do not count");
+    assert_eq!(drain(&mut rx).await, 0, "hidden files do not count");
     for i in 0..5 {
         write(&w.root().join(format!("platform/memory/m{i}.md")), "x");
     }
-    tokio::time::sleep(Duration::from_millis(1500)).await;
-    let n = count.load(Ordering::SeqCst);
+    timeout(Duration::from_secs(20), rx.recv()).await.expect("burst never reported");
+    let n = 1 + drain(&mut rx).await;
     assert!((1..=2).contains(&n), "a burst is reported once or twice, got {n}");
     task.abort();
 }
