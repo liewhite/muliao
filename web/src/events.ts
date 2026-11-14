@@ -133,7 +133,8 @@ const onVisibilityChange = () => {
   if (hiddenTimer !== null) clearTimeout(hiddenTimer)
   hiddenTimer = null
   if (document.visibilityState === 'visible') {
-    if (source === null) connect()
+    // 没有连接就连上；手机后台里被系统掐断、计时器没跑到的死连接也当场发现、重连
+    checkAlive()
   } else {
     hiddenTimer = setTimeout(() => {
       hiddenTimer = null
