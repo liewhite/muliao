@@ -115,6 +115,9 @@ pub struct ResultItem {
     pub view: Option<View>,
     /// 工具结束的时间；事后补的结果、没记结束时间的结果为 None
     pub at: Option<DateTime<Utc>>,
+    /// 事后补的结果（被停止、被中断），不是工具交回的：提问调用据此不把它当回答（[`annotate_asks`]）。只在后端用
+    #[serde(skip)]
+    pub(crate) made_up: bool,
 }
 
 /// 失败、参数被拒绝交还模型重试的结果。
@@ -261,6 +264,7 @@ fn result_entry<U>(result: &ToolResult, renders: &Renders) -> Result<Item<U>> {
         images: result_images(result),
         view,
         at: if made_up { None } else { finished_at(result) },
+        made_up,
     }))
 }
 
@@ -398,14 +402,17 @@ pub(crate) fn to_items_with<'a, U>(
 }
 
 /// 给 ask_user 调用填上状态，唯一规则：
-/// - 被退回（结果是 tool_error，如这次运行不提供提问）：不是提问，按普通工具调用加错误展示（wait 为 None）；
-/// - 有结果的按结果（[`AskResult`]）：answered / not_answered；
+/// - 被退回（结果是 tool_error，如这次运行不提供提问），或挂起之前就被停下、打断（结果是事后补的）：没问成，按普通
+///   工具调用加它的结果展示（wait 为 None）；
+/// - 有工具交回的结果的按结果（[`AskResult`]）：answered / not_answered；
 /// - 没有结果的：现在能回答是 pending，回答已提交、还排着是 submitted，否则运行还没停下（asking）。
 pub(crate) fn annotate_asks(items: &mut [Item], open: &OpenAsks) -> Result<()> {
     let results: HashMap<String, Option<String>> = items
         .iter()
         .filter_map(|i| match i {
-            Item::ToolResult(r) if r.tool_name == ASK_USER => Some((r.tool_call_id.clone(), Some(r.text.clone()))),
+            Item::ToolResult(r) if r.tool_name == ASK_USER => {
+                Some((r.tool_call_id.clone(), (!r.made_up).then(|| r.text.clone())))
+            }
             Item::ToolError(e) if e.tool_name == ASK_USER => Some((e.tool_call_id.clone(), None)),
             _ => None,
         })
@@ -719,7 +726,7 @@ mod tests {
     fn ask_states() {
         let args = ask_args();
         let calls = response(
-            ["asking", "pending", "submitted", "answered", "not", "refused"]
+            ["asking", "pending", "submitted", "answered", "not", "refused", "stopped", "interrupted"]
                 .map(|id| ResponsePart::ToolCall(call(id, ASK_USER, &args)))
                 .into_iter()
                 .collect(),
@@ -728,6 +735,9 @@ mod tests {
             RequestPart::ToolResult(result("answered", ASK_USER, vec![Content::text(ask_result(true))], false)),
             RequestPart::ToolResult(result("not", ASK_USER, vec![Content::text(ask_result(false))], false)),
             RequestPart::ToolResult(result("refused", ASK_USER, vec![Content::text("no asking here")], true)),
+            // 挂起记录写下之前被停下或打断：补出来的结果不是回答，这次调用按普通工具调用展示
+            RequestPart::ToolResult(made_up_result(&call("stopped", ASK_USER, &args), MadeUp::Stopped)),
+            RequestPart::ToolResult(made_up_result(&call("interrupted", ASK_USER, &args), MadeUp::Interrupted)),
         ]));
         let mut items = to_items([&calls, &results], &Renders::new(), None).unwrap();
         assert!(items.iter().all(|i| !matches!(i, Item::ToolCall(c) if c.wait.is_none())));
@@ -747,6 +757,8 @@ mod tests {
         assert_eq!(state("answered"), Some(AskState::Answered { answers: answered_a() }));
         assert_eq!(state("not"), Some(AskState::NotAnswered { note: "skipped".into() }));
         assert_eq!(state("refused"), None);
+        assert_eq!(state("stopped"), None);
+        assert_eq!(state("interrupted"), None);
         let Some(CallWait::Ask(not)) = call_of(&items, "not").wait else { panic!() };
         assert_eq!(
             Some(&QuestionOption { label: "a".into(), description: String::new() }),
