@@ -644,3 +644,50 @@ async fn tools_manage_triggers_by_name() {
     assert_eq!(w.call("trigger_delete", json!({"name": "daily"})).await.unwrap(), "deleted trigger daily");
     assert!(w.call("trigger_delete", json!({"name": "daily"})).await.unwrap_err().contains("not found"));
 }
+
+/// 002 迁移把旧格式的行换成现在读得懂的：流式缺 generation 的补上、运行状况去掉；定时已通知过的搬到 waiting_notified；
+/// 一次性的 state `{}` 照常读出。迁移后全部行（含已结束的）都要读得出来。
+#[test]
+fn migration_002_makes_old_rows_readable() {
+    const V1: muliao_platform::db::Migration =
+        muliao_platform::db::Migration { domain: "triggers", steps: &[include_str!("../migrations/001_triggers.sql")] };
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.db");
+    migrate(&path, &[V1]).unwrap();
+    let c = rusqlite::Connection::open(&path).unwrap();
+    let rows = [
+        (
+            "s",
+            "stream",
+            r#"{"command": "x", "secrets": [], "debounce_seconds": 5.0}"#,
+            r#"{"running_since": null, "failures": 0}"#,
+            None,
+        ),
+        (
+            "t",
+            "schedule",
+            r#"{"cron": "0 9 * * *"}"#,
+            r#"{"next_run_at": "2030-01-01T09:00:00+08:00", "skipped": {"count": 2, "since": "2026-01-01T00:00:00Z", "previous_state": "waiting", "session_id": "sess", "notified": true}}"#,
+            None,
+        ),
+        ("o", "once", r#"{"at": "2026-01-01T09:00:00+08:00"}"#, "{}", Some("2026-01-01T01:00:00+00:00")),
+    ];
+    for (name, kind, config, state, finished) in rows {
+        c.execute(
+            "INSERT INTO triggers (name, agent_id, prompt, kind, config, state, enabled, disabled_reason, faults, \
+             finished_at, created_at) VALUES (?1, 'a', 'p', ?2, ?3, ?4, 1, NULL, '[]', ?5, '2026-01-01T00:00:00+00:00')",
+            rusqlite::params![name, kind, config, state, finished],
+        )
+        .unwrap();
+    }
+    drop(c);
+    migrate(&path, &[MIGRATION]).unwrap();
+    let c = rusqlite::Connection::open(&path).unwrap();
+    let live = crate::store::list_in(&c, &Listing::default()).unwrap();
+    let finished = crate::store::list_in(&c, &Listing { finished: true, ..Listing::default() }).unwrap();
+    assert_eq!((live.len(), finished.len()), (2, 1));
+    let schedule = live.iter().find(|t| t.name == "t").unwrap();
+    assert_eq!(schedule.waiting_notified, Some(SessionId::new("sess")));
+    let stream = live.iter().find(|t| t.name == "s").unwrap();
+    assert!(matches!(&stream.mode, crate::kinds::Mode::Stream { .. }));
+}

@@ -23,7 +23,7 @@ pub struct Trigger {
     pub id: i64,
     pub name: String,
     pub agent_id: AgentId,
-    pub prompt: String,
+    pub prompt: Prompt,
     /// 怎么触发：种类、配置与运行状态（kind、config、state 三列）
     pub mode: Mode,
     pub enabled: bool,
@@ -54,11 +54,13 @@ fn trigger_of(row: &Row<'_>) -> rusqlite::Result<Trigger> {
     let (kind, config, state): (String, String, String) = (row.get(4)?, row.get(5)?, row.get(6)?);
     let mode = Mode::from_columns(&kind, &config, &state)
         .map_err(|e| rusqlite::Error::FromSqlConversionFailure(4, Type::Text, Box::new(e)))?;
+    let prompt = Prompt::new(row.get::<_, String>(3)?)
+        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(3, Type::Text, e.into()))?;
     Ok(Trigger {
         id: row.get(0)?,
         name: row.get(1)?,
         agent_id: row.get(2)?,
-        prompt: row.get(3)?,
+        prompt,
         mode,
         enabled: row.get(7)?,
         last_fired_at: row.get(8)?,
@@ -158,7 +160,7 @@ pub fn save_in(tx: &mut Tx<'_>, t: &Trigger) -> Result<()> {
         params![
             t.name,
             t.agent_id,
-            t.prompt,
+            t.prompt.as_str(),
             kind,
             config,
             state,

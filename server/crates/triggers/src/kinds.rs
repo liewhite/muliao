@@ -84,7 +84,8 @@ pub enum Mode {
         config: ScheduleConfig,
         state: ScheduleState,
     },
-    /// 到期时间就是配置本身，没有随运行变化的状态（state 列存 `{}`）
+    /// 到期时间就是配置本身，没有随运行变化的状态（state 列存 `{}`）。读出时 state 作为未知字段被忽略：本 enum
+    /// 不能加 deny_unknown_fields（迁移测试守着）
     Once {
         config: OnceConfig,
     },
@@ -142,12 +143,27 @@ impl Mode {
         }
     }
 
-    /// 按到期时间触发的方式的下次到期；流式不按到期时间。
-    pub fn due_at(&self) -> Option<DateTime<Utc>> {
+    /// 按到期时间触发的那部分（定时、一次性）；流式不按到期时间。
+    pub fn due(&mut self) -> Option<Due<'_>> {
         match self {
-            Mode::Schedule { state, .. } => Some(state.next_run_at.to_utc()),
-            Mode::Once { config } => Some(config.at.to_utc()),
+            Mode::Schedule { config, state } => Some(Due::Schedule { config, state }),
+            Mode::Once { config } => Some(Due::Once { config }),
             Mode::Stream { .. } => None,
+        }
+    }
+}
+
+/// 按到期时间触发的一种（[`crate::due`] 只对它 match）。
+pub enum Due<'a> {
+    Schedule { config: &'a ScheduleConfig, state: &'a mut ScheduleState },
+    Once { config: &'a OnceConfig },
+}
+
+impl Due<'_> {
+    pub fn at(&self) -> DateTime<Utc> {
+        match self {
+            Due::Schedule { state, .. } => state.next_run_at.to_utc(),
+            Due::Once { config } => config.at.to_utc(),
         }
     }
 }

@@ -85,6 +85,7 @@ impl From<Script> for String {
 #[serde(deny_unknown_fields)]
 pub struct Precheck {
     /// bash command run before each firing.
+    // 上限同 SCRIPT_MAX_CHARS（属性里写不了常量）
     #[schemars(with = "String", length(min = 1, max = 4000))]
     pub command: Script,
     /// Vault keys exposed to the command as env vars.
@@ -209,7 +210,7 @@ pub fn alert_letter(t: &Trigger, p: &Precheck, error: &str) -> String {
             user_only.into(),
             "Its prompt was:".into(),
             "<prompt>".into(),
-            t.prompt.clone(),
+            t.prompt.as_str().to_owned(),
             "</prompt>".into(),
         ]);
     }

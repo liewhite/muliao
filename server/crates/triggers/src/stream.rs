@@ -40,7 +40,7 @@ use tokio::time::Instant;
 use crate::faults::{FaultSource, TriggerFault, recovered};
 use crate::kinds::{Kind, Mode};
 use crate::precheck::{Script, tail_chars};
-use crate::service::{Busy, EVENT_MAX_BYTES, TriggerService, busy_previous_in, notify_waiting_in};
+use crate::service::{EVENT_MAX_BYTES, TriggerService, busy_previous_in, needs_waiting_notice, notify_waiting_in};
 use crate::store::{Listing, Trigger, load_in, save_in};
 use muliao_platform::errors::{Error, Result};
 
@@ -430,15 +430,15 @@ impl StreamRunner {
     // ---- 进程 ----
 
     async fn process_loop(&self, spec: &Spec, pending: &Pending, process: &Mutex<Process>) {
-        let mut failures = 0;
         loop {
-            let (error, stable) = self.run_once(spec, pending, process).await;
-            // 稳定运行过的不算连续失败，从最短的退避重来
-            if stable {
-                failures = 0;
-            }
-            failures += 1;
-            *process.lock().expect("process lock") = Process { running_since: None, failures };
+            let error = self.run_once(spec, pending, process).await;
+            // 连续失败只记在 process 一处：稳定运行过的已在那里清零，从最短的退避重来
+            let failures = {
+                let mut p = process.lock().expect("process lock");
+                p.running_since = None;
+                p.failures += 1;
+                p.failures
+            };
             tracing::warn!(trigger = %spec.name, failures, error, "stream exited");
             if failures >= ALERT_AFTER {
                 let fault =
@@ -449,23 +449,23 @@ impl StreamRunner {
         }
     }
 
-    /// 起一次进程并跑到它退出，返回 (退出的原因, 是否稳定运行过)。
-    async fn run_once(&self, spec: &Spec, pending: &Pending, process: &Mutex<Process>) -> (String, bool) {
+    /// 起一次进程并跑到它退出，返回退出的原因。稳定运行过的在 process 里把连续失败清零。
+    async fn run_once(&self, spec: &Spec, pending: &Pending, process: &Mutex<Process>) -> String {
         let config = &spec.config;
         let shell = match self.commands.prepare(&spec.agent_id, &config.secrets, SecretUse::AgentCommand).await {
             Ok(shell) => shell,
-            Err(e) => return (format!("stream could not start: {e}"), false),
+            Err(e) => return format!("stream could not start: {e}"),
         };
         let log_file = shell.cwd.join(stderr_log(&spec.name));
         let started = format!("--- started {} ---", Utc::now().to_rfc3339());
         if let Err(e) = prepare_log(log_file.clone(), format!("{started}\n")).await {
-            return (format!("stream supervision failed: cannot write {}: {e}", log_file.display()), false);
+            return format!("stream supervision failed: cannot write {}: {e}", log_file.display());
         }
         let options = Options { pipefail: true, ..Options::default() };
         let Spawned { mut child, pgid, stdout, stderr, .. } =
             match shell.spawn(config.command.as_str(), false, &options) {
                 Ok(s) => s,
-                Err(e) => return (format!("stream supervision failed: cannot start the command: {e}"), false),
+                Err(e) => return format!("stream supervision failed: cannot start the command: {e}"),
             };
         // spawn 之后的任何一步（包括被取消：停用、删除、改配置、关停）都要杀掉进程组
         let mut guard = KillOnDrop(Some(pgid));
@@ -530,7 +530,7 @@ impl StreamRunner {
             let code = code.map_or("no exit code".to_owned(), |c| c.to_string());
             format!("stream command exited with {code}: {}", tail_chars(&logged, ERROR_TAIL_CHARS).trim())
         });
-        (format!("{error}{refusal}"), stable)
+        format!("{error}{refusal}")
     }
 
     async fn read_events(
@@ -616,7 +616,7 @@ impl StreamRunner {
                 })
                 .await?;
             let Some((notified, session_id, busy)) = blocking else { return Ok(()) };
-            if busy == Busy::Waiting && notified.as_ref() != Some(&session_id) {
+            if needs_waiting_notice(notified.as_ref(), &session_id, busy) {
                 let (notifications, queued) = (self.notifications.clone(), pending.len());
                 self.service
                     .db()

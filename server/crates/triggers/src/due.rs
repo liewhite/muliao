@@ -1,6 +1,6 @@
 //! 按到期时间触发的方式共用的激活机制：扫描到期的触发器，到点各触发一次。
 //!
-//! 定时与一次性的差别只有两件事：到期时间从哪来（[`crate::kinds::Mode::due_at`]）、这次到期被用掉之后这一行怎么变
+//! 定时与一次性的差别只有两件事：到期时间从哪来（[`crate::kinds::Mode::due`]）、这次到期被用掉之后这一行怎么变
 //! （[`consume_in`]）；扫描、并发触发与下次唤醒在这里实现一次。
 //!
 //! 用最终正确性换简化：消耗这次到期与触发不在一个事务里（触发可能先跑前置检查，不能占着事务）。进程恰好死在两者之间时
@@ -16,7 +16,7 @@ use muliao_notifications::Notifications;
 use muliao_platform::db::Tx;
 use tokio::task::JoinHandle;
 
-use crate::kinds::Mode;
+use crate::kinds::Due;
 use crate::schedule;
 use crate::service::TriggerService;
 use crate::store::{Listing, Trigger, load_in, save_in};
@@ -70,7 +70,7 @@ impl DueRunner {
     async fn pending(&self) -> Vec<(i64, DateTime<Utc>)> {
         let listing = Listing { enabled_only: true, ..Listing::default() };
         match self.service.list(listing).await {
-            Ok(triggers) => triggers.iter().filter_map(|t| Some((t.id, t.mode.due_at()?))).collect(),
+            Ok(triggers) => triggers.into_iter().filter_map(|mut t| Some((t.id, t.mode.due()?.at()))).collect(),
             Err(e) => {
                 tracing::error!(error = %e, "listing due triggers failed");
                 Vec::new()
@@ -118,9 +118,6 @@ impl DueRunner {
                 if !t.enabled {
                     return Ok(Some("disabled".into()));
                 }
-                if t.mode.due_at().is_none_or(|at| at > now) {
-                    return Ok(Some("rescheduled".into()));
-                }
                 let skipped = consume_in(tx, &mut t, now, tz, &notifications)?;
                 save_in(tx, &t)?;
                 Ok(skipped)
@@ -151,7 +148,7 @@ impl DueRunner {
 }
 
 /// 在到期的事务里消耗这次到期：改这一行（调用方写回），使它不再在 now 到期——定时推进到下次，一次性的结束。返回
-/// Some(原因) 表示这次不触发（记日志）；这次到期无论如何都已被消耗。
+/// Some(原因) 表示这次不触发（记日志）；列出之后改了配置、还没到期的不动。
 fn consume_in(
     tx: &mut Tx<'_>,
     t: &mut Trigger,
@@ -159,19 +156,17 @@ fn consume_in(
     tz: Tz,
     notifications: &Notifications,
 ) -> Result<Option<String>> {
-    match t.mode.clone() {
-        Mode::Schedule { config, mut state } => {
-            let skipped = schedule::consume_in(tx, t, &config, &mut state, now, tz, notifications)?;
-            t.mode = Mode::Schedule { config, state };
-            Ok(skipped)
-        }
+    let mut mode = t.mode.clone();
+    let Some(due) = mode.due().filter(|d| d.at() <= now) else { return Ok(Some("rescheduled".into())) };
+    let skipped = match due {
+        Due::Schedule { config, state } => schedule::consume_in(tx, t, config, state, now, tz, notifications)?,
         // 到点让它结束，这一次就算用掉了
-        Mode::Once { .. } => {
+        Due::Once { .. } => {
             t.finished_at = Some(now);
             tracing::info!(trigger = %t.name, "once trigger finished");
-            Ok(None)
+            None
         }
-        // 没有到期时间，调用方已据此跳过
-        Mode::Stream { .. } => Ok(Some("not due-based".into())),
-    }
+    };
+    t.mode = mode;
+    Ok(skipped)
 }

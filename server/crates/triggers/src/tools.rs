@@ -46,7 +46,7 @@ fn info(view: TriggerView, names: &AgentNames) -> TriggerInfo {
         agent: names.name(&t.agent_id),
         name: t.name,
         kind: view.kind,
-        prompt: t.prompt,
+        prompt: t.prompt.into(),
         enabled: t.enabled,
         precheck: t.precheck,
         faults: t.faults,

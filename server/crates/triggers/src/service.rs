@@ -133,8 +133,13 @@ pub(crate) fn busy_previous_in(c: &Connection, t: &Trigger) -> Result<Option<(Se
     })
 }
 
+/// 要不要为这个挡路的会话通知用户：在等待、且还没为它通知过。在运行的不通知：运行偶尔长过一个周期是常态。
+pub(crate) fn needs_waiting_notice(notified: Option<&SessionId>, session_id: &SessionId, busy: Busy) -> bool {
+    busy == Busy::Waiting && notified != Some(session_id)
+}
+
 /// 挡路的会话在等待（可能永远等不到）时通知用户，每个挡路会话只通知一次（记在 `waiting_notified`，重启后仍记得）。
-/// 在运行的不通知：运行偶尔长过一个周期是常态。定时与流式共用；通知的内容由各自给出。调用方写回这一行。
+/// 定时与流式共用；通知的内容由各自给出。调用方写回这一行。
 pub(crate) fn notify_waiting_in(
     tx: &mut Tx<'_>,
     notifications: &Notifications,
@@ -143,7 +148,7 @@ pub(crate) fn notify_waiting_in(
     busy: Busy,
     notice: impl FnOnce(&Trigger) -> Notify,
 ) -> Result<()> {
-    if busy == Busy::Running || t.waiting_notified.as_ref() == Some(session_id) {
+    if !needs_waiting_notice(t.waiting_notified.as_ref(), session_id, busy) {
         return Ok(());
     }
     notifications.notify_in(tx, &notice(t))?;
@@ -408,7 +413,7 @@ impl TriggerService {
                     }
                 }
                 if let Some(prompt) = update.prompt {
-                    t.prompt = prompt.into();
+                    t.prompt = prompt;
                 }
                 if let Some(enabled) = update.enabled {
                     t.enabled = enabled;
@@ -491,9 +496,10 @@ impl TriggerService {
                 let letter = format!(
                     "Your trigger `{}` came due for its last time while you were archived, so its task was NOT done \
                      and it has finished. Its prompt was:\n<prompt>\n{}\n</prompt>",
-                    t.name, t.prompt
+                    t.name,
+                    t.prompt.as_str()
                 );
-                faults.alert_in(tx, &t, "未执行：它的 agent 已归档", letter, &t.prompt)
+                faults.alert_in(tx, &t, "未执行：它的 agent 已归档", letter, t.prompt.as_str())
             })
             .await
     }
@@ -590,7 +596,7 @@ impl TriggerService {
         let now = Utc::now();
         let mail = SenderMail {
             sender: Sender::Trigger { trigger_id: t.id },
-            content: event_prompt(&t.prompt, payload),
+            content: event_prompt(t.prompt.as_str(), payload),
             session: SenderTarget::New {
                 agent_id: t.agent_id.clone(),
                 title: format!("{} · {}", t.name, local_minute(now, self.0.tz)),

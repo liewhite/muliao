@@ -5,5 +5,8 @@ ALTER TABLE triggers DROP COLUMN disabled_reason;
 ALTER TABLE triggers ADD COLUMN waiting_notified TEXT;
 UPDATE triggers SET waiting_notified = json_extract(state, '$.skipped.session_id')
 WHERE kind = 'schedule' AND json_extract(state, '$.skipped.notified') = 1;
--- 流式进程的运行状况（启动时间、连续失败次数）改放内存，state 只留 generation。
-UPDATE triggers SET state = json_object('generation', json_extract(state, '$.generation')) WHERE kind = 'stream';
+-- 流式进程的运行状况（启动时间、连续失败次数）改放内存，state 只留 generation。Python 时代建的可能没有 generation，
+-- 补一个（下次托管按它起）。
+UPDATE triggers
+SET state = json_object('generation', coalesce(json_extract(state, '$.generation'), lower(hex(randomblob(16)))))
+WHERE kind = 'stream';

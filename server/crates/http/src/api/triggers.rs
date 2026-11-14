@@ -70,7 +70,7 @@ impl TriggerOut {
             id: t.id,
             name: t.name,
             agent_id: t.agent_id,
-            prompt: t.prompt,
+            prompt: t.prompt.into(),
             enabled: t.enabled,
             precheck: t.precheck,
             last_checked_at: t.last_checked_at,
