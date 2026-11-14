@@ -1,19 +1,14 @@
 // issue 的小部件：状态圆点、负责项目的色点、胶囊与下拉框（看板、issue 页、会话页的标题共用）
 
-import type { ComponentProps, CSSProperties } from 'react'
+import type { ComponentProps } from 'react'
 import { selectableAgents } from '../agents/agentGroups'
 import { useAgents } from '../agents/agentList'
 import type { AgentId, IssueStatus } from '../api'
 import { SelectInput, type Option } from '../ui'
-import { STATUS_COLOR, ownerHue, ownerLabel } from './model'
+import { STATUS_COLOR, ownerHue, ownerLabel, ownerStyle } from './model'
 
 export function StatusDot({ status }: { status: IssueStatus }) {
   return <span className={`inline-block size-3 shrink-0 rounded-full border-2 ${STATUS_COLOR[status]}`} aria-hidden />
-}
-
-/** 带负责项目色相的样式：配合 owner-color 类（styles.css）得到 --owner-fg / --owner-bg；不着色时为 undefined */
-export function ownerStyle(hue: number | null): CSSProperties | undefined {
-  return hue === null ? undefined : ({ '--owner-hue': hue } as CSSProperties)
 }
 
 /** 负责项目的色点；不着色时是灰点 */

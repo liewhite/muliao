@@ -25,6 +25,7 @@ import {
   FOLD_LIMIT,
   foldIssues,
   ownerHue,
+  ownerStyle,
   groupByStatus,
   moveIssues,
   type AssigneeChoice,
@@ -33,7 +34,7 @@ import {
   issueRefs,
   parseIssueRefs,
 } from './model'
-import { OwnerChip, OwnerDot, OwnerSelect, StatusDot, ownerStyle } from './issueParts'
+import { OwnerChip, OwnerDot, OwnerSelect, StatusDot } from './issueParts'
 import { NODE_HEIGHT, NODE_WIDTH, edgePath, graphIssues, layoutIssueGraph, type GraphScope } from './issueGraph'
 import { oneOf, useStoredState } from '../storedState'
 import {

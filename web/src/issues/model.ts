@@ -1,5 +1,6 @@
 // issue 看板的纯逻辑：状态与优先级的展示顺序、按状态分列、时间线文字
 
+import type { CSSProperties } from 'react'
 import { agentLabel, selectableAgents } from '../agents/agentGroups'
 import type { Option } from '../ui'
 import {
@@ -192,4 +193,9 @@ export const WORK_LABEL: Record<NonNullable<Issue['assignee_state']>, string> = 
   running: '处理中',
   waiting: '处理中',
   idle: '空闲',
+}
+
+/** 带负责项目色相的样式：配合 owner-color 类（styles.css）得到 --owner-fg / --owner-bg；不着色时为 undefined */
+export function ownerStyle(hue: number | null): CSSProperties | undefined {
+  return hue === null ? undefined : ({ '--owner-hue': hue } as CSSProperties)
 }
