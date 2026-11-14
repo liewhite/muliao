@@ -352,7 +352,7 @@ impl Meter {
         *self.spent.lock().expect("meter lock") += totals;
         let entry = UsageEntry {
             agent_id: self.agent_id.clone(),
-            session_id: Some(self.session_id.clone()),
+            session_id: self.session_id.clone(),
             kind: self.kind,
             model: self.model.clone(),
             totals,

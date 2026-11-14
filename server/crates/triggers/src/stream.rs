@@ -127,7 +127,9 @@ pub struct StreamConfigOut {
 
 impl From<&StreamConfig> for StreamConfigOut {
     fn from(c: &StreamConfig) -> Self {
-        StreamConfigOut { command: c.command.clone(), secrets: c.secrets.clone(), debounce_seconds: c.debounce_seconds }
+        // 解构：StreamConfig 加了字段而这里没跟上时编译不过
+        let StreamConfig { command, secrets, debounce_seconds } = c;
+        StreamConfigOut { command: command.clone(), secrets: secrets.clone(), debounce_seconds: *debounce_seconds }
     }
 }
 

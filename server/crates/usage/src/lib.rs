@@ -67,8 +67,8 @@ impl AddAssign for UsageTotals {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsageEntry {
     pub agent_id: AgentId,
-    /// 不属于任何会话的运行为空（历史数据里有）
-    pub session_id: Option<SessionId>,
+    /// 这笔用量所在的会话（库里的列可以为空：早先的数据有不属于任何会话的）
+    pub session_id: SessionId,
     pub kind: RunKind,
     /// `<provider 名>:<模型名>`，与 agent.toml 的 model 同一格式
     pub model: String,

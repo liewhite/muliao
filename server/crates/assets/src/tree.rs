@@ -199,7 +199,10 @@ impl Asset {
     }
 
     pub fn owner(&self) -> Owner {
-        self.key.agent().map_or(Owner::Platform, |a| Owner::Agent(a.clone()))
+        match &self.key {
+            AssetKey::Named { owner, .. } => owner.clone(),
+            AssetKey::Private { agent, .. } => Owner::Agent(agent.clone()),
+        }
     }
 
     pub fn owned_by(&self, agent_id: &AgentId) -> bool {

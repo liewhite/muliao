@@ -190,7 +190,7 @@ impl RawMail {
                 attachments: serde_json::from_str(&self.attachments).map_err(|e| bad("attachments", e))?,
                 delegation_id: self.delegation_id,
             },
-            ("answer", origin @ (None | Some(Origin::User)), None) => {
+            ("answer", None | Some(Origin::User), None) => {
                 // answers 列存的是 调用 id -> 结果 的表（早先设计成一封可带多个），实际每封只有一个
                 let answers: BTreeMap<String, CallResult> =
                     serde_json::from_str(&self.answers).map_err(|e| bad("answers", e))?;
@@ -198,12 +198,6 @@ impl RawMail {
                 let (Some((call_id, result)), None) = (answers.next(), answers.next()) else {
                     return Err(broken(format!("answer mail {id} does not answer exactly one call")));
                 };
-                if result.is_from_user() != origin.is_some() {
-                    return Err(broken(format!(
-                        "answer mail {id} has origin {origin:?} for a {:?} result",
-                        result.kind()
-                    )));
-                }
                 MailBody::Answer { call_id, result }
             }
             ("event", None, Some(raw)) => match EventSource::parse(&raw) {

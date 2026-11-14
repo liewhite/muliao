@@ -38,14 +38,6 @@ pub enum RunEnd {
 }
 
 impl RunEnd {
-    /// 停在这一类挂起的调用上。
-    pub fn waits_on(&self, kind: Waiting) -> bool {
-        match self {
-            RunEnd::Answered { .. } => false,
-            RunEnd::Paused { waiting_on, .. } => waiting_on.contains(&kind),
-        }
-    }
-
     /// 给用户看的文字：回答，或问题与等批准的调用。
     pub fn text(&self) -> &str {
         match self {

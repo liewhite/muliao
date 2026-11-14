@@ -6,10 +6,10 @@ fn totals(requests: u64, input: u64) -> UsageTotals {
     UsageTotals { requests, input_tokens: input, output_tokens: 1, cache_read_tokens: 2, cache_write_tokens: 3 }
 }
 
-fn entry(agent: &str, session: Option<&str>, model: &str, t: UsageTotals) -> UsageEntry {
+fn entry(agent: &str, session: &str, model: &str, t: UsageTotals) -> UsageEntry {
     UsageEntry {
         agent_id: AgentId::new(agent),
-        session_id: session.map(SessionId::new),
+        session_id: SessionId::new(session),
         kind: RunKind::Run,
         model: model.into(),
         totals: t,
@@ -54,10 +54,10 @@ async fn insert_at(log: &UsageLog, at: DateTime<Utc>, e: UsageEntry) {
 async fn record_and_session_totals() {
     let (_dir, log) = log().await;
     assert_eq!(log.session_totals(&SessionId::new("s1")).await.unwrap(), UsageTotals::default());
-    log.record(entry("a", Some("s1"), "p:m", totals(1, 10))).await.unwrap();
-    log.record(UsageEntry { kind: RunKind::Compaction, ..entry("a", Some("s1"), "p:m", totals(1, 5)) }).await.unwrap();
-    log.record(entry("a", Some("s2"), "p:m", totals(1, 100))).await.unwrap();
-    log.record(entry("a", None, "p:m", totals(1, 1000))).await.unwrap();
+    log.record(entry("a", "s1", "p:m", totals(1, 10))).await.unwrap();
+    log.record(UsageEntry { kind: RunKind::Compaction, ..entry("a", "s1", "p:m", totals(1, 5)) }).await.unwrap();
+    log.record(entry("a", "s2", "p:m", totals(1, 100))).await.unwrap();
+    log.record(entry("a", "s3", "p:m", totals(1, 1000))).await.unwrap();
     let s1 = log.session_totals(&SessionId::new("s1")).await.unwrap();
     assert_eq!(s1, totals(1, 10) + totals(1, 5));
     assert_eq!(s1.input_tokens, 15);
@@ -69,11 +69,11 @@ async fn summarize_groups_by_day_in_the_configured_timezone() {
     let (_dir, log) = log().await;
     let utc = |d, h| Utc.with_ymd_and_hms(2026, 11, d, h, 0, 0).unwrap();
     // UTC 11-11 15:00 是上海 11-11 23:00；UTC 11-11 17:00 是上海 11-12 01:00：同一个 UTC 日，分属上海两天
-    insert_at(&log, utc(11, 15), entry("a", Some("s"), "p:m", totals(1, 10))).await;
-    insert_at(&log, utc(11, 17), entry("a", Some("s"), "p:m", totals(1, 20))).await;
-    insert_at(&log, utc(11, 18), entry("b", Some("s"), "p:x", totals(2, 40))).await;
+    insert_at(&log, utc(11, 15), entry("a", "s", "p:m", totals(1, 10))).await;
+    insert_at(&log, utc(11, 17), entry("a", "s", "p:m", totals(1, 20))).await;
+    insert_at(&log, utc(11, 18), entry("b", "s", "p:x", totals(2, 40))).await;
     // 范围外（until 不含）
-    insert_at(&log, utc(12, 0), entry("a", Some("s"), "p:m", totals(9, 999))).await;
+    insert_at(&log, utc(12, 0), entry("a", "s", "p:m", totals(9, 999))).await;
 
     let since = utc(11, 0);
     let until = utc(12, 0);
@@ -119,8 +119,8 @@ async fn time_ranges_compare_correctly_with_fractional_seconds() {
     let (_dir, log) = log().await;
     let whole = Utc.with_ymd_and_hms(2026, 11, 11, 10, 0, 0).unwrap();
     let frac = whole + chrono::Duration::milliseconds(500);
-    insert_at(&log, whole, entry("a", None, "p:m", totals(1, 1))).await;
-    insert_at(&log, frac, entry("a", None, "p:m", totals(1, 2))).await;
+    insert_at(&log, whole, entry("a", "s", "p:m", totals(1, 1))).await;
+    insert_at(&log, frac, entry("a", "s", "p:m", totals(1, 2))).await;
     let only_frac = log
         .summarize(whole + chrono::Duration::milliseconds(1), frac + chrono::Duration::seconds(1), &[])
         .await

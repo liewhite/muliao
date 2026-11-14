@@ -42,15 +42,6 @@ pub enum MemoryAccess {
     ReadOnly,
 }
 
-impl MemoryAccess {
-    pub fn editable(self) -> bool {
-        match self {
-            MemoryAccess::Own | MemoryAccess::Editable => true,
-            MemoryAccess::ReadOnly => false,
-        }
-    }
-}
-
 /// 一次运行放进指令的一块记忆。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemoryBlock {

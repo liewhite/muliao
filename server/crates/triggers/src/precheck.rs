@@ -107,7 +107,9 @@ pub struct PrecheckOut {
 
 impl From<&Precheck> for PrecheckOut {
     fn from(p: &Precheck) -> Self {
-        PrecheckOut { command: p.command.clone(), secrets: p.secrets.clone(), fire_when: p.fire_when }
+        // 解构：Precheck 加了字段而这里没跟上时编译不过
+        let Precheck { command, secrets, fire_when } = p;
+        PrecheckOut { command: command.clone(), secrets: secrets.clone(), fire_when: *fire_when }
     }
 }
 
