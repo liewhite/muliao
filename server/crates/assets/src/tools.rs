@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::access::Actor;
 use crate::distribution::Distribution;
-use crate::formats::agent_file::Thinking;
+use crate::formats::agent_file::{Grouping, Thinking};
 use crate::lifecycle::AgentLifecycle;
 use crate::rules::{AgentRules, Role, Rule, texts};
 use crate::secrets::Secrets;
@@ -250,7 +250,7 @@ impl Tool<RunScope> for CreateAgent {
             description: a.description,
             model: a.model.as_deref().map(ModelRef::parse).transpose().map_err(ToolError::Retry)?,
             thinking: a.thinking,
-            group: a.group,
+            group: a.group.as_deref().map_or(Grouping::Ungrouped, Grouping::parse),
             rules: AgentRules { roles: a.roles, allow: Rule::parse_all(&a.allow)?, deny: Rule::parse_all(&a.deny)? },
         };
         let created = self.agents.create(spec, &Actor::Agent(ctx.deps.agent_id.clone())).await?;

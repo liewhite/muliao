@@ -6,7 +6,7 @@ use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
 use muliao_assets::access::{Actor, Reach, Source, UsableAsset};
 use muliao_assets::distribution::{RoleSpec, RoleView, UsedAsset};
-use muliao_assets::formats::agent_file::{AgentConfig, Thinking};
+use muliao_assets::formats::agent_file::{AgentConfig, Grouping, Thinking};
 use muliao_assets::formats::mcp::McpTransport;
 use muliao_assets::kinds::Shown;
 use muliao_assets::rules::{AgentRules, Rule, Rules, ToolSpec, texts};
@@ -86,7 +86,7 @@ pub struct AgentOut {
 impl AgentOut {
     fn of(v: AgentView) -> Self {
         let AgentView { info, config, rules } = v;
-        let archived_at = info.archived_at();
+        let (archived_at, is_default) = (info.archived_at(), info.is_default());
         AgentOut {
             id: info.id,
             name: info.name.to_string(),
@@ -100,7 +100,7 @@ impl AgentOut {
             allow: texts(&rules.allow),
             deny: texts(&rules.deny),
             created_at: info.created_at,
-            is_default: info.is_default,
+            is_default,
             archived_at,
         }
     }
@@ -137,7 +137,7 @@ async fn agent_defaults(State(s): State<AppState>) -> axum::Json<AgentDefaults> 
         allow: texts(&spec.rules.allow),
         deny: texts(&spec.rules.deny),
         thinking: spec.thinking,
-        group: spec.group,
+        group: spec.group.name().map(str::to_owned),
     })
 }
 
@@ -363,7 +363,7 @@ async fn create_agent(
         description: body.description,
         model: body.model.map(ModelIo::parse).transpose()?,
         thinking: body.thinking,
-        group: body.group,
+        group: body.group.as_deref().map_or(Grouping::Ungrouped, Grouping::parse),
         rules: AgentRules {
             roles: body.roles,
             allow: Rule::parse_all(&body.allow)?,
@@ -419,7 +419,7 @@ async fn update_agent(
             description: body.description,
             model: body.model.map(ModelIo::parse).transpose()?,
             thinking: body.thinking,
-            group: body.group,
+            group: body.group.as_deref().map(Grouping::parse),
         },
         roles: body.roles,
         allow: body.allow.as_deref().map(Rule::parse_all).transpose()?,

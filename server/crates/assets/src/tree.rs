@@ -34,7 +34,7 @@ use crate::access_file::{self, ACCESS_FILE, Access, AccessText};
 use crate::formats::agent_file::{self, AGENT_FILE, AgentFile};
 use crate::kinds::{Content, Kind, KindContent, Section, StoredKind};
 use crate::naming::{AgentName, PLATFORM};
-use crate::rules::{Action, AgentRules, Roles, ToolTable};
+use crate::rules::{Action, AgentRules, Roles, Target, ToolTable};
 use muliao_platform::errors::{Result, conflict, not_found};
 
 pub const PRIVATE_MEMORY_FILE: &str = "memory.md";
@@ -50,8 +50,8 @@ pub enum Place {
     Shelf(StoredKind),
     /// 一项按名字认的资源（平台记忆、MCP、secret 的文件，skill 的目录）；inner 是 skill 目录里的文件的相对路径
     Entry { kind: StoredKind, name: String, inner: Vec<String> },
-    /// agent 目录里的私有记忆（memory.md）
-    PrivateMemory,
+    /// agent 目录里的私有记忆（memory.md），归这个 agent
+    PrivateMemory(AgentId),
 }
 
 /// 路径不是资源目录里该有的东西（kind 为 None），或名字不合那种资源的规则。
@@ -67,16 +67,24 @@ impl Misplaced {
     }
 }
 
-/// owner 目录里的相对路径 rel（非空）是什么（[`rel_of`] 的反向）：in_agent 是 agent 的目录（否则是平台目录）。
-pub fn place_of(rel: &[String], in_agent: bool) -> Result<Place, Misplaced> {
+/// owner 目录里的相对路径 rel（非空）是什么（[`rel_of`] 的反向）。
+pub fn place_of(rel: &[String], owner: &Owner) -> Result<Place, Misplaced> {
     let (head, rest) = rel.split_first().expect("a relative path has at least one part");
-    let config = if in_agent { AGENT_FILE } else { ACCESS_FILE };
+    let config = match owner {
+        Owner::Platform => ACCESS_FILE,
+        Owner::Agent(_) => AGENT_FILE,
+    };
     if rest.is_empty() && head == config {
         return Ok(Place::Config);
     }
-    if in_agent && rest.is_empty() && head == PRIVATE_MEMORY_FILE {
-        return Ok(Place::PrivateMemory);
+    if let Owner::Agent(id) = owner
+        && rest.is_empty()
+        && head == PRIVATE_MEMORY_FILE
+    {
+        return Ok(Place::PrivateMemory(id.clone()));
     }
+    // agent 目录里没有按名字认的记忆（只有私有记忆）
+    let in_agent = matches!(owner, Owner::Agent(_));
     let shelves: Vec<StoredKind> =
         StoredKind::ALL.into_iter().filter(|k| !in_agent || *k != StoredKind::Memory).collect();
     let joined = rel.join("/");
@@ -142,12 +150,36 @@ pub struct AgentDir {
     pub file: AgentFile,
 }
 
-/// 一项资源。path：记忆、MCP、secret 是那个文件，skill 是它的目录。私有记忆的 name 是它的 agent 的名字，只用于显示。种类就是内容的种类
-/// （[`Asset::kind`]）。
+/// 一项资源是哪一项：按名字认的（名字每种全局唯一，归 owner），或某个 agent 的私有记忆（按所属的 agent 认，归它；
+/// agent_name 只用于显示）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AssetKey {
+    Named { name: String, owner: Owner },
+    Private { agent: AgentId, agent_name: String },
+}
+
+impl AssetKey {
+    /// 显示的名字：按名字认的是它的名字，私有记忆是它的 agent 的名字。
+    pub fn name(&self) -> &str {
+        match self {
+            AssetKey::Named { name, .. } => name,
+            AssetKey::Private { agent_name, .. } => agent_name,
+        }
+    }
+
+    /// 它归的 agent；归平台为 None。
+    pub fn agent(&self) -> Option<&AgentId> {
+        match self {
+            AssetKey::Named { owner, .. } => owner.agent(),
+            AssetKey::Private { agent, .. } => Some(agent),
+        }
+    }
+}
+
+/// 一项资源。path：记忆、MCP、secret 是那个文件，skill 是它的目录。种类就是内容的种类（[`Asset::kind`]）。
 #[derive(Debug, Clone)]
 pub struct Asset {
-    pub name: String,
-    pub owner: Owner,
+    pub key: AssetKey,
     pub path: PathBuf,
     pub updated_at: DateTime<Utc>,
     pub content: Content,
@@ -162,12 +194,23 @@ impl Asset {
         self.content.description()
     }
 
-    /// 规则里指它的名字（`<action>:<kind>:<名>`）。私有记忆为 None：它按所属的 agent 认，只有不限种类的规则
-    /// （`write:*`）管得到它。
-    pub fn rule_name(&self) -> Option<&str> {
-        match (self.kind(), &self.owner) {
-            (StoredKind::Memory, Owner::Agent(_)) => None,
-            _ => Some(&self.name),
+    pub fn name(&self) -> &str {
+        self.key.name()
+    }
+
+    pub fn owner(&self) -> Owner {
+        self.key.agent().map_or(Owner::Platform, |a| Owner::Agent(a.clone()))
+    }
+
+    pub fn owned_by(&self, agent_id: &AgentId) -> bool {
+        self.key.agent() == Some(agent_id)
+    }
+
+    /// 规则里怎么判断它（[`Target`]）。
+    pub fn target(&self) -> Target<'_> {
+        match &self.key {
+            AssetKey::Named { name, .. } => Target::Named { kind: self.kind().kind(), name },
+            AssetKey::Private { .. } => Target::PrivateMemory,
         }
     }
 }
@@ -271,10 +314,7 @@ impl Snapshot {
         if kind == StoredKind::Memory {
             all.extend(self.private.values());
         }
-        all.sort_by(|a, b| {
-            (&a.name, a.owner.agent().map(AgentId::as_str).unwrap_or(""))
-                .cmp(&(&b.name, b.owner.agent().map(AgentId::as_str).unwrap_or("")))
-        });
+        all.sort_by(|a, b| a.name().cmp(b.name()).then_with(|| a.owner().cmp(&b.owner())));
         all
     }
 
@@ -501,7 +541,7 @@ impl Reader<'_> {
 
     fn visit(&mut self, base: &Path, rel: Vec<String>, owner: &Owner) {
         let path = rel.iter().fold(base.to_path_buf(), |p, part| p.join(part));
-        let place = match place_of(&rel, matches!(owner, Owner::Agent(_))) {
+        let place = match place_of(&rel, owner) {
             Ok(p) => p,
             Err(e) => return self.problem(path, e.reason, owner.agent()),
         };
@@ -522,14 +562,12 @@ impl Reader<'_> {
                     Err(e) => self.problem(path, format!("cannot list: {e}"), owner.agent()),
                 }
             }
-            Place::PrivateMemory => {
-                let id = owner.agent().expect("private memory is in an agent directory").clone();
+            Place::PrivateMemory(id) => {
                 if path.is_dir() {
                     return self.problem(path, "expected a file", Some(&id));
                 }
-                // 显示的名字是 agent 名
-                let name = self.known[&id].to_string();
-                if let Some(asset) = self.loaded(StoredKind::Memory, &name, path, owner) {
+                let key = AssetKey::Private { agent: id.clone(), agent_name: self.known[&id].to_string() };
+                if let Some(asset) = self.loaded(StoredKind::Memory, key, path) {
                     self.private.insert(id, asset);
                 }
             }
@@ -539,7 +577,8 @@ impl Reader<'_> {
                     let what = if directory { "directory" } else { "file" };
                     return self.problem(path, format!("expected a {what}"), owner.agent());
                 }
-                match self.loaded(kind, &name, path, owner) {
+                let key = AssetKey::Named { name: name.clone(), owner: owner.clone() };
+                match self.loaded(kind, key, path) {
                     Some(asset) => self.found.entry(asset.kind()).or_default().entry(name).or_default().push(asset),
                     None => {
                         self.unloaded.entry(kind).or_default().insert(name.clone());
@@ -553,23 +592,18 @@ impl Reader<'_> {
     }
 
     /// 按这种资源登记的读法读一项；读坏了记成问题、返回 None。
-    fn loaded(&mut self, kind: StoredKind, name: &str, path: PathBuf, owner: &Owner) -> Option<Asset> {
-        match (kind.spec().load)(&path, name, self.memory_max_chars) {
+    fn loaded(&mut self, kind: StoredKind, key: AssetKey, path: PathBuf) -> Option<Asset> {
+        let owner = key.agent().cloned();
+        match (kind.spec().load)(&path, key.name(), self.memory_max_chars) {
             Err(reason) => {
-                self.problem(path, reason, owner.agent());
+                self.problem(path, reason, owner.as_ref());
                 None
             }
             Ok(got) => {
                 if let Some(w) = got.warning {
-                    self.problem(path.clone(), w, owner.agent());
+                    self.problem(path.clone(), w, owner.as_ref());
                 }
-                Some(Asset {
-                    name: name.to_owned(),
-                    owner: owner.clone(),
-                    path,
-                    updated_at: got.updated_at,
-                    content: got.content,
-                })
+                Some(Asset { key, path, updated_at: got.updated_at, content: got.content })
             }
         }
     }
@@ -589,19 +623,19 @@ impl Reader<'_> {
                 out.insert(name, places.into_iter().next().expect("one place"));
                 continue;
             }
-            let platform: Vec<&Asset> = places.iter().filter(|a| a.owner == Owner::Platform).collect();
+            let platform: Vec<&Asset> = places.iter().filter(|a| a.owner() == Owner::Platform).collect();
             if platform.len() == 1 || broken {
                 let where_ = match platform.first() {
                     Some(p) => self.rel(&p.path),
                     None => format!("{PLATFORM}/ (broken, see the problem reported for it)"),
                 };
-                let copies: Vec<&Asset> = places.iter().filter(|a| a.owner != Owner::Platform).collect();
+                let copies: Vec<&Asset> = places.iter().filter(|a| a.owner() != Owner::Platform).collect();
                 self.shadowed
                     .entry(kind)
                     .or_default()
                     .insert(name.clone(), copies.iter().map(|a| a.path.clone()).collect());
                 let reports: Vec<(PathBuf, Option<AgentId>)> =
-                    copies.iter().map(|a| (a.path.clone(), a.owner.agent().cloned())).collect();
+                    copies.iter().map(|a| (a.path.clone(), a.owner().agent().cloned())).collect();
                 for (path, agent) in reports {
                     self.problem(
                         path,
@@ -628,7 +662,7 @@ impl Reader<'_> {
                          loaded until all but one are renamed or removed",
                         kind.label()
                     ),
-                    a.owner.agent(),
+                    a.owner().agent(),
                 );
             }
             self.unloaded.entry(kind).or_default().insert(name);

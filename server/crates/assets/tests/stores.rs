@@ -13,7 +13,7 @@ use muliao_assets::distribution::{Distribution, RoleSpec};
 use muliao_assets::formats::mcp::{McpConfig, McpTransport};
 use muliao_assets::kinds::{Kind, StoredKind};
 use muliao_assets::mcp::McpRegistry;
-use muliao_assets::memory::MemoryStore;
+use muliao_assets::memory::{MemoryAccess, MemoryStore};
 use muliao_assets::rules::{AgentRules, Rules};
 use muliao_assets::run_assets::RunAssets;
 use muliao_assets::secrets::{SecretUse, Secrets};
@@ -39,9 +39,9 @@ async fn memory_versions_and_blocks() {
     let private = memory.read_private(&a).await.unwrap();
     memory.put_private(&a, "我的", Some(&private.version)).await.unwrap();
     let blocks = memory.for_agent(&a).await.unwrap();
-    let names: Vec<(&str, bool, bool)> = blocks.iter().map(|b| (b.name.as_str(), b.editable, b.yours)).collect();
+    let names: Vec<(&str, MemoryAccess)> = blocks.iter().map(|b| (b.name.as_str(), b.access)).collect();
     // team 没分给它；全局记忆 base 收录但不能改
-    assert_eq!(names, vec![("alice", true, true), ("global", false, false)]);
+    assert_eq!(names, vec![("alice", MemoryAccess::Own), ("global", MemoryAccess::ReadOnly)]);
 }
 
 #[tokio::test(flavor = "multi_thread")]

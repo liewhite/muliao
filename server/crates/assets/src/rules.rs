@@ -273,12 +273,26 @@ impl Rule {
         Ok(ok.into_iter().filter_map(Result::ok).collect())
     }
 
-    /// 按名字匹配这个权限（不限种类的也算；本机目录规则不管资源）。
-    fn matches(&self, action: Action, kind: Kind, name: &str) -> bool {
-        match self {
-            Rule::Every(a) => a.covers(action),
-            Rule::Named { actions, kind: k, glob } => actions.covers(action) && *k == kind && fnmatch(name, glob),
-            Rule::Path(_) => false,
+    /// 这条 allow 放行 target 上的这个动作（不限种类的也算；本机目录规则不管资源）。私有记忆没有规则里的名字，只有不限种类的
+    /// 放行它。
+    fn grants(&self, action: Action, target: Target<'_>) -> bool {
+        match (self, target) {
+            (Rule::Every(a), _) => a.covers(action),
+            (Rule::Named { actions, kind: k, glob }, Target::Named { kind, name }) => {
+                actions.covers(action) && *k == kind && fnmatch(name, glob)
+            }
+            (Rule::Named { .. }, Target::PrivateMemory) | (Rule::Path(_), _) => false,
+        }
+    }
+
+    /// 这条 deny 拦 target 上的这个动作：同 [`Rule::grants`]，另外拦这一种全部名字的（glob 全是 `*`，如
+    /// `write:memory:*`）也拦私有记忆；`write:memory:?`、`write:memory:a*` 拦不到它。
+    fn blocks(&self, action: Action, target: Target<'_>) -> bool {
+        match (self, target) {
+            (Rule::Named { actions, kind, glob }, Target::PrivateMemory) => {
+                actions.covers(action) && *kind == Kind::Memory && glob.chars().all(|c| c == '*')
+            }
+            _ => self.grants(action, target),
         }
     }
 
@@ -289,7 +303,7 @@ impl Rule {
     /// 一条 tool 规则匹配不上 tools 里的任何工具（拼错、工具改了名，或这次配置没注册它）。
     pub fn matches_no_tool(&self, tools: &ToolTable) -> bool {
         matches!(self, Rule::Named { kind: Kind::Tool, .. })
-            && !tools.names().any(|t| self.matches(Action::Use, Kind::Tool, t))
+            && !tools.names().any(|t| self.grants(Action::Use, Target::tool(t)))
     }
 
     /// 按名字指某一种的规则会拼错；不限种类的与目录规则（目录可以还没建）不查。addressable 是规则能指的全部
@@ -321,6 +335,20 @@ pub fn texts(rules: &[Rule]) -> Vec<String> {
     rules.iter().map(Rule::to_string).collect()
 }
 
+/// 规则判断的对象：按名字认的一项（内置工具或按名字认的资源），或某个 agent 的私有记忆。私有记忆按所属的 agent 认、
+/// 在规则里没有名字：只有不限种类的 allow（`write:*`）放行它，deny 另有拦记忆全部名字的（`write:memory:*`）拦得到它。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Target<'a> {
+    Named { kind: Kind, name: &'a str },
+    PrivateMemory,
+}
+
+impl<'a> Target<'a> {
+    pub fn tool(name: &'a str) -> Self {
+        Target::Named { kind: Kind::Tool, name }
+    }
+}
+
 /// 一组 allow / deny 规则；deny 优先。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Rules {
@@ -350,21 +378,19 @@ impl Rules {
         out
     }
 
-    /// 这组规则放行这个权限：allow 匹配、deny 没拦。全系统唯一的判断。name 为 None 是规则不按名字指的资产（agent 的
-    /// 私有记忆）：只有不限种类的 allow 放行它（[`Rules::allows_every`]），deny 则凡是拦这一种全部的都拦它（如
-    /// `write:memory:*`）。
-    pub fn allows(&self, action: Action, kind: Kind, name: Option<&str>) -> bool {
-        permits(&self.allow, &self.deny, action, kind, name)
+    /// 这组规则放行这个权限：allow 匹配、deny 没拦。全系统唯一的判断（私有记忆怎么配见 [`Target`]）。
+    pub fn allows(&self, action: Action, target: Target<'_>) -> bool {
+        permits(&self.allow, &self.deny, action, target)
     }
 
     /// 不限种类的规则（`write:*`、`*:*`）放行这个动作、也没有不限种类的 deny 拦它：对一切资产都能做。写上就是 admin。
     pub fn allows_every(&self, action: Action) -> bool {
-        permits_every(&self.allow, &self.deny, action)
+        self.allow.iter().any(|r| r.every(action)) && !self.deny.iter().any(|r| r.every(action))
     }
 
     /// 收录：放行 use。
-    pub fn includes(&self, kind: Kind, name: Option<&str>) -> bool {
-        self.allows(Action::Use, kind, name)
+    pub fn includes(&self, target: Target<'_>) -> bool {
+        self.allows(Action::Use, target)
     }
 
     /// `write:path:<目录>` 规则里的目录：(allow 的, deny 的)，按规则顺序。
@@ -382,22 +408,13 @@ impl Rules {
 
     /// available（内置工具的名字）里放行的，按 available 的顺序。
     pub fn tools<'a>(&self, available: impl IntoIterator<Item = &'a str>) -> Vec<&'a str> {
-        available.into_iter().filter(|n| self.includes(Kind::Tool, Some(n))).collect()
+        available.into_iter().filter(|n| self.includes(Target::tool(n))).collect()
     }
 }
 
 /// [`Rules::allows`] 的判断本身：allow 与 deny 可以来自不同的规则（某一来源的 allow 对最终的 deny，[`crate::access::Grants`]）。
-pub fn permits(allow: &[Rule], deny: &[Rule], action: Action, kind: Kind, name: Option<&str>) -> bool {
-    let Some(name) = name else {
-        // 只有不限种类的 allow 放行；deny 凡是拦这一种全部的都拦：名字当作字面的 `*` 去配，`write:memory:*`、
-        // `write:*`、`*:*` 配得上，`write:memory:a*` 配不上
-        return permits_every(allow, &[], action) && !deny.iter().any(|r| r.matches(action, kind, "*"));
-    };
-    allow.iter().any(|r| r.matches(action, kind, name)) && !deny.iter().any(|r| r.matches(action, kind, name))
-}
-
-fn permits_every(allow: &[Rule], deny: &[Rule], action: Action) -> bool {
-    allow.iter().any(|r| r.every(action)) && !deny.iter().any(|r| r.every(action))
+pub fn permits(allow: &[Rule], deny: &[Rule], action: Action, target: Target<'_>) -> bool {
+    allow.iter().any(|r| r.grants(action, target)) && !deny.iter().any(|r| r.blocks(action, target))
 }
 
 pub const BASE: &str = "base";
@@ -470,17 +487,24 @@ impl AgentRules {
         Rules::union(sources.iter().map(|(_, r)| r))
     }
 
-    /// 最终规则的各个来源：(角色名, 它的规则)——base 在前、再按它的 roles——最后是 (None, 它自己的 allow / deny)。
+    /// 最终规则的各个来源：base 在前、再按它的 roles，最后是它自己的 allow / deny。
     /// 不存在的角色读树时已跳过，这里再遇到是代码错误。
-    pub fn sources(&self, known: &Roles) -> Vec<(Option<String>, Rules)> {
+    pub fn sources(&self, known: &Roles) -> Vec<(RuleSource, Rules)> {
         let missing: Vec<&String> = self.roles.iter().filter(|r| !known.contains_key(*r)).collect();
         assert!(missing.is_empty(), "agent references unknown roles {missing:?}");
         std::iter::once(BASE)
             .chain(self.roles.iter().map(String::as_str))
-            .map(|r| (Some(r.to_owned()), known[r].effective()))
-            .chain(std::iter::once((None, self.own())))
+            .map(|r| (RuleSource::Role(r.to_owned()), known[r].effective()))
+            .chain(std::iter::once((RuleSource::Own, self.own())))
             .collect()
     }
+}
+
+/// 一组规则从哪里来：某个角色（含 base），或 agent 自己的 allow / deny。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuleSource {
+    Role(String),
+    Own,
 }
 
 #[cfg(test)]
@@ -552,24 +576,29 @@ mod tests {
 
     #[test]
     fn allows_and_admin() {
+        let skill = |name| Target::Named { kind: Kind::Skill, name };
         let r = Rules::new(rules(&["use:skill:*", "write:*"]), rules(&["use:skill:secret*"]));
-        assert!(r.allows(Action::Use, Kind::Skill, Some("a")));
-        assert!(!r.allows(Action::Use, Kind::Skill, Some("secret-x")));
-        assert!(r.allows(Action::Write, Kind::Memory, None));
-        assert!(!r.allows(Action::Use, Kind::Memory, None));
+        assert!(r.allows(Action::Use, skill("a")));
+        assert!(!r.allows(Action::Use, skill("secret-x")));
+        assert!(r.allows(Action::Write, Target::PrivateMemory));
+        assert!(!r.allows(Action::Use, Target::PrivateMemory));
         assert!(r.allows_every(Action::Write));
         let denied = Rules::union([&r, &Rules::new(vec![], rules(&["*:*"]))]);
         assert!(!denied.allows_every(Action::Write));
-        // 私有记忆没有名字：拦这一种全部的 deny 管得到它，按名字拦的管不到
+        // 私有记忆没有名字：拦记忆全部名字的 deny 管得到它，按名字拦的（含 `?` 这种单字符通配）管不到
         let no_memory = Rules::union([&r, &Rules::new(vec![], rules(&["write:memory:*"]))]);
-        assert!(!no_memory.allows(Action::Write, Kind::Memory, None));
-        assert!(no_memory.allows(Action::Write, Kind::Skill, Some("x")));
-        let by_name = Rules::union([&r, &Rules::new(vec![], rules(&["write:memory:t*"]))]);
-        assert!(by_name.allows(Action::Write, Kind::Memory, None));
+        assert!(!no_memory.allows(Action::Write, Target::PrivateMemory));
+        assert!(no_memory.allows(Action::Write, skill("x")));
+        for by_name in ["write:memory:t*", "write:memory:?", "write:memory:[a-z]*"] {
+            let by_name = Rules::union([&r, &Rules::new(vec![], rules(&[by_name]))]);
+            assert!(by_name.allows(Action::Write, Target::PrivateMemory));
+        }
+        // 按种类放行全部名字的 allow 不放行私有记忆（只有不限种类的放行它）
+        assert!(!Rules::new(rules(&["write:memory:*"]), vec![]).allows(Action::Write, Target::PrivateMemory));
         // `*` 动作两种都管；目录规则不管资源
         let any = Rules::new(rules(&["*:skill:?", "write:path:/a"]), vec![]);
-        assert!(any.allows(Action::Write, Kind::Skill, Some("a")) && any.allows(Action::Use, Kind::Skill, Some("b")));
-        assert!(!any.allows(Action::Use, Kind::Skill, Some("ab")));
+        assert!(any.allows(Action::Write, skill("a")) && any.allows(Action::Use, skill("b")));
+        assert!(!any.allows(Action::Use, skill("ab")));
         assert!(!any.allows_every(Action::Write));
         let p = Rules::new(rules(&["write:path:/a", "write:*"]), rules(&["write:path:/a/b"]));
         assert_eq!(p.paths(), (vec!["/a".to_owned()], vec!["/a/b".to_owned()]));

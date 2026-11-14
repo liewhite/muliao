@@ -160,10 +160,10 @@ fn retire_assets(snapshot: &Snapshot, agent_id: &AgentId) -> Result<()> {
     let sharing = Sharing::of(snapshot);
     let owner = Owner::Agent(agent_id.to_owned());
     for kind in crate::kinds::StoredKind::ALL {
-        for a in snapshot.named(kind).filter(|a| a.owner == owner) {
-            if sharing.shared(kind.kind(), Some(&a.name), &owner) {
-                move_to(&a.path, &snapshot.path_of(kind, &a.name, &Owner::Platform)?)?;
-                tracing::info!(kind = %kind, asset = %a.name, "asset moved to the platform with its agent deleted");
+        for a in snapshot.named(kind).filter(|a| a.owned_by(agent_id)) {
+            if sharing.shared(a.target(), &owner) {
+                move_to(&a.path, &snapshot.path_of(kind, a.name(), &Owner::Platform)?)?;
+                tracing::info!(kind = %kind, asset = %a.name(), "asset moved to the platform with its agent deleted");
             }
         }
     }

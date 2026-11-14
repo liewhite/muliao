@@ -12,10 +12,12 @@ use std::path::{Path, PathBuf};
 use muliao_platform::fs::{is_within, real};
 
 use crate::access_file::ACCESS_FILE;
-use crate::kinds::{Kind, KindContent, StoredKind};
+use crate::kinds::{KindContent, StoredKind};
 use crate::naming::{AgentName, PLATFORM};
-use crate::rules::{Action, Actions, BASE, Role, Rule, Rules, ToolSpec, pattern_of, permission_of, permits};
-use crate::tree::{Asset, Owner, Snapshot, dir_owner};
+use crate::rules::{
+    Action, Actions, BASE, Role, Rule, RuleSource, Rules, Target, ToolSpec, pattern_of, permission_of, permits,
+};
+use crate::tree::{Asset, AssetKey, Owner, Snapshot, dir_owner};
 use muliao_platform::errors::{Result, forbidden};
 
 /// 做事的人：用户（界面），或某个 agent（id）。
@@ -40,21 +42,21 @@ impl Actor {
 #[derive(Debug, Clone)]
 pub struct Grants {
     agent_id: Option<AgentId>,
-    /// 规则的各个来源的 allow：(角色名, allow)，自己的 allow 为 None
-    allows: Vec<(Option<String>, Vec<Rule>)>,
+    /// 规则的各个来源的 allow
+    allows: Vec<(RuleSource, Vec<Rule>)>,
     /// 全部来源的并集（deny 作用于每个来源的 allow）
     rules: Rules,
 }
 
 impl Grants {
     /// sources：规则的各个来源（[`AgentRules::sources`] 的形状）。
-    pub fn new(agent_id: Option<AgentId>, sources: Vec<(Option<String>, Rules)>) -> Self {
+    pub fn new(agent_id: Option<AgentId>, sources: Vec<(RuleSource, Rules)>) -> Self {
         let rules = Rules::union(sources.iter().map(|(_, r)| r));
         Self { agent_id, allows: sources.into_iter().map(|(n, r)| (n, r.allow)).collect(), rules }
     }
 
     pub fn user() -> Self {
-        Self::new(None, vec![(None, Rules::new(vec![Rule::Every(Actions::Any)], vec![]))])
+        Self::new(None, vec![(RuleSource::Own, Rules::new(vec![Rule::Every(Actions::Any)], vec![]))])
     }
 
     /// 最终规则（全部来源的并集）。
@@ -65,17 +67,23 @@ impl Grants {
     /// 能对这项资产做这个动作的来源：它名下的、放行它的角色（含 base）、它自己的 allow；都没有就是不能做。最终规则是各来源的
     /// 并集，所以「某个来源放行」＝它的 allow 匹配且最终的 deny 没拦。
     pub fn source(&self, action: Action, asset: &Asset) -> Source {
-        let (kind, name) = (asset.kind().kind(), asset.rule_name());
-        let granting: Vec<&Option<String>> = self
+        let target = asset.target();
+        let granting: Vec<&RuleSource> = self
             .allows
             .iter()
-            .filter(|(_, allow)| permits(allow, &self.rules.deny, action, kind, name))
+            .filter(|(_, allow)| permits(allow, &self.rules.deny, action, target))
             .map(|(n, _)| n)
             .collect();
         Source {
-            own: self.agent_id.as_ref().is_some_and(|id| asset.owner.is(id)),
-            roles: granting.iter().filter_map(|n| (*n).clone()).collect(),
-            allow: granting.iter().any(|n| n.is_none()),
+            own: self.agent_id.as_ref().is_some_and(|id| asset.owned_by(id)),
+            roles: granting
+                .iter()
+                .filter_map(|n| match n {
+                    RuleSource::Role(r) => Some(r.clone()),
+                    RuleSource::Own => None,
+                })
+                .collect(),
+            allow: granting.iter().any(|n| matches!(n, RuleSource::Own)),
         }
     }
 
@@ -133,14 +141,14 @@ impl Sharing {
     }
 
     /// 「分发出去了」：base 收录它（人人可用），或某个不是它 owner 的 agent 的规则收录它（admin 的 `write:*` 不算分发）。
-    /// 资产页据此说明谁能用，删 agent 时据此把它名下分发出去的资产转给平台。name 是它在规则里的名字（私有记忆为 None）。
-    pub fn shared(&self, kind: Kind, name: Option<&str>, owner: &Owner) -> bool {
-        self.base.includes(kind, name) || self.agents.iter().any(|(a, r)| !owner.is(a) && r.includes(kind, name))
+    /// 资产页据此说明谁能用，删 agent 时据此把它名下分发出去的资产转给平台。
+    pub fn shared(&self, target: Target<'_>, owner: &Owner) -> bool {
+        self.base.includes(target) || self.agents.iter().any(|(a, r)| !owner.is(a) && r.includes(target))
     }
 
     /// 收录它的角色（含内置的）。
-    pub fn including(&self, kind: Kind, name: Option<&str>) -> Vec<String> {
-        self.roles.iter().filter(|(_, r)| r.includes(kind, name)).map(|(n, _)| n.clone()).collect()
+    pub fn including(&self, target: Target<'_>) -> Vec<String> {
+        self.roles.iter().filter(|(_, r)| r.includes(target)).map(|(n, _)| n.clone()).collect()
     }
 }
 
@@ -152,10 +160,10 @@ pub fn check_change(snapshot: &Snapshot, actor: &Actor, asset: &Asset) -> Result
     Err(forbidden(format!(
         "{} {:?} belongs to {}; only its owner, an agent whose roles grant 'write:{}:{}', or an admin can change it",
         asset.kind().label(),
-        asset.name,
-        snapshot.owner_label(&asset.owner),
+        asset.name(),
+        snapshot.owner_label(&asset.owner()),
         asset.kind(),
-        asset.name
+        asset.name()
     )))
 }
 
@@ -248,7 +256,7 @@ impl WriteScope {
 pub fn write_scope(snapshot: &Snapshot, agent_id: &AgentId) -> WriteScope {
     let grants = grants_for(snapshot, &Actor::Agent(agent_id.to_owned()));
     let own = snapshot.own_dir(agent_id);
-    let others: Vec<&Asset> = snapshot.all().filter(|a| !a.owner.is(agent_id)).collect();
+    let others: Vec<&Asset> = snapshot.all().filter(|a| !a.owner().is(agent_id)).collect();
     let admin = snapshot.administers(agent_id);
     let (assets, withheld) = if admin {
         (vec![snapshot.root.clone()], others.iter().filter(|a| !grants.writes(a)).map(|a| a.path.clone()).collect())
@@ -262,13 +270,16 @@ pub fn write_scope(snapshot: &Snapshot, agent_id: &AgentId) -> WriteScope {
     let located = snapshot
         .all()
         .map(|a| {
-            let whose = format!("It belongs to {} ({} {:?})", snapshot.owner_label(&a.owner), a.kind().label(), a.name);
-            let advice = match a.rule_name() {
-                None => format!("{whose}: it is that agent's private memory, which only it (or an admin) changes.]"),
-                Some(rule_name) => format!(
+            let whose =
+                format!("It belongs to {} ({} {:?})", snapshot.owner_label(&a.owner()), a.kind().label(), a.name());
+            let advice = match &a.key {
+                AssetKey::Private { .. } => {
+                    format!("{whose}: it is that agent's private memory, which only it (or an admin) changes.]")
+                }
+                AssetKey::Named { name, .. } => format!(
                     "{whose}: ask its owner or an admin to change it, or ask the user or an admin to grant you '{}' in \
                      {}.]",
-                    permission_of(Action::Write, a.kind().kind(), rule_name),
+                    permission_of(Action::Write, a.kind().kind(), name),
                     access_path.display()
                 ),
             };
@@ -319,10 +330,10 @@ pub fn reach_of(snapshot: &Snapshot, grants: &Grants) -> Reach {
         .into_iter()
         .flat_map(|k| snapshot.of_kind(k))
         .filter(|a| grants.uses(a))
-        .map(|a| UsableAsset { kind: a.kind(), name: a.name.clone() })
+        .map(|a| UsableAsset { kind: a.kind(), name: a.name().to_owned() })
         .collect();
     let tools =
-        snapshot.tools.specs().iter().filter(|t| grants.rules().includes(Kind::Tool, Some(&t.name))).cloned().collect();
+        snapshot.tools.specs().iter().filter(|t| grants.rules().includes(Target::tool(&t.name))).cloned().collect();
     Reach { tools, assets }
 }
 

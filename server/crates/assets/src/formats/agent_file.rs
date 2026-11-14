@@ -72,21 +72,44 @@ pub struct AgentConfig {
     pub description: Option<String>,
     pub model: Option<ModelRef>,
     pub thinking: Option<Thinking>,
-    /// 分组名：Some("") 是不分组（界面与工具给的会去掉首尾空白）
-    pub group: Option<String>,
+    pub group: Option<Grouping>,
 }
 
 fn invalid(reason: impl fmt::Display) -> String {
     format!("invalid {AGENT_FILE}: {reason}")
 }
 
-/// 界面与工具给的分组名的唯一规整：去掉首尾空白，空的是不分组。
-pub(crate) fn group_of(input: &str) -> Option<String> {
-    Some(input.trim().to_owned()).filter(|g| !g.is_empty())
+/// 分在哪个组：不分组，或某个组（名字去掉了首尾空白、非空）。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum Grouping {
+    #[default]
+    Ungrouped,
+    In(String),
+}
+
+impl Grouping {
+    /// 界面与工具给的分组名的唯一规整：去掉首尾空白，空的是不分组。
+    pub fn parse(input: &str) -> Self {
+        match input.trim() {
+            "" => Grouping::Ungrouped,
+            g => Grouping::In(g.to_owned()),
+        }
+    }
+
+    pub fn name(&self) -> Option<&str> {
+        match self {
+            Grouping::Ungrouped => None,
+            Grouping::In(g) => Some(g),
+        }
+    }
 }
 
 impl AgentFile {
-    pub fn new(
+    pub fn new(description: String, model: ModelRef, thinking: Thinking, group: Grouping) -> Result<Self, String> {
+        Self::checked(description, model, thinking, group.name().map(str::to_owned))
+    }
+
+    fn checked(
         description: String,
         model: ModelRef,
         thinking: Thinking,
@@ -109,9 +132,9 @@ impl AgentFile {
     pub fn with(&self, config: &AgentConfig) -> Result<Self, String> {
         let group = match &config.group {
             None => self.group.clone(),
-            Some(g) => group_of(g),
+            Some(g) => g.name().map(str::to_owned),
         };
-        Self::new(
+        Self::checked(
             config.description.clone().unwrap_or_else(|| self.description.clone()),
             config.model.clone().unwrap_or_else(|| self.model.clone()),
             config.thinking.unwrap_or(self.thinking),
@@ -171,7 +194,7 @@ pub fn parse(text: &str) -> Result<AgentFile, String> {
         })?,
     };
     let model = ModelRef::parse(&required("model")?).map_err(invalid)?;
-    AgentFile::new(required("description")?, model, thinking, string(&table, "group")?)
+    AgentFile::checked(required("description")?, model, thinking, string(&table, "group")?)
 }
 
 /// 要写成 data 时的全文：current 是已有文件的原文（在它上面改，保留注释与别的排版），没有文件为 None。值没变的键原样
@@ -208,7 +231,8 @@ mod tests {
         let text = "# 注释\ndescription = \"d\"  # 说明\nmodel = \"p:m\" # 模型\ngroup = \"g\"\n";
         let file = parse(text).unwrap();
         assert_eq!(file.thinking(), Thinking::Default);
-        let config = AgentConfig { group: Some("  ".into()), description: Some("新".into()), ..Default::default() };
+        let config =
+            AgentConfig { group: Some(Grouping::parse("  ")), description: Some("新".into()), ..Default::default() };
         let changed = file.with(&config).unwrap();
         let out = render(Some(text), &changed).unwrap();
         assert!(out.starts_with("# 注释\n"), "{out}");

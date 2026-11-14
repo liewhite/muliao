@@ -8,31 +8,35 @@ use chrono::{DateTime, Utc};
 
 use crate::access::Sharing;
 use crate::kinds::{Kind, Shown, StoredKind};
-use crate::rules::{GLOBAL_MEMORY, ToolSpec, rule_candidates};
+use crate::rules::{GLOBAL_MEMORY, Target, ToolSpec, rule_candidates};
 use crate::source::AssetSource;
-use crate::tree::{Owner, remove};
+use crate::tree::{AssetKey, Owner, remove};
 use muliao_platform::errors::{Result, conflict, invalid};
 
-/// 种类专有的详情：内置工具的读写与是否管理类；存成文件的是它能给领域外看的内容（[`Shown`]）。
+/// 种类专有的详情：内置工具的读写与是否管理类（代码里定义，没有文件）；存成文件的是它的文件与能给领域外看的内容（[`Shown`]）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Detail {
     Tool(ToolSpec),
-    Stored(Shown),
+    Stored { file: StoredFile, shown: Shown },
 }
 
-/// 资源池里的一项。内置工具归平台、没有描述、修改时间与文件。种类就是详情的种类（[`CatalogAsset::kind`]）。
+/// 存成文件的一项：描述、文件的修改时间与位置（skill 是目录）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredFile {
+    pub description: String,
+    pub updated_at: DateTime<Utc>,
+    pub path: PathBuf,
+}
+
+/// 资源池里的一项。种类就是详情的种类（[`CatalogAsset::kind`]）。
 #[derive(Debug, Clone)]
 pub struct CatalogAsset {
     pub name: String,
     pub owner: Owner,
-    pub description: String,
-    pub updated_at: Option<DateTime<Utc>>,
     /// 收录它的角色（含内置的）
     pub roles: Vec<String>,
     /// 分发出去了：否则只有 owner 能用（归平台的就没有 agent 能用）
     pub shared: bool,
-    /// 文件或目录的位置；内置工具为 None
-    pub path: Option<PathBuf>,
     /// 用户能在界面上删它（[`undeletable`]）
     pub deletable: bool,
     /// 能转给别的 owner（[`untransferable`]）
@@ -44,7 +48,7 @@ impl CatalogAsset {
     pub fn kind(&self) -> Kind {
         match &self.detail {
             Detail::Tool(_) => Kind::Tool,
-            Detail::Stored(s) => s.kind().kind(),
+            Detail::Stored { shown, .. } => shown.kind().kind(),
         }
     }
 }
@@ -53,17 +57,16 @@ pub struct AssetCatalog {
     source: Arc<AssetSource>,
 }
 
-/// 用户在界面上删不了这项的原因（资源池的「能不能删」和删除入口都用它）；能删为 None。
-fn undeletable(kind: Kind, name: &str, owner: &Owner) -> Option<String> {
-    match (kind, owner) {
-        (Kind::Tool, _) => Some(format!("built-in tool {name:?} is defined in code and cannot be deleted")),
-        (Kind::Memory, Owner::Agent(_)) => {
+/// 用户在界面上删不了这项存成文件的资源的原因（资源池的「能不能删」和删除入口都用它）；能删为 None。
+fn undeletable(kind: StoredKind, key: &AssetKey) -> Option<String> {
+    match (kind, key) {
+        (_, AssetKey::Private { .. }) => {
             Some("a private memory goes with its agent; it cannot be deleted on its own".into())
         }
-        (Kind::Memory, Owner::Platform) if name == GLOBAL_MEMORY => {
+        (StoredKind::Memory, AssetKey::Named { name, owner: Owner::Platform }) if name == GLOBAL_MEMORY => {
             Some(format!("the global memory {GLOBAL_MEMORY:?} cannot be deleted: the base role always includes it"))
         }
-        (Kind::Memory | Kind::Skill | Kind::Mcp | Kind::Secret, _) => None,
+        (StoredKind::Memory | StoredKind::Skill | StoredKind::Mcp | StoredKind::Secret, AssetKey::Named { .. }) => None,
     }
 }
 
@@ -92,26 +95,27 @@ impl AssetCatalog {
         let tools = snapshot.tools.specs().iter().map(|t| CatalogAsset {
             name: t.name.clone(),
             owner: Owner::Platform,
-            description: String::new(),
-            updated_at: None,
-            roles: sharing.including(Kind::Tool, Some(&t.name)),
-            shared: sharing.shared(Kind::Tool, Some(&t.name), &Owner::Platform),
-            path: None,
-            deletable: undeletable(Kind::Tool, &t.name, &Owner::Platform).is_none(),
+            roles: sharing.including(Target::tool(&t.name)),
+            shared: sharing.shared(Target::tool(&t.name), &Owner::Platform),
+            deletable: false,
             transferable: untransferable(Kind::Tool).is_none(),
             detail: Detail::Tool(t.clone()),
         });
         let files = StoredKind::BY_NAME.into_iter().flat_map(|k| snapshot.of_kind(k)).map(|a| CatalogAsset {
-            name: a.name.clone(),
-            owner: a.owner.clone(),
-            description: a.description().to_owned(),
-            updated_at: Some(a.updated_at),
-            roles: sharing.including(a.kind().kind(), a.rule_name()),
-            shared: sharing.shared(a.kind().kind(), a.rule_name(), &a.owner),
-            path: Some(a.path.clone()),
-            deletable: undeletable(a.kind().kind(), &a.name, &a.owner).is_none(),
+            name: a.name().to_owned(),
+            owner: a.owner(),
+            roles: sharing.including(a.target()),
+            shared: sharing.shared(a.target(), &a.owner()),
+            deletable: undeletable(a.kind(), &a.key).is_none(),
             transferable: untransferable(a.kind().kind()).is_none(),
-            detail: Detail::Stored(a.content.shown()),
+            detail: Detail::Stored {
+                file: StoredFile {
+                    description: a.description().to_owned(),
+                    updated_at: a.updated_at,
+                    path: a.path.clone(),
+                },
+                shown: a.content.shown(),
+            },
         });
         Ok(tools.chain(files).collect())
     }
@@ -121,7 +125,7 @@ impl AssetCatalog {
     pub async fn delete(&self, kind: StoredKind, name: &str) -> Result<()> {
         let w = self.source.writing().await?;
         let a = w.snapshot.asset(kind, name)?;
-        if let Some(reason) = undeletable(kind.kind(), name, &a.owner) {
+        if let Some(reason) = undeletable(kind, &a.key) {
             return Err(invalid(reason));
         }
         remove(&a.path)?;
@@ -133,10 +137,7 @@ impl AssetCatalog {
     pub async fn rule_candidates(&self) -> Result<Vec<String>> {
         let snapshot = self.source.snapshot().await?;
         let tools = snapshot.tools.specs().iter().map(|t| (Kind::Tool, t.name.as_str()));
-        let files = StoredKind::BY_NAME
-            .into_iter()
-            .flat_map(|k| snapshot.of_kind(k))
-            .filter_map(|a| a.rule_name().map(|n| (a.kind().kind(), n)));
+        let files = StoredKind::BY_NAME.into_iter().flat_map(|k| snapshot.named(k).map(move |a| (k.kind(), a.name())));
         Ok(rule_candidates(tools.chain(files)))
     }
 
@@ -148,7 +149,7 @@ impl AssetCatalog {
         let w = self.source.writing().await?;
         let snapshot = &w.snapshot;
         let asset = snapshot.asset(kind, name)?;
-        if asset.owner == *owner {
+        if asset.owner() == *owner {
             return Err(invalid(format!(
                 "{} {name:?} already belongs to {}",
                 kind.label(),

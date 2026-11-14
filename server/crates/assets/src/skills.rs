@@ -33,9 +33,9 @@ pub(crate) fn index_of(snapshot: &Snapshot, grants: &Grants) -> Vec<SkillMeta> {
 
 fn meta((a, dir): (&Asset, &SkillDir)) -> SkillMeta {
     SkillMeta {
-        name: a.name.clone(),
+        name: a.name().to_owned(),
         description: dir.description.clone(),
-        owner: a.owner.clone(),
+        owner: a.owner(),
         path: a.path.join(SKILL_FILE),
     }
 }
@@ -125,7 +125,7 @@ impl SkillStore {
     pub async fn scripts(&self, name: &str, agent_id: &AgentId) -> Result<SkillScripts> {
         let snapshot = self.source.snapshot().await?;
         let grants = grants_for(&snapshot, &Actor::Agent(agent_id.to_owned()));
-        let found = usable::<SkillDir>(&snapshot, &grants).into_iter().find(|(a, _)| a.name == name);
+        let found = usable::<SkillDir>(&snapshot, &grants).into_iter().find(|(a, _)| a.name() == name);
         let (a, dir) = found.ok_or_else(|| {
             not_found(format!("skill {name:?} not found among the skills you can use (see your skill index)"))
         })?;

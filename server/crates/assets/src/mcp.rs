@@ -22,7 +22,7 @@ pub struct McpServer {
 }
 
 fn server_of((a, file): (&Asset, &McpFile)) -> McpServer {
-    McpServer { owner: a.owner.clone(), name: a.name.clone(), config: file.config.clone(), enabled: file.enabled }
+    McpServer { owner: a.owner(), name: a.name().to_owned(), config: file.config.clone(), enabled: file.enabled }
 }
 
 /// grants 能用的、已启用的 server，按名称。

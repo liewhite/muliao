@@ -7,7 +7,7 @@ use std::sync::Arc;
 use common::{world, write};
 use muliao_assets::access::Actor;
 use muliao_assets::agents;
-use muliao_assets::formats::agent_file::{AgentConfig, Thinking};
+use muliao_assets::formats::agent_file::{AgentConfig, Grouping, Thinking};
 use muliao_assets::kinds::StoredKind;
 use muliao_assets::lifecycle::{AgentLifecycle, ArchiveBlocker, DeletionHook};
 use muliao_assets::rules::AgentRules;
@@ -25,7 +25,7 @@ async fn create_writes_files_rules_and_row() {
     let spec = AgentSpec {
         name: " 交易 ".into(),
         description: "做交易".into(),
-        group: Some("  组 ".into()),
+        group: Grouping::parse("  组 "),
         thinking: Thinking::High,
         rules: AgentRules { allow: vec!["use:tool:create_agent".parse().unwrap()], ..Default::default() },
         ..Default::default()
@@ -147,7 +147,7 @@ async fn default_and_archive() {
 
     w.service.set_default(&a, true).await.unwrap();
     w.service.set_default(&b, true).await.unwrap();
-    assert!(!w.service.get(&a).await.unwrap().is_default, "at most one default");
+    assert!(!w.service.get(&a).await.unwrap().is_default(), "at most one default");
     assert!(life.set_archived(&b, true).await.unwrap_err().to_string().contains("default agent"));
     assert!(life.set_archived(&a, true).await.unwrap_err().to_string().contains("working right now"));
     busy.store(false, std::sync::atomic::Ordering::SeqCst);
@@ -194,7 +194,7 @@ async fn delete_cleans_up_and_keeps_shared_assets() {
     assert!(!root.join("alice").exists());
     assert!(!w.workspaces().join(a.as_str()).exists());
     let s = w.source.snapshot().await.unwrap();
-    assert_eq!(s.get(StoredKind::Skill, "used").unwrap().owner, Owner::Platform);
+    assert_eq!(s.get(StoredKind::Skill, "used").unwrap().owner(), Owner::Platform);
     assert!(s.get(StoredKind::Skill, "mine").is_none());
     assert!(!read(access(&root)).contains(a.as_str()));
     assert!(s.problems.is_empty(), "{:?}", s.problems);

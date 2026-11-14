@@ -7,7 +7,7 @@ use std::sync::Arc;
 use crate::access::{Actor, Grants, Reach, Source, WriteScope, grants_for, holders_of, reach_of, write_scope};
 use crate::access_file;
 use crate::kinds::{Shown, StoredKind};
-use crate::rules::{Action, AgentRules, BUILTIN_ROLES, Role, Rule, Rules};
+use crate::rules::{Action, AgentRules, BUILTIN_ROLES, Role, Rule, RuleSource, Rules};
 use crate::source::AssetSource;
 use crate::tree::{Owner, Snapshot};
 use muliao_platform::errors::{Result, conflict, invalid, not_found};
@@ -52,7 +52,7 @@ fn role_view(snapshot: &Snapshot, role: &Role) -> RoleView {
     // reach 只按角色自己的规则，不含任何 agent 自己的资源
     RoleView {
         role: role.clone(),
-        reach: reach_of(snapshot, &Grants::new(None, vec![(Some(role.name.clone()), role.effective())])),
+        reach: reach_of(snapshot, &Grants::new(None, vec![(RuleSource::Role(role.name.clone()), role.effective())])),
         holders: holders_of(snapshot, role),
     }
 }
@@ -102,8 +102,8 @@ impl Distribution {
                 continue;
             }
             used.push(UsedAsset {
-                name: a.name.clone(),
-                owner: a.owner.clone(),
+                name: a.name().to_owned(),
+                owner: a.owner(),
                 description: a.description().to_owned(),
                 source,
                 editable: grants.writes(a),
@@ -220,7 +220,7 @@ impl Distribution {
             None => rules.clone(),
             Some(r) => Rules::union([&r.fixed, rules]),
         };
-        Ok(reach_of(&snapshot, &Grants::new(None, vec![(None, effective)])))
+        Ok(reach_of(&snapshot, &Grants::new(None, vec![(RuleSource::Own, effective)])))
     }
 }
 

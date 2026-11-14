@@ -20,13 +20,35 @@ pub(crate) fn blocks_of(snapshot: &Snapshot, grants: &Grants, agent_id: &AgentId
     usable::<MemoryText>(snapshot, grants)
         .into_iter()
         .map(|(a, m)| MemoryBlock {
-            name: a.name.clone(),
+            name: a.name().to_owned(),
             content: m.text.clone(),
-            editable: grants.writes(a),
-            yours: a.owner.is(agent_id),
+            access: if a.owned_by(agent_id) {
+                MemoryAccess::Own
+            } else if grants.writes(a) {
+                MemoryAccess::Editable
+            } else {
+                MemoryAccess::ReadOnly
+            },
             path: a.path.clone(),
         })
         .collect()
+}
+
+/// 一块记忆对这个 agent 是什么：它自己的私有记忆（能改）、别处的但它能改、只能读。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryAccess {
+    Own,
+    Editable,
+    ReadOnly,
+}
+
+impl MemoryAccess {
+    pub fn editable(self) -> bool {
+        match self {
+            MemoryAccess::Own | MemoryAccess::Editable => true,
+            MemoryAccess::ReadOnly => false,
+        }
+    }
 }
 
 /// 一次运行放进指令的一块记忆。
@@ -34,10 +56,7 @@ pub(crate) fn blocks_of(snapshot: &Snapshot, grants: &Grants, agent_id: &AgentId
 pub struct MemoryBlock {
     pub name: String,
     pub content: String,
-    /// 这个 agent 能改它
-    pub editable: bool,
-    /// 归这个 agent（它的私有记忆）
-    pub yours: bool,
+    pub access: MemoryAccess,
     pub path: PathBuf,
 }
 
@@ -56,8 +75,8 @@ pub struct MemoryInfo {
 fn info(a: &Asset) -> Result<MemoryInfo> {
     let raw = crate::formats::read(&a.path).map_err(muliao_platform::errors::conflict)?;
     Ok(MemoryInfo {
-        name: a.name.clone(),
-        owner: a.owner.clone(),
+        name: a.name().to_owned(),
+        owner: a.owner(),
         version: version_of(&raw),
         content: crate::formats::memory::body_of(&raw),
         updated_at: a.updated_at,

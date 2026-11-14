@@ -66,7 +66,7 @@ async fn list_get_create_and_delete_agents_by_name() {
             AgentSpec {
                 name: "grouped".into(),
                 description: "g".into(),
-                group: Some("ops".into()),
+                group: muliao_assets::formats::agent_file::Grouping::In("ops".into()),
                 ..Default::default()
             },
             &Actor::User,

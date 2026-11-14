@@ -41,8 +41,8 @@ pub struct SecretInfo {
 
 fn info((a, file): (&Asset, &SecretFile)) -> SecretInfo {
     SecretInfo {
-        owner: a.owner.clone(),
-        key: a.name.clone(),
+        owner: a.owner(),
+        key: a.name().to_owned(),
         description: file.description.clone(),
         allow_shell: file.allow_shell,
         updated_at: a.updated_at,
@@ -79,8 +79,8 @@ impl Secrets {
         let existing = writable::<SecretFile>(&w.snapshot, key, actor)?;
         let allow_shell = allow_shell.unwrap_or_else(|| existing.is_none_or(|(_, f)| f.allow_shell));
         // 已有的也按 owner 重算：正在删除的 agent 名下的不再写
-        let owner = existing.map_or(owner, |(a, _)| &a.owner);
-        let path = w.snapshot.path_of(StoredKind::Secret, key, owner)?;
+        let owner = existing.map_or(owner.clone(), |(a, _)| a.owner());
+        let path = w.snapshot.path_of(StoredKind::Secret, key, &owner)?;
         let text = render(&SecretFile { description: description.to_owned(), ciphertext, allow_shell });
         muliao_platform::fs::write_atomic(&path, text.as_bytes())?;
         // 别的 agent 可能依赖它：记录谁改了哪个 key（不记值）
@@ -113,7 +113,7 @@ impl Secrets {
         let snapshot = self.source.snapshot().await?;
         let grants = grants_for(&snapshot, user);
         let found: BTreeMap<&str, (&Asset, &SecretFile)> =
-            usable::<SecretFile>(&snapshot, &grants).into_iter().map(|(a, f)| (a.name.as_str(), (a, f))).collect();
+            usable::<SecretFile>(&snapshot, &grants).into_iter().map(|(a, f)| (a.name(), (a, f))).collect();
         let missing: Vec<&String> = keys.iter().filter(|k| !found.contains_key(k.as_str())).collect();
         if !missing.is_empty() {
             return Err(not_found(format!(

@@ -94,7 +94,7 @@ fn check(
             Section::Layout,
         ));
     }
-    let place = place_of(rest, matches!(owner, Owner::Agent(_))).map_err(|e| (e.reason.clone(), e.section()))?;
+    let place = place_of(rest, owner).map_err(|e| (e.reason.clone(), e.section()))?;
 
     let draft =
         |kind: StoredKind, name: &str, inner: &[String], named: bool| -> std::result::Result<String, Rejection> {
@@ -139,10 +139,7 @@ fn check(
         Place::Entry { kind, inner, .. } if kind.spec().is_directory && inner.is_empty() => {
             Err((format!("{} is a directory, not a file", rest.join("/")), kind.spec().section))
         }
-        Place::PrivateMemory => {
-            let id = owner.agent().expect("private memory is in an agent directory");
-            draft(StoredKind::Memory, snapshot.names[id].as_str(), &[], false)
-        }
+        Place::PrivateMemory(id) => draft(StoredKind::Memory, snapshot.names[&id].as_str(), &[], false),
         Place::Entry { kind, name, inner } => draft(kind, &name, &inner, true),
     }
 }

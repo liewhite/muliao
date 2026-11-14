@@ -63,19 +63,16 @@ pub struct AgentInfo {
     pub id: AgentId,
     pub name: AgentName,
     pub created_at: DateTime<Utc>,
-    /// 系统默认 agent，最多一个
-    pub is_default: bool,
     pub state: AgentState,
 }
 
 /// agent 处在哪个阶段。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentState {
-    Active,
+    /// 可用；default：系统默认 agent（最多一个，只有可用的才是）
+    Active { default: bool },
     /// 已归档：不能运行，取消归档后恢复
-    Archived {
-        at: DateTime<Utc>,
-    },
+    Archived { at: DateTime<Utc> },
     /// 正在删除（只有 [`agent_in`] 会给出这样的）
     Deleting,
 }
@@ -83,6 +80,11 @@ pub enum AgentState {
 impl AgentInfo {
     pub fn archived(&self) -> bool {
         matches!(self.state, AgentState::Archived { .. })
+    }
+
+    /// 系统默认 agent。
+    pub fn is_default(&self) -> bool {
+        matches!(self.state, AgentState::Active { default: true })
     }
 
     /// 归档时间；没归档为 None。
@@ -97,12 +99,13 @@ impl AgentInfo {
 fn info(row: &Row<'_>) -> rusqlite::Result<AgentInfo> {
     let archived_at: Option<DateTime<Utc>> = row.get(3)?;
     let deleting: bool = row.get(5)?;
+    // 默认的不能归档（[`set_archived_in`]），开始删除时清掉 is_default（[`mark_deleting_in`]）：只有可用的带它
     let state = match (deleting, archived_at) {
         (true, _) => AgentState::Deleting,
         (false, Some(at)) => AgentState::Archived { at },
-        (false, None) => AgentState::Active,
+        (false, None) => AgentState::Active { default: row.get(2)? },
     };
-    Ok(AgentInfo { id: row.get(0)?, name: row.get(1)?, is_default: row.get(2)?, created_at: row.get(4)?, state })
+    Ok(AgentInfo { id: row.get(0)?, name: row.get(1)?, created_at: row.get(4)?, state })
 }
 
 fn one(c: &Connection, filter: &str, value: &dyn rusqlite::ToSql) -> Result<Option<AgentInfo>> {
@@ -279,7 +282,7 @@ pub(crate) fn remove_in(c: &Connection, agent_id: &AgentId) -> Result<bool> {
 pub(crate) fn set_archived_in(c: &Connection, agent_id: &AgentId, archived: bool) -> Result<(AgentInfo, AgentInfo)> {
     let before = active_agent_in(c, agent_id)?;
     if before.archived() != archived {
-        if archived && before.is_default {
+        if archived && before.is_default() {
             return Err(conflict(format!(
                 "agent {:?} is the default agent; unset it as default first, then archive",
                 before.name

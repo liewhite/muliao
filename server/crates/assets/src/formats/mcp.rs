@@ -21,7 +21,7 @@ pub enum McpTransport {
 }
 
 /// 一个 MCP server 的连接配置：每种传输方式只带自己的字段（外部输入经 [`McpConfig::new`] 或读文件在边界解析一次）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(tag = "transport", rename_all = "lowercase")]
 pub enum McpConfig {
     Stdio { command: String, args: Vec<String>, env: BTreeMap<String, String> },

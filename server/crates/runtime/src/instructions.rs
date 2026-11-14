@@ -11,7 +11,7 @@ use std::path::Path;
 use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
 use muliao_assets::kinds::ASSETS_SKILL;
-use muliao_assets::memory::MemoryBlock;
+use muliao_assets::memory::{MemoryAccess, MemoryBlock};
 use muliao_assets::skills::SkillMeta;
 use muliao_platform::tooling::Audience;
 
@@ -154,12 +154,10 @@ pub fn memory_section(memories: &[MemoryBlock], limit: usize) -> String {
 }
 
 fn access_of(m: &MemoryBlock) -> &'static str {
-    if m.yours {
-        "editable, your private memory"
-    } else if m.editable {
-        "editable, shared"
-    } else {
-        "read-only, shared"
+    match m.access {
+        MemoryAccess::Own => "editable, your private memory",
+        MemoryAccess::Editable => "editable, shared",
+        MemoryAccess::ReadOnly => "read-only, shared",
     }
 }
 
@@ -196,15 +194,13 @@ mod tests {
             MemoryBlock {
                 name: "global".into(),
                 content: "be <brief>".into(),
-                editable: true,
-                yours: false,
+                access: MemoryAccess::Editable,
                 path: "/a/platform/memory/global.md".into(),
             },
             MemoryBlock {
                 name: "me".into(),
                 content: String::new(),
-                editable: true,
-                yours: true,
+                access: MemoryAccess::Own,
                 path: "/a/me/memory.md".into(),
             },
         ];

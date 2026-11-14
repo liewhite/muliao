@@ -73,16 +73,11 @@ pub struct CatalogAssetOut {
     pub name: String,
     /// agent 的 id；null 归平台（内置工具、界面上建的、迁移前的公共资产）
     pub owner: Option<AgentId>,
-    pub description: String,
     /// 收录它的角色（allow 放行、deny 没拦，含内置的 base、admin）
     pub roles: Vec<String>,
     /// 分发出去了：base 收录它，或某个不是 owner 的 agent 的规则（角色或自己的 allow）放行它；否则只有 owner 能用（归平台的
     /// 就谁也用不了）。与删除 agent 时把资产转给平台同一个定义
     pub shared: bool,
-    /// 文件的修改时间；内置工具在代码里定义，为 null
-    pub updated_at: Option<DateTime<Utc>>,
-    /// 文件（skill 是目录）的位置；内置工具为 null
-    pub path: Option<String>,
     /// 用户能在界面上删它（内置工具、全局记忆、私有记忆不能）
     pub deletable: bool,
     /// 用户能在界面上把它转给别的 owner（内置工具、记忆不能）
@@ -91,66 +86,67 @@ pub struct CatalogAssetOut {
     pub detail: CatalogDetail,
 }
 
+/// 存成文件的一项的文件：描述、修改时间与位置（skill 是目录）。
+#[derive(Serialize, ToSchema)]
+pub struct StoredFileOut {
+    pub description: String,
+    pub updated_at: DateTime<Utc>,
+    pub path: String,
+}
+
 #[derive(Serialize, ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CatalogDetail {
-    /// 内置工具：归平台、代码里定义，不能改
+    /// 内置工具：归平台、代码里定义，没有文件，不能改
     Tool {
         access: Access,
         /// 管理类工具：base 角色没有
         admin: bool,
     },
-    Skill,
-    Mcp(McpConfigOut),
+    Skill {
+        file: StoredFileOut,
+    },
+    Mcp {
+        file: StoredFileOut,
+        enabled: bool,
+        /// env / headers 里的 secret 只以 ${vault:KEY} 引用形式存储，可以原样返回
+        config: McpConfig,
+    },
     /// 值不返回
     Secret {
+        file: StoredFileOut,
         /// false：agent 自己写的命令不能注入，只有 skill_run 的 skill 脚本与 MCP 配置能用（#528）
         allow_shell: bool,
     },
     /// 正文不在列表里：平台的记忆（owner 为 null）用 GET /api/assets/memory/{name} 读，agent 的私有记忆（owner 是它，name 是
     /// 它的名字，只作显示）用 GET /api/agents/{owner}/memory
-    Memory,
-}
-
-#[derive(Serialize, ToSchema)]
-pub struct McpConfigOut {
-    pub transport: McpTransport,
-    pub command: Option<String>,
-    pub args: Vec<String>,
-    pub url: Option<String>,
-    /// env / headers 里的 secret 只以 ${vault:KEY} 引用形式存储，可以原样返回
-    pub env: BTreeMap<String, String>,
-    pub headers: BTreeMap<String, String>,
-    pub enabled: bool,
-}
-
-impl McpConfigOut {
-    fn of(c: &McpConfig, enabled: bool) -> Self {
-        let (none, empty) = (None, BTreeMap::new());
-        let (command, args, url, env, headers) = match c {
-            McpConfig::Stdio { command, args, env } => (Some(command.clone()), args.clone(), none, env.clone(), empty),
-            McpConfig::Http { url, headers } => (None, Vec::new(), Some(url.clone()), empty, headers.clone()),
-        };
-        McpConfigOut { transport: c.transport(), command, args, url, env, headers, enabled }
-    }
+    Memory {
+        file: StoredFileOut,
+    },
 }
 
 fn catalog_out(e: CatalogAsset) -> CatalogAssetOut {
-    let detail = match &e.detail {
+    let detail = match e.detail {
         Detail::Tool(t) => CatalogDetail::Tool { access: Access::of(t.access), admin: t.admin },
-        Detail::Stored(Shown::Skill(_)) => CatalogDetail::Skill,
-        Detail::Stored(Shown::Mcp(m)) => CatalogDetail::Mcp(McpConfigOut::of(&m.config, m.enabled)),
-        Detail::Stored(Shown::Secret { allow_shell }) => CatalogDetail::Secret { allow_shell: *allow_shell },
-        Detail::Stored(Shown::Memory(_)) => CatalogDetail::Memory,
+        Detail::Stored { file, shown } => {
+            let file = StoredFileOut {
+                description: file.description,
+                updated_at: file.updated_at,
+                path: file.path.display().to_string(),
+            };
+            match shown {
+                Shown::Skill(_) => CatalogDetail::Skill { file },
+                Shown::Mcp(m) => CatalogDetail::Mcp { file, enabled: m.enabled, config: m.config },
+                Shown::Secret { allow_shell } => CatalogDetail::Secret { file, allow_shell },
+                Shown::Memory(_) => CatalogDetail::Memory { file },
+            }
+        }
     };
     CatalogAssetOut {
         owner: owner_out(&e.owner),
         name: e.name,
-        description: e.description,
         roles: e.roles,
         shared: e.shared,
-        updated_at: e.updated_at,
-        path: e.path.map(|p| p.display().to_string()),
         deletable: e.deletable,
         transferable: e.transferable,
         detail,
@@ -372,20 +368,16 @@ pub async fn blocking<T: Send + 'static>(
 pub struct McpOut {
     pub owner: Option<AgentId>,
     pub name: String,
-    #[serde(flatten)]
-    pub config: McpConfigOut,
+    pub enabled: bool,
+    /// env / headers 里的 secret 只以 ${vault:KEY} 引用形式存储，可以原样返回
+    pub config: McpConfig,
     /// 新增时连接验证列出的工具（不验证时为空）
     pub tools: Vec<String>,
 }
 
 impl McpOut {
     fn of(m: &McpServer, tools: Vec<String>) -> Self {
-        McpOut {
-            owner: owner_out(&m.owner),
-            name: m.name.clone(),
-            config: McpConfigOut::of(&m.config, m.enabled),
-            tools,
-        }
+        McpOut { owner: owner_out(&m.owner), name: m.name.clone(), enabled: m.enabled, config: m.config.clone(), tools }
     }
 }
 

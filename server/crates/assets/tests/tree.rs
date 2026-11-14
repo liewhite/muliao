@@ -44,14 +44,14 @@ async fn conflicts_broken_files_and_platform_priority() {
     write(&root.join("platform/memory/big.md"), &"x".repeat(150));
 
     let s = w.source.snapshot().await.unwrap();
-    assert_eq!(s.get(StoredKind::Skill, "shared").unwrap().owner, Owner::Platform);
+    assert_eq!(s.get(StoredKind::Skill, "shared").unwrap().owner(), Owner::Platform);
     assert!(reasons_for(&s, "alice/skills/shared")[0].contains("already used by the platform's"));
     assert_eq!(s.shadowed(StoredKind::Skill, "shared").len(), 1);
     assert!(s.get(StoredKind::Skill, "dup").is_none());
     assert_eq!(reasons_for(&s, "skills/dup").len(), 2);
     assert!(s.check_free(StoredKind::Skill, "dup").is_err(), "conflicting names stay taken");
     assert!(s.check_free(StoredKind::Skill, "broken").is_err(), "broken ones stay taken");
-    assert_eq!(s.get(StoredKind::Skill, "solo").unwrap().owner, Owner::Agent(b.clone()));
+    assert_eq!(s.get(StoredKind::Skill, "solo").unwrap().owner(), Owner::Agent(b.clone()));
     assert!(reasons_for(&s, "Bad_Name.json")[0].contains("invalid MCP server name"));
     assert!(reasons_for(&s, "bob/notes.txt")[0].contains("not a place for an asset file"));
     assert!(reasons_for(&s, "stray.txt")[0].contains("only platform/ and agent directories"));
@@ -65,8 +65,8 @@ async fn conflicts_broken_files_and_platform_priority() {
     assert!(!s.problems_for(&b).iter().any(|p| p.path.ends_with("stray.txt")));
     // 私有记忆：显示名是 agent 名、规则不按名字指它
     let private = s.private_memory(&a).unwrap();
-    assert_eq!(private.name, "alice");
-    assert_eq!(private.rule_name(), None);
+    assert_eq!(private.name(), "alice");
+    assert_eq!(private.target(), muliao_assets::rules::Target::PrivateMemory);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -210,8 +210,8 @@ async fn grants_and_write_scope() {
     assert!(alice.uses(team) && alice.writes(team));
     let bobs = s.get(StoredKind::Skill, "bobs").unwrap();
     assert!(alice.uses(bobs) && !alice.writes(bobs));
-    assert!(!alice.rules().includes(muliao_assets::kinds::Kind::Tool, Some("run_shell")));
-    assert!(!alice.rules().includes(muliao_assets::kinds::Kind::Tool, Some("create_agent")));
+    assert!(!alice.rules().includes(muliao_assets::rules::Target::tool("run_shell")));
+    assert!(!alice.rules().includes(muliao_assets::rules::Target::tool("create_agent")));
     // 私有记忆只有自己与 admin
     assert!(!alice.uses(s.private_memory(&b).unwrap()));
 

@@ -15,7 +15,7 @@ use muliao_platform::db::Database;
 use crate::access::Actor;
 use crate::access_file::{self, AccessEdit};
 use crate::agents::{self, AgentInfo, AgentNames};
-use crate::formats::agent_file::{self, AGENT_FILE, AgentConfig, AgentFile, Thinking};
+use crate::formats::agent_file::{self, AGENT_FILE, AgentConfig, AgentFile, Grouping, Thinking};
 use crate::naming::{AgentName, new_agent_id};
 use crate::rules::{AgentRules, Rule};
 use crate::source::AssetSource;
@@ -30,8 +30,7 @@ pub struct AgentSpec {
     pub description: String,
     pub model: Option<ModelRef>,
     pub thinking: Thinking,
-    /// 分组名（去掉首尾空白，空串与 None 都是不分组）
-    pub group: Option<String>,
+    pub group: Grouping,
     pub rules: AgentRules,
 }
 
@@ -85,12 +84,11 @@ impl AgentService {
     pub async fn create(&self, spec: AgentSpec, actor: &Actor) -> Result<AgentInfo> {
         let agent_id = new_agent_id();
         let name = AgentName::new(&spec.name)?;
-        let group = spec.group.as_deref().and_then(agent_file::group_of);
         let file = AgentFile::new(
             spec.description,
             spec.model.unwrap_or_else(|| self.default_model.clone()),
             spec.thinking,
-            group,
+            spec.group,
         )
         .map_err(invalid)?;
         self.source.check_agent(&file)?;
