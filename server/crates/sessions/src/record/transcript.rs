@@ -141,7 +141,7 @@ pub enum Item<U = UserItem> {
     Event(EventItem),
     Assistant {
         text: String,
-        /// 只是没有新进展时的占位答复（[`crate::outside::work::NO_PROGRESS_REPLY`]）：界面合并运行中检查时一起收起
+        /// 只是没有新进展时的占位答复「…」：界面合并运行中检查时一起收起
         no_progress: bool,
     },
     Thinking {

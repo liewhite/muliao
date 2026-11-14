@@ -283,7 +283,7 @@ pub enum Choice {
     Always,
 }
 
-/// 用户对一次等批准的调用的决定。批准的是哪一份（pin）只记在挂起记录里（[`crate::waiting::paused_calls`]），交给运行时从那里取；
+/// 用户对一次等批准的调用的决定。批准的是哪一份（pin）只记在挂起记录（paused_calls 表）里，交给运行时从那里取；
 /// 旧信件里多存的 pin 读入时忽略。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Decision {
