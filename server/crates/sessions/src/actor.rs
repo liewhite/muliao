@@ -118,7 +118,7 @@ pub struct Actors {
 
 impl Actors {
     /// 起叫醒与停止的分发和节拍循环。之后调 [`Actors::resume`] 接着跑重启前没做完的。
-    pub fn start(
+    pub(crate) fn start(
         core: Arc<Core>,
         mut wakes: mpsc::UnboundedReceiver<SessionId>,
         mut stops: mpsc::UnboundedReceiver<StopRequest>,
@@ -145,10 +145,10 @@ impl Actors {
                 tokio::time::sleep(TICK).await;
                 let Some(inner) = weak.upgrade() else { return };
                 let core = &inner.core;
-                if let Err(e) = wakeups::deliver_due(&core.db, &core.waker, core.tz).await {
+                if let Err(e) = wakeups::deliver_due(&core.d.db, &core.d.waker, core.d.tz).await {
                     tracing::error!(error = %e, "delivering due wake-ups failed");
                 }
-                if let Err(e) = check_threads(&core.db, &core.waker, &beats).await {
+                if let Err(e) = check_threads(&core.d.db, &core.d.waker, &beats).await {
                     tracing::error!(error = %e, "checking delegated threads failed");
                 }
             }
@@ -161,6 +161,7 @@ impl Actors {
         let ids = self
             .inner
             .core
+            .d
             .db
             .read(|c| {
                 let mut ids = runs::sessions_unfinished_in(c)?;
@@ -277,7 +278,8 @@ async fn idle_command(inner: &Arc<Inner>, id: &SessionId, cmd: Command, rx: &mut
 /// 有没结束的运行，或按唤醒规则该开始一次：就是工作状态的 running（同一条规则，删除是否拒绝也看它）。
 async fn has_work(core: &Core, id: &SessionId) -> Result<bool> {
     let id = id.to_owned();
-    core.db
+    core.d
+        .db
         .read(move |c| {
             if directory::get_in(c, &id)?.is_none() {
                 return Ok(false);
@@ -290,7 +292,7 @@ async fn has_work(core: &Core, id: &SessionId) -> Result<bool> {
 /// 会话最后一条消息（判断一次尝试有没有往前推进）。读不出来时记下错误、当作没有：只影响退避要不要从头算。
 async fn last_message(core: &Core, id: &SessionId) -> Option<MessageId> {
     let session_id = id.to_owned();
-    match core.db.read(move |c| crate::history::last_message_id_in(c, &session_id)).await {
+    match core.d.db.read(move |c| crate::history::last_message_id_in(c, &session_id)).await {
         Ok(last) => last,
         Err(e) => {
             tracing::error!(session_id = %id, error = %e, "reading the last message of the session failed");
@@ -395,8 +397,9 @@ async fn run_with_retries(inner: &Arc<Inner>, id: &SessionId, rx: &mut mpsc::Unb
 async fn fail(core: &Core, id: &SessionId, error: &str) -> bool {
     tracing::error!(session_id = %id, error, "run failed");
     let (session_id, message, waker, events, live) =
-        (id.to_owned(), error.to_owned(), core.waker.clone(), core.events.clone(), core.live.clone());
+        (id.to_owned(), error.to_owned(), core.d.waker.clone(), core.d.events.clone(), core.live.clone());
     let full = core
+        .d
         .db
         .write(move |tx| {
             let Some(run) = runs::unfinished_in(tx, &session_id)? else { return Ok(false) };
@@ -427,6 +430,7 @@ async fn fail(core: &Core, id: &SessionId, error: &str) -> bool {
         tracing::error!(session_id = %id, error = %e, "settling a failed run failed; recording the failure alone");
         let (session_id, message, live) = (id.to_owned(), error.to_owned(), core.live.clone());
         let alone = core
+            .d
             .db
             .write(move |tx| match runs::unfinished_in(tx, &session_id)? {
                 Some(run) => runs::end_in(tx, &live, run.id, Outcome::Failed(message)).map(|()| true),
@@ -444,7 +448,8 @@ async fn fail(core: &Core, id: &SessionId, error: &str) -> bool {
 /// 手动重试：最近一次运行最终失败、没有在跑的运行时，把它重新算作没结束（actor 随后接着跑）。
 async fn reopen(core: &Core, id: &SessionId) -> Result<()> {
     let (id, live) = (id.to_owned(), core.live.clone());
-    core.db
+    core.d
+        .db
         .write(move |tx| {
             directory::get_in(tx, &id)?.ok_or_else(|| not_found(format!("session {id:?} not found")))?;
             if runs::unfinished_in(tx, &id)?.is_some() {
@@ -502,6 +507,7 @@ async fn compact_until_stopped(
 async fn compact(core: &Core, id: &SessionId) -> Result<usize> {
     let session_id = id.to_owned();
     let agent_id = core
+        .d
         .db
         .read(move |c| {
             let session = directory::get_in(c, &session_id)?
@@ -512,8 +518,8 @@ async fn compact(core: &Core, id: &SessionId) -> Result<usize> {
         })
         .await?;
     let result = async {
-        let assets = core.agents.run_assets(&agent_id).await?;
-        core.compactor.compact(id, &assets).await
+        let assets = core.d.agents.run_assets(&agent_id).await?;
+        crate::compaction::compact(core, id, &assets).await
     }
     .await;
     match &result {

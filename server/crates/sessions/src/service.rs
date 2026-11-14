@@ -5,22 +5,20 @@ use muliao_platform::ids::{CallId, SessionId};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use muliao_platform::db::Database;
-
 use crate::activity::{Wait, WorkState, statuses_in, waits_of_in};
-use crate::actor::{Actors, Waker};
+use crate::actor::Actors;
 use crate::compaction::context_tokens;
 use crate::deletion::delete_sessions_in;
 use crate::directory::{self, Listing, Session, Thread};
-use crate::events::Events;
 use crate::halt::Halted;
 use crate::history::{self, Compaction, context_of};
 use crate::inbound::{CallReply, Inbound, UserMessage, receive_in, reply_in};
-use crate::live::{Live, LiveSegment, Retrying, RunEvent};
+use crate::live::{LiveSegment, Retrying, RunEvent};
 use crate::mailbox::{Mail, visible_in};
+use crate::run::Core;
 use crate::runs::{self, RunRecord};
 use crate::thread_calls::call_threads_in;
-use crate::transcript::{Renders, SavedItem, annotate_approvals, annotate_asks, annotate_threads, to_items};
+use crate::transcript::{SavedItem, annotate_approvals, annotate_asks, annotate_threads, to_items};
 use muliao_platform::errors::{Error, Result, not_found};
 
 /// 会话列表不给条数时一页多少条
@@ -60,32 +58,21 @@ pub struct ListedSession {
 
 #[derive(Clone)]
 pub struct SessionService {
-    db: Arc<Database>,
-    waker: Waker,
+    core: Arc<Core>,
     actors: Actors,
-    events: Arc<Events>,
-    live: Live,
-    renders: Arc<Renders>,
-    threshold: u64,
 }
 
 impl SessionService {
-    pub fn new(
-        db: Arc<Database>,
-        waker: Waker,
-        actors: Actors,
-        events: Arc<Events>,
-        live: Live,
-        renders: Renders,
-        threshold: u64,
-    ) -> Self {
-        Self { db, waker, actors, events, live, renders: Arc::new(renders), threshold }
+    pub(crate) fn new(core: Arc<Core>, actors: Actors) -> Self {
+        Self { core, actors }
     }
 
     /// 用户在界面上发的消息（续写或新建会话），返回信进的会话。
     pub async fn receive(&self, message: UserMessage) -> Result<Session> {
-        let waker = self.waker.clone();
-        self.db
+        let waker = self.core.d.waker.clone();
+        self.core
+            .d
+            .db
             .write(move |tx| match message {
                 UserMessage::Message { session, content, attachments } => {
                     receive_in(tx, &waker, Inbound::User { session, content, attachments })
@@ -102,7 +89,9 @@ impl SessionService {
 
     pub async fn get(&self, session_id: &SessionId) -> Result<Session> {
         let id = session_id.to_owned();
-        self.db
+        self.core
+            .d
+            .db
             .read(move |c| directory::get_in(c, &id)?.ok_or_else(|| not_found(format!("session {id:?} not found"))))
             .await
     }
@@ -110,10 +99,12 @@ impl SessionService {
     pub async fn detail(&self, session_id: &SessionId) -> Result<SessionView> {
         // 先取快照再读库：快照这一段已在展示的消息不在历史里重复；之间换了段时，新保存的消息照旧由旧快照展示，saved 事件
         // 随后让前端重新拉取
-        let live = self.live.snapshot(session_id);
-        let retrying = self.live.retry_state(session_id);
-        let (id, renders, threshold) = (session_id.to_owned(), self.renders.clone(), self.threshold);
-        self.db
+        let live = self.core.live.snapshot(session_id);
+        let retrying = self.core.live.retry_state(session_id);
+        let (id, core) = (session_id.to_owned(), self.core.clone());
+        self.core
+            .d
+            .db
             .read(move |c| {
                 let session =
                     directory::get_in(c, &id)?.ok_or_else(|| not_found(format!("session {id:?} not found")))?;
@@ -125,7 +116,7 @@ impl SessionService {
                 let after = live.as_ref().and_then(|l| l.after_message_id);
                 let (mut ids, mut items) = (Vec::new(), Vec::new());
                 for row in rows.iter().filter(|r| after.is_none_or(|a| r.id <= a)) {
-                    for item in to_items([&row.message], &renders, Some(row.created_at))? {
+                    for item in to_items([&row.message], &core.d.renders, Some(row.created_at))? {
                         ids.push(row.id);
                         items.push(item);
                     }
@@ -149,7 +140,7 @@ impl SessionService {
                     state: status.state,
                     waits,
                     context_tokens: context_tokens(&context.messages, context.stale_responses),
-                    compaction_threshold_tokens: threshold,
+                    compaction_threshold_tokens: core.d.compaction.threshold_tokens,
                     session,
                 })
             })
@@ -158,7 +149,9 @@ impl SessionService {
 
     /// 会话列表（顶层会话与 thread）：不是 idle 的置顶（看筛选后的全部会话，所以第一页就含全部进行中的），其余按最近更新。
     pub async fn list(&self, listing: Listing, limit: usize, offset: usize) -> Result<Vec<ListedSession>> {
-        self.db
+        self.core
+            .d
+            .db
             .read(move |c| {
                 let ids = directory::listed_ids_in(c, &listing)?;
                 let states: BTreeMap<SessionId, WorkState> =
@@ -185,8 +178,10 @@ impl SessionService {
 
     /// 用户删除会话（规则见 [`crate::deletion`]）：忙时 Conflict。
     pub async fn delete(&self, session_id: &SessionId) -> Result<()> {
-        let (id, waker, events) = (session_id.to_owned(), self.waker.clone(), self.events.clone());
-        self.db
+        let (id, waker, events) = (session_id.to_owned(), self.core.d.waker.clone(), self.core.d.events.clone());
+        self.core
+            .d
+            .db
             .write(move |tx| {
                 let session =
                     directory::get_in(tx, &id)?.ok_or_else(|| not_found(format!("session {id:?} not found")))?;

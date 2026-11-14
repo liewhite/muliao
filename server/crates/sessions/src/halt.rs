@@ -49,10 +49,11 @@ pub(crate) async fn halt(
     mut unsaved: Vec<Message>,
     stop_thread: StopThread,
 ) -> Result<Halted> {
-    core.redaction.messages(&mut unsaved);
+    core.d.redaction.messages(&mut unsaved);
     let (session_id, waker, events, live) =
-        (session_id.to_owned(), core.waker.clone(), core.events.clone(), core.live.clone());
-    core.db
+        (session_id.to_owned(), core.d.waker.clone(), core.d.events.clone(), core.live.clone());
+    core.d
+        .db
         .write(move |tx| {
             let Some(session) = directory::get_in(tx, &session_id)? else {
                 tracing::info!(%session_id, "stopping a deleted session: nothing to do");

@@ -35,13 +35,11 @@ use muliao_runtime::models::ModelRegistry;
 use muliao_runtime::toolbox::Toolbox;
 use muliao_runtime::{Runtime, RuntimeDeps};
 use muliao_sessions::actor::{Actors, Waker};
-use muliao_sessions::compaction::Compactor;
+use muliao_sessions::compaction::CompactionPolicy;
 use muliao_sessions::events::{Events, Subscribers};
 use muliao_sessions::inbound::SenderInbox;
-use muliao_sessions::live::Live;
 use muliao_sessions::origins::OriginNotes;
-use muliao_sessions::run::Core;
-use muliao_sessions::service::SessionService;
+use muliao_sessions::run::SessionDeps;
 use muliao_sessions::tools::Stopper;
 use muliao_sessions::work::SessionWork;
 use muliao_speech::config::TranscriptionConfig;
@@ -244,32 +242,29 @@ pub async fn assemble(config: Config, web_dir: PathBuf) -> anyhow::Result<App> {
         usage: usage.clone(),
         tz,
     }));
-    let live = Live::new(bus.clone());
     // 会话领域自己开出的来源的说明由它自己写；这里填别的领域开出的会话的说明
     let notes = OriginNotes { trigger: TriggerDomain::origin_note(), issue: muliao_issues::rules::SESSION_NOTE };
-    let threshold = rt.compaction_threshold_tokens;
-    let core = Arc::new(Core {
-        db: db.clone(),
-        runtime: runtime.clone(),
-        files: files.clone(),
-        agents: agents.clone(),
-        live: live.clone(),
-        events: events.clone(),
-        notes,
-        waker: waker.clone(),
-        compactor: Compactor {
+    let (actors, sessions) = muliao_sessions::start(
+        SessionDeps {
             db: db.clone(),
             runtime,
-            threshold_tokens: threshold,
-            keep_steps: rt.compaction_keep_steps as usize,
+            files: files.clone(),
+            agents: agents.clone(),
+            events,
+            notes,
+            waker,
+            compaction: CompactionPolicy {
+                threshold_tokens: rt.compaction_threshold_tokens,
+                keep_steps: rt.compaction_keep_steps as usize,
+            },
+            renders: toolbox.renders(),
+            redaction: toolbox.redaction(),
+            tz,
+            bus: bus.clone(),
         },
-        renders: toolbox.renders(),
-        redaction: toolbox.redaction(),
-        tz,
-        bus: bus.clone(),
-    });
-    let actors = Actors::start(core, wakes, stops);
-    let sessions = SessionService::new(db.clone(), waker, actors.clone(), events, live, toolbox.renders(), threshold);
+        wakes,
+        stops,
+    );
 
     let services = Services {
         bus: bus.clone(),

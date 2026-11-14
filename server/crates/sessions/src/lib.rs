@@ -37,6 +37,24 @@ pub mod testing;
 mod tests;
 
 use muliao_platform::db::Migration;
+use muliao_platform::ids::SessionId;
+use tokio::sync::mpsc;
+
+use crate::actor::{Actors, StopRequest};
+use crate::run::{Core, SessionDeps};
+use crate::service::SessionService;
+
+/// 建会话领域：起会话 actor 的分发，返回它们与界面门面（共用一份 [`Core`]）。之后调 [`Actors::resume`] 接着跑重启前
+/// 没做完的。wakes、stops：[`crate::actor::Waker::channel`] 与 [`crate::actor::Stopper::channel`] 的接收端。
+pub fn start(
+    deps: SessionDeps,
+    wakes: mpsc::UnboundedReceiver<SessionId>,
+    stops: mpsc::UnboundedReceiver<StopRequest>,
+) -> (Actors, SessionService) {
+    let core = std::sync::Arc::new(Core::new(deps));
+    let actors = Actors::start(core.clone(), wakes, stops);
+    (actors.clone(), SessionService::new(core, actors))
+}
 
 pub const MIGRATION: Migration = Migration {
     domain: "sessions",

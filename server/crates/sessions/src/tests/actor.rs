@@ -10,14 +10,13 @@ use std::time::Duration;
 use crate::activity::{WorkState, work_state_in};
 use crate::actor::{Actors, Waker};
 use crate::answers::QuestionAnswer;
-use crate::compaction::Compactor;
+use crate::compaction::CompactionPolicy;
 use crate::conventions::{STOPPED_TOOL_RESULT, is_stopped};
 use crate::events::{Events, RunEnd, RunEnded, RunFailed, Subscribers};
 use crate::history;
 use crate::inbound::{UserMessage, UserTarget};
-use crate::live::Live;
 use crate::origins::OriginNotes;
-use crate::run::Core;
+use crate::run::SessionDeps;
 use crate::runs::{self, RunState};
 use crate::service::SessionService;
 use crate::tools::Stopper;
@@ -282,25 +281,25 @@ async fn world() -> World {
     });
     let events = Arc::new(Events::new(subscribers));
     let bus = Arc::new(Bus::new(1000));
-    let live = Live::new(bus.clone());
-    let core = Arc::new(Core {
-        db: db.clone(),
-        runtime: runtime.clone(),
-        files,
-        agents,
-        live: live.clone(),
-        events: events.clone(),
-        notes: OriginNotes { trigger: "A trigger started this.", issue: "An issue started this." },
-        waker: waker.clone(),
-        compactor: Compactor { db: db.clone(), runtime, threshold_tokens: 1_000_000, keep_steps: 10 },
-        renders: toolbox.renders(),
-        redaction: toolbox.redaction(),
-        tz,
-        bus: bus.clone(),
-    });
-    let actors = Actors::start(core, wakes, stops);
+    let (actors, service) = crate::start(
+        SessionDeps {
+            db: db.clone(),
+            runtime,
+            files,
+            agents,
+            events,
+            notes: OriginNotes { trigger: "A trigger started this.", issue: "An issue started this." },
+            waker: waker.clone(),
+            compaction: CompactionPolicy { threshold_tokens: 1_000_000, keep_steps: 10 },
+            renders: toolbox.renders(),
+            redaction: toolbox.redaction(),
+            tz,
+            bus: bus.clone(),
+        },
+        wakes,
+        stops,
+    );
     actors.resume().await.unwrap();
-    let service = SessionService::new(db.clone(), waker, actors.clone(), events, live, toolbox.renders(), 1_000_000);
     World {
         _dir: dir,
         bus,

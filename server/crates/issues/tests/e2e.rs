@@ -30,12 +30,11 @@ use muliao_runtime::toolbox::Toolbox;
 use muliao_runtime::{Runtime, RuntimeDeps};
 use muliao_sessions::activity::{WorkState, work_state_in};
 use muliao_sessions::actor::{Actors, Waker};
-use muliao_sessions::compaction::Compactor;
+use muliao_sessions::compaction::CompactionPolicy;
 use muliao_sessions::events::{Events, Subscribers};
 use muliao_sessions::inbound::SenderInbox;
-use muliao_sessions::live::Live;
 use muliao_sessions::origins::OriginNotes;
-use muliao_sessions::run::Core;
+use muliao_sessions::run::SessionDeps;
 use muliao_sessions::tools::Stopper;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -194,22 +193,24 @@ async fn world() -> World {
     board.subscribe(&mut subscribers);
     let events = Arc::new(Events::new(subscribers));
     let bus = Arc::new(Bus::new(1000));
-    let core = Arc::new(Core {
-        db: db.clone(),
-        runtime: runtime.clone(),
-        files,
-        agents,
-        live: Live::new(bus.clone()),
-        events,
-        notes: OriginNotes { trigger: "A trigger started this.", issue: muliao_issues::rules::SESSION_NOTE },
-        waker,
-        compactor: Compactor { db: db.clone(), runtime, threshold_tokens: 1_000_000, keep_steps: 10 },
-        renders: toolbox.renders(),
-        redaction: toolbox.redaction(),
-        tz,
-        bus,
-    });
-    let actors = Actors::start(core, wakes, stops);
+    let (actors, _service) = muliao_sessions::start(
+        SessionDeps {
+            db: db.clone(),
+            runtime,
+            files,
+            agents,
+            events,
+            notes: OriginNotes { trigger: "A trigger started this.", issue: muliao_issues::rules::SESSION_NOTE },
+            waker,
+            compaction: CompactionPolicy { threshold_tokens: 1_000_000, keep_steps: 10 },
+            renders: toolbox.renders(),
+            redaction: toolbox.redaction(),
+            tz,
+            bus,
+        },
+        wakes,
+        stops,
+    );
     actors.resume().await.unwrap();
     World { _dir: dir, db, script, _server: server, board, _actors: actors, me, other, notifications }
 }

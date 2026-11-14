@@ -11,15 +11,13 @@
 //!   原始消息不删除。
 
 use muliao_platform::ids::SessionId;
-use std::sync::Arc;
 
 use agenter::Message;
 use muliao_assets::run_assets::RunAssets;
-use muliao_platform::db::Database;
-use muliao_runtime::Runtime;
 
 use crate::conventions::{OpenCalls, measured_responses};
 use crate::history::{Stored, add_compaction_in, latest_compaction, rows_after};
+use crate::run::Core;
 use crate::transcript::{Renders, to_items, to_text};
 use muliao_platform::errors::Result;
 
@@ -132,17 +130,16 @@ fn verdict(threshold: u64, session_id: &SessionId, history: &[Message], stale_re
     Verdict::Due
 }
 
-pub struct Compactor {
-    pub db: Arc<Database>,
-    pub runtime: Arc<Runtime>,
-    /// 压缩阈值（config `[runtime] compaction_threshold_tokens`），所有会话同一个；判断用 [`verdict`]
+/// 什么时候压缩、压到哪（config `[runtime]`），所有会话同一份。
+pub struct CompactionPolicy {
+    /// 压缩阈值（`compaction_threshold_tokens`）；判断用 [`verdict`]
     pub threshold_tokens: u64,
-    /// 保留最近这么多步原文不压缩（config `[runtime] compaction_keep_steps`）
+    /// 保留最近这么多步原文不压缩（`compaction_keep_steps`）
     pub keep_steps: usize,
 }
 
-impl Compactor {
-    /// 该不该压缩（规则见 [`verdict`]），按这个压缩器的阈值。
+impl CompactionPolicy {
+    /// 该不该压缩（规则见 [`verdict`]），按这份阈值。
     pub(crate) fn verdict(
         &self,
         session_id: &SessionId,
@@ -151,39 +148,41 @@ impl Compactor {
     ) -> Verdict {
         verdict(self.threshold_tokens, session_id, history, stale_responses)
     }
+}
 
-    /// 用这份资源（运行中压缩时是运行开头取的那份）里的模型压缩到保留窗口之外没有可压缩的为止（每一批一次模型调用）。
-    /// 返回压缩的步数；为 0 表示没有可压缩的。模型调用失败时之前批次写下的压缩仍在（每批各自提交）。
-    pub(crate) async fn compact(&self, session_id: &SessionId, assets: &RunAssets) -> Result<usize> {
-        let mut compacted = 0;
-        loop {
-            let sid = session_id.to_owned();
-            let (previous, rows) = self
-                .db
-                .read(move |c| -> Result<_> {
-                    let previous = latest_compaction(c, &sid)?;
-                    let rows = rows_after(c, &sid, previous.as_ref().map(|p| p.through_message_id))?;
-                    Ok((previous, rows))
-                })
-                .await?;
-            let steps = steps_of(&rows);
-            if steps.len() <= self.keep_steps {
-                break;
-            }
-            let (chosen, more) = select_steps(&steps, self.keep_steps, TRANSCRIPT_CHARS)?;
-            let prompt = compaction_prompt(previous.as_ref().map(|p| p.summary.as_str()), chosen)?;
-            let summary = self.runtime.summarize(assets, session_id, COMPACTION_INSTRUCTIONS, &prompt).await?;
-            let through = chosen.last().and_then(|s| s.last()).expect("at least one step is chosen").id;
-            let sid = session_id.to_owned();
-            self.db.write(move |tx| add_compaction_in(tx, &sid, through, &summary)).await?;
-            compacted += chosen.len();
-            tracing::info!(%session_id, steps = chosen.len(), through_message_id = %through, more, "session compacted");
-            if !more {
-                break;
-            }
+/// 用这份资源（运行中压缩时是运行开头取的那份）里的模型压缩到保留窗口之外没有可压缩的为止（每一批一次模型调用）。
+/// 返回压缩的步数；为 0 表示没有可压缩的。模型调用失败时之前批次写下的压缩仍在（每批各自提交）。
+pub(crate) async fn compact(core: &Core, session_id: &SessionId, assets: &RunAssets) -> Result<usize> {
+    let keep_steps = core.d.compaction.keep_steps;
+    let mut compacted = 0;
+    loop {
+        let sid = session_id.to_owned();
+        let (previous, rows) = core
+            .d
+            .db
+            .read(move |c| -> Result<_> {
+                let previous = latest_compaction(c, &sid)?;
+                let rows = rows_after(c, &sid, previous.as_ref().map(|p| p.through_message_id))?;
+                Ok((previous, rows))
+            })
+            .await?;
+        let steps = steps_of(&rows);
+        if steps.len() <= keep_steps {
+            break;
         }
-        Ok(compacted)
+        let (chosen, more) = select_steps(&steps, keep_steps, TRANSCRIPT_CHARS)?;
+        let prompt = compaction_prompt(previous.as_ref().map(|p| p.summary.as_str()), chosen)?;
+        let summary = core.d.runtime.summarize(assets, session_id, COMPACTION_INSTRUCTIONS, &prompt).await?;
+        let through = chosen.last().and_then(|s| s.last()).expect("at least one step is chosen").id;
+        let sid = session_id.to_owned();
+        core.d.db.write(move |tx| add_compaction_in(tx, &sid, through, &summary)).await?;
+        compacted += chosen.len();
+        tracing::info!(%session_id, steps = chosen.len(), through_message_id = %through, more, "session compacted");
+        if !more {
+            break;
+        }
     }
+    Ok(compacted)
 }
 
 #[cfg(test)]

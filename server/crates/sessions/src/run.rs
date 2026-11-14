@@ -27,7 +27,6 @@ use muliao_assets::service::AgentService;
 use muliao_files::FileStore;
 use muliao_platform::bus::Bus;
 use muliao_platform::db::{Database, Tx};
-use muliao_platform::tool_views::ToolRender;
 use muliao_platform::tooling::Audience;
 use muliao_runtime::instructions::with_notices;
 use muliao_runtime::toolbox::Redaction;
@@ -37,7 +36,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::actor::Waker;
 use crate::answers::{Waiting, approvals_waiting_text, questions_of, questions_waiting_text};
-use crate::compaction::{Compactor, Verdict};
+use crate::compaction::{CompactionPolicy, Verdict, compact};
 use crate::content::{Content, append_content, content_of, request_of};
 use crate::conventions::{
     MadeUp, answer_text, attach_run_context, interrupted_response, is_stopped, made_up_result, results_request,
@@ -53,25 +52,36 @@ use crate::paused_calls::{Pause, record_in};
 use crate::pending::{Paused, PendingCall, Position, deferred_results};
 use crate::runs::{self, Outcome};
 use crate::settlement::{delegated_in, settle_finished_in};
-use crate::transcript::{call_item, result_item};
+use crate::transcript::{Renders, call_item, result_item};
 use crate::work::position_in;
 use muliao_platform::errors::{Error, Result, broken};
 
-/// 会话领域运行时共用的部件（组合根装配一次）。
-pub struct Core {
+/// 会话领域要别的领域给的部件，组合根交一次（[`crate::start`]）。
+pub struct SessionDeps {
     pub db: Arc<Database>,
     pub runtime: Arc<Runtime>,
     pub files: Arc<FileStore>,
     pub agents: Arc<AgentService>,
-    pub live: Live,
     pub events: Arc<Events>,
     pub notes: OriginNotes,
     pub waker: Waker,
-    pub compactor: Compactor,
-    pub renders: HashMap<String, Arc<ToolRender>>,
+    pub compaction: CompactionPolicy,
+    pub renders: Renders,
     pub redaction: Redaction,
     pub tz: chrono_tz::Tz,
     pub bus: Arc<Bus>,
+}
+
+/// 会话领域各处共用的部件：交进来的依赖，加上由它建出的实时状态。会话 actor 与界面门面共用一份。
+pub(crate) struct Core {
+    pub(crate) d: SessionDeps,
+    pub(crate) live: Live,
+}
+
+impl Core {
+    pub(crate) fn new(deps: SessionDeps) -> Self {
+        Self { live: Live::new(deps.bus.clone()), d: deps }
+    }
 }
 
 /// 一次运行怎么结束的（失败不在这里，是 [`Failure`]）。
@@ -210,7 +220,7 @@ pub(crate) async fn execute(
             return Ok(Ran::Finished);
         }
     };
-    let assets = core.agents.run_assets(&begun.session.agent_id).await?;
+    let assets = core.d.agents.run_assets(&begun.session.agent_id).await?;
     let audience = audience_of(&begun.audience_mail.iter().collect::<Vec<_>>(), begun.delegated);
     let mut driver = Driver {
         core,
@@ -237,7 +247,8 @@ pub(crate) async fn execute(
 /// 开头的事务：取（或接着）这次运行的记录，读出状态；被打断的那一步补上「被中断」的结果。
 async fn begin(core: &Core, session_id: &SessionId) -> Result<Begun> {
     let (session_id, live) = (session_id.to_owned(), core.live.clone());
-    core.db
+    core.d
+        .db
         .write(move |tx| {
             let session = directory::running_in(tx, &session_id)?;
             let run_id = runs::current_or_start_in(tx, &live, &session_id)?;
@@ -316,7 +327,7 @@ enum Start {
 }
 
 async fn plan(core: &Core, begun: &Begun) -> Result<Plan> {
-    let workspace = core.agents.workspace(&begun.session.agent_id);
+    let workspace = core.d.agents.workspace(&begun.session.agent_id);
     let mail = || begun.queued.iter().map(|m| m.id).collect();
     let start = match &begun.at {
         Position::Resend => Some(Start::Resend),
@@ -325,12 +336,12 @@ async fn plan(core: &Core, begun: &Begun) -> Result<Plan> {
             let rest: Vec<Mail> = begun.queued.iter().filter(|m| !answering.contains(&m.id)).cloned().collect();
             Some(Start::Resume {
                 paused: p.clone(),
-                content: content_of(&core.files, &workspace, &rest).await?,
+                content: content_of(&core.d.files, &workspace, &rest).await?,
                 mail: mail(),
             })
         }
         Position::Fresh => {
-            let content = content_of(&core.files, &workspace, &begun.queued).await?;
+            let content = content_of(&core.d.files, &workspace, &begun.queued).await?;
             (!content.is_empty()).then(|| Start::Fresh { content, mail: mail() })
         }
         // 被打断的那一步开头已补上结果、换成了补完之后停在哪
@@ -369,8 +380,8 @@ async fn finish(core: &Core, begun: &Begun, end: Ending) -> Result<()> {
         agent_name: begun.agent_name.clone(),
         adopted: begun.adopted.clone(),
     };
-    let (waker, events, live) = (core.waker.clone(), core.events.clone(), core.live.clone());
-    core.db.write(move |tx| finish_in(tx, &waker, &events, &live, &finishing, end)).await
+    let (waker, events, live) = (core.d.waker.clone(), core.d.events.clone(), core.live.clone());
+    core.d.db.write(move |tx| finish_in(tx, &waker, &events, &live, &finishing, end)).await
 }
 
 /// 收尾要的这次运行的身份（从 [`Begun`] 拷出，交给写线程）。
@@ -474,10 +485,10 @@ impl Driver<'_> {
             assets: self.assets,
             session_id: self.session_id(),
             audience: self.audience,
-            origin_note: self.core.notes.of(self.begun.session.origin.origin()),
+            origin_note: self.core.d.notes.of(self.begun.session.origin.origin()),
             summary: self.summary.as_deref(),
         };
-        let Some(run) = self.unless_stopped(self.core.runtime.start(spec)).await else {
+        let Some(run) = self.unless_stopped(self.core.d.runtime.start(spec)).await else {
             return Err(Cut::Stopped(Vec::new()));
         };
         Ok(Arc::new(run?))
@@ -491,7 +502,7 @@ impl Driver<'_> {
         let mut run = self.start_run().await?;
         let mut notices: Vec<String> = run.notices().to_vec();
         let session_id = self.session_id().to_owned();
-        let last = self.core.db.read(move |c| history::last_message_id_in(c, &session_id)).await?;
+        let last = self.core.d.db.read(move |c| history::last_message_id_in(c, &session_id)).await?;
         // 实时展示随这个守卫结束：运行返回、被停止时丢掉、panic 时都一样
         let _live = self.core.live.begin(self.session_id(), last);
         self.steps(&mut run, &mut notices, start).await
@@ -549,7 +560,7 @@ impl Driver<'_> {
     /// 不执行——偏保守，不会重复执行，窗口只有交出回答到工具开始执行之间。
     async fn hand_over(&self, p: &Paused) -> Result<HashMap<String, Resolution>> {
         let (session_id, answers) = (self.session_id().to_owned(), p.answers.clone());
-        let decided = self.core.db.write(move |tx| crate::paused_calls::take_in(tx, &session_id, &answers)).await?;
+        let decided = self.core.d.db.write(move |tx| crate::paused_calls::take_in(tx, &session_id, &answers)).await?;
         deferred_results(p, decided)
     }
 
@@ -688,7 +699,7 @@ impl Driver<'_> {
                 })
                 .await?;
                 let session_id = self.session_id().to_owned();
-                let at = self.core.db.read(move |c| position_in(c, &session_id)).await?;
+                let at = self.core.d.db.read(move |c| position_in(c, &session_id)).await?;
                 // 停下了却没有挂起的调用：有工具交回 Defer 却没记下挂起
                 let Some(p) = at.paused() else { return Err(broken("run paused on calls nobody recorded").into()) };
                 Ok(Next::End(paused_end(&p.pending)))
@@ -704,16 +715,16 @@ impl Driver<'_> {
         notices: &mut Vec<String>,
     ) -> Result<()> {
         let session_id = self.session_id().to_owned();
-        let queued = self.core.db.read(move |c| queued_in(c, &session_id)).await?;
+        let queued = self.core.d.db.read(move |c| queued_in(c, &session_id)).await?;
         let arrived: Vec<Mail> = queued.into_iter().filter(|m| !mail.contains(&m.id)).collect();
         if !arrived.is_empty() {
-            let workspace = self.core.agents.workspace(&self.begun.session.agent_id);
+            let workspace = self.core.d.agents.workspace(&self.begun.session.agent_id);
             // 运行中途没有挂起的调用（调用只在运行结束时挂起），这时到达的回答都是迟到的
-            append_content(&mut request, content_of(&self.core.files, &workspace, &arrived).await?);
+            append_content(&mut request, content_of(&self.core.d.files, &workspace, &arrived).await?);
             mail.extend(arrived.iter().map(|m| m.id));
         }
         let attaching = self.run_context_row.is_none();
-        let run_context = if attaching { self.core.runtime.run_context(self.audience) } else { String::new() };
+        let run_context = if attaching { self.core.d.runtime.run_context(self.audience) } else { String::new() };
         let context = with_notices(&run_context, notices);
         if !context.is_empty() {
             // 只挂在本次运行新增的第一条请求上（重发的那条已经在库里，不改它）；运行上下文已经挂出去了时，notices 单独挂
@@ -744,7 +755,7 @@ impl Driver<'_> {
         if self.compaction_exhausted {
             return false;
         }
-        match self.core.compactor.verdict(self.session_id(), &self.history, self.stale_responses) {
+        match self.core.d.compaction.verdict(self.session_id(), &self.history, self.stale_responses) {
             Verdict::Due => true,
             Verdict::Hopeless => {
                 self.compaction_exhausted = true;
@@ -756,14 +767,14 @@ impl Driver<'_> {
 
     /// 压缩到一半被停止：没写完的这一批作废，已提交的批次保留。
     async fn compact(&mut self) -> std::result::Result<(), Cut> {
-        let Some(compacted) = self.unless_stopped(self.core.compactor.compact(self.session_id(), self.assets)).await
-        else {
+        let Some(compacted) = self.unless_stopped(compact(self.core, self.session_id(), self.assets)).await else {
             return Err(Cut::Stopped(Vec::new()));
         };
         let compacted = compacted?;
         let session_id = self.session_id().to_owned();
         let (context, through) = self
             .core
+            .d
             .db
             .read(move |c| {
                 let through = history::latest_compaction(c, &session_id)?.map(|x| x.through_message_id);
@@ -795,10 +806,11 @@ impl Driver<'_> {
     ) -> Result<Vec<MessageId>> {
         // 脱敏只作用于存下的那份；这次运行内存里的历史留明文：下一步执行的就是这些调用，执行时要拿到真的参数（#770）
         let mut stored = messages.clone();
-        self.core.redaction.messages(&mut stored);
+        self.core.d.redaction.messages(&mut stored);
         let (session_id, run_id) = (self.session_id().to_owned(), self.begun.run_id);
         let ids = self
             .core
+            .d
             .db
             .write(move |tx| {
                 let ids = history::append_in(tx, &session_id, run_id, &stored)?;
@@ -816,7 +828,7 @@ impl Driver<'_> {
     fn on_event(&self) -> impl FnMut(RunEvent<'_>) + Send + use<> {
         let live = self.core.live.clone();
         let (session_id, agent) = (self.session_id().to_owned(), self.begun.agent_name.clone());
-        let renders = self.core.renders.clone();
+        let renders = self.core.d.renders.clone();
         move |event| match event {
             RunEvent::Model(e) => match e {
                 Event::PartStart { part: ResponsePart::Text { text, .. }, .. } => {
