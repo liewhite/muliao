@@ -206,8 +206,7 @@ pub async fn assemble(config: Config, web_dir: PathBuf) -> anyhow::Result<App> {
 
     // ---- agent 的删除与归档：各领域登记的清理与检查 ----
     let lifecycle = Arc::new(AgentLifecycle::new(
-        source.clone(),
-        settings.workspaces_dir(),
+        agents.clone(),
         vec![
             muliao_sessions::deletion::deletion_hook(waker.clone(), events.clone()),
             ScriptGrants::deletion_hook(),

@@ -41,7 +41,7 @@ async fn kit() -> Kit {
     let tools = tools(
         w.service.clone(),
         Arc::new(Distribution::new(w.source.clone())),
-        Arc::new(AgentLifecycle::new(w.source.clone(), w.workspaces(), vec![], vec![])),
+        Arc::new(AgentLifecycle::new(w.service.clone(), vec![], vec![])),
         Arc::new(Secrets::new(w.source.clone(), vault)),
     );
     Kit { w, tools }

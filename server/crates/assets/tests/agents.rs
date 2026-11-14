@@ -143,7 +143,7 @@ async fn default_and_archive() {
     let busy = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let flag = busy.clone();
     let blocker: ArchiveBlocker = Arc::new(move |_c, _id| Ok(flag.load(std::sync::atomic::Ordering::SeqCst)));
-    let life = AgentLifecycle::new(w.source.clone(), w.workspaces(), vec![], vec![("sessions".into(), blocker)]);
+    let life = AgentLifecycle::new(w.service.clone(), vec![], vec![("sessions".into(), blocker)]);
 
     w.service.set_default(&a, true).await.unwrap();
     w.service.set_default(&b, true).await.unwrap();
@@ -175,7 +175,7 @@ async fn delete_cleans_up_and_keeps_shared_assets() {
 
     // 一个领域的清理报错：整个回滚，agent 照常可用
     let refuse: DeletionHook = Arc::new(|_tx, _id| Err(muliao_platform::errors::DomainError::conflict("busy").into()));
-    let life = AgentLifecycle::new(w.source.clone(), w.workspaces(), vec![refuse], vec![]);
+    let life = AgentLifecycle::new(w.service.clone(), vec![refuse], vec![]);
     assert!(matches!(life.delete(&a, &Actor::User).await, Err(Error::Domain(_))));
     assert!(w.service.get_active(&a).await.is_ok());
 
@@ -187,7 +187,7 @@ async fn delete_cleans_up_and_keeps_shared_assets() {
         seen.lock().unwrap().push(id.to_owned());
         Ok(())
     });
-    let life = AgentLifecycle::new(w.source.clone(), w.workspaces(), vec![hook], vec![]);
+    let life = AgentLifecycle::new(w.service.clone(), vec![hook], vec![]);
     life.delete(&a, &Actor::Agent(b.clone())).await.unwrap();
     assert_eq!(*calls.lock().unwrap(), vec![a.clone()]);
     assert!(w.service.get(&a).await.is_err(), "the row is gone");
@@ -216,7 +216,7 @@ async fn interrupted_deletion_resumes() {
     assert!(w.service.list().await.unwrap().is_empty());
     let r = w.source.write(&[(w.root().join("alice/memory.md"), "x".into(), muliao_assets::tree::Expect::Any)]).await;
     assert!(r.unwrap_err().to_string().contains("being deleted"));
-    let life = AgentLifecycle::new(w.source.clone(), w.workspaces(), vec![], vec![]);
+    let life = AgentLifecycle::new(w.service.clone(), vec![], vec![]);
     assert!(life.delete(&a, &Actor::User).await.unwrap_err().to_string().contains("already being deleted"));
     life.resume_deletions().await.unwrap();
     assert!(w.service.get(&a).await.is_err());
@@ -228,7 +228,7 @@ async fn failed_file_removal_is_reported_and_resumed() {
     use std::os::unix::fs::PermissionsExt;
     let w = world().await;
     let a = w.create("alice").await;
-    let life = AgentLifecycle::new(w.source.clone(), w.workspaces(), vec![], vec![]);
+    let life = AgentLifecycle::new(w.service.clone(), vec![], vec![]);
     // 资源目录根删不了子目录：删文件失败
     let root = w.root();
     std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o555)).unwrap();

@@ -78,6 +78,10 @@ impl AgentService {
         &self.default_model
     }
 
+    pub(crate) fn source(&self) -> &Arc<AssetSource> {
+        &self.source
+    }
+
     pub fn workspace(&self, agent_id: &AgentId) -> PathBuf {
         workspace_of(&self.workspaces_dir, agent_id)
     }

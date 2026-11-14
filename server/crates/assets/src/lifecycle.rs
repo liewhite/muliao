@@ -21,6 +21,7 @@ use rusqlite::Connection;
 use crate::access::{Actor, Sharing};
 use crate::access_file::{self, AccessEdit};
 use crate::agents::{self, AgentInfo};
+use crate::service::AgentService;
 use crate::source::AssetSource;
 use crate::tree::{Owner, Snapshot, move_to, remove};
 use muliao_platform::errors::{Result, conflict};
@@ -34,21 +35,17 @@ pub type ArchiveBlocker = Arc<dyn Fn(&Connection, &AgentId) -> Result<bool> + Se
 pub struct AgentLifecycle {
     db: Arc<Database>,
     source: Arc<AssetSource>,
-    /// 各 agent 的工作目录所在（[`crate::service::workspace_of`]）
-    workspaces_dir: PathBuf,
+    /// 各 agent 的工作目录在哪由它定
+    agents: Arc<AgentService>,
     hooks: Arc<Vec<DeletionHook>>,
     blockers: Arc<Vec<(String, ArchiveBlocker)>>,
 }
 
 impl AgentLifecycle {
     /// hooks、blockers：各领域登记的删除清理与归档前检查（组合根收集）。
-    pub fn new(
-        source: Arc<AssetSource>,
-        workspaces_dir: PathBuf,
-        hooks: Vec<DeletionHook>,
-        blockers: Vec<(String, ArchiveBlocker)>,
-    ) -> Self {
-        Self { db: source.db().clone(), source, workspaces_dir, hooks: Arc::new(hooks), blockers: Arc::new(blockers) }
+    pub fn new(agents: Arc<AgentService>, hooks: Vec<DeletionHook>, blockers: Vec<(String, ArchiveBlocker)>) -> Self {
+        let source = agents.source().clone();
+        Self { db: source.db().clone(), source, agents, hooks: Arc::new(hooks), blockers: Arc::new(blockers) }
     }
 
     /// 发起删除并删完文件。标记之后删文件失败（或调用方中途被取消）时 agent 已不在列表里，停在正在删除，服务下次启动时
@@ -69,14 +66,14 @@ impl AgentLifecycle {
             })
             .await?;
         tracing::info!(agent = %agent_id, actor = actor.as_str(), "agent deletion started");
-        let workspace = crate::service::workspace_of(&self.workspaces_dir, agent_id);
+        let workspace = self.agents.workspace(agent_id);
         remove_files(self.db.clone(), self.source.clone(), workspace, agent_id.to_owned()).await
     }
 
     /// 启动时：接着删停在正在删除的 agent（上次删文件失败或服务中途重启）。失败的记 error，下次启动再试。
     pub async fn resume_deletions(&self) -> Result<()> {
         for agent_id in self.db.read(agents::deleting_in).await? {
-            let workspace = crate::service::workspace_of(&self.workspaces_dir, &agent_id);
+            let workspace = self.agents.workspace(&agent_id);
             if let Err(e) = remove_files(self.db.clone(), self.source.clone(), workspace, agent_id.clone()).await {
                 tracing::error!(agent = %agent_id, error = %e, "removing the files of a deleted agent failed again");
             }
