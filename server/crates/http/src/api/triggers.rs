@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use muliao_platform::ids::{AgentId, SessionId};
 use muliao_triggers::faults::TriggerFault;
 use muliao_triggers::kinds::{Kind, KindView, NewConfig};
-use muliao_triggers::precheck::Precheck;
+use muliao_triggers::precheck::{Precheck, PrecheckOut};
 use muliao_triggers::store::Listing;
 use muliao_triggers::{NewSpec, PrecheckChange, Prompt, TriggerView, Update};
 use serde::{Deserialize, Serialize};
@@ -49,7 +49,7 @@ pub struct TriggerOut {
     prompt: String,
     enabled: bool,
     /// 触发前的前置检查；没有则每次都交给 agent
-    precheck: Option<Precheck>,
+    precheck: Option<PrecheckOut>,
     last_checked_at: Option<DateTime<Utc>>,
     last_fired_at: Option<DateTime<Utc>>,
     /// 上一次触发开出的、还在的会话
@@ -72,7 +72,7 @@ impl TriggerOut {
             agent_id: t.agent_id,
             prompt: t.prompt.into(),
             enabled: t.enabled,
-            precheck: t.precheck,
+            precheck: t.precheck.as_ref().map(PrecheckOut::from),
             last_checked_at: t.last_checked_at,
             last_fired_at: t.last_fired_at,
             last_session_id: v.live_session_id,

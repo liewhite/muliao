@@ -78,7 +78,8 @@ export type Skill = Schemas['SkillDetail']
 export type Memory = Schemas['MemoryOut']
 /** 一种触发方式与它的说明 */
 export type TriggerKind = Schemas['TriggerKindOut']
-export type Precheck = Schemas['Precheck']
+/** 前置检查：读到的与编辑器交出的都是每个字段都在的（请求里能省的字段这里也总给出） */
+export type Precheck = Schemas['PrecheckOut']
 /** 按 kind 区分的联合：收窄 kind 后 config 与 status 就是这种方式的类型 */
 export type Trigger = Schemas['TriggerOut']
 export type TriggerKindName = Trigger['kind']

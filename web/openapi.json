@@ -2597,7 +2597,7 @@
           {
             "name": "assignee",
             "in": "query",
-            "description": "指派人：agent id，或 `user` 表示用户",
+            "description": "指派人：`user` 是用户，`agent:<agent id>` 是某个 agent；别的写法 422",
             "required": false,
             "schema": {
               "type": "string"
@@ -4709,11 +4709,8 @@
             "required": [
               "name",
               "owner",
-              "description",
               "roles",
               "shared",
-              "updated_at",
-              "path",
               "deletable",
               "transferable"
             ],
@@ -4732,9 +4729,6 @@
                   }
                 ]
               },
-              "description": {
-                "type": "string"
-              },
               "roles": {
                 "type": "array",
                 "items": {
@@ -4745,21 +4739,6 @@
               "shared": {
                 "type": "boolean",
                 "description": "分发出去了：base 收录它，或某个不是 owner 的 agent 的规则（角色或自己的 allow）放行它；否则只有 owner 能用（归平台的\n就谁也用不了）。与删除 agent 时把资产转给平台同一个定义"
-              },
-              "updated_at": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "format": "date-time",
-                "description": "文件的修改时间；内置工具在代码里定义，为 null"
-              },
-              "path": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "description": "文件（skill 是目录）的位置；内置工具为 null"
               },
               "deletable": {
                 "type": "boolean",
@@ -4778,7 +4757,7 @@
         "oneOf": [
           {
             "type": "object",
-            "description": "内置工具：归平台、代码里定义，不能改",
+            "description": "内置工具：归平台、代码里定义，没有文件，不能改",
             "required": [
               "access",
               "admin",
@@ -4803,9 +4782,13 @@
           {
             "type": "object",
             "required": [
+              "file",
               "kind"
             ],
             "properties": {
+              "file": {
+                "$ref": "#/components/schemas/StoredFileOut"
+              },
               "kind": {
                 "type": "string",
                 "enum": [
@@ -4815,34 +4798,44 @@
             }
           },
           {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/McpConfigOut"
+            "type": "object",
+            "required": [
+              "file",
+              "enabled",
+              "config",
+              "kind"
+            ],
+            "properties": {
+              "file": {
+                "$ref": "#/components/schemas/StoredFileOut"
               },
-              {
-                "type": "object",
-                "required": [
-                  "kind"
-                ],
-                "properties": {
-                  "kind": {
-                    "type": "string",
-                    "enum": [
-                      "mcp"
-                    ]
-                  }
-                }
+              "enabled": {
+                "type": "boolean"
+              },
+              "config": {
+                "$ref": "#/components/schemas/McpConfig",
+                "description": "env / headers 里的 secret 只以 ${vault:KEY} 引用形式存储，可以原样返回"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "mcp"
+                ]
               }
-            ]
+            }
           },
           {
             "type": "object",
             "description": "值不返回",
             "required": [
+              "file",
               "allow_shell",
               "kind"
             ],
             "properties": {
+              "file": {
+                "$ref": "#/components/schemas/StoredFileOut"
+              },
               "allow_shell": {
                 "type": "boolean",
                 "description": "false：agent 自己写的命令不能注入，只有 skill_run 的 skill 脚本与 MCP 配置能用（#528）"
@@ -4859,9 +4852,13 @@
             "type": "object",
             "description": "正文不在列表里：平台的记忆（owner 为 null）用 GET /api/assets/memory/{name} 读，agent 的私有记忆（owner 是它，name 是\n它的名字，只作显示）用 GET /api/agents/{owner}/memory",
             "required": [
+              "file",
               "kind"
             ],
             "properties": {
+              "file": {
+                "$ref": "#/components/schemas/StoredFileOut"
+              },
               "kind": {
                 "type": "string",
                 "enum": [
@@ -6404,7 +6401,7 @@
             ],
             "properties": {
               "config": {
-                "$ref": "#/components/schemas/StreamConfig"
+                "$ref": "#/components/schemas/StreamConfigOut"
               },
               "status": {
                 "$ref": "#/components/schemas/StreamStatus"
@@ -6596,19 +6593,18 @@
           {
             "type": "object",
             "required": [
-              "answers",
+              "call_id",
+              "result",
               "kind"
             ],
             "properties": {
-              "answers": {
-                "type": "object",
-                "description": "tool_call_id -> 那次挂起调用的结果（用户的回答，或被问 agent 的结局）",
-                "additionalProperties": {
-                  "$ref": "#/components/schemas/CallResult"
-                },
-                "propertyNames": {
-                  "type": "string"
-                }
+              "call_id": {
+                "type": "string",
+                "description": "回答的是哪次挂起调用"
+              },
+              "result": {
+                "$ref": "#/components/schemas/CallResult",
+                "description": "那次挂起调用的结果（用户的回答，或被问 agent 的结局）"
               },
               "kind": {
                 "type": "string",
@@ -6722,62 +6718,73 @@
           }
         }
       },
-      "McpConfigOut": {
-        "type": "object",
-        "required": [
-          "transport",
-          "command",
-          "args",
-          "url",
-          "env",
-          "headers",
-          "enabled"
-        ],
-        "properties": {
-          "transport": {
-            "$ref": "#/components/schemas/McpTransport"
-          },
-          "command": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "args": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "url": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "env": {
+      "McpConfig": {
+        "oneOf": [
+          {
             "type": "object",
-            "description": "env / headers 里的 secret 只以 ${vault:KEY} 引用形式存储，可以原样返回",
-            "additionalProperties": {
-              "type": "string"
-            },
-            "propertyNames": {
-              "type": "string"
+            "required": [
+              "command",
+              "args",
+              "env",
+              "transport"
+            ],
+            "properties": {
+              "command": {
+                "type": "string"
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "env": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "transport": {
+                "type": "string",
+                "enum": [
+                  "stdio"
+                ]
+              }
             }
           },
-          "headers": {
+          {
             "type": "object",
-            "additionalProperties": {
-              "type": "string"
-            },
-            "propertyNames": {
-              "type": "string"
+            "required": [
+              "url",
+              "headers",
+              "transport"
+            ],
+            "properties": {
+              "url": {
+                "type": "string"
+              },
+              "headers": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "transport": {
+                "type": "string",
+                "enum": [
+                  "http"
+                ]
+              }
             }
-          },
-          "enabled": {
-            "type": "boolean"
           }
-        }
+        ],
+        "description": "一个 MCP server 的连接配置：每种传输方式只带自己的字段（外部输入经 [`McpConfig::new`] 或读文件在边界解析一次）。"
       },
       "McpIn": {
         "type": "object",
@@ -6841,41 +6848,43 @@
         }
       },
       "McpOut": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/McpConfigOut"
-          },
-          {
-            "type": "object",
-            "required": [
-              "owner",
-              "name",
-              "tools"
-            ],
-            "properties": {
-              "owner": {
-                "oneOf": [
-                  {
-                    "$ref": "#/components/schemas/AgentId"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+        "type": "object",
+        "required": [
+          "owner",
+          "name",
+          "enabled",
+          "config",
+          "tools"
+        ],
+        "properties": {
+          "owner": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AgentId"
               },
-              "name": {
-                "type": "string"
-              },
-              "tools": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                },
-                "description": "新增时连接验证列出的工具（不验证时为空）"
+              {
+                "type": "null"
               }
-            }
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "config": {
+            "$ref": "#/components/schemas/McpConfig",
+            "description": "env / headers 里的 secret 只以 ${vault:KEY} 引用形式存储，可以原样返回"
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "新增时连接验证列出的工具（不验证时为空）"
           }
-        ]
+        }
       },
       "McpTransport": {
         "type": "string",
@@ -7185,6 +7194,29 @@
           }
         },
         "additionalProperties": false
+      },
+      "PrecheckOut": {
+        "type": "object",
+        "description": "给界面看的前置检查：每个字段都在（输入时能省的已取了默认值）。",
+        "required": [
+          "command",
+          "secrets",
+          "fire_when"
+        ],
+        "properties": {
+          "command": {
+            "$ref": "#/components/schemas/Script"
+          },
+          "secrets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "fire_when": {
+            "$ref": "#/components/schemas/FireWhen"
+          }
+        }
       },
       "Priority": {
         "type": "string",
@@ -8648,6 +8680,27 @@
           "cancelled"
         ]
       },
+      "StoredFileOut": {
+        "type": "object",
+        "description": "存成文件的一项的文件：描述、修改时间与位置（skill 是目录）。",
+        "required": [
+          "description",
+          "updated_at",
+          "path"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "path": {
+            "type": "string"
+          }
+        }
+      },
       "StoredKind": {
         "type": "string",
         "description": "存成文件的四种：可以新建、改、删、转移 owner（记忆不转移）。",
@@ -8678,6 +8731,29 @@
           }
         },
         "additionalProperties": false
+      },
+      "StreamConfigOut": {
+        "type": "object",
+        "description": "给界面与模型看的流配置：每个字段都在（输入时能省的已取了默认值）。",
+        "required": [
+          "command",
+          "secrets",
+          "debounce_seconds"
+        ],
+        "properties": {
+          "command": {
+            "$ref": "#/components/schemas/Script"
+          },
+          "secrets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "debounce_seconds": {
+            "$ref": "#/components/schemas/Debounce"
+          }
+        }
       },
       "StreamStatus": {
         "type": "object",
@@ -8883,7 +8959,7 @@
               "precheck": {
                 "oneOf": [
                   {
-                    "$ref": "#/components/schemas/Precheck",
+                    "$ref": "#/components/schemas/PrecheckOut",
                     "description": "触发前的前置检查；没有则每次都交给 agent"
                   },
                   {

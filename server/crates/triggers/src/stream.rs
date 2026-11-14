@@ -117,6 +117,20 @@ pub struct StreamConfig {
     pub debounce_seconds: Debounce,
 }
 
+/// 给界面与模型看的流配置：每个字段都在（输入时能省的已取了默认值）。
+#[derive(Debug, Clone, PartialEq, Serialize, utoipa::ToSchema)]
+pub struct StreamConfigOut {
+    pub command: Script,
+    pub secrets: Vec<String>,
+    pub debounce_seconds: Debounce,
+}
+
+impl From<&StreamConfig> for StreamConfigOut {
+    fn from(c: &StreamConfig) -> Self {
+        StreamConfigOut { command: c.command.clone(), secrets: c.secrets.clone(), debounce_seconds: c.debounce_seconds }
+    }
+}
+
 /// 存在 state 里的：这份配置的代号。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StreamState {

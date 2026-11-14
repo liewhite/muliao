@@ -132,8 +132,7 @@ function MemoryItem({ item }: { item: AssetOf<'memory'> }) {
           <div className="min-w-0 flex-1">
             <div className="font-mono font-medium">{item.name}</div>
             <div className="truncate text-xs text-muted">
-              <span className="font-mono">{item.path}</span>
-              {item.updated_at && <> · {formatTime(item.updated_at)}</>}
+              <span className="font-mono">{item.file.path}</span> · {formatTime(item.file.updated_at)}
             </div>
           </div>
           {item.deletable && (
@@ -170,7 +169,7 @@ export function MemoryTab({ assets }: { assets: AssetOf<'memory'>[] }) {
       ) : (
         <div className="flex flex-col gap-2">
           {assets.map((i) => (
-            <MemoryItem key={i.path} item={i} />
+            <MemoryItem key={i.file.path} item={i} />
           ))}
         </div>
       )}
@@ -192,7 +191,7 @@ export function AgentMemories({ agent }: { agent: AgentId }) {
             ) : (
               own.map((m) => (
                 <MemoryEditor
-                  key={m.path}
+                  key={m.file.path}
                   memory={m}
                   hint="agent 每次运行都会看到它能用的全部记忆，也会自行修改"
                 />

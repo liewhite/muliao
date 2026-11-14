@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { expect, it } from 'vitest'
-import { generate, OUTPUT, relaxRequestDefaults } from './gen-api.mjs'
+import { generate, OUTPUT, optionalResponseFields, relaxRequestDefaults } from './gen-api.mjs'
 
 it('the committed frontend types match openapi.json', async () => {
   // 不一致时运行 npm run gen:api
@@ -26,4 +26,31 @@ it('only request-only schemas lose their defaults', () => {
   }
   const s = relaxRequestDefaults(spec).components.schemas
   expect([s.In, s.Nested, s.Out, s.Shared, s.Event].map((x) => 'default' in x.properties.f)).toEqual([false, false, true, true, true])
+})
+
+it('every field of a response type is always there', async () => {
+  // 有不必有的字段时，后端给响应拆一个字段全必有的 -Out 类型（如 PrecheckOut），别让前端写兜底
+  const spec = JSON.parse(await readFile(new URL('../openapi.json', import.meta.url), 'utf8'))
+  expect(optionalResponseFields(spec)).toEqual([])
+})
+
+it('finds optional fields only in response types', () => {
+  const ref = (n) => ({ $ref: `#/components/schemas/${n}` })
+  const spec = {
+    paths: {
+      '/a': {
+        post: {
+          requestBody: { content: { 'application/json': { schema: ref('In') } } },
+          responses: { 200: { content: { 'application/json': { schema: ref('Out') } } } },
+        },
+      },
+    },
+    components: {
+      schemas: {
+        In: { properties: { f: {} } },
+        Out: { required: ['a'], properties: { a: {}, b: {}, inner: { oneOf: [{ properties: { c: {} } }] } } },
+      },
+    },
+  }
+  expect(optionalResponseFields(spec)).toEqual(['Out.b', 'Out.inner', 'Out.inner.c'])
 })

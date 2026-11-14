@@ -1362,7 +1362,6 @@ export interface components {
         CatalogAssetOut: components["schemas"]["CatalogDetail"] & {
             name: string;
             owner: components["schemas"]["AgentId"] | null;
-            description: string;
             /** @description 收录它的角色（allow 放行、deny 没拦，含内置的 base、admin） */
             roles: string[];
             /**
@@ -1370,13 +1369,6 @@ export interface components {
              *     就谁也用不了）。与删除 agent 时把资产转给平台同一个定义
              */
             shared: boolean;
-            /**
-             * Format: date-time
-             * @description 文件的修改时间；内置工具在代码里定义，为 null
-             */
-            updated_at: string | null;
-            /** @description 文件（skill 是目录）的位置；内置工具为 null */
-            path: string | null;
             /** @description 用户能在界面上删它（内置工具、全局记忆、私有记忆不能） */
             deletable: boolean;
             /** @description 用户能在界面上把它转给别的 owner（内置工具、记忆不能） */
@@ -1389,17 +1381,24 @@ export interface components {
             /** @enum {string} */
             kind: "tool";
         } | {
+            file: components["schemas"]["StoredFileOut"];
             /** @enum {string} */
             kind: "skill";
-        } | (components["schemas"]["McpConfigOut"] & {
+        } | {
+            file: components["schemas"]["StoredFileOut"];
+            enabled: boolean;
+            /** @description env / headers 里的 secret 只以 ${vault:KEY} 引用形式存储，可以原样返回 */
+            config: components["schemas"]["McpConfig"];
             /** @enum {string} */
             kind: "mcp";
-        }) | {
+        } | {
+            file: components["schemas"]["StoredFileOut"];
             /** @description false：agent 自己写的命令不能注入，只有 skill_run 的 skill 脚本与 MCP 配置能用（#528） */
             allow_shell: boolean;
             /** @enum {string} */
             kind: "secret";
         } | {
+            file: components["schemas"]["StoredFileOut"];
             /** @enum {string} */
             kind: "memory";
         };
@@ -1816,7 +1815,7 @@ export interface components {
             /** @enum {string} */
             kind: "once";
         } | {
-            config: components["schemas"]["StreamConfig"];
+            config: components["schemas"]["StreamConfigOut"];
             status: components["schemas"]["StreamStatus"];
             /** @enum {string} */
             kind: "stream";
@@ -1869,10 +1868,10 @@ export interface components {
             /** @enum {string} */
             kind: "event";
         } | {
-            /** @description tool_call_id -> 那次挂起调用的结果（用户的回答，或被问 agent 的结局） */
-            answers: {
-                [key: string]: components["schemas"]["CallResult"];
-            };
+            /** @description 回答的是哪次挂起调用 */
+            call_id: string;
+            /** @description 那次挂起调用的结果（用户的回答，或被问 agent 的结局） */
+            result: components["schemas"]["CallResult"];
             /** @enum {string} */
             kind: "answer";
         };
@@ -1903,19 +1902,22 @@ export interface components {
             transport: components["schemas"]["McpTransport"];
             enabled: boolean;
         };
-        McpConfigOut: {
-            transport: components["schemas"]["McpTransport"];
-            command: string | null;
+        /** @description 一个 MCP server 的连接配置：每种传输方式只带自己的字段（外部输入经 [`McpConfig::new`] 或读文件在边界解析一次）。 */
+        McpConfig: {
+            command: string;
             args: string[];
-            url: string | null;
-            /** @description env / headers 里的 secret 只以 ${vault:KEY} 引用形式存储，可以原样返回 */
             env: {
                 [key: string]: string;
             };
+            /** @enum {string} */
+            transport: "stdio";
+        } | {
+            url: string;
             headers: {
                 [key: string]: string;
             };
-            enabled: boolean;
+            /** @enum {string} */
+            transport: "http";
         };
         McpIn: {
             owner?: components["schemas"]["AgentId"] | null;
@@ -1932,9 +1934,12 @@ export interface components {
             /** @description 先连接一次验证（按用户能用的 secret 解析引用），连不上 422、不保存 */
             probe?: boolean;
         };
-        McpOut: components["schemas"]["McpConfigOut"] & {
+        McpOut: {
             owner: components["schemas"]["AgentId"] | null;
             name: string;
+            enabled: boolean;
+            /** @description env / headers 里的 secret 只以 ${vault:KEY} 引用形式存储，可以原样返回 */
+            config: components["schemas"]["McpConfig"];
             /** @description 新增时连接验证列出的工具（不验证时为空） */
             tools: string[];
         };
@@ -2024,6 +2029,12 @@ export interface components {
              *     only records it).
              */
             fire_when?: components["schemas"]["FireWhen"];
+        };
+        /** @description 给界面看的前置检查：每个字段都在（输入时能省的已取了默认值）。 */
+        PrecheckOut: {
+            command: components["schemas"]["Script"];
+            secrets: string[];
+            fire_when: components["schemas"]["FireWhen"];
         };
         /** @enum {string} */
         Priority: "none" | "urgent" | "high" | "medium" | "low";
@@ -2417,6 +2428,13 @@ export interface components {
         };
         /** @enum {string} */
         Status: "backlog" | "in_progress" | "in_review" | "blocked" | "done" | "cancelled";
+        /** @description 存成文件的一项的文件：描述、修改时间与位置（skill 是目录）。 */
+        StoredFileOut: {
+            description: string;
+            /** Format: date-time */
+            updated_at: string;
+            path: string;
+        };
         /**
          * @description 存成文件的四种：可以新建、改、删、转移 owner（记忆不转移）。
          * @enum {string}
@@ -2426,6 +2444,12 @@ export interface components {
             command: components["schemas"]["Script"];
             secrets?: string[];
             debounce_seconds?: components["schemas"]["Debounce"];
+        };
+        /** @description 给界面与模型看的流配置：每个字段都在（输入时能省的已取了默认值）。 */
+        StreamConfigOut: {
+            command: components["schemas"]["Script"];
+            secrets: string[];
+            debounce_seconds: components["schemas"]["Debounce"];
         };
         StreamStatus: {
             /**
@@ -2486,7 +2510,7 @@ export interface components {
             agent_id: components["schemas"]["AgentId"];
             prompt: string;
             enabled: boolean;
-            precheck: components["schemas"]["Precheck"] | null;
+            precheck: components["schemas"]["PrecheckOut"] | null;
             /** Format: date-time */
             last_checked_at: string | null;
             /** Format: date-time */
@@ -4643,7 +4667,7 @@ export interface operations {
             query?: {
                 /** @description 只要这些状态（可以重复给）；不给是全部 */
                 status?: components["schemas"]["Status"][];
-                /** @description 指派人：agent id，或 `user` 表示用户 */
+                /** @description 指派人：`user` 是用户，`agent:<agent id>` 是某个 agent；别的写法 422 */
                 assignee?: string;
                 /** @description 负责项目的 agent id */
                 owner?: components["schemas"]["AgentId"];

@@ -60,6 +60,28 @@ export function relaxRequestDefaults(spec) {
   return spec
 }
 
+/**
+ * 响应里出现的类型中不是必有的字段（`类型.字段`）。服务端序列化时每个字段都会给出（没有值是 null），不必有的字段只来自
+ * 请求与响应共用、带默认值的类型：前端读到它就得写兜底。这种类型要拆出一个字段全必有的 -Out 类型给响应用。
+ */
+export function optionalResponseFields(spec) {
+  const schemas = spec.components.schemas
+  const roots = refsIn(spec.paths, (k) => k === 'requestBody' || k === 'parameters')
+  const found = []
+  const visit = (node, at) => {
+    if (Array.isArray(node)) return node.forEach((n) => visit(n, at))
+    if (!node || typeof node !== 'object') return
+    const required = new Set(node.required ?? [])
+    for (const [name, prop] of Object.entries(node.properties ?? {})) {
+      if (!required.has(name)) found.push(`${at}.${name}`)
+      visit(prop, `${at}.${name}`)
+    }
+    for (const [k, v] of Object.entries(node)) if (k !== 'properties') visit(v, at)
+  }
+  for (const name of closure(schemas, roots)) visit(schemas[name], name)
+  return found
+}
+
 /** 后端各种编号的类型（platform::ids）：生成成带品牌的字符串，传错位置（把会话编号当 agent 编号）编译不过 */
 export const BRANDED = ['AgentId', 'SessionId']
 

@@ -97,6 +97,20 @@ pub struct Precheck {
     pub fire_when: FireWhen,
 }
 
+/// 给界面看的前置检查：每个字段都在（输入时能省的已取了默认值）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+pub struct PrecheckOut {
+    pub command: Script,
+    pub secrets: Vec<String>,
+    pub fire_when: FireWhen,
+}
+
+impl From<&Precheck> for PrecheckOut {
+    fn from(p: &Precheck) -> Self {
+        PrecheckOut { command: p.command.clone(), secrets: p.secrets.clone(), fire_when: p.fire_when }
+    }
+}
+
 /// 检查本身失败的原因（给用户与 agent 看，可能含脚本的 stderr）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Failed(pub String);

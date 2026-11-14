@@ -89,8 +89,7 @@ function SecretItem({ item }: { item: AssetOf<'secret'> }) {
               )}
             </div>
             <div className="truncate text-xs text-muted">
-              {item.description || '无说明'}
-              {item.updated_at && <> · {formatTime(item.updated_at)}</>}
+              {item.file.description || '无说明'} · {formatTime(item.file.updated_at)}
             </div>
           </div>
           <Button isIconOnly size="sm" variant="ghost" aria-label={`删除 ${item.name}`} onPress={() => void remove()}>

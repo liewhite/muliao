@@ -460,17 +460,12 @@ function MailNote({ mail, ctx }: { mail: Mail; ctx: SessionContext }) {
           <EventNote lead={<SourceLabel source={mail.source} ctx={ctx} />} text={mail.content} />
         )
       ) : mail.kind === 'answer' ? (
-        Object.values(mail.answers).map((result, i) =>
-          result.tool === 'ask_user' ? (
-            <AnsweredQuestions key={i} answers={result.result.answers} />
-          ) : result.tool === 'approval' ? (
-            <QuestionNote
-              key={i}
-              text={CHOICE_TEXT[result.result.choice]}
-            />
-          ) : (
-            <EventNote key={i} lead={<span className="shrink-0 text-foreground">agent 的回答</span>} text={result.result.text} />
-          ),
+        mail.result.tool === 'ask_user' ? (
+          <AnsweredQuestions answers={mail.result.result.answers} />
+        ) : mail.result.tool === 'approval' ? (
+          <QuestionNote text={CHOICE_TEXT[mail.result.result.choice]} />
+        ) : (
+          <EventNote lead={<span className="shrink-0 text-foreground">agent 的回答</span>} text={mail.result.result.text} />
         )
       ) : (
         <UserBubble text={mail.content} attachments={mail.attachments} pending={!discarded} />

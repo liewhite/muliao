@@ -169,7 +169,7 @@ function ConfigEditor({ value, onChange }: { value: KindConfig; onChange: Config
   }
 }
 
-type FireWhen = NonNullable<Precheck['fire_when']>
+type FireWhen = Precheck['fire_when']
 
 const FIRE_WHEN_LABELS: Record<FireWhen, string> = {
   output: '有输出就触发',
@@ -179,9 +179,9 @@ const FIRE_WHEN_LABELS: Record<FireWhen, string> = {
 /** 前置检查：先跑一条命令，只有真有事才调用 agent。关闭时回调 null（每次都交给 agent） */
 function PrecheckEditor({ precheck, onChange }: { precheck: Precheck | null; onChange: (p: Precheck | null) => void }) {
   const [on, setOn] = useState(precheck !== null)
-  const [command, setCommand] = useState(precheck?.command ?? '')
-  const [secrets, setSecrets] = useState((precheck?.secrets ?? []).join(', '))
-  const [fireWhen, setFireWhen] = useState<FireWhen>(precheck?.fire_when ?? 'output')
+  const [command, setCommand] = useState(precheck ? precheck.command : '')
+  const [secrets, setSecrets] = useState(precheck ? precheck.secrets.join(', ') : '')
+  const [fireWhen, setFireWhen] = useState<FireWhen>(precheck ? precheck.fire_when : 'output')
 
   function emit(next: { on?: boolean; command?: string; secrets?: string; fireWhen?: FireWhen }) {
     const v = { on, command, secrets, fireWhen, ...next }
@@ -255,7 +255,7 @@ function PrecheckSummary({ trigger }: { trigger: Trigger }) {
   return (
     <div className="flex flex-col gap-1 text-xs text-muted">
       <div>
-        前置检查 · {FIRE_WHEN_LABELS[trigger.precheck.fire_when ?? 'output']}
+        前置检查 · {FIRE_WHEN_LABELS[trigger.precheck.fire_when]}
         {trigger.last_checked_at && <> · 上次检查 {formatTime(trigger.last_checked_at)}</>}
       </div>
       <pre className={CODE_BLOCK}>{trigger.precheck.command}</pre>

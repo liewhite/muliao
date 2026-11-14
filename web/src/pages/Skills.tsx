@@ -47,7 +47,7 @@ export function SkillTab({ assets }: { assets: AssetOf<'skill'>[] }) {
                 <Link to={editorPath(s.name)} className="hover:underline">
                   <Card.Title className="font-mono text-base">{s.name}</Card.Title>
                 </Link>
-                <Card.Description>{s.description}</Card.Description>
+                <Card.Description>{s.file.description}</Card.Description>
               </Card.Header>
               <Card.Content>
                 <AssetAccess asset={s} />

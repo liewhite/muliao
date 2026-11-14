@@ -121,11 +121,12 @@ function McpForm() {
 
 /** 连接地址与环境变量 / 请求头 */
 function McpTarget({ server }: { server: AssetOf<'mcp'> }) {
-  const pairs = { ...server.env, ...server.headers }
+  const c = server.config
+  const [target, pairs] = c.transport === 'stdio' ? [[c.command, ...c.args].join(' '), c.env] : [c.url, c.headers]
   return (
     <>
       <code className="block whitespace-pre-wrap break-all rounded-lg bg-surface-secondary p-2 font-mono text-xs">
-        {server.command ? [server.command, ...server.args].join(' ') : server.url}
+        {target}
       </code>
       {Object.keys(pairs).length > 0 && (
         <code className="block whitespace-pre-wrap break-all rounded-lg bg-surface-secondary p-2 font-mono text-xs">
@@ -155,7 +156,7 @@ function McpItem({ server }: { server: AssetOf<'mcp'> }) {
           <Card.Title className="font-mono text-base">{server.name}</Card.Title>
           <div className="mt-1 flex flex-wrap gap-1.5">
             <Chip size="sm" variant="secondary">
-              {server.transport}
+              {server.config.transport}
             </Chip>
           </div>
           <div className="mt-1.5">

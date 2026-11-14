@@ -3,12 +3,12 @@ import { asAgentId, type CatalogAsset } from './api'
 import { filterAssets } from './rules'
 
 const a = asAgentId('agent-a')
-const common = (name: string, owner: CatalogAsset['owner']) => ({ name, owner, description: '', roles: [], shared: false, deletable: true, transferable: true })
-const AT = '2026-10-27T00:00:00Z'
+const common = (name: string, owner: CatalogAsset['owner']) => ({ name, owner, roles: [], shared: false, deletable: true, transferable: true })
+const file = (path: string) => ({ description: '', updated_at: '2026-10-27T00:00:00Z', path })
 const ASSETS: CatalogAsset[] = [
-  { kind: 'tool', access: 'write', admin: false, updated_at: null, path: null, ...common('run_shell', null) },
-  { kind: 'skill', updated_at: AT, path: '/a/platform/skills/relay-host', ...common('relay-host', null) },
-  { kind: 'skill', updated_at: AT, path: '/a/agent-a/skills/mine', ...common('mine', a) },
+  { kind: 'tool', access: 'write', admin: false, ...common('run_shell', null) },
+  { kind: 'skill', file: file('/a/platform/skills/relay-host'), ...common('relay-host', null) },
+  { kind: 'skill', file: file('/a/agent-a/skills/mine'), ...common('mine', a) },
 ]
 
 describe('filterAssets', () => {

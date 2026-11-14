@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use crate::once::{self, OnceConfig, OnceInput, OnceStatus};
 use crate::schedule::{self, ScheduleConfig, ScheduleState, ScheduleStatus};
 use crate::store::Trigger;
-use crate::stream::{self, Hosting, StreamConfig, StreamState, StreamStatus};
+use crate::stream::{self, Hosting, StreamConfig, StreamConfigOut, StreamState, StreamStatus};
 use muliao_platform::errors::{Result, invalid};
 
 /// 触发方式的种类。
@@ -174,7 +174,7 @@ impl Due<'_> {
 pub enum KindView {
     Schedule { config: ScheduleConfig, status: ScheduleStatus },
     Once { config: OnceConfig, status: OnceStatus },
-    Stream { config: StreamConfig, status: StreamStatus },
+    Stream { config: StreamConfigOut, status: StreamStatus },
 }
 
 impl KindView {
@@ -185,7 +185,7 @@ impl KindView {
             }
             Mode::Once { config } => KindView::Once { config: config.clone(), status: once::status(config) },
             Mode::Stream { config, .. } => {
-                KindView::Stream { config: config.clone(), status: stream::status(&t.name, hosting.process(t.id)) }
+                KindView::Stream { config: config.into(), status: stream::status(&t.name, hosting.process(t.id)) }
             }
         }
     }
