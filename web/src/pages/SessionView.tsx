@@ -68,7 +68,7 @@ import { STATUS_LABEL, issueRoute } from '../issues'
 import { useReturnState, useRouteParam } from '../nav'
 import { cacheHitPercent, contextText, formatTokens } from '../usage'
 import { StatusDot } from './Issues'
-import { AgentName, CODE_BLOCK, ErrorAlert, Loading, Markdown, Page, formatTime, useAction, useConfirm } from '../ui'
+import { ActionButton, AgentName, CODE_BLOCK, ErrorAlert, Loading, Markdown, Page, formatTime, useAction, useConfirm } from '../ui'
 import { useLoad } from '../load'
 
 /**
@@ -715,7 +715,7 @@ function Composer({
   uploads: Uploads
   voice: VoiceInput
   busy: boolean
-  /** 这个会话有事在进行（工作状态不是 idle：运行、排队、等后台任务或委派）：显示停止按钮（进行中也可以继续发消息，会排在后面） */
+  /** 这个会话有事在进行（工作状态不是 idle：运行、排队、等后台任务或委派；或在手动压缩）：显示停止按钮（进行中也可以继续发消息，会排在后面） */
   active: boolean
   onSend: () => void
   onStop: () => void
@@ -880,6 +880,8 @@ export default function SessionView() {
   const [draft, setDraft] = useState('')
   const uploads = useUploads()
   const action = useAction()
+  // 压缩单独一个：它要做完才返回（几秒到几十秒），期间停止等其他操作照常可用
+  const compaction = useAction()
   const bottom = useFollowBottom()
   // 说完就发：转写出的文字接在已输入的内容后面，连同附件一起发出；暂时发不了（附件还在上传、上一条还在发）
   // 或发送失败时留在输入框里，不丢
@@ -966,16 +968,17 @@ export default function SessionView() {
       }
       actions={
         <>
-          <Button
+          <ActionButton
             size="sm"
             variant="secondary"
             isDisabled={action.busy}
-            onPress={() => void action.run(() => api.compact(id))}
+            isPending={compaction.busy}
+            onPress={() => void compaction.run(() => api.compact(id))}
             aria-description="把早期对话压缩成摘要，减少发给模型的上下文"
           >
-            <Archive className="size-4" />
+            {!compaction.busy && <Archive className="size-4" />}
             压缩
-          </Button>
+          </ActionButton>
           <Button isIconOnly size="sm" variant="ghost" onPress={() => void remove()} aria-label="删除会话">
             <Trash2 className="size-4" />
           </Button>
@@ -997,7 +1000,7 @@ export default function SessionView() {
                 <ArrowDown className="size-4" />
               </Button>
             )}
-            <ErrorAlert error={action.error ?? voice.error} />
+            <ErrorAlert error={action.error ?? compaction.error ?? voice.error} />
             {detail.data && <UsageLine context={detail.data.context} usage={detail.data.usage} />}
             <Composer
               draft={draft}
@@ -1005,7 +1008,8 @@ export default function SessionView() {
               uploads={uploads}
               voice={voice}
               busy={action.busy}
-              active={detail.data !== undefined && detail.data.state !== 'idle'}
+              // 压缩中也能停止（会话此时是空闲的）
+              active={compaction.busy || (detail.data !== undefined && detail.data.state !== 'idle')}
               onSend={() => void send()}
               onStop={() => void action.run(() => api.stop(id))}
             />

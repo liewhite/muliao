@@ -391,21 +391,14 @@ async fn stop(State(s): State<AppState>, Path(session_id): Path<SessionId>) -> A
     Ok(StatusCode::ACCEPTED)
 }
 
-/// 手动压缩上下文：排在正在进行的运行之后，在后台做；开始与做完时会话页随 saved 事件刷新。没有可压缩的（都在保留的最近几步里）
-/// 时什么都不变；失败记在服务日志里。
+/// 手动压缩上下文，做完才返回（几秒到几十秒）。没有可压缩的（都在保留的最近几步里）时什么都不变。会话在运行（运行中超阈值
+/// 会自动压缩）、已在压缩，或压缩中被停止时 409；模型调用失败时报错，之前写下的批次保留。
 #[utoipa::path(post, path = "/api/sessions/{session_id}/compact", tag = "sessions",
-    responses((status = 202), (status = 404, body = ErrorOut)),
+    responses((status = 204), (status = 404, body = ErrorOut), (status = 409, body = ErrorOut)),
     params(("session_id" = SessionId, Path, description = "会话的编号")))]
 async fn compact(State(s): State<AppState>, Path(session_id): Path<SessionId>) -> ApiResult<StatusCode> {
-    s.services.sessions.get(&session_id).await?;
-    let sessions = s.services.sessions.clone();
-    tokio::spawn(async move {
-        match sessions.compact(&session_id).await {
-            Ok(steps) => tracing::info!(%session_id, steps, "manual compaction done"),
-            Err(e) => tracing::error!(%session_id, error = %e, "manual compaction failed"),
-        }
-    });
-    Ok(StatusCode::ACCEPTED)
+    s.services.sessions.compact(&session_id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// 重试最近一次最终失败的运行（同一次运行接着跑）。会话在跑、或最近一次运行没有失败时 409。

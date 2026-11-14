@@ -1,6 +1,6 @@
 //! 会话领域端到端（离线）：真的库、资源目录、运行端口、会话 actor，模型是 wiremock 扮的 Anthropic 接口（按顺序交回事先排好的
 //! 回复）。覆盖：一次普通对话、工具调用与每步保存、ask_user 挂起与回答、停止正在执行的工具、重启后被打断的一步补「被中断」、
-//! ask_agent 委派与交回、最终失败与手动重试、删除忙会话被拒。
+//! ask_agent 委派与交回、最终失败与手动重试、删除忙会话被拒、手动压缩（运行中被拒、压缩中停止立即生效）。
 
 use muliao_platform::ids::{AgentId, SessionId};
 use std::collections::VecDeque;
@@ -593,6 +593,55 @@ async fn deleting_a_busy_session_is_refused() {
     w.service.stop(&s).await.unwrap();
     w.service.delete(&s).await.unwrap();
     assert!(w.service.get(&s).await.is_err());
+}
+
+#[tokio::test]
+async fn manual_compaction_is_refused_while_running() {
+    let w = world().await;
+    w.script.call("c1", "slow", json!({}));
+    let s = w.new_chat("忙").await;
+    for _ in 0..200 {
+        if w.history(&s).await.len() == 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let e = w.service.compact(&s).await.unwrap_err();
+    assert!(e.to_string().contains("running"), "{e}");
+    w.service.stop(&s).await.unwrap();
+    w.release.notify_waiters();
+}
+
+#[tokio::test]
+async fn stopping_a_manual_compaction_takes_effect_at_once() {
+    let w = world().await;
+    // 保留最近 10 步：6 问 6 答是 12 步，有 2 步可压缩
+    w.script.text("嗯");
+    let s = w.new_chat("0").await;
+    assert_eq!(w.settled(&s).await, WorkState::Idle);
+    for i in 1..6 {
+        w.script.text("嗯");
+        w.say(UserTarget::Existing(s.clone()), &i.to_string()).await;
+        assert_eq!(w.settled(&s).await, WorkState::Idle);
+    }
+    // 总结迟迟不回
+    w.script.push(ok(json!({"type": "text", "text": "摘要"}), "end_turn").set_delay(Duration::from_secs(60)));
+    let service = w.service.clone();
+    let s2 = s.clone();
+    let compaction = tokio::spawn(async move { service.compact(&s2).await });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    tokio::time::timeout(Duration::from_secs(5), w.service.stop(&s)).await.expect("stop is not held up").unwrap();
+    let e = compaction.await.unwrap().unwrap_err();
+    assert!(e.to_string().contains("stopped"), "{e}");
+    let s3 = s.clone();
+    let compactions = w.db.read(move |c| history::compactions_in(c, &s3)).await.unwrap();
+    assert!(compactions.is_empty(), "the unfinished batch is dropped");
+    // 再压一次：这次等到做完才返回
+    w.script.text("摘要");
+    assert_eq!(w.service.compact(&s).await.unwrap(), 2);
+    let s3 = s.clone();
+    let compactions = w.db.read(move |c| history::compactions_in(c, &s3)).await.unwrap();
+    assert_eq!(compactions.len(), 1);
 }
 
 struct Flaky(Arc<Mutex<u32>>);

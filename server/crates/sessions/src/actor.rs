@@ -3,6 +3,8 @@
 //! （[`Actors::resume`]）。
 //!
 //! - 发给 actor 的命令：叫醒、停止、手动压缩、重试最终失败的运行。actor 没事可做时退出，下一条命令再起一个。
+//! - 手动压缩只在没在跑时做，做完（或失败）才回复发起的用户；在跑时直接拒绝（运行中超阈值会自动压缩）。压缩中收到停止就
+//!   丢掉它：没写完的这一批作废，已提交的批次保留。
 //! - 运行失败：暂时性的（模型或外部服务一时不可用）退避重试，从同一个运行接着跑，约 30 分钟后算最终失败；其余当场最终失败：
 //!   记在运行记录上（会话页显示错误与「重试」），结清交给它的委派，发布 RunFailed。
 //! - 停止：在跑就丢掉这次运行（Rust 里丢掉即取消；数据库事务在写线程上，不会被打断一半），先存下它已产生的部分，再在同一个
@@ -149,7 +151,7 @@ impl Actors {
         rx.await.map_err(|_| broken("the session actor went away while stopping"))?
     }
 
-    /// 手动压缩：排在当前运行之后。返回压缩的步数（0 是保留窗口之外没有可压缩的）。
+    /// 手动压缩，做完才返回压缩的步数（0 是保留窗口之外没有可压缩的）。会话在跑、在压缩，或压缩中被停止时 Conflict。
     pub(crate) async fn compact(&self, session_id: &SessionId) -> Result<usize> {
         let (tx, rx) = oneshot::channel();
         self.send(session_id, Command::Compact(tx));
@@ -199,18 +201,13 @@ impl Actors {
 
 /// 一个会话的 actor：处理命令，有事就跑，没事就退出。
 async fn actor(inner: Arc<Inner>, id: SessionId, mut rx: mpsc::UnboundedReceiver<Command>) {
-    let mut compactions: Vec<oneshot::Sender<Result<usize>>> = Vec::new();
     loop {
         while let Ok(cmd) = rx.try_recv() {
-            idle_command(&inner, &id, cmd, &mut compactions).await;
-        }
-        if let Some(reply) = compactions.pop() {
-            let _ = reply.send(compact(&inner.core, &id).await);
-            continue;
+            idle_command(&inner, &id, cmd, &mut rx).await;
         }
         let idle = match has_work(&inner.core, &id).await {
             // 失败得连运行记录都没留下（开头的事务就出错）：不原地重来，等下一次叫醒
-            Ok(true) => !run_with_retries(&inner, &id, &mut rx, &mut compactions).await,
+            Ok(true) => !run_with_retries(&inner, &id, &mut rx).await,
             Ok(false) => true,
             Err(e) => {
                 tracing::error!(session_id = %id, error = %e, "session actor could not read its state");
@@ -230,19 +227,14 @@ async fn actor(inner: Arc<Inner>, id: SessionId, mut rx: mpsc::UnboundedReceiver
 }
 
 /// 没在跑时收到的命令。
-async fn idle_command(
-    inner: &Arc<Inner>,
-    id: &SessionId,
-    cmd: Command,
-    compactions: &mut Vec<oneshot::Sender<Result<usize>>>,
-) {
+async fn idle_command(inner: &Arc<Inner>, id: &SessionId, cmd: Command, rx: &mut mpsc::UnboundedReceiver<Command>) {
     match cmd {
         Command::Wake => {}
         Command::Stop(reply) => {
             let halted = halt(&inner.core, id, None, Actors::stop_thread(Arc::downgrade(inner))).await;
             let _ = reply.send(halted);
         }
-        Command::Compact(reply) => compactions.push(reply),
+        Command::Compact(reply) => compact_until_stopped(inner, id, rx, reply).await,
         Command::Retry(reply) => {
             let _ = reply.send(reopen(&inner.core, id).await);
         }
@@ -276,12 +268,7 @@ async fn last_message(core: &Core, id: &SessionId) -> Option<i64> {
 
 /// 运行一次（失败时按规则重试），其间收到停止就丢掉它、执行停止事务。返回 false：最终失败却没有运行记录可记（开头
 /// 的事务就出错），立即再跑只会再错一遍。
-async fn run_with_retries(
-    inner: &Arc<Inner>,
-    id: &SessionId,
-    rx: &mut mpsc::UnboundedReceiver<Command>,
-    compactions: &mut Vec<oneshot::Sender<Result<usize>>>,
-) -> bool {
+async fn run_with_retries(inner: &Arc<Inner>, id: &SessionId, rx: &mut mpsc::UnboundedReceiver<Command>) -> bool {
     let core = &inner.core;
     // 结束了（成功、最终失败或停止）就不再显示在等重试
     let attempts = core.live.attempts(id);
@@ -298,7 +285,7 @@ async fn run_with_retries(
                     r = &mut run => break Ok(r),
                     cmd = rx.recv() => match cmd {
                         Some(Command::Stop(reply)) => break Err(reply),
-                        Some(Command::Compact(reply)) => compactions.push(reply),
+                        Some(Command::Compact(reply)) => refuse_compaction_while_running(reply),
                         Some(Command::Retry(reply)) => { let _ = reply.send(Err(conflict("the session is running"))); }
                         Some(Command::Wake) | None => {}
                     }
@@ -352,7 +339,7 @@ async fn run_with_retries(
                             let _ = reply.send(halted);
                             return true;
                         }
-                        Some(Command::Compact(reply)) => compactions.push(reply),
+                        Some(Command::Compact(reply)) => refuse_compaction_while_running(reply),
                         Some(Command::Retry(reply)) => { let _ = reply.send(Err(conflict("the session is running"))); }
                         Some(Command::Wake) | None => {}
                     }
@@ -430,6 +417,46 @@ async fn reopen(core: &Core, id: &SessionId) -> Result<()> {
             }
         })
         .await
+}
+
+fn refuse_compaction_while_running(reply: oneshot::Sender<Result<usize>>) {
+    let _ = reply.send(Err(conflict(
+        "the session is running; it compacts automatically when its context grows over the threshold, \
+         compact by hand after the run ends",
+    )));
+}
+
+/// 没在跑时的手动压缩，期间收到停止就丢掉它（没提交的这一批作废；写事务在写线程上，不会被打断一半），回复发起压缩的一方
+/// 「已停止」，再照常执行停止事务。
+async fn compact_until_stopped(
+    inner: &Arc<Inner>,
+    id: &SessionId,
+    rx: &mut mpsc::UnboundedReceiver<Command>,
+    reply: oneshot::Sender<Result<usize>>,
+) {
+    let stop = {
+        let compaction = compact(&inner.core, id);
+        tokio::pin!(compaction);
+        loop {
+            tokio::select! {
+                r = &mut compaction => {
+                    let _ = reply.send(r);
+                    return;
+                }
+                cmd = rx.recv() => match cmd {
+                    Some(Command::Stop(stop)) => break stop,
+                    Some(Command::Compact(other)) => { let _ = other.send(Err(conflict("the session is already compacting"))); }
+                    Some(Command::Retry(other)) => { let _ = other.send(Err(conflict("the session is compacting"))); }
+                    Some(Command::Wake) | None => {}
+                }
+            }
+        }
+        // 离开这个块时压缩被丢掉
+    };
+    tracing::info!(session_id = %id, "manual compaction stopped");
+    let _ = reply.send(Err(conflict("compaction stopped")));
+    let halted = halt(&inner.core, id, None, Actors::stop_thread(Arc::downgrade(inner))).await;
+    let _ = stop.send(halted);
 }
 
 /// 手动压缩（没在跑时）：结果（含失败）交回发起的用户，不另记运行记录。

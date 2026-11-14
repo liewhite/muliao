@@ -195,7 +195,7 @@ impl SessionService {
             .await
     }
 
-    /// 用户手动压缩上下文：排在当前运行之后，做完返回压缩的步数（0 是保留窗口之外没有可压缩的）。
+    /// 用户手动压缩上下文，做完返回压缩的步数（0 是保留窗口之外没有可压缩的）。会话在跑时拒绝，压缩中可以停止（见 actor）。
     pub async fn compact(&self, session_id: &SessionId) -> Result<usize> {
         self.actors.compact(session_id).await
     }

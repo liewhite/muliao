@@ -570,8 +570,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * 手动压缩上下文：排在正在进行的运行之后，在后台做；开始与做完时会话页随 saved 事件刷新。没有可压缩的（都在保留的最近几步里）
-         *     时什么都不变；失败记在服务日志里。
+         * 手动压缩上下文，做完才返回（几秒到几十秒）。没有可压缩的（都在保留的最近几步里）时什么都不变。会话在运行（运行中超阈值
+         *     会自动压缩）、已在压缩，或压缩中被停止时 409；模型调用失败时报错，之前写下的批次保留。
          */
         post: operations["compact"];
         delete?: never;
@@ -4218,13 +4218,21 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            202: {
+            204: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
