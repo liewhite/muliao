@@ -14,9 +14,11 @@ use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::answers::{APPROVAL_INTERRUPTED, CallResult, Waiting};
-use crate::pending::PausedKinds;
 use muliao_platform::db::placeholders;
 use muliao_platform::errors::{Result, broken};
+
+/// 一个会话里挂起过的调用（调用 id → 种类）；行永久保留，没结果的才在等。
+pub(crate) type PausedKinds = HashMap<String, Waiting>;
 
 /// 一次调用挂起成哪一种。等批准独有被批准对象的指纹 pin。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,14 +41,14 @@ impl Pause {
     }
 }
 
-/// 这次调用挂起了。同一次调用已记过的不再记（续跑重做同一调用时幂等）。
+/// 这次调用挂起了。每次调用只挂起一次（被打断的调用不重做），表上的唯一索引挡住重复。
 pub(crate) fn record_in(c: &Connection, session_id: &SessionId, call_id: &str, pause: &Pause) -> Result<()> {
     let pin = match pause {
         Pause::Approval { pin } => Some(pin.as_str()),
         Pause::AskUser | Pause::AskAgent => None,
     };
     c.execute(
-        "INSERT OR IGNORE INTO paused_calls (session_id, call_id, kind, pin, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT INTO paused_calls (session_id, call_id, kind, pin, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
         params![session_id, call_id, pause.kind().as_str(), pin, Utc::now()],
     )?;
     Ok(())

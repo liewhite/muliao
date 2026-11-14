@@ -176,14 +176,7 @@ fn hold_kinds_are_backfilled_from_holders() {
     db.upgrade_to_latest();
     let held = holds::active_among(&db.conn(), &[SessionId::new(SESSION)]).unwrap();
     let kinds: Vec<HoldOf> = held[&SessionId::new(SESSION)].iter().map(|h| h.of.clone()).collect();
-    assert_eq!(
-        kinds,
-        [
-            HoldOf::Job { job_id: JobId::new(7) },
-            HoldOf::Wake,
-            HoldOf::Delegation { row: None, call_id: Some("c1".into()) }
-        ]
-    );
+    assert_eq!(kinds, [HoldOf::Job { job_id: JobId::new(7) }, HoldOf::Wake, HoldOf::Delegation { row: None }]);
 }
 
 #[test]

@@ -17,6 +17,7 @@ use agenter::{Message, Resolution, ToolCall, ToolResult};
 use crate::answers::{CallResult, Question, Waiting, questions_of, skipped};
 use crate::conventions::{is_stopped, unanswered_calls};
 use crate::mailbox::{Mail, MailBody};
+use crate::paused_calls::PausedKinds;
 use muliao_platform::errors::{Result, broken};
 
 impl Waiting {
@@ -25,9 +26,6 @@ impl Waiting {
         self == Waiting::AskUser
     }
 }
-
-/// 一个会话里挂起过的调用（调用 id → 种类），来自 [`crate::paused_calls`]；行永久保留，没结果的才在等。
-pub(crate) type PausedKinds = HashMap<String, Waiting>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PendingCall {

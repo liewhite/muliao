@@ -2,7 +2,6 @@
 //! 委派。后台任务的占用记着任务编号（库里唯一），到点唤醒的行（`wakeups`）引用它的占用，委派的占用引用委派行。
 //!
 //! - 有 active 占用：工作还没做完，交给它的委派不结清。委派的占用还 active 就是这项委派还没结清（唯一的判断）。
-//! - 带 call_id 的委派占用：结局作为这次挂起调用（ask_agent）的结果交回；调用在不在等看挂起记录（[`crate::paused_calls`]）。
 //! - 结局交回时释放（和一封信件同一事务）；会话被停止、或自己放弃时清掉（之后的结局不再投）。行永久保留。
 
 use std::collections::BTreeMap;
@@ -49,8 +48,8 @@ pub enum HoldOf {
     Job { job_id: JobId },
     /// 到点唤醒（wake_me）：约的时刻与说明在引用它的 `wakeups` 行
     Wake,
-    /// 委派：row 是委派行（thread 删除后置空）；call_id：结局作为这次挂起调用的结果交回（ask_agent），并发等待的为 None
-    Delegation { row: Option<DelegationId>, call_id: Option<String> },
+    /// 委派：row 是委派行（thread 删除后置空）
+    Delegation { row: Option<DelegationId> },
 }
 
 impl HoldOf {
@@ -74,31 +73,20 @@ pub struct Hold {
     pub created_at: DateTime<Utc>,
 }
 
-impl Hold {
-    /// 委派结局要交回的挂起调用（ask_agent）。
-    pub(crate) fn call_id(&self) -> Option<&str> {
-        match &self.of {
-            HoldOf::Delegation { call_id, .. } => call_id.as_deref(),
-            HoldOf::Job { .. } | HoldOf::Wake => None,
-        }
-    }
-}
+const COLUMNS: &str = "id, session_id, kind, job_id, thread_call_id, awaited, status, created_at";
 
-const COLUMNS: &str = "id, session_id, kind, job_id, thread_call_id, call_id, awaited, status, created_at";
-
-type Raw =
-    (HoldId, SessionId, String, Option<JobId>, Option<DelegationId>, Option<String>, bool, String, DateTime<Utc>);
+type Raw = (HoldId, SessionId, String, Option<JobId>, Option<DelegationId>, bool, String, DateTime<Utc>);
 
 fn from_row(r: &Row<'_>) -> rusqlite::Result<Raw> {
-    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?))
+    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?))
 }
 
 /// 读库时解析一次：种类与它的列对不上是数据坏了。
-fn hold((id, session_id, kind, job_id, row, call_id, awaited, status, created_at): Raw) -> Result<Hold> {
-    let of = match (kind.as_str(), job_id, call_id) {
-        ("job", Some(job_id), None) => HoldOf::Job { job_id },
-        ("wake", None, None) => HoldOf::Wake,
-        ("delegation", None, call_id) => HoldOf::Delegation { row, call_id },
+fn hold((id, session_id, kind, job_id, row, awaited, status, created_at): Raw) -> Result<Hold> {
+    let of = match (kind.as_str(), job_id) {
+        ("job", Some(job_id)) => HoldOf::Job { job_id },
+        ("wake", None) => HoldOf::Wake,
+        ("delegation", None) => HoldOf::Delegation { row },
         _ => return Err(broken(format!("hold {id} of kind {kind:?} does not match its columns"))),
     };
     Ok(Hold { id, session_id, of, awaited, status: HoldStatus::parse(&status)?, created_at })
@@ -120,28 +108,27 @@ pub(crate) fn hold_wake_in(c: &Connection, session_id: &SessionId, awaited: bool
     insert(c, session_id, HoldOf::Wake, awaited)
 }
 
-/// 发起方登记一项委派的占用，引用委派行（row）。call_id：结局作为这次挂起调用的结果交回（ask_agent）；并发等待的为 None。
+/// 发起方登记一项委派的占用，引用委派行（row）。
 pub(crate) fn hold_delegation_in(
     c: &Connection,
     session_id: &SessionId,
     row: DelegationId,
-    call_id: Option<String>,
     awaited: bool,
 ) -> Result<Hold> {
-    insert(c, session_id, HoldOf::Delegation { row: Some(row), call_id }, awaited)
+    insert(c, session_id, HoldOf::Delegation { row: Some(row) }, awaited)
 }
 
 fn insert(c: &Connection, session_id: &SessionId, of: HoldOf, awaited: bool) -> Result<Hold> {
-    let (job_id, row, call_id) = match &of {
-        HoldOf::Job { job_id } => (Some(*job_id), None, None),
-        HoldOf::Wake => (None, None, None),
-        HoldOf::Delegation { row, call_id } => (None, *row, call_id.as_deref()),
+    let (job_id, row) = match &of {
+        HoldOf::Job { job_id } => (Some(*job_id), None),
+        HoldOf::Wake => (None, None),
+        HoldOf::Delegation { row } => (None, *row),
     };
     let now = Utc::now();
     c.execute(
-        "INSERT INTO session_holds (session_id, kind, job_id, thread_call_id, call_id, awaited, status, created_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'active', ?7)",
-        params![session_id, of.kind(), job_id, row, call_id, awaited, now],
+        "INSERT INTO session_holds (session_id, kind, job_id, thread_call_id, awaited, status, created_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6)",
+        params![session_id, of.kind(), job_id, row, awaited, now],
     )?;
     let id = HoldId::new(c.last_insert_rowid());
     Ok(Hold { id, session_id: session_id.clone(), of, awaited, status: HoldStatus::Active, created_at: now })

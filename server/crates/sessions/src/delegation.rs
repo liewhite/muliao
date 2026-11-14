@@ -91,9 +91,8 @@ pub(crate) fn send_in(
     let inbound = match mode {
         Mode::Plain => Inbound::delegated(parent_id, &child.id, prompt, true, None),
         Mode::ReportBack { awaited, .. } | Mode::Ask { awaited } => {
-            let suspends = matches!(mode, Mode::Ask { .. });
-            hold_delegation_in(tx, parent_id, call.id, suspends.then(|| call_id.to_owned()), awaited)?;
-            if suspends {
+            hold_delegation_in(tx, parent_id, call.id, awaited)?;
+            if matches!(mode, Mode::Ask { .. }) {
                 // 和投信同一个事务：thread 可能在发问方这一步保存完之前就答完，交回时要认得出这是挂起调用的回答
                 paused_calls::record_in(tx, parent_id, call_id, &Pause::AskAgent)?;
             }
@@ -145,7 +144,7 @@ pub(crate) fn hand_back_in(
     let name = thread_name(child);
     let agent = agent_in(tx, &child.agent_id)?;
     for o in owed {
-        // 作为 ask_agent 调用的结果：完成时就是回答本身（发问方问的就是它）
+        // 发起方还停在这次调用上（ask_agent）时作为它的结果：完成时就是回答本身（发问方问的就是它）
         let result_text = if ending == Ending::Finished {
             text.to_owned()
         } else {
@@ -158,7 +157,7 @@ pub(crate) fn hand_back_in(
             Some(&o.hold),
             &EventSource::Thread { session_id: child.id.clone() },
             &event_text(name, agent.name.as_str(), ending, text),
-            Some(answer),
+            Some((o.delegation.call_id.as_str(), answer)),
         )?;
         tracing::info!(delegation = %o.delegation.id, session_id = %o.delegation.parent_id, thread_session_id = %child.id,
             ending = ?ending, delivered_as = ?delivered, "delegation handed back");

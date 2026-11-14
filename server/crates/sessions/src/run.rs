@@ -630,7 +630,9 @@ impl Driver<'_> {
                 .await?;
                 let session_id = self.session_id().to_owned();
                 let at = self.core.db.read(move |c| position_in(c, &session_id)).await?;
-                Ok(Next::End(paused_end(at.paused().map_or(&[][..], |p| &p.pending))))
+                // 停下了却没有挂起的调用：有工具交回 Defer 却没记下挂起
+                let Some(p) = at.paused() else { return Err(broken("run paused on calls nobody recorded").into()) };
+                Ok(Next::End(paused_end(&p.pending)))
             }
         }
     }

@@ -98,8 +98,8 @@ async fn a_deleted_thread_is_no_longer_owed() {
             }
             let r1 = record_call_in(tx, &p, "c1", &sid("t1"), None)?;
             let r2 = record_call_in(tx, &p, "c2", &sid("t2"), Some(60.0))?;
-            hold_delegation_in(tx, &SessionId::new("p"), r1.id, Some("c1".into()), false)?;
-            hold_delegation_in(tx, &SessionId::new("p"), r2.id, None, false)?;
+            hold_delegation_in(tx, &SessionId::new("p"), r1.id, false)?;
+            hold_delegation_in(tx, &SessionId::new("p"), r2.id, false)?;
             let before = owed_in(tx, None, Some(&SessionId::new("p")))?;
             let only_r2 = owed_in(tx, Some(&[r2.id]), None)?;
             delete_in(tx, &[sid("t1")])?;
@@ -114,5 +114,5 @@ async fn a_deleted_thread_is_no_longer_owed() {
     assert_eq!(threads(&before), [sid("t1"), sid("t2")]);
     assert_eq!(threads(&only_r2), [sid("t2")]);
     assert_eq!(threads(&after), [sid("t2")]);
-    assert!(matches!(after[0].hold.of, HoldOf::Delegation { call_id: None, .. }));
+    assert!(matches!(after[0].hold.of, HoldOf::Delegation { row: Some(_) }));
 }

@@ -2,7 +2,7 @@
 -- 认；现在每个挂起的调用在挂起时记一行，写明种类。approval_requests 并进来（等批准独有的 pin、taken_at 两列只在等批准
 -- 时有值），删掉旧表。换算现有数据：
 -- - 等批准：原样搬过来，旧行没有 pin 的记空串（工具给的指纹不会是空的，批准后比对对不上、不执行，与以前读法一致）；
--- - 问 agent：带调用号的委派占用（不论状态）就是交出去了的 ask_agent；
+-- - 问 agent：带调用号的委派占用（不论状态）就是交出去了的 ask_agent；换算后删掉占用上的调用号列；
 -- - 问用户：参数里有问题、还没有结果的 ask_user 调用（没结果的调用只可能在会话最后一条回复里）。
 CREATE TABLE paused_calls (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -23,6 +23,8 @@ SELECT session_id, call_id, 'approval', COALESCE(pin, ''), taken_at, created_at 
 
 INSERT OR IGNORE INTO paused_calls (session_id, call_id, kind, created_at)
 SELECT session_id, call_id, 'ask_agent', created_at FROM session_holds WHERE call_id IS NOT NULL ORDER BY id;
+-- 占用上的调用号是第三份（委派行 thread_calls.call_id 已有，挂起与否看这张表），删掉
+ALTER TABLE session_holds DROP COLUMN call_id;
 
 INSERT OR IGNORE INTO paused_calls (session_id, call_id, kind, created_at)
 SELECT m.session_id, json_extract(p.value, '$.id'), 'ask_user', m.created_at

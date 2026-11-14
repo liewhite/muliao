@@ -306,7 +306,12 @@ impl Waiting {
     }
 
     pub(crate) fn parse(s: &str) -> Option<Waiting> {
-        [Waiting::AskUser, Waiting::AskAgent, Waiting::Approval].into_iter().find(|w| w.as_str() == s)
+        match s {
+            "ask_user" => Some(Waiting::AskUser),
+            "ask_agent" => Some(Waiting::AskAgent),
+            "approval" => Some(Waiting::Approval),
+            _ => None,
+        }
     }
 }
 
