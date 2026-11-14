@@ -43,17 +43,13 @@ default_model = "claude:claude-sonnet-5-5"
 # 至少配置一个 provider。[llm.providers.<名称>] 的名称由你任意取，只用于模型字符串 "<名称>:<模型名>"；
 # type 是调用协议，代码里没有任何针对具体厂商的逻辑。type 可选：
 #   anthropic         Anthropic Messages 协议，也适用于提供 Anthropic 兼容接口的服务
-#   openai            OpenAI Chat Completions 协议，也适用于 DeepSeek、OpenRouter、vLLM、Ollama 等兼容服务
-#   openai-responses  OpenAI Responses API
-#   google            Gemini API
+#   openai-responses  OpenAI Responses API，也适用于提供 Responses 兼容接口的服务
+# anthropic 类型总是在指令、工具定义与消息末尾放 prompt caching 缓存断点，不可关闭
 # base_url 不填则使用该类型的官方地址（不受 *_BASE_URL 环境变量影响）。agent 的模型写成 "<provider 名>:<模型名>"，如 "claude:claude-opus-5-5"
 
 [llm.providers.claude]
 type = "anthropic"
 api_key = ""
-# 可选，默认 true，只对 type = "anthropic" 有效（填在别的 type 上会启动失败）：开启 Anthropic 的 prompt
-# caching，在指令、工具定义与消息末尾放缓存断点，长上下文的重复前缀按缓存价计费。关掉就不发送任何缓存设置
-# prompt_cache = true
 # 可选，默认 4：同时进行的模型请求上限，这个 provider 下所有模型、所有 agent 共用（流式请求在整个流期间占一个）。
 # 超过时请求排队等待，日志里有 "model request waiting for a slot"。会话、事件与推送本身不设并发上限
 # max_concurrency = 4

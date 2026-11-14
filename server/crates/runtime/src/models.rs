@@ -18,7 +18,7 @@ use muliao_platform::errors::{DomainError, Error};
 fn official_base_url(protocol: Protocol) -> &'static str {
     match protocol {
         // agenter 的 Anthropic 地址不带 /v1
-        Protocol::Anthropic { .. } => "https://api.anthropic.com",
+        Protocol::Anthropic => "https://api.anthropic.com",
         Protocol::OpenAiResponses => "https://api.openai.com/v1",
     }
 }
@@ -97,9 +97,7 @@ impl ModelRegistry {
         let (p, name) = self.split(model)?;
         let http = self.http.clone();
         Ok(match p.protocol {
-            Protocol::Anthropic { prompt_cache } => Arc::new(
-                p.limit.wrap(AnthropicModel::new(http, &p.base_url, &p.api_key, name).prompt_cache(prompt_cache)),
-            ),
+            Protocol::Anthropic => Arc::new(p.limit.wrap(AnthropicModel::new(http, &p.base_url, &p.api_key, name))),
             Protocol::OpenAiResponses => {
                 Arc::new(p.limit.wrap(OpenAIResponsesModel::new(http, &p.base_url, &p.api_key, name)))
             }
@@ -115,7 +113,7 @@ impl ModelRegistry {
             ))
         })?;
         let listed = match p.protocol {
-            Protocol::Anthropic { .. } => agenter::anthropic::list_models(&self.http, &p.base_url, &p.api_key).await,
+            Protocol::Anthropic => agenter::anthropic::list_models(&self.http, &p.base_url, &p.api_key).await,
             Protocol::OpenAiResponses => {
                 agenter::openai_responses::list_models(&self.http, &p.base_url, &p.api_key).await
             }
