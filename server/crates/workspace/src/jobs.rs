@@ -26,7 +26,6 @@ use muliao_platform::db::{Database, Tx};
 use muliao_platform::shell::{DRAIN, LEFT_RUNNING_NOTE, Spawned, kill_group};
 use muliao_platform::tooling::RunScope;
 use muliao_sessions::events::SessionStopped;
-use muliao_sessions::holds::HoldOf;
 use muliao_sessions::work::{CheckBeats, SessionWork, TICK, no_progress_hint};
 use rusqlite::{Connection, Row, params};
 use tokio::sync::watch;
@@ -357,9 +356,6 @@ impl JobRunner {
         let inserted = self
             .db
             .write(move |tx| -> Result<JobStarted> {
-                if muliao_sessions::directory::get_in(tx, &sid)?.is_none() {
-                    return Err(not_found(format!("session {sid:?} not found")));
-                }
                 tx.execute(
                     "INSERT INTO jobs (session_id, agent_id, command, status, pid, check_seconds, started_at) \
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -516,14 +512,7 @@ impl JobRunner {
     /// 会话被用户停止（订阅会话领域的事件，在停止的事务里）：提交之后结束被清掉的占用对应的后台任务（同 job_kill），结局
     /// 照常由照看者记下（killed）；会话的占用已经清掉，结局不再投信。
     pub fn on_stopped(self: &Arc<Self>, tx: &mut Tx<'_>, event: &SessionStopped) {
-        let jobs: Vec<JobId> = event
-            .cleared
-            .iter()
-            .filter_map(|h| match h {
-                HoldOf::Job { job_id } => Some(*job_id),
-                _ => None,
-            })
-            .collect();
+        let jobs = event.jobs.clone();
         if jobs.is_empty() {
             return;
         }

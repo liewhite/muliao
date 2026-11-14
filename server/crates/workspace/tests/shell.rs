@@ -277,7 +277,7 @@ async fn stopping_the_session_kills_its_jobs() {
     w.db.write(move |tx| {
         jobs.on_stopped(
             tx,
-            &SessionStopped { session_id: session, cleared: vec![muliao_sessions::holds::HoldOf::Job { job_id: id }] },
+            &SessionStopped { session_id: session, jobs: vec![id] },
         );
         Ok::<_, rusqlite::Error>(())
     })

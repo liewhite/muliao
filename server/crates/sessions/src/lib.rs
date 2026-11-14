@@ -13,7 +13,7 @@ pub mod directory;
 pub mod events;
 pub mod halt;
 pub mod history;
-pub mod holds;
+mod holds;
 pub mod inbound;
 pub mod live;
 pub mod mailbox;

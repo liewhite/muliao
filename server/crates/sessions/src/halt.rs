@@ -10,7 +10,7 @@
 //!    跑完的结局因占用已清掉而不投（罕见、只多花一段 token，不为它持久化停止任务）。
 //! 6. 发布 SessionStopped：工作区领域在提交后结束被清掉的后台任务。
 
-use muliao_platform::ids::{DelegationId, RunId, SessionId};
+use muliao_platform::ids::{DelegationId, JobId, RunId, SessionId};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -85,8 +85,14 @@ pub(crate) async fn halt(
                 let stop = stop_thread.clone();
                 tx.on_commit(move || stop(thread));
             }
-            let cleared_of: Vec<HoldOf> = cleared.iter().map(|h| h.of.clone()).collect();
-            events.session_stopped(tx, &SessionStopped { session_id: session_id.clone(), cleared: cleared_of })?;
+            let jobs: Vec<JobId> = cleared
+                .iter()
+                .filter_map(|h| match h.of {
+                    HoldOf::Job { job_id } => Some(job_id),
+                    _ => None,
+                })
+                .collect();
+            events.session_stopped(tx, &SessionStopped { session_id: session_id.clone(), jobs })?;
             tracing::info!(%session_id, stopped_runs = ?stopped_runs, discarded_mail = ?discarded,
                 cleared_holds = ?cleared.iter().map(|h| h.id).collect::<Vec<_>>(), settled_delegations = ?settled,
                 stopping_threads = ?threads, "session halted");

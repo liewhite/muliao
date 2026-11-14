@@ -18,7 +18,7 @@ use crate::holds::{self, Hold, HoldStatus};
 use crate::mailbox::{NewMail, has_queued_from, post_in, queued_in};
 use crate::paused_calls::kinds_in;
 use crate::pending::{Position, position};
-use muliao_platform::errors::{Result, broken};
+use muliao_platform::errors::{Result, broken, not_found};
 
 /// 发起并发工作时不给 heartbeat_seconds 的默认间隔
 pub const DEFAULT_CHECK_SECONDS: f64 = 60.0;
@@ -110,6 +110,9 @@ fn job_hold_in(c: &Connection, session_id: &SessionId, job_id: JobId) -> Result<
     Ok(hold)
 }
 
+/// 到点唤醒的事件来源的写法（存在信件里，也交给模型）。与工具名 wake_me 同字只是巧合：工具改名不改它，已存的信件靠它认
+const WAKE_SOURCE: &str = "wake_me";
+
 /// 事件信件的来源：交给模型时套在事件外面（[`EventSource::raw`]），界面按种类显示。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -128,13 +131,13 @@ impl EventSource {
         match self {
             EventSource::Job { job_id } => format!("job:{job_id}"),
             EventSource::Thread { session_id } => format!("thread:{session_id}"),
-            EventSource::Wake => crate::wakeups::WAKE_ME.to_owned(),
+            EventSource::Wake => WAKE_SOURCE.to_owned(),
         }
     }
 
     /// [`EventSource::raw`] 的逆运算（读库边界用）；不是三种写法之一为 None。
     pub(crate) fn parse(raw: &str) -> Option<Self> {
-        if raw == crate::wakeups::WAKE_ME {
+        if raw == WAKE_SOURCE {
             return Some(EventSource::Wake);
         }
         if let Some(id) = raw.strip_prefix("thread:").filter(|s| !s.is_empty()) {
@@ -156,8 +159,12 @@ impl SessionWork {
         Self { waker }
     }
 
-    /// 登记一项进行中的后台任务：会话据此知道工作还没做完。awaited：用户是否在等它的结局。
+    /// 登记一项进行中的后台任务：会话据此知道工作还没做完。awaited：用户是否在等它的结局。会话不存在（刚被删除）时 NotFound，
+    /// 调用方的事务随之回滚。
     pub fn hold_in(&self, tx: &mut Tx<'_>, session_id: &SessionId, job_id: JobId, awaited: bool) -> Result<()> {
+        if directory::get_in(tx, session_id)?.is_none() {
+            return Err(not_found(format!("session {session_id:?} not found")));
+        }
         holds::hold_job_in(tx, session_id, job_id, awaited)?;
         Ok(())
     }

@@ -4,13 +4,12 @@
 //!
 //! 订阅在组合根装配时登记一次（[`Events::subscribe`]），之后不变；没登记完就发布是装配漏了，当场 panic。
 
-use muliao_platform::ids::{AgentId, RunId, SessionId};
+use muliao_platform::ids::{AgentId, JobId, RunId, SessionId};
 use std::sync::{Arc, OnceLock};
 
 use muliao_platform::db::Tx;
 
 use crate::answers::Waiting;
-use crate::holds::HoldOf;
 use crate::origins::SessionOrigin;
 
 /// 一次运行结束了（模型给出了回答，或停在挂起的调用上）；没有可交给模型的空闲收尾、被用户停止的不发。只带事实。
@@ -59,11 +58,11 @@ pub struct RunFailed {
     pub error: String,
 }
 
-/// 会话被停止：cleared 是被清掉的占用（如后台任务，它在外面的工作被放弃；委派由会话领域自己停）。
+/// 会话被停止：jobs 是随它被放弃的后台任务（发起它们的领域去结束进程；委派、唤醒由会话领域自己收拾）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionStopped {
     pub session_id: SessionId,
-    pub cleared: Vec<HoldOf>,
+    pub jobs: Vec<JobId>,
 }
 
 /// 会话被删除：引用它的数据由各领域清理。

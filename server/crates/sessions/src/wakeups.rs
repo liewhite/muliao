@@ -16,7 +16,7 @@ use crate::holds::{self, Hold, abandon_in, active_wakes_in};
 use crate::work::{EventSource, deliver_in};
 use muliao_platform::errors::Result;
 
-/// 工具名，也是唤醒信件的事件来源
+/// 工具名
 pub const WAKE_ME: &str = "wake_me";
 
 pub struct Scheduled {
