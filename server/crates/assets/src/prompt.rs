@@ -35,7 +35,7 @@ pub fn memory_section(memories: &[MemoryBlock], limit: usize) -> String {
 }
 
 /// skill 索引：名字、什么时候用、SKILL.md 在哪；agent 自己的标 (yours)。
-pub fn skill_index(skills: &[SkillMeta], agent_id: &AgentId) -> String {
+pub(crate) fn skill_index(skills: &[SkillMeta], agent_id: &AgentId) -> String {
     let lines: Vec<String> = if skills.is_empty() {
         vec!["(no skills yet)".into()]
     } else {
@@ -51,7 +51,7 @@ pub fn skill_index(skills: &[SkillMeta], agent_id: &AgentId) -> String {
 }
 
 /// 教 agent 把学到的东西写成记忆与 skill：它自己的资源目录在哪、整棵资源树在哪、记忆的上限。
-pub fn self_improvement(memory_limit: usize, asset_dir: &Path, assets_root: &Path) -> String {
+pub(crate) fn self_improvement(memory_limit: usize, asset_dir: &Path, assets_root: &Path) -> String {
     format!(
         "## Self-improvement\n\
 Everything you learn persists only as memory or skills. Both are plain files: yours are in {asset_dir} \
@@ -76,7 +76,7 @@ or skills.\n\
 }
 
 /// 运行开头告诉 agent：与它相关的这个文件没加载，去修。
-pub fn problem_notice(p: &Problem) -> String {
+pub(crate) fn problem_notice(p: &Problem) -> String {
     format!(
         "Asset file not loaded: {}: {}. Fix the file (or tell an admin if you cannot write it); formats are in the \
          {ASSETS_SKILL} skill.",

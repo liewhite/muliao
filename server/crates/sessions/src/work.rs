@@ -18,7 +18,7 @@ use crate::holds::{self, Hold, HoldStatus};
 use crate::mailbox::{NewMail, has_queued_from, post_in, queued_in};
 use crate::paused_calls::kinds_in;
 use crate::pending::{Position, position};
-use muliao_platform::errors::{Result, broken, not_found};
+use muliao_platform::errors::{Result, broken};
 
 /// 发起并发工作时不给 heartbeat_seconds 的默认间隔
 pub const DEFAULT_CHECK_SECONDS: f64 = 60.0;
@@ -159,12 +159,9 @@ impl SessionWork {
         Self { waker }
     }
 
-    /// 登记一项进行中的后台任务：会话据此知道工作还没做完。awaited：用户是否在等它的结局。会话不存在（刚被删除）时 NotFound，
-    /// 调用方的事务随之回滚。
+    /// 登记一项进行中的后台任务：会话据此知道工作还没做完。awaited：用户是否在等它的结局。会话不存在（刚被删除）时占用
+    /// 的外键让插入失败，调用方的事务随之回滚。
     pub fn hold_in(&self, tx: &mut Tx<'_>, session_id: &SessionId, job_id: JobId, awaited: bool) -> Result<()> {
-        if directory::get_in(tx, session_id)?.is_none() {
-            return Err(not_found(format!("session {session_id:?} not found")));
-        }
         holds::hold_job_in(tx, session_id, job_id, awaited)?;
         Ok(())
     }

@@ -61,3 +61,30 @@ impl ConfigSection for LlmConfig {
         e
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use muliao_platform::config::ConfigFile;
+
+    use super::*;
+
+    const LLM: &str =
+        "[llm]\ndefault_model = \"claude:m\"\n[llm.providers.claude]\ntype = \"anthropic\"\napi_key = \"k\"\n";
+
+    fn parse(text: &str) -> Result<LlmConfig, String> {
+        ConfigFile::parse(text, "/tmp/c.toml".into()).and_then(|mut f| f.required()).map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn providers_are_checked() {
+        let llm = parse(LLM).unwrap();
+        assert_eq!(
+            (llm.providers["claude"].protocol, llm.providers["claude"].max_concurrency.get()),
+            (Protocol::Anthropic, 4)
+        );
+        assert!(parse(&LLM.replace("claude:m", "other:m")).unwrap_err().contains("not in"));
+        assert!(parse(&LLM.replace("anthropic", "google")).is_err());
+        assert!(parse(&format!("{LLM}max_concurrency = 0\n")).unwrap_err().contains("nonzero"));
+        assert!(parse(&LLM.replace("api_key = \"k\"", "api_key = \"\"")).unwrap_err().contains("api_key length"));
+    }
+}

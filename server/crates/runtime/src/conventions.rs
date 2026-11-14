@@ -73,7 +73,8 @@ pub fn files_metadata(files: &[SharedFile]) -> Option<Value> {
         .then(|| serde_json::to_value(ResultFiles { attachments: files.to_vec() }).expect("shared files serialize"))
 }
 
-/// 在工具里调用：把这些文件挂到这次调用的结果上给用户看（随结果交回，成为它的 metadata）。
+/// 在工具里调用：把这些文件挂到这次调用的结果上给用户看（随结果交回，成为它的 metadata）。挂给用户的文件是工具结果
+/// metadata 的全部内容，所以 output 原有的 metadata 被替换（现在没有别的工具 metadata）。
 pub fn attach(output: ToolOutput, files: &[SharedFile]) -> ToolOutput {
     ToolOutput { metadata: files_metadata(files), ..output }
 }

@@ -66,7 +66,8 @@ async fn skills_index_scripts_and_edit() {
     assert_eq!(scripts.fingerprint().unwrap(), before, "hidden files do not count");
     write(&w.root().join("alice/skills/tool/run.sh"), "echo 2");
     assert_ne!(scripts.fingerprint().unwrap(), before);
-    assert_eq!(w.service.run_assets(&a).await.unwrap().skills.len(), 1);
+    let index = &w.service.run_assets(&a).await.unwrap().instruction_sections()[1];
+    assert!(index.contains("- `tool` (yours): 做事"), "{index}");
     let b = w.create("bob").await;
     assert!(skills.scripts("tool", &b).await.is_err(), "not shared with bob");
     // 编辑时保留 approval，旧版本冲突

@@ -89,7 +89,8 @@ pub(crate) async fn halt(
                 .iter()
                 .filter_map(|h| match h.of {
                     HoldOf::Job { job_id } => Some(job_id),
-                    _ => None,
+                    // 唤醒与委派由会话领域自己收拾（委派的 thread 上面已排好停止）
+                    HoldOf::Wake | HoldOf::Delegation { .. } | HoldOf::DeletedThread => None,
                 })
                 .collect();
             events.session_stopped(tx, &SessionStopped { session_id: session_id.clone(), jobs })?;

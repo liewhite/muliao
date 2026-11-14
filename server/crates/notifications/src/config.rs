@@ -21,3 +21,20 @@ impl ConfigSection for PushConfig {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use muliao_platform::config::ConfigFile;
+
+    use super::*;
+
+    #[test]
+    fn the_vapid_subject_is_a_contact() {
+        let parse = |v: &str| {
+            ConfigFile::parse(format!("[push]\nvapid_subject = \"{v}\"\n"), "/tmp/c.toml".into())
+                .and_then(|mut f| f.required::<PushConfig>())
+        };
+        assert!(parse("mailto:a@b.c").is_ok());
+        assert!(parse("a@b.c").unwrap_err().to_string().contains("push.vapid_subject"));
+    }
+}

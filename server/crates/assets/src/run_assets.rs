@@ -21,12 +21,12 @@ pub struct RunAssets {
     pub workspace: PathBuf,
     /// 最终规则（base + 角色 + 自己的 allow / deny）：开放哪些内置工具
     pub rules: Rules,
-    pub memories: Vec<MemoryBlock>,
-    pub skills: Vec<SkillMeta>,
+    memories: Vec<MemoryBlock>,
+    skills: Vec<SkillMeta>,
     /// 能用的、已启用的 MCP server
     pub mcp: Vec<McpServer>,
     /// 资源目录里与它相关、没加载的文件（读坏、名字冲突）
-    pub problems: Vec<Problem>,
+    problems: Vec<Problem>,
     /// 整棵资源树的根
     assets_root: PathBuf,
     /// 每块记忆的字符上限

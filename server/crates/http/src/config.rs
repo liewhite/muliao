@@ -48,3 +48,20 @@ impl ConfigSection for AuthConfig {
         e
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use muliao_platform::config::ConfigFile;
+
+    use super::*;
+
+    #[test]
+    fn short_secrets_are_refused() {
+        let text = "[auth]\npassword = \"1234\"\nsecret_key = \"0123456789abcdef0123456789abcdef\"\n";
+        let mut f = ConfigFile::parse(text, "/tmp/c.toml".into()).unwrap();
+        let err = f.required::<AuthConfig>().unwrap_err().to_string();
+        assert!(err.contains("auth.password length") && !err.contains("1234"), "{err}");
+        let mut f = ConfigFile::parse("[server]\npublic_url = \"http://x\"\n", "/tmp/c.toml".into()).unwrap();
+        assert_eq!(f.required::<ServerConfig>().unwrap().port, 8000);
+    }
+}

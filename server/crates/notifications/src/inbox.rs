@@ -39,7 +39,8 @@ pub struct Notify {
     /// 通知关于的会话（打开它即已读、随它删除）；系统通知为 None
     pub session_id: Option<SessionId>,
     /// 点开打开的页面（前端路由，发送方定，如交给用户审核的 issue 页）；为 None 时打开 session_id 的会话。用户打开这个页面
-    /// 时界面按它标已读（[`Notifications::mark_link_read`]）
+    /// 时界面按它标已读（[`Notifications::mark_link_read`]）。指向 issue 页即请用户审核它：Service Worker 据此在推送上加
+    /// 「通过 / 打回」（web/public/sw.js 的 reviewedIssue，与 issueRoute 由 web/src/sw.test.ts 核对）
     pub link: Option<String>,
 }
 
