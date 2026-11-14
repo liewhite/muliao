@@ -15,8 +15,8 @@ use chrono_tz::Tz;
 use muliao_notifications::{Notifications, Notify};
 use muliao_platform::db::Tx;
 use muliao_platform::text::truncate;
-use muliao_sessions::intake::inbound::{SenderInbox, SenderMail, SenderTarget};
-use muliao_sessions::intake::origins::Sender;
+use muliao_sessions::Sender;
+use muliao_sessions::{SenderInbox, SenderMail, SenderTarget};
 use serde::{Deserialize, Serialize};
 
 use crate::store::Trigger;

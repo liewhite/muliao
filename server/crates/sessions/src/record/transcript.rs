@@ -28,7 +28,7 @@ use crate::waiting::pending::{OpenAsk, OpenAsks};
 use muliao_platform::errors::{Result, broken};
 
 /// 各工具的展示规则（`Toolbox::renders`）；只要文字的投影给空的。
-pub type Renders = HashMap<String, Arc<ToolRender>>;
+pub(crate) type Renders = HashMap<String, Arc<ToolRender>>;
 
 /// ask_user 调用的状态，由后端按唯一规则给出（[`annotate_asks`]），前端只渲染。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]

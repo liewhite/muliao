@@ -11,10 +11,10 @@ use muliao_platform::ids::{AgentId, Importance, SessionId};
 use muliao_platform::text::truncate;
 use muliao_platform::time::parse_local;
 use muliao_platform::tooling::{BuiltinTool, RunScope, ToolTraits, builtin};
-use muliao_sessions::intake::directory::Session;
-use muliao_sessions::intake::origins::{Origin, SessionOrigin};
+use muliao_sessions::Item;
+use muliao_sessions::directory::Session;
 use muliao_sessions::recall::{Activity, SentUser, between_in, timeline_in};
-use muliao_sessions::record::transcript::Item;
+use muliao_sessions::{Origin, SessionOrigin};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

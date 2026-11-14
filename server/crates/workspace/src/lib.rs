@@ -30,8 +30,8 @@ use muliao_files::FileStore;
 use muliao_platform::db::{Database, Migration};
 use muliao_platform::sandbox::Sandbox;
 use muliao_platform::tooling::BuiltinTool;
+use muliao_sessions::SessionWork;
 use muliao_sessions::events::Subscribers;
-use muliao_sessions::outside::work::SessionWork;
 
 pub use grants::ScriptGrants;
 pub use jobs::JobRunner;

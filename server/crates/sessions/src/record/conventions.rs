@@ -279,7 +279,7 @@ mod raw_source {
 
 impl PartMark {
     /// 同一段在前面多了 n 段的请求里。
-    pub(super) fn shifted(self, n: usize) -> Self {
+    pub(crate) fn shifted(self, n: usize) -> Self {
         PartMark { part: self.part + n, ..self }
     }
 }
@@ -291,7 +291,7 @@ fn event_head(source: &EventSource) -> String {
 }
 
 /// 交给模型的一条事件。
-pub(super) fn format_event(source: &EventSource, content: &str) -> String {
+pub(crate) fn format_event(source: &EventSource, content: &str) -> String {
     format!("{}{content}{EVENT_END}", event_head(source))
 }
 
@@ -306,7 +306,7 @@ pub(crate) fn part_marks(request: &Request) -> Vec<PartMark> {
 }
 
 /// 整条请求记下的各段换成这些（新建请求时）。
-pub(super) fn set_part_marks(request: &mut Request, marks: &[PartMark]) {
+pub(crate) fn set_part_marks(request: &mut Request, marks: &[PartMark]) {
     edit(&mut request.metadata, |m: &mut RequestMeta| m.parts = marks.to_vec());
 }
 

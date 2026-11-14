@@ -4,4 +4,4 @@ pub(crate) mod delegation;
 pub(crate) mod holds;
 pub(crate) mod settlement;
 pub(crate) mod wakeups;
-pub mod work;
+pub(crate) mod work;

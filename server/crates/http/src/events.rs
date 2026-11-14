@@ -11,7 +11,7 @@ use axum::response::sse::{Event, Sse};
 use futures::Stream;
 use muliao_notifications::inbox::NotificationEvent;
 use muliao_platform::bus::{ServerEvent as BusEvent, Subscription};
-use muliao_sessions::execution::live::{RunEventEnvelope, SavedEvent};
+use muliao_sessions::{RunEventEnvelope, SavedEvent};
 use serde::Serialize;
 use serde_json::Value;
 use utoipa::ToSchema;

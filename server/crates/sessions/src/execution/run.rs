@@ -23,66 +23,34 @@ use agenter::{
 use chrono::Utc;
 use muliao_assets::agents::agent_in;
 use muliao_assets::run_assets::RunAssets;
-use muliao_assets::service::AgentService;
-use muliao_files::FileStore;
-use muliao_platform::bus::Bus;
-use muliao_platform::db::{Database, Tx};
+use muliao_platform::db::Tx;
 use muliao_platform::tooling::Audience;
 use muliao_runtime::instructions::with_notices;
-use muliao_runtime::toolbox::Redaction;
-use muliao_runtime::{Run, RunSpec, Runtime, ToolsRun};
+use muliao_runtime::{Run, RunSpec, ToolsRun};
 use rusqlite::Connection;
 use tokio_util::sync::CancellationToken;
 
+use crate::Core;
+use crate::directory::{self, Session};
 use crate::events::{Events, RunEnd, RunEnded};
 use crate::execution::actor::Waker;
+use crate::execution::content::{Content, append_content, content_of, request_of};
 use crate::execution::live::{DeltaType, Live};
 use crate::execution::runs::{self, Outcome};
-use crate::intake::directory::{self, Session};
-use crate::intake::origins::OriginNotes;
 use crate::mailbox::{Mail, consume_in, consumed_by_in, give_in, queued_in};
 use crate::outside::settlement::{delegated_in, settle_finished_in};
-use crate::record::compaction::{CompactionPolicy, Verdict, compact};
-use crate::record::content::{Content, append_content, content_of, request_of};
+use crate::record::compaction::{Verdict, compact};
 use crate::record::conventions::{
     MadeUp, answer_text, attach_run_context, interrupted_response, is_stopped, made_up_result, results_request,
     set_finished_at, shared_attachments, unanswered_calls,
 };
 use crate::record::history::{self, SessionContext, Stored};
-use crate::record::transcript::{Renders, call_item, result_item};
+use crate::record::transcript::{call_item, result_item};
 use crate::waiting::answers::{Waiting, approvals_waiting_text, questions_of, questions_waiting_text};
 use crate::waiting::paused_calls::{Pause, record_in};
 use crate::waiting::pending::position_in;
 use crate::waiting::pending::{Paused, PendingCall, Position, deferred_results};
 use muliao_platform::errors::{Error, Result, broken};
-
-/// 会话领域要别的领域给的部件，组合根交一次（[`crate::start`]）。
-pub struct SessionDeps {
-    pub db: Arc<Database>,
-    pub runtime: Arc<Runtime>,
-    pub files: Arc<FileStore>,
-    pub agents: Arc<AgentService>,
-    pub events: Arc<Events>,
-    pub notes: OriginNotes,
-    pub waker: Waker,
-    pub compaction: CompactionPolicy,
-    pub renders: Renders,
-    pub redaction: Redaction,
-    pub tz: chrono_tz::Tz,
-    pub bus: Arc<Bus>,
-}
-
-/// 会话领域各处共用的部件：交进来的依赖，加上由它建出的实时状态。会话 actor 与界面门面共用一份。
-pub(crate) struct Core {
-    pub(crate) d: SessionDeps,
-    pub(crate) live: Live,
-}
-
-impl Core {
-    pub(crate) fn new(deps: SessionDeps) -> Self {
-        Self { live: Live::new(deps.bus.clone()), d: deps }
-    }
-}
 
 /// 一次运行怎么结束的（失败不在这里，是 [`Failure`]）。
 pub(crate) enum Ran {

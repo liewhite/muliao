@@ -27,7 +27,7 @@ impl Content {
 
 /// 回答信件在这里只会是迟到的：按时的回答作为挂起调用的结果交回。消息的附件复制到 agent 的工作目录（派生副本，原件在
 /// 文件存储里）。
-pub(crate) async fn content_of(files: &FileStore, workspace: &Path, mail: &[Mail]) -> Result<Content> {
+pub(super) async fn content_of(files: &FileStore, workspace: &Path, mail: &[Mail]) -> Result<Content> {
     let mut c = Content::default();
     for m in mail {
         match &m.body {
@@ -61,14 +61,14 @@ pub(crate) async fn content_of(files: &FileStore, workspace: &Path, mail: &[Mail
 }
 
 /// 把内容接在这条请求末尾，并记下各段是什么。
-pub(crate) fn append_content(request: &mut Request, content: Content) {
+pub(super) fn append_content(request: &mut Request, content: Content) {
     let offset = request.parts.len();
     request.parts.extend(content.parts);
     mark_parts(request, content.marks.into_iter().map(|m| m.shifted(offset)).collect());
 }
 
 /// 新的一条请求，内容就是这些。
-pub(crate) fn request_of(content: Content) -> Request {
+pub(super) fn request_of(content: Content) -> Request {
     let mut r = Request { parts: content.parts, timestamp: chrono::Utc::now(), metadata: None };
     set_part_marks(&mut r, &content.marks);
     r

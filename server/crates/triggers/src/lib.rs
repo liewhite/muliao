@@ -30,7 +30,7 @@ use chrono_tz::Tz;
 use muliao_notifications::Notifications;
 use muliao_platform::db::{Database, Migration};
 use muliao_platform::tooling::BuiltinTool;
-use muliao_sessions::intake::inbound::SenderInbox;
+use muliao_sessions::SenderInbox;
 use muliao_workspace::commands::AgentCommands;
 use tokio::task::JoinHandle;
 

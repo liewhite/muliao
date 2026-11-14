@@ -1,5 +1,4 @@
-//! 来信：会话目录、会话来源、一切投进信箱的东西的唯一入口。
+//! 来信：会话来源、一切投进信箱的东西的唯一入口。
 
-pub mod directory;
-pub mod inbound;
-pub mod origins;
+pub(crate) mod inbound;
+pub(crate) mod origins;

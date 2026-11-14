@@ -15,7 +15,7 @@ use muliao_assets::agents::{agent_names_in, runnable_agent_in};
 use muliao_notifications::{Notifications, Notify};
 use muliao_platform::db::Tx;
 use muliao_platform::ids::{AgentId, IssueId};
-use muliao_sessions::intake::inbound::{Refusal, Refused, SenderInbox};
+use muliao_sessions::{Refusal, Refused, SenderInbox};
 use rusqlite::Connection;
 
 use crate::activity::{Activity, Arrival, Change, DependencyChange, Happening, record_in, timeline_in};

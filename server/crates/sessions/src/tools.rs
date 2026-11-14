@@ -275,7 +275,7 @@ impl Tool<RunScope> for StopThread {
         let (child, who) = self
             .db
             .read(move |c| {
-                let mut named = crate::intake::directory::threads_named_in(c, &parent, &wanted)?;
+                let mut named = crate::directory::threads_named_in(c, &parent, &wanted)?;
                 if let Some(agent) = &a.agent {
                     let id = named_in(c, agent)?.id;
                     named.retain(|s| s.agent_id == id);
@@ -459,6 +459,16 @@ impl Tool<RunScope> for WakeMe {
     }
 }
 
+/// 发起并发工作时不给 heartbeat_seconds 的默认间隔
+pub const DEFAULT_CHECK_SECONDS: f64 = 60.0;
+
+/// 工具参数 heartbeat_seconds → 运行中检查的间隔（run_shell(background)、delegate_task(report_back) 共用）：不给时取默认，
+/// 不大于 0（含 NaN）时是参数错误。
+pub fn check_interval(heartbeat_seconds: Option<f64>) -> Result<f64, String> {
+    let interval = heartbeat_seconds.unwrap_or(DEFAULT_CHECK_SECONDS);
+    if interval > 0.0 { Ok(interval) } else { Err("heartbeat_seconds must be greater than 0".to_owned()) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -493,14 +503,4 @@ mod tests {
             Utc.with_ymd_and_hms(2026, 11, 12, 2, 30, 0).unwrap()
         );
     }
-}
-
-/// 发起并发工作时不给 heartbeat_seconds 的默认间隔
-pub const DEFAULT_CHECK_SECONDS: f64 = 60.0;
-
-/// 工具参数 heartbeat_seconds → 运行中检查的间隔（run_shell(background)、delegate_task(report_back) 共用）：不给时取默认，
-/// 不大于 0（含 NaN）时是参数错误。
-pub fn check_interval(heartbeat_seconds: Option<f64>) -> Result<f64, String> {
-    let interval = heartbeat_seconds.unwrap_or(DEFAULT_CHECK_SECONDS);
-    if interval > 0.0 { Ok(interval) } else { Err("heartbeat_seconds must be greater than 0".to_owned()) }
 }

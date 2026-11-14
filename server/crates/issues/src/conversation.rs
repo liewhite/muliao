@@ -4,10 +4,10 @@
 use muliao_platform::ids::{AgentId, IssueId, SessionId};
 use std::collections::BTreeMap;
 
+use muliao_sessions::Sender;
 use muliao_sessions::activity::{WorkState, keyed_states_in};
-use muliao_sessions::intake::directory::{Session, keyed_among, keyed_in};
-use muliao_sessions::intake::inbound::{SenderMail, SenderTarget};
-use muliao_sessions::intake::origins::Sender;
+use muliao_sessions::directory::{Session, keyed_among, keyed_in};
+use muliao_sessions::{SenderMail, SenderTarget};
 use rusqlite::Connection;
 
 use muliao_platform::errors::Result;

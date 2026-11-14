@@ -17,8 +17,8 @@ use muliao_platform::bus::{Bus, ServerEvent};
 use muliao_platform::db::{Database, Tx};
 use muliao_platform::errors::{Result, broken};
 use muliao_platform::text::truncate;
+use muliao_sessions::Waiting;
 use muliao_sessions::events::{RunEnd, RunEnded, RunFailed, SessionDeleted, Subscribers};
-use muliao_sessions::waiting::answers::Waiting;
 use rusqlite::{Connection, OptionalExtension, Row, params, params_from_iter};
 use serde::Serialize;
 use utoipa::ToSchema;
@@ -215,7 +215,7 @@ impl Notifications {
 
     /// 运行最终失败：通知用户，点开是那个会话；运行中途的工具报错不走这里。
     fn on_run_failed(&self, tx: &mut Tx<'_>, e: &RunFailed) -> muliao_platform::errors::Result<()> {
-        let session = muliao_sessions::intake::directory::get_in(tx, &e.session_id)?.ok_or_else(|| {
+        let session = muliao_sessions::directory::get_in(tx, &e.session_id)?.ok_or_else(|| {
             broken(format!("run {} failed in session {}, which does not exist", e.run_id, e.session_id))
         })?;
         let n = Notify {

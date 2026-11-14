@@ -300,6 +300,11 @@ pub(crate) fn open_asks_of(at: &Position, queued: &[Mail]) -> OpenAsks {
     OpenAsks(open)
 }
 
+/// 会话现在停在哪（规则在 [`position`]）。没出结果的调用只可能在最后一条回复里，不加载整段上下文。
+pub(crate) fn position_in(c: &Connection, session_id: &SessionId) -> Result<Position> {
+    position(&since_last_response(c, session_id)?, &kinds_in(c, session_id)?, &queued_in(c, session_id)?)
+}
+
 #[cfg(test)]
 mod tests {
     use muliao_platform::ids::JobId;
@@ -443,9 +448,4 @@ mod tests {
         assert_eq!(closing.answered.iter().map(|r| r.call_id.as_str()).collect::<Vec<_>>(), ["q1"]);
         assert_eq!(closing.used, [MailId::new(7)]);
     }
-}
-
-/// 会话现在停在哪（规则在 [`position`]）。没出结果的调用只可能在最后一条回复里，不加载整段上下文。
-pub(crate) fn position_in(c: &Connection, session_id: &SessionId) -> Result<Position> {
-    position(&since_last_response(c, session_id)?, &kinds_in(c, session_id)?, &queued_in(c, session_id)?)
 }

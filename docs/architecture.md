@@ -160,7 +160,7 @@ Web / 触发器 / delegate_task / ask_agent        后台任务与委派的结�
 
 职责：会话、thread 树、信箱、历史、挂起的调用、会话 actor 与运行（逐步保存）、压缩、停止、删除。会话 actor 是运行的串行边界，会话领域的一个本地事务是状态的一致性边界。对外接口：界面经 `SessionService` 门面，别的领域经各模块的 `*_in` 查询、`SenderInbox`（来信）与 `SessionWork`（外部工作），事件在 `sessions/src/events.rs`。
 
-代码按子领域分目录（`sessions/src/`）：`intake/`（来信：会话目录、来源、入口）、`record/`（历史与约定：消息、压缩、约定、信件内容、展示投影）、`waiting/`（挂起的调用与回答、会话停在哪）、`outside/`（外部工作：占用、交回、到点唤醒、委派、结清）、`execution/`（会话 actor、运行、运行记录、停止、实时展示）；信箱、工作状态、事件、删除、读模型、工具与门面在顶层。别的子领域要用的模块是 `pub(crate)`，只在子领域里用的条目是 `pub(super)`。
+代码按子领域分目录（`sessions/src/`）：`intake/`（来信：来源、入口）、`record/`（历史与约定：消息、压缩、约定、展示投影）、`waiting/`（挂起的调用与回答、会话停在哪）、`outside/`（外部工作：占用、交回、到点唤醒、委派、结清）、`execution/`（会话 actor、运行与信件交给模型的样子、运行记录、停止、实时展示）；会话目录、信箱、工作状态、事件、删除、读模型、工具与门面在顶层，`SessionDeps`/`Core` 与 `start` 在 lib.rs。子目录是内部分组（`pub(crate)`）：别的领域用到的接口由 lib.rs 重新导出（`muliao_sessions::SenderInbox` 等），分组调整不波及它们；子领域之间用的是 `pub(crate)`，只在子领域里用的是 `pub(super)`。
 
 ### 会话种类
 

@@ -77,7 +77,7 @@ struct State {
 }
 
 #[derive(Clone)]
-pub struct Live {
+pub(crate) struct Live {
     bus: Arc<Bus>,
     states: Arc<Mutex<HashMap<SessionId, State>>>,
 }
@@ -129,7 +129,7 @@ impl Drop for Attempts {
 }
 
 impl Live {
-    pub fn new(bus: Arc<Bus>) -> Self {
+    pub(crate) fn new(bus: Arc<Bus>) -> Self {
         Self { bus, states: Arc::default() }
     }
 

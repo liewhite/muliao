@@ -7,10 +7,10 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::SessionDeps;
 use crate::activity::{WorkState, work_state_in};
 use crate::events::{Events, RunEnd, RunEnded, RunFailed, Subscribers};
 use crate::execution::actor::{Actors, Waker};
-use crate::execution::run::SessionDeps;
 use crate::execution::runs::{self, RunState};
 use crate::intake::inbound::{UserMessage, UserTarget};
 use crate::intake::origins::OriginNotes;
@@ -782,11 +782,7 @@ async fn an_answer_arriving_before_the_asking_step_is_saved_still_answers_the_ca
     let threads = || {
         let s = s.clone();
         w.db.read(move |c| {
-            crate::intake::directory::threads_named_in(
-                c,
-                &s,
-                &crate::intake::origins::ThreadName::parse("calc").unwrap(),
-            )
+            crate::directory::threads_named_in(c, &s, &crate::intake::origins::ThreadName::parse("calc").unwrap())
         })
     };
     let thread = loop {

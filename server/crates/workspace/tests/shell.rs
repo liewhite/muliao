@@ -292,7 +292,7 @@ async fn jobs_left_running_by_a_previous_process_are_reported_interrupted() {
     let fresh = muliao_workspace::JobRunner::new(
         w.db.clone(),
         w.workspace.commands.clone(),
-        muliao_sessions::outside::work::SessionWork::new(muliao_sessions::execution::actor::Waker::channel().0),
+        muliao_sessions::SessionWork::new(muliao_sessions::Waker::channel().0),
     );
     fresh.run().await.unwrap().abort();
     let info = fresh.info(id, &w.me).await.unwrap();

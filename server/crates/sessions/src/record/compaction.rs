@@ -15,7 +15,7 @@ use muliao_platform::ids::SessionId;
 use agenter::Message;
 use muliao_assets::run_assets::RunAssets;
 
-use crate::execution::run::Core;
+use crate::Core;
 use crate::record::conventions::{OpenCalls, measured_responses};
 use crate::record::history::{Stored, add_compaction_in, latest_compaction, rows_after};
 use crate::record::transcript::{Renders, to_items, to_text};
@@ -26,7 +26,7 @@ const ITEM_CHARS: usize = 4000;
 /// 一次交给模型总结的文字记录的字符上限（超出的步留给下一次）。
 const TRANSCRIPT_CHARS: usize = 400_000;
 
-pub const COMPACTION_INSTRUCTIONS: &str = "\
+pub(crate) const COMPACTION_INSTRUCTIONS: &str = "\
 You compress the earlier part of a conversation between a user and an AI agent so the agent can continue \
 without the original messages. Write a dense summary in the conversation's language covering: the user's goals \
 and requests, decisions made, facts learned, results of tool calls that still matter (file paths, IDs, URLs, \
@@ -96,7 +96,7 @@ pub(super) fn compaction_prompt(previous_summary: Option<&str>, steps: &[Vec<&St
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Verdict {
+pub(crate) enum Verdict {
     NotDue,
     Due,
     /// 刚压缩过，上下文仍超阈值：保留窗口本身就超了

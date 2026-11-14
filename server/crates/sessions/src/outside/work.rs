@@ -10,8 +10,8 @@ use std::collections::BTreeMap;
 use muliao_platform::db::Tx;
 use rusqlite::Connection;
 
+use crate::directory;
 use crate::execution::actor::Waker;
-use crate::intake::directory;
 use crate::mailbox::EventSource;
 use crate::mailbox::{NewMail, has_queued_from, post_in};
 use crate::outside::holds::{self, Hold, HoldStatus};
@@ -21,7 +21,7 @@ use muliao_platform::errors::{Result, broken};
 
 /// 交回结局的结果。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Delivered {
+pub(crate) enum Delivered {
     /// 作为挂起调用的结果（回答信件）
     Answer,
     /// 作为事件信件
@@ -133,7 +133,7 @@ impl SessionWork {
 
 /// 收到运行中检查、没有要做的事时只回的占位答复（唯一一份：检查信件与工具说明教 agent 这样回，界面按
 /// [`is_no_progress`] 认出它并收起）。
-pub const NO_PROGRESS_REPLY: &str = "…";
+pub(crate) const NO_PROGRESS_REPLY: &str = "…";
 
 /// 教 agent 怎么回运行中检查的那半句（检查信件与工具说明共用）。
 pub fn no_progress_hint() -> String {

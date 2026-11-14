@@ -33,30 +33,35 @@ pub type DeletionHook = Arc<dyn Fn(&mut Tx<'_>, &AgentId) -> Result<()> + Send +
 pub type ArchiveBlocker = Arc<dyn Fn(&Connection, &AgentId) -> Result<bool> + Send + Sync>;
 
 pub struct AgentLifecycle {
-    db: Arc<Database>,
-    source: Arc<AssetSource>,
-    /// 各 agent 的工作目录在哪由它定
+    /// 资源目录、库与各 agent 的工作目录都经它取
     agents: Arc<AgentService>,
     hooks: Arc<Vec<DeletionHook>>,
     blockers: Arc<Vec<(String, ArchiveBlocker)>>,
 }
 
 impl AgentLifecycle {
+    fn source(&self) -> &Arc<AssetSource> {
+        self.agents.source()
+    }
+
+    fn db(&self) -> &Arc<Database> {
+        self.source().db()
+    }
+
     /// hooks、blockers：各领域登记的删除清理与归档前检查（组合根收集）。
     pub fn new(agents: Arc<AgentService>, hooks: Vec<DeletionHook>, blockers: Vec<(String, ArchiveBlocker)>) -> Self {
-        let source = agents.source().clone();
-        Self { db: source.db().clone(), source, agents, hooks: Arc::new(hooks), blockers: Arc::new(blockers) }
+        Self { agents, hooks: Arc::new(hooks), blockers: Arc::new(blockers) }
     }
 
     /// 发起删除并删完文件。标记之后删文件失败（或调用方中途被取消）时 agent 已不在列表里，停在正在删除，服务下次启动时
     /// 接着删。
     pub async fn delete(&self, agent_id: &AgentId, actor: &Actor) -> Result<()> {
         let id = agent_id.to_owned();
-        let agent = self.db.read(move |c| agents::deletable_in(c, &id)).await?;
+        let agent = self.db().read(move |c| agents::deletable_in(c, &id)).await?;
         // 删除最后要改 access.toml：同样的改动现在就算一遍，不合法时先拒绝，不让 agent 停在正在删除、删文件一直失败
-        retire_plan(&*self.source.snapshot().await?, &agent.id)?;
+        retire_plan(&*self.source().snapshot().await?, &agent.id)?;
         let (id, hooks) = (agent_id.to_owned(), self.hooks.clone());
-        self.db
+        self.db()
             .write(move |tx| {
                 agents::mark_deleting_in(tx, &id)?;
                 for hook in hooks.iter() {
@@ -67,14 +72,14 @@ impl AgentLifecycle {
             .await?;
         tracing::info!(agent = %agent_id, actor = actor.as_str(), "agent deletion started");
         let workspace = self.agents.workspace(agent_id);
-        remove_files(self.db.clone(), self.source.clone(), workspace, agent_id.to_owned()).await
+        remove_files(self.db().clone(), self.source().clone(), workspace, agent_id.to_owned()).await
     }
 
     /// 启动时：接着删停在正在删除的 agent（上次删文件失败或服务中途重启）。失败的记 error，下次启动再试。
     pub async fn resume_deletions(&self) -> Result<()> {
-        for agent_id in self.db.read(agents::deleting_in).await? {
+        for agent_id in self.db().read(agents::deleting_in).await? {
             let workspace = self.agents.workspace(&agent_id);
-            if let Err(e) = remove_files(self.db.clone(), self.source.clone(), workspace, agent_id.clone()).await {
+            if let Err(e) = remove_files(self.db().clone(), self.source().clone(), workspace, agent_id.clone()).await {
                 tracing::error!(agent = %agent_id, error = %e, "removing the files of a deleted agent failed again");
             }
         }
@@ -86,7 +91,7 @@ impl AgentLifecycle {
     pub async fn set_archived(&self, agent_id: &AgentId, archived: bool) -> Result<AgentInfo> {
         let (id, blockers) = (agent_id.to_owned(), self.blockers.clone());
         let (before, after) = self
-            .db
+            .db()
             .write(move |tx| {
                 // 先记下（是不是默认 agent 在这里查），再问各领域忙不忙：忙时报错，整个事务回滚
                 let (before, after) = agents::set_archived_in(tx, &id, archived)?;

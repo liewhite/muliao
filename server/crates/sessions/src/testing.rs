@@ -32,7 +32,6 @@ pub fn user_request(texts: &[(Origin, &str)], run_context: &str) -> Message {
 pub fn record_run_in(
     tx: &mut Tx<'_>,
     waker: &Waker,
-    live: &Live,
     session_id: &SessionId,
     from: Option<(Origin, String)>,
     messages: &[Message],
@@ -44,14 +43,16 @@ pub fn record_run_in(
             post_in(tx, waker, session_id, NewMail { body, awaited: true })
         })
         .transpose()?;
-    let run = current_or_start_in(tx, live, session_id)?;
+    // 测试不看实时展示：给它一条没人订阅的总线
+    let live = Live::new(std::sync::Arc::new(muliao_platform::bus::Bus::new(16)));
+    let run = current_or_start_in(tx, &live, session_id)?;
     if let Some(m) = mail {
         give_in(tx, &[m], run)?;
         consume_in(tx, &[m], run)?;
     }
     append_in(tx, session_id, run, messages)?;
     if let Some(o) = outcome {
-        end_in(tx, live, run, o)?;
+        end_in(tx, &live, run, o)?;
     }
     Ok(())
 }

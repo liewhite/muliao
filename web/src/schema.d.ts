@@ -1504,7 +1504,7 @@ export interface components {
          */
         Debounce: number;
         /**
-         * @description 用户对一次等批准的调用的决定。批准的是哪一份（pin）只记在挂起记录里（[`crate::paused_calls`]），交给运行时从那里取；
+         * @description 用户对一次等批准的调用的决定。批准的是哪一份（pin）只记在挂起记录里（[`crate::waiting::paused_calls`]），交给运行时从那里取；
          *     旧信件里多存的 pin 读入时忽略。
          */
         Decision: {
@@ -1780,7 +1780,7 @@ export interface components {
             type: "event";
         }) | {
             text: string;
-            /** @description 只是没有新进展时的占位答复（[`crate::work::NO_PROGRESS_REPLY`]）：界面合并运行中检查时一起收起 */
+            /** @description 只是没有新进展时的占位答复（[`crate::outside::work::NO_PROGRESS_REPLY`]）：界面合并运行中检查时一起收起 */
             no_progress: boolean;
             /** @enum {string} */
             type: "assistant";

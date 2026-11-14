@@ -11,9 +11,9 @@ use chrono::{Duration, NaiveDate, Utc};
 use muliao_platform::db::{Database, migrate};
 use muliao_platform::errors::{Error, ErrorKind};
 use muliao_platform::tooling::{Audience, RunScope};
-use muliao_sessions::execution::actor::Waker;
-use muliao_sessions::execution::runs::Outcome;
-use muliao_sessions::intake::origins::Origin;
+use muliao_sessions::Origin;
+use muliao_sessions::Outcome;
+use muliao_sessions::Waker;
 use muliao_sessions::testing::{record_run_in, user_request};
 use serde_json::{Value, json};
 
@@ -142,9 +142,8 @@ impl World {
     /// 一次运行：投 mail（发送方 from 的消息），交给运行并保存 messages，按 outcome 结束（None 为还在跑）。
     async fn run(&self, session: &str, from: Option<(Origin, &str)>, messages: Vec<Message>, outcome: Option<Outcome>) {
         let (session, waker) = (SessionId::new(session), self.waker.clone());
-        let live = muliao_sessions::execution::live::Live::new(std::sync::Arc::new(muliao_platform::bus::Bus::new(16)));
         let from = from.map(|(o, t)| (o, t.to_owned()));
-        self.db.write(move |tx| record_run_in(tx, &waker, &live, &session, from, &messages, outcome)).await.unwrap();
+        self.db.write(move |tx| record_run_in(tx, &waker, &session, from, &messages, outcome)).await.unwrap();
     }
 
     async fn call(&self, me: &str, name: &str, args: Value, max_chars: usize) -> Result<String, String> {

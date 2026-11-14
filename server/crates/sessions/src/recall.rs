@@ -13,8 +13,8 @@ use chrono::{DateTime, Utc};
 use rusqlite::Connection;
 
 use crate::activity::{WorkState, work_states_in};
+use crate::directory::{Session, among_in, with_prefix_in};
 use crate::execution::runs::started_between_in;
-use crate::intake::directory::{Session, among_in, with_prefix_in};
 use crate::intake::origins::Origin;
 use crate::mailbox::{Mail, MailBody, first_arrivals_between_in, sent_by_in};
 use crate::record::history::{Span, spans_between_in, transcript_in};

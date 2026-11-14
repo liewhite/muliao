@@ -232,7 +232,7 @@ pub(crate) fn questions_waiting_text(questions: &[Question]) -> String {
 // ---- 被问的 agent（ask_agent）----
 
 /// ask_agent 答复之前来了新消息：这次调用不再等，模型知道回答之后会作为事件送达。
-pub const STILL_WORKING: &str = "A new message arrived before the agent you asked answered. Its answer will reach you as \
+pub(crate) const STILL_WORKING: &str = "A new message arrived before the agent you asked answered. Its answer will reach you as \
      an event in this conversation when it is ready.";
 
 /// 被问的 agent 交回的结局：给发问方模型的文字，它挂给用户的文件（交回时挂到发问方这次调用的结果上，文件就出现在用户
@@ -265,11 +265,11 @@ impl AgentAnswer {
 
 // ---- 等批准的调用 ----
 
-pub const DENIED: &str = "The user denied this call; it was not run.";
+pub(crate) const DENIED: &str = "The user denied this call; it was not run.";
 const NOT_DECIDED: &str = "The user did not approve this call and responded with something else instead; it was not \
      run. Call it again if it is still needed.";
 /// 批准了，但这份批准之前已经交给过运行去执行：可能已在执行中被打断，不再执行。
-pub const APPROVAL_INTERRUPTED: &str = "The user approved this call, but the run was interrupted (e.g. the service \
+pub(crate) const APPROVAL_INTERRUPTED: &str = "The user approved this call, but the run was interrupted (e.g. the service \
      restarted) after it may have started executing, so it was not run again. It may have taken effect: check before \
      calling it again (that asks the user to approve again).";
 

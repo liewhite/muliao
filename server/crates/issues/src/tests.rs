@@ -8,10 +8,10 @@ use muliao_notifications::{Notification, Notifications, Push, VapidKeys};
 use muliao_platform::bus::Bus;
 use muliao_platform::db::{Database, migrate};
 use muliao_platform::retry::Retry;
+use muliao_sessions::SenderInbox;
+use muliao_sessions::SessionOrigin;
+use muliao_sessions::Waker;
 use muliao_sessions::events::{RunEnd, RunEnded, RunFailed, SessionDeleted, Subscribers};
-use muliao_sessions::execution::actor::Waker;
-use muliao_sessions::intake::inbound::SenderInbox;
-use muliao_sessions::intake::origins::SessionOrigin;
 use muliao_sessions::mailbox::queued_in;
 use muliao_sessions::tools::Stopper;
 
@@ -385,8 +385,7 @@ async fn a_run_ending_with_the_issue_unsettled_asks_the_agent_to_settle_it() {
     assert_eq!(kinds(&w.timeline(i.id).await), ["created"]);
     w.consume_all().await;
     // 停在挂起调用上的：不问
-    let paused =
-        RunEnd::Paused { prompt: "?".into(), waiting_on: vec![muliao_sessions::waiting::answers::Waiting::AskUser] };
+    let paused = RunEnd::Paused { prompt: "?".into(), waiting_on: vec![muliao_sessions::Waiting::AskUser] };
     w.publish(run_ended, ended(paused)).await;
     assert_eq!(kinds(&w.timeline(i.id).await), ["created"]);
     w.publish(run_ended, ended(answered())).await;
