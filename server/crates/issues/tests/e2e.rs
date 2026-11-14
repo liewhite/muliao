@@ -253,7 +253,7 @@ impl World {
         panic!("session {id} did not settle; {} replies left", self.script.left());
     }
 
-    async fn kinds(&self, issue_id: i64) -> Vec<&'static str> {
+    async fn kinds(&self, issue_id: i64) -> Vec<String> {
         self.board.detail(issue_id).await.unwrap().activities.iter().map(|a| a.what.kind()).collect()
     }
 }

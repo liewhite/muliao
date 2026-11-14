@@ -163,5 +163,5 @@ pub fn consume_in(
     state.skipped =
         Some(SkipStreak { shown: SkippedFires { count, since, previous_state: busy }, session_id: session_id.clone() });
     notify_waiting_in(tx, notifications, t, &session_id, busy, |t| waiting_notice(t, count, &session_id))?;
-    Ok(Some(format!("previous run still {} (skipped {count} in a row)", busy.as_str())))
+    Ok(Some(format!("previous run still {busy} (skipped {count} in a row)")))
 }

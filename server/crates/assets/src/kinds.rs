@@ -2,7 +2,6 @@
 //! （[`KindSpec`]：名字、放在哪、名字规则、说明在公共 skill 哪一节、文件怎么读、写之前怎么校验）。读树与写入口只按登记
 //! 分派，不列举种类；加一种资源 = 在 [`StoredKind`] 加一项、写它的格式模块、在 [`StoredKind::spec`] 登记一行。
 
-use std::fmt;
 use std::path::Path;
 
 use crate::formats::mcp::McpFile;
@@ -15,7 +14,8 @@ use crate::naming::validate_slug;
 /// AI 资源的种类，也是规则 `action:kind:glob` 里的 kind。内置工具（tool）在代码里、各自注册时声明属性（工具表
 /// [`crate::rules::ToolTable`]），归平台、没有内容；其余四种是资源目录里的文件。本机上的可写目录（`write:path:<目录>`，
 /// #416）不是资源，是另一种规则（[`crate::rules::Rule::Path`]）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Kind {
     Tool,
     Skill,
@@ -26,20 +26,6 @@ pub enum Kind {
 
 impl Kind {
     pub const ALL: [Kind; 5] = [Kind::Tool, Kind::Skill, Kind::Mcp, Kind::Secret, Kind::Memory];
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Kind::Tool => "tool",
-            Kind::Skill => "skill",
-            Kind::Mcp => "mcp",
-            Kind::Secret => "secret",
-            Kind::Memory => "memory",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Kind> {
-        Self::ALL.into_iter().find(|k| k.as_str() == value)
-    }
 
     /// 错误信息里的名字（同一种类处处同一个说法）。
     pub fn label(self) -> &'static str {
@@ -53,14 +39,10 @@ impl Kind {
     }
 }
 
-impl fmt::Display for Kind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
 /// 存成文件的四种：可以新建、改、删、转移 owner（记忆不转移）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, utoipa::ToSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize, utoipa::ToSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum StoredKind {
     Skill,
@@ -83,14 +65,6 @@ impl StoredKind {
         }
     }
 
-    pub fn as_str(self) -> &'static str {
-        self.kind().as_str()
-    }
-
-    pub fn parse(value: &str) -> Option<StoredKind> {
-        Self::ALL.into_iter().find(|k| k.as_str() == value)
-    }
-
     pub fn label(self) -> &'static str {
         self.spec().label
     }
@@ -105,11 +79,7 @@ impl StoredKind {
     }
 }
 
-impl fmt::Display for StoredKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
+muliao_platform::serde_names!(Kind, StoredKind);
 
 /// 讲资源目录怎么改的公共 skill（#501）：写入口的拒绝与提示词指向它
 pub const ASSETS_SKILL: &str = "assets-files";

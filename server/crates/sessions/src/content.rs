@@ -1,5 +1,5 @@
 //! 信件交给模型的样子：消息是原文加附件引用，事件套上来源（[`format_event`]），迟到的回答写成文字。一次请求里的信件都
-//! 接在这条请求末尾，各段是什么（事件的来源、是否检查，消息的发送方）在构造时就记下（`PARTS`），界面据此单独显示，不从文字反推。
+//! 接在这条请求末尾，各段是什么（事件的来源、是否检查，消息的发送方）在构造时就记下（`muliao_parts`），界面据此单独显示，不从文字反推。
 
 use std::path::Path;
 
@@ -61,10 +61,10 @@ pub(crate) async fn content_of(files: &FileStore, workspace: &Path, mail: &[Mail
 }
 
 /// 把内容接在这条请求末尾，并记下各段是什么。
-pub(crate) fn append_content(request: &mut Request, content: Content) -> Result<()> {
+pub(crate) fn append_content(request: &mut Request, content: Content) {
     let offset = request.parts.len();
     request.parts.extend(content.parts);
-    mark_parts(request, content.marks.into_iter().map(|m| m.shifted(offset)).collect())
+    mark_parts(request, content.marks.into_iter().map(|m| m.shifted(offset)).collect());
 }
 
 /// 新的一条请求，内容就是这些。

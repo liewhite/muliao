@@ -34,12 +34,21 @@ pub enum MailBody {
     Event { source: EventSource, content: String, check_in: bool },
 }
 
+/// 库里 kind 列：信件的种类。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum MailKind {
+    Message,
+    Answer,
+    Event,
+}
+
 impl MailBody {
-    fn kind(&self) -> &'static str {
+    fn kind(&self) -> MailKind {
         match self {
-            MailBody::Message { .. } => "message",
-            MailBody::Answer { .. } => "answer",
-            MailBody::Event { .. } => "event",
+            MailBody::Message { .. } => MailKind::Message,
+            MailBody::Answer { .. } => MailKind::Answer,
+            MailBody::Event { .. } => MailKind::Event,
         }
     }
 
@@ -77,7 +86,7 @@ impl MailBody {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum MailState {
     Queued,
@@ -87,24 +96,7 @@ pub enum MailState {
     Discarded,
 }
 
-impl MailState {
-    fn as_str(self) -> &'static str {
-        match self {
-            MailState::Queued => "queued",
-            MailState::Consumed => "consumed",
-            MailState::Discarded => "discarded",
-        }
-    }
-
-    fn parse(s: &str) -> Result<Self> {
-        Ok(match s {
-            "queued" => MailState::Queued,
-            "consumed" => MailState::Consumed,
-            "discarded" => MailState::Discarded,
-            _ => return Err(broken(format!("unknown mail state {s:?}"))),
-        })
-    }
-}
+muliao_platform::serde_names!(MailKind, MailState);
 
 /// 信箱里的一封信。
 #[derive(Debug, Clone, PartialEq)]
@@ -141,20 +133,20 @@ impl NewMail {
 const COLUMNS: &str = "id, session_id, kind, source, origin, content, check_in, attachments, answers, awaited, \
      delegation_id, state, taken_by, created_at";
 
-/// 一行的原样：文本列在 [`RawMail::parse`] 里解析（解析不了是数据坏了，不是 SQL 错误）。
+/// 一行的原样：JSON 列与种类和各列的搭配在 [`RawMail::parse`] 里解析（解析不了是数据坏了，不是 SQL 错误）。
 struct RawMail {
     id: MailId,
     session_id: SessionId,
-    kind: String,
+    kind: MailKind,
     source: Option<String>,
-    origin: Option<String>,
+    origin: Option<Origin>,
     content: String,
     check_in: bool,
     attachments: String,
     answers: String,
     awaited: bool,
     delegation_id: Option<DelegationId>,
-    state: String,
+    state: MailState,
     taken_by: Option<RunId>,
     created_at: DateTime<Utc>,
 }
@@ -182,15 +174,14 @@ impl RawMail {
     fn parse(self) -> Result<Mail> {
         let id = self.id;
         let bad = |what: &str, e: serde_json::Error| broken(format!("{what} of mail {id}: {e}"));
-        let origin = self.origin.as_deref().map(Origin::parse).transpose()?;
-        let body = match (self.kind.as_str(), origin, self.source) {
-            ("message", Some(origin), None) => MailBody::Message {
+        let body = match (self.kind, self.origin, self.source) {
+            (MailKind::Message, Some(origin), None) => MailBody::Message {
                 origin,
                 content: self.content,
                 attachments: serde_json::from_str(&self.attachments).map_err(|e| bad("attachments", e))?,
                 delegation_id: self.delegation_id,
             },
-            ("answer", None | Some(Origin::User), None) => {
+            (MailKind::Answer, None | Some(Origin::User), None) => {
                 // answers 列存的是 调用 id -> 结果 的表（早先设计成一封可带多个），实际每封只有一个
                 let answers: BTreeMap<String, CallResult> =
                     serde_json::from_str(&self.answers).map_err(|e| bad("answers", e))?;
@@ -200,7 +191,7 @@ impl RawMail {
                 };
                 MailBody::Answer { call_id, result }
             }
-            ("event", None, Some(raw)) => match EventSource::parse(&raw) {
+            (MailKind::Event, None, Some(raw)) => match EventSource::parse(&raw) {
                 Some(source) => MailBody::Event { source, content: self.content, check_in: self.check_in },
                 None => return Err(broken(format!("event mail {id} has an unknown source {raw:?}"))),
             },
@@ -213,7 +204,7 @@ impl RawMail {
             session_id: self.session_id,
             body,
             awaited: self.awaited,
-            state: MailState::parse(&self.state)?,
+            state: self.state,
             taken_by: self.taken_by,
             created_at: self.created_at,
         })
@@ -242,36 +233,37 @@ pub(crate) fn post_in(tx: &mut Tx<'_>, waker: &Waker, session_id: &SessionId, ma
     };
     tx.execute(
         "INSERT INTO mail (session_id, kind, source, origin, content, check_in, attachments, answers, awaited, \
-         delegation_id, state, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'queued', ?11)",
+         delegation_id, state, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         params![
             session_id,
             body.kind(),
             source,
-            body.origin().map(Origin::as_str),
+            body.origin(),
             body.content(),
             check_in,
             serde_json::to_string(body.attachments()).expect("ids serialize"),
             serde_json::to_string(&answers.unwrap_or_default()).expect("answers serialize"),
             mail.awaited,
             delegation,
+            MailState::Queued,
             Utc::now(),
         ],
     )?;
     let id = MailId::new(tx.last_insert_rowid());
-    tracing::info!(%session_id, mail_id = %id, kind = body.kind(), source = source.as_deref(), "mail posted");
+    tracing::info!(%session_id, mail_id = %id, kind = %body.kind(), source = source.as_deref(), "mail posted");
     waker.wake_on_commit(tx, session_id);
     Ok(id)
 }
 
 /// 会话里还在排队的信件，按到达顺序。
 pub fn queued_in(c: &Connection, session_id: &SessionId) -> Result<Vec<Mail>> {
-    query(c, "session_id = ?1 AND state = 'queued'", [session_id])
+    query(c, "session_id = ?1 AND state = ?2", params![session_id, MailState::Queued])
 }
 
 /// 有排着的信的会话（服务启动时各叫醒一次）。
 pub(crate) fn sessions_with_queued_in(c: &Connection) -> Result<Vec<SessionId>> {
-    let mut stmt = c.prepare("SELECT DISTINCT session_id FROM mail WHERE state = 'queued'")?;
-    Ok(stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)
+    let mut stmt = c.prepare("SELECT DISTINCT session_id FROM mail WHERE state = ?1")?;
+    Ok(stmt.query_map([MailState::Queued], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)
 }
 
 /// 这些会话里还在排队的信件，各自按到达顺序（一次查询）；每个会话都在结果里。
@@ -282,8 +274,11 @@ pub(crate) fn queued_among(c: &Connection, session_ids: &[SessionId]) -> Result<
     }
     for m in query(
         c,
-        &format!("state = 'queued' AND session_id IN ({})", placeholders(session_ids.len())),
-        rusqlite::params_from_iter(session_ids),
+        &format!("state = ? AND session_id IN ({})", placeholders(session_ids.len())),
+        rusqlite::params_from_iter(
+            std::iter::once(&MailState::Queued as &dyn rusqlite::ToSql)
+                .chain(session_ids.iter().map(|s| s as &dyn rusqlite::ToSql)),
+        ),
     )? {
         out.entry(m.session_id.clone()).or_default().push(m);
     }
@@ -293,7 +288,10 @@ pub(crate) fn queued_among(c: &Connection, session_ids: &[SessionId]) -> Result<
 /// 这些排着的信件交给这次运行（运行开头取走时）。已经不在排队的不动。
 pub(crate) fn give_in(c: &Connection, ids: &[MailId], run_id: RunId) -> Result<()> {
     for id in ids {
-        c.execute("UPDATE mail SET taken_by = ?1 WHERE id = ?2 AND state = 'queued'", params![run_id, id])?;
+        c.execute(
+            "UPDATE mail SET taken_by = ?1 WHERE id = ?2 AND state = ?3",
+            params![run_id, id, MailState::Queued],
+        )?;
     }
     Ok(())
 }
@@ -302,8 +300,8 @@ pub(crate) fn give_in(c: &Connection, ids: &[MailId], run_id: RunId) -> Result<(
 pub(crate) fn consume_in(c: &Connection, ids: &[MailId], run_id: RunId) -> Result<()> {
     for id in ids {
         let n = c.execute(
-            "UPDATE mail SET state = 'consumed', taken_by = ?1 WHERE id = ?2 AND state = 'queued'",
-            params![run_id, id],
+            "UPDATE mail SET state = ?1, taken_by = ?2 WHERE id = ?3 AND state = ?4",
+            params![MailState::Consumed, run_id, id, MailState::Queued],
         )?;
         if n != 1 {
             return Err(broken(format!("run {run_id} handed mail {id} to the model but it was no longer queued")));
@@ -315,7 +313,7 @@ pub(crate) fn consume_in(c: &Connection, ids: &[MailId], run_id: RunId) -> Resul
 /// 这些还没交给模型的信件记为被丢弃。返回丢弃的信件 id。
 pub(crate) fn discard_in(c: &Connection, session_id: &SessionId, ids: &[MailId]) -> Result<Vec<MailId>> {
     for id in ids {
-        c.execute("UPDATE mail SET state = 'discarded' WHERE id = ?1", [id])?;
+        c.execute("UPDATE mail SET state = ?1 WHERE id = ?2", params![MailState::Discarded, id])?;
     }
     if !ids.is_empty() {
         tracing::info!(%session_id, discarded = ?ids, "mailbox cleared");
@@ -325,37 +323,36 @@ pub(crate) fn discard_in(c: &Connection, session_id: &SessionId, ids: &[MailId])
 
 /// 这次运行处理掉的信件（交给了它、已交给模型）。
 pub(crate) fn consumed_by_in(c: &Connection, session_id: &SessionId, run_id: RunId) -> Result<Vec<Mail>> {
-    query(c, "session_id = ?1 AND taken_by = ?2 AND state = 'consumed'", params![session_id, run_id])
+    query(c, "session_id = ?1 AND taken_by = ?2 AND state = ?3", params![session_id, run_id, MailState::Consumed])
 }
 
 /// 会话里这些状态的委派来的信件，按到达顺序。
 pub(crate) fn delegated_mail_in(c: &Connection, session_id: &SessionId, states: &[MailState]) -> Result<Vec<Mail>> {
-    let states: Vec<String> = states.iter().map(|s| format!("'{}'", s.as_str())).collect();
-    query(
-        c,
-        &format!("session_id = ?1 AND delegation_id IS NOT NULL AND state IN ({})", states.join(", ")),
-        [session_id],
-    )
+    let filter = format!("session_id = ? AND delegation_id IS NOT NULL AND state IN ({})", placeholders(states.len()));
+    let values =
+        std::iter::once(session_id as &dyn rusqlite::ToSql).chain(states.iter().map(|s| s as &dyn rusqlite::ToSql));
+    query(c, &filter, rusqlite::params_from_iter(values))
 }
 
 /// 界面上显示在历史之后的信件：排队中的，以及最近一次停止丢弃的（之后再有信件交给模型就不再显示）。
 pub(crate) fn visible_in(c: &Connection, session_id: &SessionId) -> Result<Vec<Mail>> {
-    let last_consumed: Option<MailId> =
-        c.query_row("SELECT max(id) FROM mail WHERE session_id = ?1 AND state = 'consumed'", [session_id], |r| {
-            r.get(0)
-        })?;
+    let last_consumed: Option<MailId> = c.query_row(
+        "SELECT max(id) FROM mail WHERE session_id = ?1 AND state = ?2",
+        params![session_id, MailState::Consumed],
+        |r| r.get(0),
+    )?;
     query(
         c,
-        "session_id = ?1 AND (state = 'queued' OR (state = 'discarded' AND id > ?2))",
-        params![session_id, last_consumed.map_or(0, MailId::get)],
+        "session_id = ?1 AND (state = ?3 OR (state = ?4 AND id > ?2))",
+        params![session_id, last_consumed.map_or(0, MailId::get), MailState::Queued, MailState::Discarded],
     )
 }
 
 /// 这个发送方是否已有信件在排队（运行中检查据此不堆积）。
 pub(crate) fn has_queued_from(c: &Connection, session_id: &SessionId, source: &str) -> Result<bool> {
     Ok(c.query_row(
-        "SELECT EXISTS (SELECT 1 FROM mail WHERE session_id = ?1 AND source = ?2 AND state = 'queued')",
-        params![session_id, source],
+        "SELECT EXISTS (SELECT 1 FROM mail WHERE session_id = ?1 AND source = ?2 AND state = ?3)",
+        params![session_id, source, MailState::Queued],
         |r| r.get(0),
     )?)
 }
@@ -383,7 +380,6 @@ pub(crate) fn sent_by_in(
         n + 3
     );
     let mut values: Vec<&dyn rusqlite::ToSql> = session_ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
-    let origin = origin.as_str();
     values.extend([&origin as &dyn rusqlite::ToSql, &start, &end]);
     query(c, &filter, rusqlite::params_from_iter(values))
 }

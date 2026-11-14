@@ -25,7 +25,6 @@ use muliao_files::FileStore;
 use muliao_platform::errors::Error;
 use muliao_platform::tooling::{Audience, RunScope};
 use muliao_usage::{RunKind, UsageEntry, UsageLog, UsageTotals};
-use serde_json::Value;
 
 use crate::attachments::{for_model, store_tool_images};
 use crate::instructions::{InstructionParts, build_instructions, run_context};
@@ -169,7 +168,7 @@ impl Runtime {
             agent = %agent_id,
             session_id = %spec.session_id,
             model = %dir.file.model(),
-            thinking = dir.file.thinking().as_str(),
+            thinking = %dir.file.thinking(),
             tools = agent.tools().len(),
             "agent run started"
         );
@@ -312,15 +311,12 @@ impl Run {
         Ok(ToolsRun::Done(done))
     }
 
-    /// 工具结果变成存储形态：挂上的附加数据并进 metadata，图片存进文件存储。
+    /// 工具结果变成存储形态：挂上的附加数据作为 metadata，图片存进文件存储。
     async fn settle(&self, result: &mut ToolResult) -> Result<(), Error> {
-        if let Some(extra) = self.scope.take_result_metadata(&result.call_id) {
-            let mut merged = match result.metadata.take() {
-                Some(Value::Object(m)) => m,
-                _ => serde_json::Map::new(),
-            };
-            merged.extend(extra);
-            result.metadata = Some(Value::Object(merged));
+        // agenter 交回的工具结果不带 metadata：挂上的附加数据就是它的全部 metadata
+        if let Some(meta) = self.scope.take_result_metadata(&result.call_id) {
+            let before = result.metadata.replace(meta);
+            assert!(before.is_none(), "agenter gave the result of {} its own metadata", result.tool_name);
         }
         store_tool_images(&self.files, result).await
     }
@@ -384,7 +380,7 @@ impl Meter {
             totals,
         };
         if let Err(e) = self.usage.record(entry).await {
-            tracing::error!(agent = %self.agent_id, session_id = %self.session_id, kind = self.kind.as_str(),
+            tracing::error!(agent = %self.agent_id, session_id = %self.session_id, kind = %self.kind,
                 model = %self.model, input_tokens = totals.input_tokens, output_tokens = totals.output_tokens,
                 cache_read_tokens = totals.cache_read_tokens, cache_write_tokens = totals.cache_write_tokens,
                 error = %e, "recording model usage failed; this request is not in the usage log");

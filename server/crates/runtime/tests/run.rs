@@ -24,7 +24,7 @@ use muliao_platform::db::{Database, migrate};
 use muliao_platform::sandbox::{Category, Confinement, Sandbox, WritablePaths};
 use muliao_platform::tooling::{Audience, RunScope, ToolTraits, builtin};
 use muliao_platform::vault::Vault;
-use muliao_runtime::conventions::{SharedFile, TOOL_ATTACHMENTS, attach, tool_attachments};
+use muliao_runtime::conventions::{ResultFiles, SharedFile, attach};
 use muliao_runtime::mcp::{Confine, McpConnector};
 use muliao_runtime::models::ModelRegistry;
 use muliao_runtime::toolbox::Toolbox;
@@ -335,8 +335,8 @@ async fn a_run_from_start_to_finish() {
     let Content::File(f) = &t.content[1] else { panic!("{t:?}") };
     let FileSource::Url(url) = &f.source else { panic!("the image is stored, not kept inline") };
     assert!(url.starts_with("/api/files/") && url.ends_with("/snap.png"), "{url}");
-    assert_eq!(tool_attachments(t).unwrap()[0].name, "report.pdf");
-    assert!(t.metadata.as_ref().unwrap().get(TOOL_ATTACHMENTS).is_some());
+    let meta: ResultFiles = serde_json::from_value(t.metadata.clone().unwrap()).unwrap();
+    assert_eq!(meta.attachments[0].name, "report.pdf");
     history.push(Message::User(Request {
         parts: results.into_iter().map(RequestPart::ToolResult).collect(),
         timestamp: Utc::now(),

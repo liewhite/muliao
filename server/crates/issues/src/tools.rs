@@ -159,7 +159,7 @@ struct ListedRow {
 fn list_render() -> ToolRender {
     ToolRender::new()
         .call(|a: &ListArgs| {
-            let statuses: Vec<String> = a.statuses.iter().map(|s| s.as_str().to_owned()).collect();
+            let statuses: Vec<String> = a.statuses.iter().map(|s| s.to_string()).collect();
             Some(vec![fields([
                 ("statuses", (!statuses.is_empty()).then_some(&statuses).into()),
                 ("assignee", a.assignee.as_ref().into()),
@@ -401,8 +401,8 @@ fn create_render() -> ToolRender {
                 ("title", i.title.as_str().into()),
                 ("key", i.key.as_ref().into()),
                 ("owner", i.owner.as_str().into()),
-                ("status", i.status.as_str().into()),
-                ("priority", i.priority.as_str().into()),
+                ("status", i.status.to_string().into()),
+                ("priority", i.priority.to_string().into()),
                 ("assignee", i.assignee.as_ref().into()),
                 ("depends on", (!depends.is_empty()).then_some(&depends).into()),
             ]));
@@ -499,8 +499,8 @@ fn update_render() -> ToolRender {
         let mut view = vec![fields([
             issue_field(a.issue_id),
             ("title", a.title.as_ref().into()),
-            ("status", a.status.map(Status::as_str).into()),
-            ("priority", a.priority.map(Priority::as_str).into()),
+            ("status", a.status.map(|s| s.to_string()).into()),
+            ("priority", a.priority.map(|p| p.to_string()).into()),
             ("assignee", assignee.into()),
             ("owner", a.owner.as_ref().into()),
             ("depends on", depends.as_ref().into()),
@@ -564,7 +564,7 @@ impl Tool<RunScope> for IssueStop {
 
 fn stop_render() -> ToolRender {
     ToolRender::new().call(|a: &StopArgs| {
-        let mut view = vec![fields([issue_field(a.issue_id), ("status", a.status.status().as_str().into())])];
+        let mut view = vec![fields([issue_field(a.issue_id), ("status", a.status.status().to_string().into())])];
         view.extend(a.message.as_deref().and_then(markdown));
         Some(view)
     })

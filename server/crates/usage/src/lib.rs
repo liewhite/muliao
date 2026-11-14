@@ -16,7 +16,8 @@ pub const MIGRATION: Migration =
     Migration { domain: "usage", steps: &[include_str!("../migrations/001_model_usage.sql")] };
 
 /// 哪一类运行用掉的 token（运行端口的两个模型调用入口各对应一个）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RunKind {
     /// 会话的一次运行
     Run,
@@ -24,14 +25,7 @@ pub enum RunKind {
     Compaction,
 }
 
-impl RunKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            RunKind::Run => "run",
-            RunKind::Compaction => "compaction",
-        }
-    }
-}
+muliao_platform::serde_names!(RunKind);
 
 /// 用量的各项计数（一笔的，或一组的和）。`input_tokens` 是输入总数，**已经包含**缓存读写两项，展示为「总数与其中两部分」，
 /// 不要相加。
@@ -156,7 +150,7 @@ impl UsageLog {
                         at,
                         entry.agent_id,
                         entry.session_id,
-                        entry.kind.as_str(),
+                        entry.kind,
                         entry.model,
                         t.requests,
                         t.input_tokens,

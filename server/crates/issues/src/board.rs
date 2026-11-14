@@ -360,7 +360,7 @@ impl Board {
                         .statuses
                         .iter()
                         .map(|s| {
-                            values.push(s.as_str().into());
+                            values.push(s.to_string());
                             format!("?{}", values.len())
                         })
                         .collect();

@@ -10,6 +10,7 @@ use std::path::PathBuf;
 
 use crate::MIGRATION;
 use crate::answers::{AgentAnswer, CallResult, Choice, Decision, Waiting};
+use crate::conventions::tool_attachments;
 use crate::conventions::{PartKind, PartMark, part_marks};
 use crate::history;
 use crate::holds::{self, HoldOf};
@@ -20,7 +21,7 @@ use crate::work::{EventSource, position_in};
 use agenter::{Content, File, FileSource, Message, Request, RequestPart, Response, ResponsePart, ToolCall, ToolResult};
 use chrono::Utc;
 use muliao_platform::db::{Migration, migrate};
-use muliao_runtime::conventions::{SharedFile, tool_attachments};
+use muliao_runtime::conventions::SharedFile;
 use rusqlite::{Connection, params};
 use serde_json::{Value, json};
 
@@ -81,8 +82,14 @@ impl OldDb {
 
     /// 一条用户一方的请求，metadata 原样存（旧形状由调用方给）。
     fn request(&self, run: i64, parts: Vec<RequestPart>, metadata: Option<Value>) {
-        let r = Request { parts, timestamp: Utc::now(), metadata };
-        history::append_in(&self.conn(), &SessionId::new(SESSION), RunId::new(run), &[Message::User(r)]).unwrap();
+        // 直接写行：旧版存下的形状现在的代码写不出来
+        let r = Message::User(Request { parts, timestamp: Utc::now(), metadata });
+        self.conn()
+            .execute(
+                "INSERT INTO messages (session_id, run_id, payload, created_at) VALUES (?1, ?2, ?3, ?4)",
+                params![SESSION, run, serde_json::to_string(&r).unwrap(), Utc::now()],
+            )
+            .unwrap();
     }
 
     /// 一封已交给某次运行的信件。
@@ -102,7 +109,7 @@ impl OldDb {
             .unwrap()
             .into_iter()
             .map(|s| match s.message {
-                Message::User(r) => part_marks(&r).unwrap(),
+                Message::User(r) => part_marks(&r),
                 other => panic!("expected a request, got {other:?}"),
             })
             .collect()
@@ -420,7 +427,7 @@ fn shared_files_keep_only_ids() {
             .parts
             .iter()
             .map(|p| match p {
-                RequestPart::ToolResult(t) => tool_attachments(t).unwrap(),
+                RequestPart::ToolResult(t) => tool_attachments(t),
                 other => panic!("expected a tool result, got {other:?}"),
             })
             .collect();

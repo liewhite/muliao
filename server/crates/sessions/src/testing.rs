@@ -16,16 +16,16 @@ use crate::origins::Origin;
 use crate::runs::{Outcome, current_or_start_in, end_in};
 
 /// 一条请求：每段文字记下它所在信件的发送方（交出信件时就这样记），末尾带运行上下文。
-pub fn user_request(texts: &[(Origin, &str)], run_context: &str) -> Result<Message> {
+pub fn user_request(texts: &[(Origin, &str)], run_context: &str) -> Message {
     let parts = texts.iter().map(|(_, t)| RequestPart::Text { text: (*t).into() }).collect();
     let mut request = Request { parts, timestamp: Utc::now(), metadata: None };
     let marks = texts
         .iter()
         .enumerate()
         .map(|(part, (origin, _))| PartMark { part, kind: PartKind::Message { origin: *origin } });
-    mark_parts(&mut request, marks.collect())?;
-    attach_run_context(&mut request, run_context)?;
-    Ok(Message::User(request))
+    mark_parts(&mut request, marks.collect());
+    attach_run_context(&mut request, run_context);
+    Message::User(request)
 }
 
 /// 一次运行：投一封 from 发来的消息（有的话）并交给运行，保存 messages，按 outcome 结束（None 为还在跑）。

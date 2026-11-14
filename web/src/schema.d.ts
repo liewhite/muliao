@@ -1173,8 +1173,8 @@ export interface components {
             model?: components["schemas"]["ModelIo"] | null;
             /** @description 角色，不含每个 agent 隐含的 base */
             roles?: string[];
-            allow?: string[];
-            deny?: string[];
+            allow?: components["schemas"]["RuleList"];
+            deny?: components["schemas"]["RuleList"];
             /** @description 思考档位："default" 不指定，按模型与服务端的默认 */
             thinking?: components["schemas"]["Thinking"];
             /** @description 分组名；null 或空串为不分组 */
@@ -1216,8 +1216,8 @@ export interface components {
         AgentPreviewIn: {
             agent_id?: components["schemas"]["AgentId"] | null;
             roles: string[];
-            allow: string[];
-            deny: string[];
+            allow: components["schemas"]["RuleList"];
+            deny: components["schemas"]["RuleList"];
         };
         /** @description 只改给出的字段（缺省或 null 是不变）：界面只提交用户改过的，编辑期间 agent 自己改了另一个字段不会被旧值盖掉。 */
         AgentUpdate: {
@@ -1225,8 +1225,8 @@ export interface components {
             description?: string | null;
             model?: components["schemas"]["ModelIo"] | null;
             roles?: string[] | null;
-            allow?: string[] | null;
-            deny?: string[] | null;
+            allow?: components["schemas"]["RuleList"] | null;
+            deny?: components["schemas"]["RuleList"] | null;
             thinking?: components["schemas"]["Thinking"] | null;
             /** @description 空串为不分组 */
             group?: string | null;
@@ -2117,7 +2117,7 @@ export interface components {
             tool_call_id: string;
             /** @description 交给模型的文字（各文字段以换行连接） */
             text: string;
-            /** @description 工具结果挂上的文件（TOOL_ATTACHMENTS） */
+            /** @description 工具结果挂上的文件（muliao_attachments） */
             attachments: components["schemas"]["Attachment"][];
             /** @description 工具交回给模型的图片（如浏览器截图）：属于这次调用的过程，不是给用户的文件 */
             images: components["schemas"]["Attachment"][];
@@ -2142,8 +2142,8 @@ export interface components {
         };
         RoleIn: {
             description: string;
-            allow: string[];
-            deny: string[];
+            allow: components["schemas"]["RuleList"];
+            deny: components["schemas"]["RuleList"];
         };
         RoleOut: {
             name: string;
@@ -2165,15 +2165,20 @@ export interface components {
         RolePreviewIn: {
             /** @description 已有的角色（内置的加上固定规则）；null 为还没建的 */
             name?: string | null;
-            allow: string[];
-            deny: string[];
+            allow: components["schemas"]["RuleList"];
+            deny: components["schemas"]["RuleList"];
         };
         /** @description 只改给出的字段（缺省或 null 是不变）：界面只提交用户改过的，编辑期间 agent 改了别的字段不会被旧值盖掉。 */
         RoleUpdate: {
             description?: string | null;
-            allow?: string[] | null;
-            deny?: string[] | null;
+            allow?: components["schemas"]["RuleList"] | null;
+            deny?: components["schemas"]["RuleList"] | null;
         };
+        /**
+         * @description 一组规则的读入（access.toml、界面与工具参数里的字符串列表）：反序列化时逐条 [`Rule::parse`]，任一条不合法整组不合法，
+         *     报错说明每一处。对外的 schema 是字符串数组。
+         */
+        RuleList: string[];
         /** @description 一条运行事件。 */
         RunEvent: {
             item: components["schemas"]["Item"];
@@ -3435,7 +3440,7 @@ export interface operations {
             header?: never;
             path: {
                 /** @description skill、mcp、secret 或 memory */
-                kind: string;
+                kind: components["schemas"]["StoredKind"];
                 name: string;
             };
             cookie?: never;

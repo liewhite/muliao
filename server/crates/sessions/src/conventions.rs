@@ -1,35 +1,34 @@
 //! 会话领域在 agenter 消息上加的约定，集中登记在这里：新增约定先在这里登记，解析也只在这里写一份。工具交回给用户的
-//! 文件与图片是运行端口的约定（`muliao_runtime::conventions`）。
+//! 文件与图片是运行端口的约定（`muliao_runtime::conventions`），它在工具结果上写的那部分（[`ResultFiles`]）平铺进
+//! [`ResultMeta`]。
 //!
 //! 消息是存储与回放的唯一形式（库里一行一条 [`Message`]），所以「这一轮是被停止的」这类事实都记在消息自己的 metadata
-//! 上（不发给模型、随消息持久化），不另存副本。键都带 `muliao_` 前缀。
+//! 上（不发给模型、随消息持久化），不另存副本。metadata 的形状按位置各是一个 serde 结构（键都带 `muliao_` 前缀）：
+//! 请求上 [`RequestMeta`]、回复上 [`ResponseMeta`]、工具结果上 [`ResultMeta`]。读库时（`history::decode`）整条消息的
+//! metadata 按它们检查一次（[`check_metadata`]），之后的读取不再处理坏数据：读不出就是代码的 bug，当场 panic。
 //!
 //! | 约定 | 记在哪里 | 谁写 | 谁读 |
 //! |---|---|---|---|
-//! | [`RUN_STOPPED`]：运行被用户停止 | 停止时最后那条消息的 metadata | 停止（halt） | 会话条目（「已停止」）、续跑（不重发标了它的请求） |
-//! | [`INTERRUPTED`]：生成到一半被停的回复 | 回复的 metadata | 停止 | 会话条目；压缩判断（[`measured_responses`]） |
-//! | [`MADE_UP`]：事后补的结果（停止、中断时没出结果的调用） | 工具结果的 metadata（`stopped` / `interrupted`） | 停止、续跑 | 模型看结果文字；会话条目（没有结束时间） |
-//! | [`PARTS`]：这条请求里哪些段是信件内容、各是什么（[`PartMark`]：事件的来源与是否运行中检查，消息的发送方） | 请求的 metadata | 交出信件时 | 会话条目、热历史（哪句是用户说的） |
-//! | [`RUN_CONTEXT`]：这次运行的运行上下文（当前时间等） | 单独一段文字，请求的 metadata 记下标 | 每步保存 | 模型；会话条目不展示 |
-//! | [`FINISHED_AT`]：工具调用结束的时刻 | 工具结果的 metadata（RFC3339） | 每步保存 | 会话条目（结果的时间） |
+//! | `muliao_stopped`：运行被用户停止 | 停止时最后那条消息 | 停止（halt） | 会话条目（「已停止」）、续跑（不重发标了它的请求） |
+//! | `muliao_interrupted`：生成到一半被停的回复 | 回复 | 停止 | 会话条目；压缩判断（[`measured_responses`]） |
+//! | `muliao_made_up`：事后补的结果（停止、中断时没出结果的调用） | 工具结果（[`MadeUp`]） | 停止、续跑 | 模型看结果文字；会话条目（没有结束时间） |
+//! | `muliao_parts`：这条请求里哪些段是信件内容、各是什么（[`PartMark`]：事件的来源与是否运行中检查，消息的发送方） | 请求 | 交出信件时 | 会话条目、热历史（哪句是用户说的） |
+//! | `muliao_run_context`：这次运行的运行上下文（当前时间等）是第几段 | 请求 | 每步保存 | 模型；会话条目不展示 |
+//! | `muliao_finished_at`：工具调用结束的时刻 | 工具结果 | 每步保存 | 会话条目（结果的时间） |
 //! | 「调用是否已有结果」 | 工具结果；没结果的只可能在最后一条回复里 | — | [`OpenCalls`] |
 
 use std::collections::HashSet;
 
 use agenter::{Message, Request, RequestPart, Response, ResponsePart, ToolCall, ToolResult};
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Utc};
+use muliao_runtime::conventions::{ResultFiles, SharedFile};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::origins::Origin;
 use crate::work::EventSource;
 use muliao_platform::errors::{Result, broken};
-
-pub const RUN_STOPPED: &str = "muliao_stopped";
-pub const INTERRUPTED: &str = "muliao_interrupted";
-pub const MADE_UP: &str = "muliao_made_up";
-pub const PARTS: &str = "muliao_parts";
-pub const RUN_CONTEXT: &str = "muliao_run_context";
-pub const FINISHED_AT: &str = "muliao_finished_at";
 
 /// 停止时还没出结果的工具调用的结果：副作用可能已经发生，告诉模型它没有完成。
 pub const STOPPED_TOOL_RESULT: &str = "Stopped by the user before this tool call finished; it may have partly run.";
@@ -43,20 +42,14 @@ pub const CONTINUATION: &str =
     "The earlier part of this conversation is summarized in your instructions. Continue from there.";
 
 /// 事后补的结果是哪一种。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum MadeUp {
     Stopped,
     Interrupted,
 }
 
 impl MadeUp {
-    fn as_str(self) -> &'static str {
-        match self {
-            MadeUp::Stopped => "stopped",
-            MadeUp::Interrupted => "interrupted",
-        }
-    }
-
     fn text(self) -> &'static str {
         match self {
             MadeUp::Stopped => STOPPED_TOOL_RESULT,
@@ -65,48 +58,111 @@ impl MadeUp {
     }
 }
 
-fn meta_of(metadata: &Option<Value>) -> Option<&Map<String, Value>> {
-    metadata.as_ref().and_then(Value::as_object)
+fn is_false(b: &bool) -> bool {
+    !b
 }
 
-fn meta_mut(metadata: &mut Option<Value>) -> &mut Map<String, Value> {
-    if !matches!(metadata, Some(Value::Object(_))) {
-        *metadata = Some(Value::Object(Map::new()));
-    }
+/// 请求（用户一方的消息）上的 metadata。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+struct RequestMeta {
+    #[serde(rename = "muliao_stopped", default, skip_serializing_if = "is_false")]
+    stopped: bool,
+    #[serde(rename = "muliao_parts", default, skip_serializing_if = "Vec::is_empty")]
+    parts: Vec<PartMark>,
+    #[serde(rename = "muliao_run_context", default, skip_serializing_if = "Option::is_none")]
+    run_context: Option<usize>,
+    /// 旧版写下、现在不读的键：原样保留
+    #[serde(flatten)]
+    legacy: Map<String, Value>,
+}
+
+/// 回复上的 metadata。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+struct ResponseMeta {
+    #[serde(rename = "muliao_stopped", default, skip_serializing_if = "is_false")]
+    stopped: bool,
+    #[serde(rename = "muliao_interrupted", default, skip_serializing_if = "is_false")]
+    interrupted: bool,
+    #[serde(flatten)]
+    legacy: Map<String, Value>,
+}
+
+/// 工具结果上的 metadata：会话领域的，加上运行端口写下的（[`ResultFiles`]）。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+struct ResultMeta {
+    #[serde(rename = "muliao_made_up", default, skip_serializing_if = "Option::is_none")]
+    made_up: Option<MadeUp>,
+    #[serde(rename = "muliao_finished_at", default, skip_serializing_if = "Option::is_none")]
+    finished_at: Option<DateTime<Utc>>,
+    #[serde(flatten)]
+    files: ResultFiles,
+    #[serde(flatten)]
+    legacy: Map<String, Value>,
+}
+
+fn try_read<T: DeserializeOwned + Default>(metadata: &Option<Value>) -> std::result::Result<T, String> {
     match metadata {
-        Some(Value::Object(m)) => m,
-        _ => unreachable!(),
+        None => Ok(T::default()),
+        Some(v) => T::deserialize(v).map_err(|e| e.to_string()),
     }
 }
 
-fn metadata_of(message: &Message) -> &Option<Value> {
-    match message {
-        Message::User(r) => &r.metadata,
-        Message::Assistant(r) => &r.metadata,
-    }
+/// 读 metadata：消息读库时已检查过（[`check_metadata`]），其余的都由这里写出，所以读不出是 bug。
+fn read<T: DeserializeOwned + Default>(metadata: &Option<Value>) -> T {
+    try_read(metadata).unwrap_or_else(|e| panic!("metadata {metadata:?} was checked or written here: {e}"))
 }
 
-fn metadata_mut(message: &mut Message) -> &mut Option<Value> {
+/// 写回 metadata；什么都没有时为 None。
+fn write<T: Serialize>(metadata: &mut Option<Value>, meta: &T) {
+    let value = serde_json::to_value(meta).expect("metadata serializes");
+    *metadata = (value != Value::Object(Map::new())).then_some(value);
+}
+
+fn edit<T: Serialize + DeserializeOwned + Default>(metadata: &mut Option<Value>, change: impl FnOnce(&mut T)) {
+    let mut meta: T = read(metadata);
+    change(&mut meta);
+    write(metadata, &meta);
+}
+
+/// 读库边界：这条消息上各处 metadata 的形状对不对（不对是数据与代码不一致，说明是哪一处）。
+pub(crate) fn check_metadata(message: &Message) -> std::result::Result<(), String> {
     match message {
-        Message::User(r) => &mut r.metadata,
-        Message::Assistant(r) => &mut r.metadata,
+        Message::User(r) => {
+            try_read::<RequestMeta>(&r.metadata).map_err(|e| format!("request metadata: {e}"))?;
+            for p in &r.parts {
+                if let RequestPart::ToolResult(t) = p {
+                    try_read::<ResultMeta>(&t.metadata)
+                        .map_err(|e| format!("metadata of a result of {}: {e}", t.tool_name))?;
+                }
+            }
+        }
+        Message::Assistant(r) => {
+            try_read::<ResponseMeta>(&r.metadata).map_err(|e| format!("response metadata: {e}"))?;
+        }
     }
+    Ok(())
 }
 
 /// 这条消息标着「已停止」。
 pub(crate) fn is_stopped(message: &Message) -> bool {
-    meta_of(metadata_of(message)).and_then(|m| m.get(RUN_STOPPED)).and_then(Value::as_bool).unwrap_or(false)
+    match message {
+        Message::User(r) => read::<RequestMeta>(&r.metadata).stopped,
+        Message::Assistant(r) => read::<ResponseMeta>(&r.metadata).stopped,
+    }
 }
 
 /// 标上「已停止」：界面据此显示，续跑据此不重发这条请求。
 pub(crate) fn mark_stopped(message: &mut Message) {
-    meta_mut(metadata_mut(message)).insert(RUN_STOPPED.into(), Value::Bool(true));
+    match message {
+        Message::User(r) => edit(&mut r.metadata, |m: &mut RequestMeta| m.stopped = true),
+        Message::Assistant(r) => edit(&mut r.metadata, |m: &mut ResponseMeta| m.stopped = true),
+    }
 }
 
 /// 生成到一半被停下的回复（停止时按已收到的部分保存）。
 pub(crate) fn interrupted_response(parts: Vec<ResponsePart>, protocol: &str, model: &str) -> Response {
     let mut metadata = None;
-    meta_mut(&mut metadata).insert(INTERRUPTED.into(), Value::Bool(true));
+    write(&mut metadata, &ResponseMeta { interrupted: true, ..Default::default() });
     Response {
         parts,
         protocol: protocol.to_owned(),
@@ -120,13 +176,13 @@ pub(crate) fn interrupted_response(parts: Vec<ResponsePart>, protocol: &str, mod
 }
 
 pub(crate) fn is_interrupted(response: &Response) -> bool {
-    meta_of(&response.metadata).and_then(|m| m.get(INTERRUPTED)).and_then(Value::as_bool).unwrap_or(false)
+    read::<ResponseMeta>(&response.metadata).interrupted
 }
 
 /// 给没出结果的调用补上的结果。
 pub(crate) fn made_up_result(call: &ToolCall, kind: MadeUp) -> ToolResult {
     let mut metadata = None;
-    meta_mut(&mut metadata).insert(MADE_UP.into(), Value::from(kind.as_str()));
+    write(&mut metadata, &ResultMeta { made_up: Some(kind), ..Default::default() });
     ToolResult {
         call_id: call.id.clone(),
         tool_name: call.name.clone(),
@@ -138,26 +194,39 @@ pub(crate) fn made_up_result(call: &ToolCall, kind: MadeUp) -> ToolResult {
 
 /// 这个结果是事后补的（不是工具交回的）：它产生的时刻不是调用结束的时刻。
 pub(crate) fn made_up(result: &ToolResult) -> Option<MadeUp> {
-    match meta_of(&result.metadata).and_then(|m| m.get(MADE_UP)).and_then(Value::as_str) {
-        Some("stopped") => Some(MadeUp::Stopped),
-        Some("interrupted") => Some(MadeUp::Interrupted),
-        _ => None,
-    }
+    read::<ResultMeta>(&result.metadata).made_up
 }
 
-/// 工具调用结束的时刻（保存结果时记下）；没记的（事后补的结果、记下这条约定之前的结果）为 None。值不是 RFC3339 时间是
-/// 写入方的 bug，当场 panic。
+/// 工具调用结束的时刻（保存结果时记下）；没记的（事后补的结果、记下这条约定之前的结果）为 None。
 pub(crate) fn finished_at(result: &ToolResult) -> Option<DateTime<Utc>> {
-    let value = meta_of(&result.metadata)?.get(FINISHED_AT)?;
-    let parsed = value.as_str().and_then(|s| DateTime::parse_from_rfc3339(s).ok());
-    let at = parsed.unwrap_or_else(|| panic!("bad {FINISHED_AT} {value} on a result of {}", result.tool_name));
-    Some(at.with_timezone(&Utc))
+    read::<ResultMeta>(&result.metadata).finished_at
 }
 
 /// 记下工具调用结束的时刻。
 pub(crate) fn set_finished_at(result: &mut ToolResult, at: DateTime<Utc>) {
-    meta_mut(&mut result.metadata)
-        .insert(FINISHED_AT.into(), Value::from(at.to_rfc3339_opts(SecondsFormat::Micros, true)));
+    edit(&mut result.metadata, |m: &mut ResultMeta| m.finished_at = Some(at));
+}
+
+/// 工具结果挂给用户的文件（运行端口写下的，[`ResultFiles`]）。
+pub(crate) fn tool_attachments(result: &ToolResult) -> Vec<SharedFile> {
+    read::<ResultMeta>(&result.metadata).files.attachments
+}
+
+/// 这些消息里所有工具结果挂上的文件，按出现顺序。
+pub(crate) fn shared_attachments(messages: &[Message]) -> Vec<SharedFile> {
+    messages
+        .iter()
+        .filter_map(|m| match m {
+            Message::User(r) => Some(r),
+            Message::Assistant(_) => None,
+        })
+        .flat_map(|r| &r.parts)
+        .filter_map(|p| match p {
+            RequestPart::ToolResult(t) => Some(tool_attachments(t)),
+            _ => None,
+        })
+        .flatten()
+        .collect()
 }
 
 /// 这些结果合成一条请求；没有则 None。
@@ -170,43 +239,47 @@ pub(crate) fn results_request(results: Vec<ToolResult>) -> Option<Request> {
 }
 
 /// 请求里一段信件内容是什么：第几段（`parts` 的下标）、哪一种。这些事实只存在这里，读时不从文字反推。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PartMark {
     pub part: usize,
+    #[serde(flatten)]
     pub kind: PartKind,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// 存成 `{"event": "job:7", "check_in": false}` 或 `{"sender": "user"}`（与 part 平铺在一起）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
 pub enum PartKind {
     /// 会话事件：交给模型的文字（[`format_event`]）是由来源派生的写法
-    Event { source: EventSource, check_in: bool },
+    Event {
+        #[serde(rename = "event", with = "raw_source")]
+        source: EventSource,
+        check_in: bool,
+    },
     /// 一封消息信件的文字或附件，以及它的发送方来源
-    Message { origin: Origin },
+    Message {
+        #[serde(rename = "sender")]
+        origin: Origin,
+    },
+}
+
+/// 事件来源在 metadata 里按交给模型的写法存（[`EventSource::raw`]）。
+mod raw_source {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    use crate::work::EventSource;
+
+    pub fn serialize<S: Serializer>(source: &EventSource, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&source.raw())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<EventSource, D::Error> {
+        let raw = String::deserialize(d)?;
+        EventSource::parse(&raw).ok_or_else(|| serde::de::Error::custom(format!("unknown event source {raw:?}")))
+    }
 }
 
 impl PartMark {
-    fn to_json(&self) -> Value {
-        match &self.kind {
-            PartKind::Event { source, check_in } => {
-                serde_json::json!({ "part": self.part, "event": source.raw(), "check_in": check_in })
-            }
-            PartKind::Message { origin } => serde_json::json!({ "part": self.part, "sender": origin.as_str() }),
-        }
-    }
-
-    fn from_json(v: &Value) -> Option<Self> {
-        let part = v.get("part")?.as_u64()? as usize;
-        let kind = match (v.get("event"), v.get("sender")) {
-            (Some(source), None) => PartKind::Event {
-                source: EventSource::parse(source.as_str()?)?,
-                check_in: v.get("check_in")?.as_bool()?,
-            },
-            (None, Some(sender)) => PartKind::Message { origin: Origin::parse(sender.as_str()?).ok()? },
-            _ => return None,
-        };
-        Some(PartMark { part, kind })
-    }
-
     /// 同一段在前面多了 n 段的请求里。
     pub(crate) fn shifted(self, n: usize) -> Self {
         PartMark { part: self.part + n, ..self }
@@ -229,53 +302,40 @@ pub(crate) fn event_content<'a>(text: &'a str, source: &EventSource) -> &'a str 
     text.strip_prefix(event_head(source).as_str()).and_then(|t| t.strip_suffix(EVENT_END)).unwrap_or(text)
 }
 
-/// 这条请求里记下的各段，按记下的顺序。读库边界：形状不对是数据与代码不一致。
-pub(crate) fn part_marks(request: &Request) -> Result<Vec<PartMark>> {
-    let Some(v) = meta_of(&request.metadata).and_then(|m| m.get(PARTS)) else { return Ok(Vec::new()) };
-    v.as_array()
-        .and_then(|a| a.iter().map(PartMark::from_json).collect::<Option<Vec<_>>>())
-        .ok_or_else(|| broken(format!("bad {PARTS} in request metadata: {v}")))
+/// 这条请求里记下的各段，按记下的顺序。
+pub(crate) fn part_marks(request: &Request) -> Vec<PartMark> {
+    read::<RequestMeta>(&request.metadata).parts
 }
 
 /// 整条请求记下的各段换成这些（新建请求时）。
 pub(crate) fn set_part_marks(request: &mut Request, marks: &[PartMark]) {
-    if marks.is_empty() {
-        if let Some(Value::Object(m)) = &mut request.metadata {
-            m.remove(PARTS);
-        }
-    } else {
-        meta_mut(&mut request.metadata)
-            .insert(PARTS.into(), Value::Array(marks.iter().map(PartMark::to_json).collect()));
-    }
+    edit(&mut request.metadata, |m: &mut RequestMeta| m.parts = marks.to_vec());
 }
 
 /// 接在请求末尾的这些段记下来（交出信件时；part 已是在整条请求里的下标）。
-pub(crate) fn mark_parts(request: &mut Request, marks: Vec<PartMark>) -> Result<()> {
-    if marks.is_empty() {
-        return Ok(());
-    }
-    let mut all = part_marks(request)?;
-    all.extend(marks);
-    set_part_marks(request, &all);
-    Ok(())
+pub(crate) fn mark_parts(request: &mut Request, marks: Vec<PartMark>) {
+    edit(&mut request.metadata, |m: &mut RequestMeta| m.parts.extend(marks));
 }
 
 /// 把运行上下文作为独立的一段文字放进这条请求，并记下它的下标。放在工具结果之后、别的内容之前：模型先看到「现在
 /// 几点」再看这次要处理的内容。已记下的各段下标随之后移。
-pub(crate) fn attach_run_context(request: &mut Request, text: &str) -> Result<()> {
-    assert!(run_context_index(request).is_none(), "request already carries a run context");
+pub(crate) fn attach_run_context(request: &mut Request, text: &str) {
     let at = request.parts.iter().position(|p| !matches!(p, RequestPart::ToolResult(_))).unwrap_or(request.parts.len());
-    let marks: Vec<PartMark> =
-        part_marks(request)?.into_iter().map(|m| if m.part >= at { m.shifted(1) } else { m }).collect();
     request.parts.insert(at, RequestPart::Text { text: text.to_owned() });
-    set_part_marks(request, &marks);
-    meta_mut(&mut request.metadata).insert(RUN_CONTEXT.into(), Value::from(at));
-    Ok(())
+    edit(&mut request.metadata, |m: &mut RequestMeta| {
+        assert!(m.run_context.is_none(), "request already carries a run context");
+        for mark in &mut m.parts {
+            if mark.part >= at {
+                mark.part += 1;
+            }
+        }
+        m.run_context = Some(at);
+    });
 }
 
 /// 这条请求里哪一段是运行上下文。
 pub(crate) fn run_context_index(request: &Request) -> Option<usize> {
-    meta_of(&request.metadata).and_then(|m| m.get(RUN_CONTEXT)).and_then(Value::as_u64).map(|i| i as usize)
+    read::<RequestMeta>(&request.metadata).run_context
 }
 
 /// 报告了上下文大小的回复，按时间顺序：完整的回复（报 0 也算一次测量，由压缩判断告警），生成到一半被停的只在收到了
@@ -455,11 +515,17 @@ mod tests {
         };
         let event = PartKind::Event { source: job, check_in: true };
         let user = PartKind::Message { origin: Origin::User };
-        mark_parts(&mut r, vec![PartMark { part: 0, kind: user.clone() }, PartMark { part: 1, kind: event.clone() }])
-            .unwrap();
-        attach_run_context(&mut r, "now").unwrap();
+        mark_parts(&mut r, vec![PartMark { part: 0, kind: user.clone() }, PartMark { part: 1, kind: event.clone() }]);
+        attach_run_context(&mut r, "now");
         assert_eq!(run_context_index(&r), Some(0));
-        assert_eq!(part_marks(&r).unwrap(), [PartMark { part: 1, kind: user }, PartMark { part: 2, kind: event }]);
+        assert_eq!(part_marks(&r), [PartMark { part: 1, kind: user }, PartMark { part: 2, kind: event }]);
+        assert_eq!(
+            r.metadata,
+            Some(serde_json::json!({
+                "muliao_parts": [{ "part": 1, "sender": "user" }, { "part": 2, "event": "job:1", "check_in": true }],
+                "muliao_run_context": 0,
+            }))
+        );
         assert_eq!(searchable_text(&Message::User(r)), format!("hi\n{e}"));
     }
 
@@ -488,5 +554,34 @@ mod tests {
         let at = DateTime::parse_from_rfc3339("2026-11-12T10:00:00.123456Z").unwrap().with_timezone(&Utc);
         set_finished_at(&mut r, at);
         assert_eq!(finished_at(&r), Some(at));
+    }
+
+    #[test]
+    fn metadata_is_checked_when_read_and_old_keys_are_kept() {
+        let mut m = response(vec![]);
+        let Message::Assistant(r) = &mut m else { unreachable!() };
+        r.metadata = Some(serde_json::json!({ "mcp_app": { "x": 1 } }));
+        assert!(check_metadata(&m).is_ok());
+        mark_stopped(&mut m);
+        let Message::Assistant(r) = &m else { unreachable!() };
+        assert_eq!(r.metadata, Some(serde_json::json!({ "mcp_app": { "x": 1 }, "muliao_stopped": true })));
+
+        let bad = |metadata: Value| {
+            check_metadata(&Message::User(Request {
+                parts: vec![],
+                timestamp: chrono::Utc::now(),
+                metadata: Some(metadata),
+            }))
+        };
+        assert!(
+            bad(serde_json::json!({ "muliao_parts": [{ "part": 0, "event": "nope", "check_in": false }] })).is_err()
+        );
+        assert!(bad(serde_json::json!({ "muliao_parts": "[]" })).is_err());
+        assert!(bad(serde_json::json!({ "muliao_run_context": "0" })).is_err());
+        let mut t =
+            ToolResult { call_id: "a".into(), tool_name: "t".into(), content: vec![], is_error: false, metadata: None };
+        t.metadata = Some(serde_json::json!({ "muliao_made_up": "later" }));
+        let r = Request { parts: vec![RequestPart::ToolResult(t)], timestamp: chrono::Utc::now(), metadata: None };
+        assert!(check_metadata(&Message::User(r)).unwrap_err().contains("result of t"));
     }
 }

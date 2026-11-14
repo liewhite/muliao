@@ -8,7 +8,9 @@ use agenter::{Message, Request, RequestPart};
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::conventions::{CONTINUATION, answer_text, mark_stopped, measured_responses, searchable_text};
+use crate::conventions::{
+    CONTINUATION, answer_text, check_metadata, mark_stopped, measured_responses, searchable_text,
+};
 use muliao_platform::db::placeholders;
 use muliao_platform::errors::{Result, broken};
 
@@ -22,8 +24,12 @@ pub struct Stored {
     pub run_id: RunId,
 }
 
+/// 读库边界：消息与它各处的 metadata 都在这里检查一次（[`check_metadata`]），之后不再处理坏数据。
 fn decode(id: i64, payload: &str) -> Result<Message> {
-    serde_json::from_str(payload).map_err(|e| broken(format!("message {id} does not parse: {e}")))
+    let message: Message =
+        serde_json::from_str(payload).map_err(|e| broken(format!("message {id} does not parse: {e}")))?;
+    check_metadata(&message).map_err(|e| broken(format!("message {id} has bad {e}")))?;
+    Ok(message)
 }
 
 fn stored(c: &Connection, filter: &str, params: impl rusqlite::Params) -> Result<Vec<Stored>> {

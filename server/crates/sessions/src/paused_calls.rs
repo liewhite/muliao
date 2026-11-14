@@ -16,7 +16,7 @@ use rusqlite::{Connection, params};
 
 use crate::answers::{CallResult, Waiting};
 use muliao_platform::db::placeholders;
-use muliao_platform::errors::{Result, broken};
+use muliao_platform::errors::Result;
 
 /// 一个会话里挂起过的调用（调用 id → 种类）；行永久保留，没结果的才在等。
 pub(crate) type PausedKinds = HashMap<String, Waiting>;
@@ -50,7 +50,7 @@ pub(crate) fn record_in(c: &Connection, session_id: &SessionId, call_id: &str, p
     };
     c.execute(
         "INSERT INTO paused_calls (session_id, call_id, kind, pin, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![session_id, call_id, pause.kind().as_str(), pin, Utc::now()],
+        params![session_id, call_id, pause.kind(), pin, Utc::now()],
     )?;
     Ok(())
 }
@@ -67,13 +67,10 @@ pub(crate) fn kinds_among(c: &Connection, session_ids: &[SessionId]) -> Result<B
     );
     let mut stmt = c.prepare(&sql)?;
     let rows = stmt.query_map(rusqlite::params_from_iter(session_ids), |r| {
-        Ok((r.get::<_, SessionId>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+        Ok((r.get::<_, SessionId>(0)?, r.get::<_, String>(1)?, r.get::<_, Waiting>(2)?))
     })?;
     for row in rows {
         let (s, call, kind) = row?;
-        // 列上有 CHECK 约束，只会是这三种
-        let kind =
-            Waiting::parse(&kind).ok_or_else(|| broken(format!("paused call {call} has unknown kind {kind}")))?;
         found.entry(s).or_default().insert(call, kind);
     }
     Ok(found)
@@ -96,8 +93,8 @@ pub(crate) fn take_in(
         let CallResult::Approval(d) = r else { continue };
         // 回答只对着挂起记录提交（resolve_reply），记录永久保留
         let (pin, taken): (String, Option<String>) = c.query_row(
-            "SELECT pin, taken_at FROM paused_calls WHERE session_id = ?1 AND call_id = ?2 AND kind = 'approval'",
-            params![session_id, call_id],
+            "SELECT pin, taken_at FROM paused_calls WHERE session_id = ?1 AND call_id = ?2 AND kind = ?3",
+            params![session_id, call_id, Waiting::Approval],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
         if d.approved() && taken.is_none() {

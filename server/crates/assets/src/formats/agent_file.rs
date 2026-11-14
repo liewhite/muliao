@@ -31,31 +31,7 @@ pub enum Thinking {
     Xhigh,
 }
 
-impl Thinking {
-    pub const ALL: [Thinking; 6] =
-        [Thinking::Default, Thinking::Off, Thinking::Low, Thinking::Medium, Thinking::High, Thinking::Xhigh];
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Thinking::Default => "default",
-            Thinking::Off => "off",
-            Thinking::Low => "low",
-            Thinking::Medium => "medium",
-            Thinking::High => "high",
-            Thinking::Xhigh => "xhigh",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Thinking> {
-        Self::ALL.into_iter().find(|t| t.as_str() == value)
-    }
-}
-
-impl fmt::Display for Thinking {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
+muliao_platform::serde_names!(Thinking);
 
 /// agent.toml 的内容（校验过：只能经 [`parse`] 或 [`AgentFile::new`] 得到）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -156,15 +132,18 @@ impl AgentFile {
     }
 }
 
-fn string(table: &toml::Table, key: &str) -> Result<Option<String>, String> {
-    match table.get(key) {
-        None => Ok(None),
-        Some(toml::Value::String(s)) => Ok(Some(s.clone())),
-        Some(_) => Err(invalid(format!("{key} must be a string"))),
-    }
+/// 文件的样子：读入只经它（未知的键、类型不对都在这里报出），再经 [`AgentFile::checked`] 查取值。
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Stored {
+    description: String,
+    model: ModelRef,
+    #[serde(default)]
+    thinking: Thinking,
+    group: Option<String>,
 }
 
-/// 文件里的键，按写出的顺序（读时只认这些，写时逐个写，[`AgentFile::fields`]）
+/// 文件里的键，按写出的顺序（同 [`Stored`] 的字段；写时逐个写，[`AgentFile::fields`]）
 const KEYS: [&str; 4] = ["description", "model", "thinking", "group"];
 
 impl AgentFile {
@@ -173,7 +152,7 @@ impl AgentFile {
         [
             Some(self.description.clone()),
             Some(self.model.to_string()),
-            Some(self.thinking.as_str().to_owned()),
+            Some(self.thinking.to_string()),
             self.group.clone(),
         ]
     }
@@ -181,20 +160,8 @@ impl AgentFile {
 
 /// 不合格式时报错（原因）。
 pub fn parse(text: &str) -> Result<AgentFile, String> {
-    let table: toml::Table = text.parse().map_err(|e: toml::de::Error| invalid(e.message().trim()))?;
-    let unknown: Vec<&String> = table.keys().filter(|k| !KEYS.contains(&k.as_str())).collect();
-    if !unknown.is_empty() {
-        return Err(invalid(format!("unknown keys {unknown:?}")));
-    }
-    let required = |key: &str| string(&table, key)?.ok_or_else(|| invalid(format!("{key} is required")));
-    let thinking = match string(&table, "thinking")? {
-        None => Thinking::Default,
-        Some(t) => Thinking::parse(&t).ok_or_else(|| {
-            invalid(format!("thinking must be one of {:?}, got {t:?}", Thinking::ALL.map(Thinking::as_str)))
-        })?,
-    };
-    let model = ModelRef::parse(&required("model")?).map_err(invalid)?;
-    AgentFile::checked(required("description")?, model, thinking, string(&table, "group")?)
+    let s: Stored = toml::from_str(text).map_err(|e: toml::de::Error| invalid(e.message().trim()))?;
+    AgentFile::checked(s.description, s.model, s.thinking, s.group)
 }
 
 /// 要写成 data 时的全文：current 是已有文件的原文（在它上面改，保留注释与别的排版），没有文件为 None。值没变的键原样

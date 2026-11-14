@@ -84,7 +84,7 @@ fn user_text(text: &str) -> Message {
 
 /// 一条请求：每段文字记下它所在信件的发送方（交出信件时就这样记）。
 fn user_texts(texts: &[(Origin, &str)]) -> Message {
-    user_request(texts, "Current local time: now").unwrap()
+    user_request(texts, "Current local time: now")
 }
 
 fn reply(text: &str, calls: &[(&str, &str, &str)]) -> Message {

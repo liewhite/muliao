@@ -319,24 +319,7 @@ pub enum Waiting {
     Approval,
 }
 
-impl Waiting {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Waiting::AskUser => "ask_user",
-            Waiting::AskAgent => "ask_agent",
-            Waiting::Approval => "approval",
-        }
-    }
-
-    pub(crate) fn parse(s: &str) -> Option<Waiting> {
-        match s {
-            "ask_user" => Some(Waiting::AskUser),
-            "ask_agent" => Some(Waiting::AskAgent),
-            "approval" => Some(Waiting::Approval),
-            _ => None,
-        }
-    }
-}
+muliao_platform::serde_names!(Waiting);
 
 /// 用户对提问的回答，每题一行（`- 问题: 选项; 其他`）：调用结束后才到的回答交给模型、热历史列出用户的回答，都用这一份。
 pub(crate) fn answer_lines(asked: &[&AskResult]) -> Vec<String> {

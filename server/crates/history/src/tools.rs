@@ -232,10 +232,10 @@ fn indented(text: &str) -> String {
 
 /// 会话从哪来：来源、发送方身份（issue 号等），thread 再加上名字与父会话 id 前缀。
 fn place(session: &Session) -> String {
-    let origin = session.origin.origin().as_str();
+    let origin = session.origin.origin().to_string();
     match &session.origin {
         SessionOrigin::Trigger { trigger_id: n } | SessionOrigin::Issue { issue_id: n } => format!("{origin} #{n}"),
-        SessionOrigin::User => origin.to_owned(),
+        SessionOrigin::User => origin,
         SessionOrigin::Delegation { thread, parent_session_id } => {
             let parent = parent_session_id.as_ref().map_or("(deleted)", SessionId::as_str);
             format!("{origin} thread {thread:?} of {}", chars(parent, 8))
@@ -294,9 +294,9 @@ fn overview_lines(d: &Day, who: &str, day: NaiveDate, tz: Tz) -> Vec<String> {
     let many = agents.len() > 1;
     let agent_of = |id: &AgentId| if many { format!("{} ", d.names.name(id)) } else { String::new() };
     let sessions = &d.activity.sessions;
-    let mut origins: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    let mut origins: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
     for s in sessions {
-        *origins.entry(s.session.origin.origin().as_str()).or_default() += 1;
+        *origins.entry(s.session.origin.origin().to_string()).or_default() += 1;
     }
     let mut out = vec![format!("# activity of {who} on {day} (local day, times local)"), String::new()];
     out.push(format!(
@@ -316,7 +316,7 @@ fn overview_lines(d: &Day, who: &str, day: NaiveDate, tz: Tz) -> Vec<String> {
             chars(s.session.id.as_str(), 8),
             place(&s.session),
             chars(&s.session.title, 80),
-            s.state.as_str(),
+            s.state,
             s.runs
         ));
     }
@@ -346,7 +346,7 @@ fn overview_lines(d: &Day, who: &str, day: NaiveDate, tz: Tz) -> Vec<String> {
         format!("## what the user did on issues ({} issues, comments in full)", d.actions.len()),
     ]);
     for a in &d.actions {
-        out.push(format!("- #{} {:?} (now {}):", a.issue_id, chars(&a.title, 80), a.status.as_str()));
+        out.push(format!("- #{} {:?} (now {}):", a.issue_id, chars(&a.title, 80), a.status));
         for line in &a.lines {
             out.push(indented(line));
         }
@@ -471,7 +471,7 @@ const ERROR: &str = "error";
 
 /// labels 参数里每项的首词只能是这些（思考不展示，中途停下的标记不能筛）。
 fn label_words() -> Vec<String> {
-    let mut words: Vec<String> = Origin::ALL.iter().map(|o| o.as_str().to_uppercase()).collect();
+    let mut words: Vec<String> = Origin::ALL.iter().map(|o| o.to_string().to_uppercase()).collect();
     words.extend([EVENT, ASSISTANT, CALL, RESULT, ERROR].map(str::to_owned));
     words
 }
@@ -479,7 +479,7 @@ fn label_words() -> Vec<String> {
 /// 一条的标签；思考不展示（None）。
 fn label(item: &Item<SentUser>) -> Option<String> {
     Some(match item {
-        Item::User(u) => u.sender.as_str().to_uppercase(),
+        Item::User(u) => u.sender.to_string().to_uppercase(),
         Item::Event(e) => format!("{EVENT} {}{}", e.source.raw(), if e.check_in { " (check-in)" } else { "" }),
         Item::Assistant { .. } => ASSISTANT.to_owned(),
         Item::ToolCall(c) => format!("{CALL} {}", c.tool_name),

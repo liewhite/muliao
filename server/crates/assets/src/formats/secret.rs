@@ -93,30 +93,31 @@ impl fmt::Debug for SecretFile {
     }
 }
 
+/// 文件的样子：读入只经它。
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Stored {
+    #[serde(default)]
+    description: String,
+    ciphertext: String,
+    #[serde(default = "shell_by_default")]
+    allow_shell: bool,
+}
+
+fn shell_by_default() -> bool {
+    true
+}
+
 /// 不合规则时报错。密文能不能解开在用到时才知道（解不开报出是哪个 key）。
 pub fn parse(key: &str, text: &str) -> Result<SecretFile, String> {
     validate_key(key)?;
-    let data: toml::Table = text.parse().map_err(|e: toml::de::Error| format!("cannot parse: {}", e.message()))?;
     let shape = "a secret file has only 'description' (string), 'ciphertext' (set by vault_set; never write it by \
                  hand) and optionally 'allow_shell' (true or false, default true)";
-    if data.keys().any(|k| !matches!(k.as_str(), "description" | "ciphertext" | "allow_shell")) {
-        return Err(shape.into());
+    let s: Stored = toml::from_str(text).map_err(|e: toml::de::Error| format!("{}; {shape}", e.message().trim()))?;
+    if s.ciphertext.is_empty() {
+        return Err(format!("ciphertext is empty; {shape}"));
     }
-    let description = match data.get("description") {
-        None => String::new(),
-        Some(toml::Value::String(s)) => s.clone(),
-        Some(_) => return Err(shape.into()),
-    };
-    let ciphertext = match data.get("ciphertext") {
-        Some(toml::Value::String(s)) if !s.is_empty() => s.clone(),
-        _ => return Err(shape.into()),
-    };
-    let allow_shell = match data.get("allow_shell") {
-        None => true,
-        Some(toml::Value::Boolean(b)) => *b,
-        Some(_) => return Err(shape.into()),
-    };
-    Ok(SecretFile { description, ciphertext, allow_shell })
+    Ok(SecretFile { description: s.description, ciphertext: s.ciphertext, allow_shell: s.allow_shell })
 }
 
 pub fn load(path: &Path, name: &str, _memory_max_chars: usize) -> Result<Loaded, String> {

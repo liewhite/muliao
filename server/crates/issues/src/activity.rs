@@ -99,33 +99,24 @@ pub enum Happening {
 }
 
 impl Happening {
-    /// 种类（库里 kind 列与 HTTP 的 kind 字段）。
-    pub fn kind(&self) -> &'static str {
-        match self {
-            Happening::Created => "created",
-            Happening::Comment { .. } => "comment",
-            Happening::Description => "description",
-            Happening::Title { .. } => "title",
-            Happening::Status { .. } => "status",
-            Happening::Priority { .. } => "priority",
-            Happening::Assignee { .. } => "assignee",
-            Happening::Owner { .. } => "owner",
-            Happening::DependsOn { .. } => "depends_on",
-            Happening::Dependency { .. } => "dependency",
-            Happening::RunFailed { .. } => "run_failed",
-            Happening::Unsettled => "unsettled",
-            Happening::Stopped { .. } => "stopped",
-        }
+    /// 种类（库里 kind 列与 HTTP 的 kind 字段）：serde 的标签。
+    pub fn kind(&self) -> String {
+        self.stored().0
     }
 
     /// 存进库的三列：种类、内容、变化（JSON）。
-    fn stored(&self) -> (&'static str, Option<String>, Option<String>) {
-        let Value::Object(mut fields) = serde_json::to_value(self).expect("a happening serializes") else {
-            unreachable!("an internally tagged enum serializes to an object")
-        };
-        let body = fields.remove("body").map(|b| b.as_str().expect("body is text").to_owned());
-        let change = fields.remove("change").map(|c| c.to_string());
-        (self.kind(), body, change)
+    fn stored(&self) -> (String, Option<String>, Option<String>) {
+        /// 按 serde 导出的样子：`{"kind": …, "body": …, "change": …}`，后两项按种类可没有
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Columns {
+            kind: String,
+            body: Option<String>,
+            change: Option<Value>,
+        }
+        let value = serde_json::to_value(self).expect("a happening serializes");
+        let c: Columns = serde_json::from_value(value).expect("a happening serializes to the three columns");
+        (c.kind, c.body, c.change.map(|v| v.to_string()))
     }
 
     /// 库里的三列按种类解析；形状不符（种类缺了内容或变化）当场报错，不交给读的人去猜。
@@ -235,7 +226,7 @@ mod tests {
         ];
         for what in all {
             let (kind, body, change) = what.stored();
-            assert_eq!(Happening::parse(kind, body, change.as_deref()).unwrap(), what);
+            assert_eq!(Happening::parse(&kind, body, change.as_deref()).unwrap(), what);
         }
         let (_, _, change) = Happening::Stopped { change: Arrival { before: (), to: AgentId::new("a") } }.stored();
         assert_eq!(change.unwrap(), r#"{"from":null,"to":"a"}"#);

@@ -1,7 +1,6 @@
 //! issue 本身（`issues` 表的唯一读写处）与它的取值：状态、优先级、指派人、做事的人。
 
 use muliao_platform::ids::{AgentId, SessionId};
-use std::fmt;
 
 use chrono::{DateTime, Utc};
 use muliao_assets::naming::USER;
@@ -41,41 +40,9 @@ pub enum Status {
 }
 
 impl Status {
-    pub const ALL: [Status; 6] =
-        [Status::Backlog, Status::InProgress, Status::InReview, Status::Blocked, Status::Done, Status::Cancelled];
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Status::Backlog => "backlog",
-            Status::InProgress => "in_progress",
-            Status::InReview => "in_review",
-            Status::Blocked => "blocked",
-            Status::Done => "done",
-            Status::Cancelled => "cancelled",
-        }
-    }
-
-    /// 存下的取值；时间线里 #258 之前的 todo、waiting 不在其中（那里按文字存，见 [`crate::activity::Happening::Status`]）。
-    pub fn parse(s: &str) -> Option<Status> {
-        Status::ALL.into_iter().find(|v| v.as_str() == s)
-    }
-
     /// 已结束（done / cancelled）：不再挡着依赖它的 issue（取消也放行，下游自己判断还做不做）。
     pub fn finished(self) -> bool {
         matches!(self, Status::Done | Status::Cancelled)
-    }
-}
-
-impl fmt::Display for Status {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl rusqlite::types::FromSql for Status {
-    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
-        let raw = value.as_str()?;
-        Status::parse(raw).ok_or_else(|| rusqlite::types::FromSqlError::Other(format!("unknown status {raw:?}").into()))
     }
 }
 
@@ -102,15 +69,8 @@ impl Recorded {
     }
 }
 
-impl fmt::Display for Recorded {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Recorded::Now(s) => f.write_str(s.as_str()),
-            Recorded::Retired(Retired::Todo) => f.write_str("todo"),
-            Recorded::Retired(Retired::Waiting) => f.write_str("waiting"),
-        }
-    }
-}
+// 名字（存库、显示）都按 serde：Recorded 是 untagged，名字就是里面那个状态的
+muliao_platform::serde_names!(Status, Recorded, Priority);
 
 impl From<Status> for Recorded {
     fn from(s: Status) -> Self {
@@ -127,38 +87,6 @@ pub enum Priority {
     High,
     Medium,
     Low,
-}
-
-impl Priority {
-    pub const ALL: [Priority; 5] = [Priority::None, Priority::Urgent, Priority::High, Priority::Medium, Priority::Low];
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Priority::None => "none",
-            Priority::Urgent => "urgent",
-            Priority::High => "high",
-            Priority::Medium => "medium",
-            Priority::Low => "low",
-        }
-    }
-
-    pub fn parse(s: &str) -> Option<Priority> {
-        Priority::ALL.into_iter().find(|v| v.as_str() == s)
-    }
-}
-
-impl fmt::Display for Priority {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl rusqlite::types::FromSql for Priority {
-    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
-        let raw = value.as_str()?;
-        Priority::parse(raw)
-            .ok_or_else(|| rusqlite::types::FromSqlError::Other(format!("unknown priority {raw:?}").into()))
-    }
 }
 
 /// 指派人：用户（只有一个），或一个 agent。库里存成 `user` 或 agent id（12 位十六进制，不会与 `user` 相同；agent 名称也
@@ -316,8 +244,8 @@ pub(crate) fn insert_in(c: &Connection, new: &Issue) -> Result<i64> {
         params![
             new.title,
             new.description,
-            new.status.as_str(),
-            new.priority.as_str(),
+            new.status,
+            new.priority,
             new.owner,
             new.assignee.as_ref().map(Assignee::as_str),
             new.creator.as_str(),
@@ -337,8 +265,8 @@ pub(crate) fn save_in(c: &Connection, i: &Issue) -> Result<()> {
             i.id,
             i.title,
             i.description,
-            i.status.as_str(),
-            i.priority.as_str(),
+            i.status,
+            i.priority,
             i.owner,
             i.assignee.as_ref().map(Assignee::as_str),
             i.updated_at

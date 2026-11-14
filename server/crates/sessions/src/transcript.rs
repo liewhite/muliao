@@ -12,12 +12,14 @@ use agenter::{Content, File, Message, Request, RequestPart, ResponsePart, ToolCa
 use chrono::{DateTime, Utc};
 use muliao_platform::text::truncate;
 use muliao_platform::tool_views::{ToolRender, View, truncated};
-use muliao_runtime::conventions::{Attachment, attachment_of_ref, result_images, tool_attachments};
+use muliao_runtime::conventions::{Attachment, attachment_of_ref, result_images};
 use serde::Serialize;
 
 use crate::answers::Waiting;
 use crate::answers::{AnsweredQuestion, AskResult, Question, questions_of};
-use crate::conventions::{PartKind, event_content, finished_at, is_stopped, made_up, part_marks, run_context_index};
+use crate::conventions::{
+    PartKind, event_content, finished_at, is_stopped, made_up, part_marks, run_context_index, tool_attachments,
+};
 use crate::origins::Origin;
 use crate::pending::{OpenAsk, OpenAsks};
 use crate::tools::ASK_USER;
@@ -106,7 +108,7 @@ pub struct ResultItem {
     pub tool_call_id: String,
     /// 交给模型的文字（各文字段以换行连接）
     pub text: String,
-    /// 工具结果挂上的文件（TOOL_ATTACHMENTS）
+    /// 工具结果挂上的文件（muliao_attachments）
     pub attachments: Vec<Attachment>,
     /// 工具交回给模型的图片（如浏览器截图）：属于这次调用的过程，不是给用户的文件
     pub images: Vec<Attachment>,
@@ -252,7 +254,7 @@ fn result_entry<U>(result: &ToolResult, renders: &Renders) -> Result<Item<U>> {
     if result.is_error {
         return Ok(Item::ToolError(ErrorItem { tool_name, tool_call_id, text, at: finished_at(result) }));
     }
-    let attachments = tool_attachments(result).map_err(broken)?.iter().map(Attachment::from).collect();
+    let attachments = tool_attachments(result).iter().map(Attachment::from).collect();
     let made_up = made_up(result).is_some();
     let view = match (renders.get(&result.tool_name), result.content.as_slice()) {
         (Some(render), [Content::Text { text }]) if !made_up => render.result_view(&result.tool_name, text),
@@ -320,7 +322,7 @@ fn request_items<U>(
     items: &mut Vec<Item<U>>,
     user: &impl Fn(UserItem, Option<Origin>) -> U,
 ) -> Result<()> {
-    let marks = part_marks(request)?;
+    let marks = part_marks(request);
     let context = run_context_index(request);
     let mut own = UserContent::default();
     for (i, part) in request.parts.iter().enumerate() {
@@ -600,9 +602,8 @@ mod tests {
                 event(4, thread_s1(), true),
                 message(5, Origin::Trigger),
             ],
-        )
-        .unwrap();
-        attach_run_context(&mut r, "now is 10:00").unwrap();
+        );
+        attach_run_context(&mut r, "now is 10:00");
         let senders: Vec<Option<Origin>> = to_items_with([&Message::User(r.clone())], &Renders::new(), None, |_, s| s)
             .unwrap()
             .into_iter()
@@ -641,9 +642,6 @@ mod tests {
 
     #[test]
     fn broken_requests_are_reported() {
-        let mut r = request(vec![RequestPart::Text { text: "x".into() }]);
-        r.metadata = Some(serde_json::json!({ crate::conventions::PARTS: [{ "part": 0, "event": "nope" }] }));
-        assert!(to_items([&Message::User(r)], &Renders::new(), None).is_err());
         let r = request(vec![RequestPart::File(file("https://elsewhere/x.png"))]);
         assert!(to_items([&Message::User(r)], &Renders::new(), None).is_err());
     }
@@ -806,7 +804,7 @@ mod tests {
             RequestPart::Text { text: format_event(&job7(), "done") },
         ]);
         let mut r = r;
-        mark_parts(&mut r, vec![event(2, job7(), false)]).unwrap();
+        mark_parts(&mut r, vec![event(2, job7(), false)]);
         let m = response(vec![
             ResponsePart::Thinking { text: "secret thought".into(), meta: None },
             ResponsePart::ToolCall(call("c1", "t", "{\"q\":\"0123456789\"}")),

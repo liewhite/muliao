@@ -9,7 +9,7 @@ use muliao_assets::distribution::{RoleSpec, RoleView, UsedAsset};
 use muliao_assets::formats::agent_file::{AgentConfig, Grouping, Thinking};
 use muliao_assets::formats::mcp::McpTransport;
 use muliao_assets::kinds::Shown;
-use muliao_assets::rules::{AgentRules, Rule, Rules, ToolSpec, texts};
+use muliao_assets::rules::{AgentRules, RuleList, Rules, ToolSpec, texts};
 use muliao_assets::service::{AgentPatch, AgentSpec, AgentView};
 use muliao_platform::config::ModelRef;
 use muliao_platform::errors::DomainError;
@@ -190,8 +190,8 @@ pub struct AgentPreviewIn {
     /// 已有的 agent（它自己的资产总能用）；null 为还没建的
     pub agent_id: Option<AgentId>,
     pub roles: Vec<String>,
-    pub allow: Vec<String>,
-    pub deny: Vec<String>,
+    pub allow: RuleList,
+    pub deny: RuleList,
 }
 
 /// agent 配置（还没保存的也行）最终能用的：自己的资产 + base + 角色 + allow / deny 放行的，与运行时同一套计算，与保存时
@@ -199,8 +199,7 @@ pub struct AgentPreviewIn {
 #[utoipa::path(post, path = "/api/agent-preview", tag = "agents", request_body = AgentPreviewIn,
     responses((status = 200, body = ReachOut), (status = 422, body = ErrorOut)))]
 async fn preview_agent(State(s): State<AppState>, Json(body): Json<AgentPreviewIn>) -> ApiResult<axum::Json<ReachOut>> {
-    let rules =
-        AgentRules { roles: body.roles, allow: Rule::parse_all(&body.allow)?, deny: Rule::parse_all(&body.deny)? };
+    let rules = AgentRules { roles: body.roles, allow: body.allow.0, deny: body.deny.0 };
     let reach = s.services.distribution.preview_agent(body.agent_id.as_ref(), &rules).await?;
     Ok(axum::Json(ReachOut::of(reach)))
 }
@@ -251,27 +250,24 @@ async fn list_roles(State(s): State<AppState>) -> ApiResult<axum::Json<Vec<RoleO
 pub struct RolePreviewIn {
     /// 已有的角色（内置的加上固定规则）；null 为还没建的
     pub name: Option<String>,
-    pub allow: Vec<String>,
-    pub deny: Vec<String>,
+    pub allow: RuleList,
+    pub deny: RuleList,
 }
 
 /// 角色规则（还没保存的也行）能用的，与保存时同样校验（不合法 422）。
 #[utoipa::path(post, path = "/api/role-preview", tag = "roles", request_body = RolePreviewIn,
     responses((status = 200, body = ReachOut), (status = 422, body = ErrorOut)))]
 async fn preview_role(State(s): State<AppState>, Json(body): Json<RolePreviewIn>) -> ApiResult<axum::Json<ReachOut>> {
-    let reach = s
-        .services
-        .distribution
-        .preview_role(body.name.as_deref(), &Rules::new(Rule::parse_all(&body.allow)?, Rule::parse_all(&body.deny)?))
-        .await?;
+    let reach =
+        s.services.distribution.preview_role(body.name.as_deref(), &Rules::new(body.allow.0, body.deny.0)).await?;
     Ok(axum::Json(ReachOut::of(reach)))
 }
 
 #[derive(Deserialize, ToSchema)]
 pub struct RoleIn {
     pub description: String,
-    pub allow: Vec<String>,
-    pub deny: Vec<String>,
+    pub allow: RuleList,
+    pub deny: RuleList,
 }
 
 #[utoipa::path(post, path = "/api/roles/{name}", tag = "roles", request_body = RoleIn,
@@ -285,7 +281,7 @@ async fn create_role(
     d.create(&RoleSpec {
         name: name.clone(),
         description: body.description,
-        rules: Rules::new(Rule::parse_all(&body.allow)?, Rule::parse_all(&body.deny)?),
+        rules: Rules::new(body.allow.0, body.deny.0),
     })
     .await?;
     Ok((StatusCode::CREATED, axum::Json(RoleOut::of(d.view(&name).await?))))
@@ -297,9 +293,9 @@ pub struct RoleUpdate {
     #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
-    pub allow: Option<Vec<String>>,
+    pub allow: Option<RuleList>,
     #[serde(default)]
-    pub deny: Option<Vec<String>>,
+    pub deny: Option<RuleList>,
 }
 
 /// 改角色的描述与可编辑的规则（内置角色也可以，固定的部分不变）；从带它的 agent 的下一次运行起生效。
@@ -311,8 +307,8 @@ async fn update_role(
     Json(body): Json<RoleUpdate>,
 ) -> ApiResult<axum::Json<RoleOut>> {
     let d = &s.services.distribution;
-    let allow = body.allow.as_deref().map(Rule::parse_all).transpose()?;
-    let deny = body.deny.as_deref().map(Rule::parse_all).transpose()?;
+    let allow = body.allow.map(|l| l.0);
+    let deny = body.deny.map(|l| l.0);
     d.patch(&name, body.description, allow, deny).await?;
     Ok(axum::Json(RoleOut::of(d.view(&name).await?)))
 }
@@ -341,9 +337,9 @@ pub struct AgentCreate {
     #[serde(default)]
     pub roles: Vec<String>,
     #[serde(default)]
-    pub allow: Vec<String>,
+    pub allow: RuleList,
     #[serde(default)]
-    pub deny: Vec<String>,
+    pub deny: RuleList,
     /// 思考档位："default" 不指定，按模型与服务端的默认
     #[serde(default)]
     pub thinking: Thinking,
@@ -364,11 +360,7 @@ async fn create_agent(
         model: body.model.map(ModelIo::parse).transpose()?,
         thinking: body.thinking,
         group: body.group.as_deref().map_or(Grouping::Ungrouped, Grouping::parse),
-        rules: AgentRules {
-            roles: body.roles,
-            allow: Rule::parse_all(&body.allow)?,
-            deny: Rule::parse_all(&body.deny)?,
-        },
+        rules: AgentRules { roles: body.roles, allow: body.allow.0, deny: body.deny.0 },
     };
     let created = s.services.agents.create(spec, &Actor::User).await?;
     Ok((StatusCode::CREATED, axum::Json(out(&s, &created.id).await?)))
@@ -394,9 +386,9 @@ pub struct AgentUpdate {
     #[serde(default)]
     pub roles: Option<Vec<String>>,
     #[serde(default)]
-    pub allow: Option<Vec<String>>,
+    pub allow: Option<RuleList>,
     #[serde(default)]
-    pub deny: Option<Vec<String>>,
+    pub deny: Option<RuleList>,
     #[serde(default)]
     pub thinking: Option<Thinking>,
     /// 空串为不分组
@@ -422,8 +414,8 @@ async fn update_agent(
             group: body.group.as_deref().map(Grouping::parse),
         },
         roles: body.roles,
-        allow: body.allow.as_deref().map(Rule::parse_all).transpose()?,
-        deny: body.deny.as_deref().map(Rule::parse_all).transpose()?,
+        allow: body.allow.map(|l| l.0),
+        deny: body.deny.map(|l| l.0),
     };
     let updated = s.services.agents.update(&agent_id, patch).await?;
     Ok(axum::Json(out(&s, &updated.id).await?))

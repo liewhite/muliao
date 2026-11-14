@@ -51,8 +51,8 @@ fn json<T: DeserializeOwned>(row: &Row<'_>, i: usize) -> rusqlite::Result<T> {
 
 /// 一行读成 [`Trigger`]：种类、配置与状态在这里一次解析，读不懂就是这一行读不出来（整次查询报错）。
 fn trigger_of(row: &Row<'_>) -> rusqlite::Result<Trigger> {
-    let (kind, config, state): (String, String, String) = (row.get(4)?, row.get(5)?, row.get(6)?);
-    let mode = Mode::from_columns(&kind, &config, &state)
+    let (kind, config, state): (Kind, String, String) = (row.get(4)?, row.get(5)?, row.get(6)?);
+    let mode = Mode::from_columns(kind, &config, &state)
         .map_err(|e| rusqlite::Error::FromSqlConversionFailure(4, Type::Text, Box::new(e)))?;
     let prompt = Prompt::new(row.get::<_, String>(3)?)
         .map_err(|e| rusqlite::Error::FromSqlConversionFailure(3, Type::Text, e.into()))?;
@@ -111,7 +111,7 @@ pub fn list_in(c: &Connection, listing: &Listing) -> Result<Vec<Trigger>> {
     let order = if listing.finished { "finished_at DESC, id DESC" } else { "name" };
     let mut stmt = c.prepare(&format!("SELECT {COLUMNS} FROM triggers WHERE {filter} ORDER BY {order}"))?;
     let rows = match listing.kind {
-        Some(kind) => stmt.query_map([kind.name()], trigger_of)?.collect::<rusqlite::Result<_>>()?,
+        Some(kind) => stmt.query_map([kind], trigger_of)?.collect::<rusqlite::Result<_>>()?,
         None => stmt.query_map([], trigger_of)?.collect::<rusqlite::Result<_>>()?,
     };
     Ok(rows)

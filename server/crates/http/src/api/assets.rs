@@ -19,7 +19,7 @@ use muliao_assets::mcp::McpServer;
 use muliao_assets::memory::MemoryInfo;
 use muliao_assets::tree::Owner;
 use muliao_platform::errors::DomainError;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
@@ -51,18 +51,6 @@ pub fn owner_of(owner: Option<AgentId>) -> Owner {
 
 fn owner_out(owner: &Owner) -> Option<AgentId> {
     owner.agent().cloned()
-}
-
-/// 路径里的资源种类：存成文件的四种（内置工具不在这里）
-pub struct Kind(StoredKind);
-
-impl<'de> Deserialize<'de> for Kind {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let s = String::deserialize(d)?;
-        StoredKind::parse(&s)
-            .map(Kind)
-            .ok_or_else(|| serde::de::Error::custom(format!("unknown asset kind {s:?} (skill, mcp, secret, memory)")))
-    }
 }
 
 // ---- 资源池 ----
@@ -207,14 +195,14 @@ pub struct OwnerIn {
 
 /// 挪到另一个 owner 的目录下；内容与收录它的角色不变。记忆不转移（422）；内置工具归平台，不在这里（kind 不接受 tool）。
 #[utoipa::path(put, path = "/api/assets/{kind}/{name}/owner", tag = "assets", request_body = OwnerIn,
-    params(("kind" = String, Path, description = "skill、mcp、secret 或 memory")),
+    params(("kind" = StoredKind, Path, description = "skill、mcp、secret 或 memory")),
     responses((status = 204), (status = 404, body = ErrorOut), (status = 409, body = ErrorOut), (status = 422, body = ErrorOut)))]
 async fn transfer_asset(
     State(s): State<AppState>,
-    Path((kind, name)): Path<(Kind, String)>,
+    Path((kind, name)): Path<(StoredKind, String)>,
     Json(body): Json<OwnerIn>,
 ) -> ApiResult<StatusCode> {
-    s.services.catalog.transfer(kind.0, &name, &owner_of(body.owner)).await?;
+    s.services.catalog.transfer(kind, &name, &owner_of(body.owner)).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

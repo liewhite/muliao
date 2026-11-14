@@ -87,7 +87,7 @@ async fn agent_directories_must_match_the_database() {
     write(&root.join("alice/agent.toml"), &format!("id = \"{a}\"\n{toml}"));
     let s = w.source.snapshot().await.unwrap();
     assert!(!s.agents.contains_key(&a));
-    assert!(s.problems_for(&a).iter().any(|p| p.reason.contains("unknown keys")));
+    assert!(s.problems_for(&a).iter().any(|p| p.reason.contains("unknown field")));
 
     // 模型在当前配置下不能用：照常加载，记成问题
     write(&root.join("alice/agent.toml"), &toml.replace("p:default", "q:x"));
@@ -148,7 +148,7 @@ async fn write_entry_vets_like_the_reader() {
     // agent.toml 按格式校验
     let toml = std::fs::read_to_string(root.join("alice/agent.toml")).unwrap();
     let r = rejected(write(root.join("alice/agent.toml"), &format!("{toml}extra = 1\n")).await.unwrap_err());
-    assert!(r.contains("unknown keys"));
+    assert!(r.contains("unknown field"));
     // 模型不能用的不写
     assert!(write(root.join("alice/agent.toml"), &toml.replace("p:default", "q:x")).await.is_err());
     // skill 附件要先有 SKILL.md；SKILL.md 按 frontmatter 校验；approval 要指向存在的脚本

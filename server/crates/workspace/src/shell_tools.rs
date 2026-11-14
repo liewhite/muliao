@@ -503,7 +503,7 @@ impl Tool<RunScope> for JobStatusTool {
             JobState::Ended { end: End::Exited { code }, .. } => {
                 format!("exited with code {}", code.map_or("None".to_owned(), |c| c.to_string()))
             }
-            other => other.status().as_str().to_owned(),
+            other => other.status().to_string(),
         };
         let tail = if info.tail.is_empty() { "(no output yet)" } else { &info.tail };
         Ok(agenter::tool::text(format!(

@@ -221,8 +221,8 @@ impl Rule {
     /// 形式时报错（原因）；tool 只有 use；path 只有 `write:path:<字面目录>`。
     pub fn parse(pattern: &str) -> Result<Rule, String> {
         let malformed = || {
-            let mut kinds: Vec<&str> = Kind::ALL.map(Kind::as_str).to_vec();
-            kinds.push(PATH);
+            let mut kinds: Vec<String> = Kind::ALL.map(|k| k.to_string()).to_vec();
+            kinds.push(PATH.to_owned());
             format!(
                 "rule {pattern:?} must look like 'action:kind:name' with action one of {ACTIONS:?} and kind one of \
                  {kinds:?} (fnmatch wildcards allowed in the name), or 'action:*'; e.g. 'use:tool:issue_*', \
@@ -256,21 +256,11 @@ impl Rule {
             }
             return Ok(Rule::Path(glob.to_owned()));
         }
-        let kind = Kind::parse(kind).ok_or_else(malformed)?;
+        let kind: Kind = kind.parse().map_err(|_| malformed())?;
         if !writable(kind) && actions == Actions::One(Action::Write) {
             return Err(format!("rule {pattern:?}: built-in tools can only be used ('use:tool:...')"));
         }
         Ok(Rule::Named { actions, kind, glob: glob.to_owned() })
-    }
-
-    /// 一组规则（界面、工具参数交来的）：任一条不合法就 InvalidInput，说明每一处。
-    pub fn parse_all(patterns: &[String]) -> muliao_platform::errors::Result<Vec<Rule>> {
-        let (ok, bad): (Vec<_>, Vec<_>) = patterns.iter().map(|p| Rule::parse(p)).partition(Result::is_ok);
-        if !bad.is_empty() {
-            let reasons: Vec<String> = bad.into_iter().filter_map(Result::err).collect();
-            return Err(muliao_platform::errors::invalid(reasons.join("; ")));
-        }
-        Ok(ok.into_iter().filter_map(Result::ok).collect())
     }
 
     /// 这条 allow 放行 target 上的这个动作（不限种类的也算；本机目录规则不管资源）。私有记忆没有规则里的名字，只有不限种类的
@@ -333,6 +323,27 @@ impl std::fmt::Display for Rule {
 /// 规则写成字符串（写进 access.toml、交给界面与工具结果）。
 pub fn texts(rules: &[Rule]) -> Vec<String> {
     rules.iter().map(Rule::to_string).collect()
+}
+
+/// 一组规则的读入（access.toml、界面与工具参数里的字符串列表）：反序列化时逐条 [`Rule::parse`]，任一条不合法整组不合法，
+/// 报错说明每一处。对外的 schema 是字符串数组。
+#[derive(Debug, Clone, Default, PartialEq, Eq, schemars::JsonSchema, utoipa::ToSchema)]
+#[schemars(transparent)]
+#[schema(value_type = Vec<String>)]
+pub struct RuleList(#[schemars(with = "Vec<String>")] pub Vec<Rule>);
+
+impl<'de> serde::Deserialize<'de> for RuleList {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let mut rules = Vec::new();
+        let mut bad = Vec::new();
+        for p in Vec::<String>::deserialize(d)? {
+            match Rule::parse(&p) {
+                Ok(r) => rules.push(r),
+                Err(e) => bad.push(e),
+            }
+        }
+        if bad.is_empty() { Ok(RuleList(rules)) } else { Err(serde::de::Error::custom(bad.join("; "))) }
+    }
 }
 
 /// 规则判断的对象：按名字认的一项（内置工具或按名字认的资源），或某个 agent 的私有记忆。私有记忆按所属的 agent 认、
@@ -571,7 +582,16 @@ mod tests {
         ] {
             assert!(Rule::parse(bad).is_err(), "{bad}");
         }
-        assert!(Rule::parse_all(&["use:skill:a".into(), "bad".into()]).is_err());
+        let list = |v: serde_json::Value| serde_json::from_value::<RuleList>(v);
+        assert_eq!(list(serde_json::json!(["use:skill:a"])).unwrap().0, rules(&["use:skill:a"]));
+        let err = list(serde_json::json!(["use:skill:a", "bad", "worse"])).unwrap_err().to_string();
+        assert!(err.contains("\"bad\"") && err.contains("\"worse\""), "{err}");
+        // 工具参数里它就是字符串数组
+        let schema = serde_json::to_value(schemars::schema_for!(RuleList)).unwrap();
+        assert_eq!(
+            (&schema["type"], &schema["items"]["type"]),
+            (&serde_json::json!("array"), &serde_json::json!("string"))
+        );
     }
 
     #[test]

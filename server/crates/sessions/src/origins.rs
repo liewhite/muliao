@@ -21,21 +21,10 @@ pub enum Origin {
     Issue,
 }
 
+muliao_platform::serde_names!(Origin);
+
 impl Origin {
     pub const ALL: [Origin; 4] = [Origin::User, Origin::Trigger, Origin::Delegation, Origin::Issue];
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Origin::User => "user",
-            Origin::Trigger => "trigger",
-            Origin::Delegation => "delegation",
-            Origin::Issue => "issue",
-        }
-    }
-
-    pub(crate) fn parse(s: &str) -> Result<Self> {
-        Origin::ALL.into_iter().find(|o| o.as_str() == s).ok_or_else(|| broken(format!("unknown origin {s:?}")))
-    }
 
     /// 续写规则只在这里：用户能在任何会话里续写；其余来源只续写自己发起的。
     pub(crate) fn writes_anywhere(self) -> bool {
@@ -98,20 +87,19 @@ impl SessionOrigin {
     /// 存下的四列（来源、发起方编号、thread 名、父会话）的唯一解析；不合格式是数据坏了。父会话删除后列为空，所以
     /// 委派会话的父会话可以为空，别的会话一定为空。
     pub(crate) fn parse(
-        origin: &str,
+        origin: Origin,
         reference: Option<&str>,
         thread: Option<String>,
         parent: Option<SessionId>,
     ) -> Result<Self> {
-        let origin = Origin::parse(origin)?;
         let number = || -> Result<i64> {
             reference
                 .and_then(|r| r.parse().ok())
-                .ok_or_else(|| broken(format!("a {} origin needs a numeric ref, got {reference:?}", origin.as_str())))
+                .ok_or_else(|| broken(format!("a {} origin needs a numeric ref, got {reference:?}", origin)))
         };
         Ok(match origin {
             Origin::User | Origin::Delegation if reference.is_some() => {
-                return Err(broken(format!("a {} origin has no ref, got {reference:?}", origin.as_str())));
+                return Err(broken(format!("a {} origin has no ref, got {reference:?}", origin)));
             }
             Origin::Delegation => match thread {
                 Some(thread) => SessionOrigin::Delegation { thread, parent_session_id: parent },
@@ -120,7 +108,7 @@ impl SessionOrigin {
             _ if thread.is_some() || parent.is_some() => {
                 return Err(broken(format!(
                     "a {} session has a thread name {thread:?} or a parent {parent:?}",
-                    origin.as_str()
+                    origin
                 )));
             }
             Origin::User => SessionOrigin::User,
@@ -162,9 +150,9 @@ impl OriginNotes {
     pub fn new(notes: impl IntoIterator<Item = (Origin, String)>) -> Self {
         let mut all: HashMap<Origin, String> = OWN_NOTES.iter().map(|(o, n)| (*o, (*n).to_owned())).collect();
         for (o, n) in notes {
-            assert!(all.insert(o, n).is_none(), "two session notes for origin {}", o.as_str());
+            assert!(all.insert(o, n).is_none(), "two session notes for origin {o}");
         }
-        let missing: Vec<&str> = Origin::ALL.iter().filter(|o| !all.contains_key(o)).map(|o| o.as_str()).collect();
+        let missing: Vec<&Origin> = Origin::ALL.iter().filter(|o| !all.contains_key(o)).collect();
         assert!(missing.is_empty(), "no session note for origins {missing:?}");
         Self(all)
     }
@@ -181,15 +169,14 @@ mod tests {
     #[test]
     fn stored_origins_round_trip_and_bad_ones_are_reported() {
         let issue = SessionOrigin::Issue { issue_id: 7 };
-        assert_eq!(SessionOrigin::parse("issue", Some("7"), None, None).unwrap(), issue);
-        assert_eq!(SessionOrigin::parse("user", None, None, None).unwrap(), SessionOrigin::User);
+        assert_eq!(SessionOrigin::parse(Origin::Issue, Some("7"), None, None).unwrap(), issue);
+        assert_eq!(SessionOrigin::parse(Origin::User, None, None, None).unwrap(), SessionOrigin::User);
         let parent = Some(SessionId::new("p"));
         let thread = SessionOrigin::Delegation { thread: "t".into(), parent_session_id: parent.clone() };
-        assert_eq!(SessionOrigin::parse("delegation", None, Some("t".into()), parent.clone()).unwrap(), thread);
-        assert!(SessionOrigin::parse("user", None, None, parent).is_err());
-        assert!(SessionOrigin::parse("user", Some("1"), None, None).is_err());
-        assert!(SessionOrigin::parse("trigger", None, None, None).is_err());
-        assert!(SessionOrigin::parse("nope", None, None, None).is_err());
+        assert_eq!(SessionOrigin::parse(Origin::Delegation, None, Some("t".into()), parent.clone()).unwrap(), thread);
+        assert!(SessionOrigin::parse(Origin::User, None, None, parent).is_err());
+        assert!(SessionOrigin::parse(Origin::User, Some("1"), None, None).is_err());
+        assert!(SessionOrigin::parse(Origin::Trigger, None, None, None).is_err());
         assert_eq!(serde_json::to_value(issue).unwrap(), serde_json::json!({"kind": "issue", "issue_id": 7}));
     }
 }

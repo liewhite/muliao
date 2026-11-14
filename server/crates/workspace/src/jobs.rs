@@ -60,25 +60,7 @@ pub enum JobStatus {
     Interrupted,
 }
 
-impl JobStatus {
-    /// 状态的名字（存库、报错时用；与 serde 的名字一致由测试钉住）。
-    pub fn as_str(self) -> &'static str {
-        match self {
-            JobStatus::Running => "running",
-            JobStatus::Exited => "exited",
-            JobStatus::Killed => "killed",
-            JobStatus::Interrupted => "interrupted",
-        }
-    }
-
-    /// 存下的名字的解析：按 serde 的名字（唯一的一张表）。
-    fn parse(name: &str) -> Option<Self> {
-        use serde::de::IntoDeserializer;
-        <Self as serde::Deserialize>::deserialize(name.into_deserializer())
-            .map_err(|_: serde::de::value::Error| ())
-            .ok()
-    }
-}
+muliao_platform::serde_names!(JobStatus);
 
 /// 后台任务怎样结束的（结束的时刻在记下时另给，[`End::at`]）。code：退出码，被信号结束的是负的信号值，取不到为 None。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,8 +101,8 @@ impl JobState {
     }
 
     /// 存下的三列（status、exit_code、finished_at）的唯一解析。
-    fn parse(status: &str, code: Option<i32>, at: Option<DateTime<Utc>>) -> Option<Self> {
-        Some(match (JobStatus::parse(status)?, code, at) {
+    fn parse(status: JobStatus, code: Option<i32>, at: Option<DateTime<Utc>>) -> Option<Self> {
+        Some(match (status, code, at) {
             (JobStatus::Running, None, None) => JobState::Running,
             (JobStatus::Exited, code, Some(at)) => End::Exited { code }.at(at),
             (JobStatus::Killed, code, Some(at)) => End::Killed { code }.at(at),
@@ -130,8 +112,8 @@ impl JobState {
     }
 
     /// 存成三列。
-    fn columns(self) -> (&'static str, Option<i32>, Option<DateTime<Utc>>) {
-        let status = self.status().as_str();
+    fn columns(self) -> (JobStatus, Option<i32>, Option<DateTime<Utc>>) {
+        let status = self.status();
         match self {
             JobState::Running => (status, None, None),
             JobState::Ended { end, at } => {
@@ -162,8 +144,8 @@ const COLUMNS: &str =
     "id, session_id, agent_id, command, status, exit_code, pid, check_seconds, started_at, finished_at";
 
 fn job_of(r: &Row<'_>) -> rusqlite::Result<Job> {
-    let (status, code, at): (String, Option<i32>, Option<DateTime<Utc>>) = (r.get(4)?, r.get(5)?, r.get(9)?);
-    let state = JobState::parse(&status, code, at).ok_or_else(|| {
+    let (status, code, at): (JobStatus, Option<i32>, Option<DateTime<Utc>>) = (r.get(4)?, r.get(5)?, r.get(9)?);
+    let state = JobState::parse(status, code, at).ok_or_else(|| {
         rusqlite::Error::FromSqlConversionFailure(
             4,
             rusqlite::types::Type::Text,
@@ -380,8 +362,8 @@ impl JobRunner {
                 }
                 tx.execute(
                     "INSERT INTO jobs (session_id, agent_id, command, status, pid, check_seconds, started_at) \
-                     VALUES (?1, ?2, ?3, 'running', ?4, ?5, ?6)",
-                    params![sid, aid, cmd, pgid, check_seconds, Utc::now()],
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    params![sid, aid, cmd, JobStatus::Running, pgid, check_seconds, Utc::now()],
                 )?;
                 let id = JobId::new(tx.last_insert_rowid());
                 let log_path = log_path(id);
@@ -500,7 +482,7 @@ impl JobRunner {
                     // 结局只记一次：照看者在写完之前一直登记着
                     return Err(muliao_platform::errors::broken(format!(
                         "job {job_id} already ended as {}, cannot record {end:?}",
-                        job.state.status().as_str()
+                        job.state.status()
                     )));
                 }
                 let now = Utc::now();
@@ -520,7 +502,7 @@ impl JobRunner {
         let agent = agent_id.to_owned();
         let job = self.db.read(move |c| own_in(c, job_id, &agent)).await?;
         if !job.state.running() {
-            return Err(conflict(format!("job {job_id} is not running (status: {})", job.state.status().as_str())));
+            return Err(conflict(format!("job {job_id} is not running (status: {})", job.state.status())));
         }
         let handle = self.running.lock().expect("running lock").get(&job_id).cloned();
         if !handle.is_some_and(|h| h.end(Ending::Killed)) {
@@ -593,10 +575,10 @@ impl JobRunner {
             return Ok(0);
         }
         let filter = format!(
-            "status = 'running' AND id IN ({})",
+            "status = ?1 AND id IN ({})",
             supervised.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(", ")
         );
-        let candidates = self.db.read(move |c| jobs_where(c, &filter, [])).await?;
+        let candidates = self.db.read(move |c| jobs_where(c, &filter, [JobStatus::Running])).await?;
         let now = Utc::now();
         let due: Vec<Job> = {
             let beats = self.beats.lock().expect("beats lock");
@@ -651,7 +633,7 @@ impl JobRunner {
     /// 服务启动时、还没有任务在跑时调用一次：这时记为运行中的是上次服务没能收尾的（被强杀、崩溃，或照看者没写下结局）。
     /// 进程自成进程组，不随服务退出，可能还活着：如实告诉 agent，不盲杀（pid 可能已被复用）。
     async fn recover(&self) -> Result<usize> {
-        let stale = self.db.read(|c| jobs_where(c, "status = 'running'", [])).await?;
+        let stale = self.db.read(|c| jobs_where(c, "status = ?1", [JobStatus::Running])).await?;
         if stale.is_empty() {
             return Ok(0);
         }
@@ -731,13 +713,5 @@ mod tests {
         let t = |s: i64| DateTime::<Utc>::from_timestamp(s, 0).unwrap();
         assert_eq!(duration(t(0), t(5)), "0m05s");
         assert_eq!(duration(t(0), t(3725)), "1h02m05s");
-    }
-
-    #[test]
-    fn status_names_are_one_table() {
-        for s in [JobStatus::Running, JobStatus::Exited, JobStatus::Killed, JobStatus::Interrupted] {
-            assert_eq!(serde_json::to_value(s).unwrap(), s.as_str());
-            assert_eq!(JobStatus::parse(s.as_str()), Some(s));
-        }
     }
 }

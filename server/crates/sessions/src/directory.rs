@@ -30,7 +30,7 @@ type Raw = (
     SessionId,
     AgentId,
     String,
-    String,
+    Origin,
     Option<String>,
     Option<SessionId>,
     Option<String>,
@@ -44,7 +44,7 @@ fn raw(r: &Row<'_>) -> rusqlite::Result<Raw> {
 
 fn session((id, agent_id, title, origin, reference, parent, thread, created_at, updated_at): Raw) -> Result<Session> {
     Ok(Session {
-        origin: SessionOrigin::parse(&origin, reference.as_deref(), thread, parent)?,
+        origin: SessionOrigin::parse(origin, reference.as_deref(), thread, parent)?,
         id,
         agent_id,
         title,
@@ -77,7 +77,7 @@ pub(crate) fn add_in(c: &Connection, s: NewSession<'_>) -> Result<Session> {
     c.execute(
         "INSERT INTO sessions (id, agent_id, title, origin, origin_ref, parent_session_id, thread, created_at, updated_at) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
-        params![s.id, s.agent_id, s.title, s.origin.origin().as_str(), reference, parent, s.origin.thread(), now],
+        params![s.id, s.agent_id, s.title, s.origin.origin(), reference, parent, s.origin.thread(), now],
     )?;
     Ok(get_in(c, s.id)?.expect("the session was just written"))
 }
@@ -135,7 +135,7 @@ pub fn keyed_among(
     let mut values: Vec<String> = Vec::new();
     for s in senders {
         conditions.push(format!("(origin = ?{} AND origin_ref = ?{})", values.len() + 1, values.len() + 2));
-        values.push(s.origin().as_str().to_owned());
+        values.push(s.origin().to_string());
         values.push(s.reference());
     }
     let mut filter = format!("({})", conditions.join(" OR "));
@@ -212,11 +212,11 @@ impl Listing {
             if origins.is_empty() {
                 values.push(String::new());
             }
-            values.extend(origins.iter().map(|o| o.as_str().to_owned()));
+            values.extend(origins.iter().map(Origin::to_string));
         }
         if let Some(s) = &self.sender {
             conditions.push("origin = ? AND origin_ref = ?".into());
-            values.push(s.origin().as_str().to_owned());
+            values.push(s.origin().to_string());
             values.push(s.reference());
         }
         if let Some(k) = &self.keyword {

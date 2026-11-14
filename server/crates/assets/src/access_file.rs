@@ -28,9 +28,10 @@ use toml_edit::{Array, DocumentMut, Item, Table, TableLike, Value};
 
 use crate::kinds::Kind;
 use crate::naming::{AgentName, is_agent_id, validate_slug};
-use crate::rules::{ADMIN, AgentRules, BASE, Role, Roles, Rule, Rules, ToolTable, fixed_rules, texts};
+use crate::rules::{ADMIN, AgentRules, BASE, Role, Roles, Rule, RuleList, Rules, ToolTable, fixed_rules, texts};
 use crate::tree::{Expect, Snapshot};
 use muliao_platform::errors::{Result, conflict, invalid};
+use serde::Deserialize;
 
 pub const ACCESS_FILE: &str = "access.toml";
 
@@ -107,12 +108,42 @@ pub fn builtin_roles(tools: &ToolTable) -> Roles {
         .collect()
 }
 
-/// 一节（[roles.x] 或 [agents.x]）读出的字段
-struct Entry {
+/// 文件的样子：读入只经它（未知的表与键、类型不对、规则形式不对都在这里报出）。节按名字排。
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Stored {
+    #[serde(default)]
+    roles: BTreeMap<String, StoredRole>,
+    /// 节名是 agent 的 id
+    #[serde(default)]
+    agents: BTreeMap<String, StoredAgent>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredRole {
+    #[serde(default)]
     description: String,
+    #[serde(default)]
+    allow: RuleList,
+    #[serde(default)]
+    deny: RuleList,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredAgent {
+    #[serde(default)]
     roles: Vec<String>,
-    allow: Vec<String>,
-    deny: Vec<String>,
+    #[serde(default)]
+    allow: RuleList,
+    #[serde(default)]
+    deny: RuleList,
+}
+
+/// 文件内容读成 [`Stored`]；不合格式时是原因。
+fn stored(text: &str) -> std::result::Result<Stored, String> {
+    toml::from_str(text).map_err(|e: toml::de::Error| format!("cannot parse: {}", e.message().trim()))
 }
 
 impl<'a> Parser<'a> {
@@ -144,87 +175,27 @@ impl<'a> Parser<'a> {
 
     fn parse(mut self, text: Option<&str>) -> Access {
         let Some(text) = text else { return self.done(None) };
-        let data: toml::Table = match text.parse() {
+        let data = match stored(text) {
             Ok(d) => d,
             Err(e) => {
-                let e: toml::de::Error = e;
-                self.invalid(format!("cannot parse: {}", e.message().trim()));
+                self.invalid(e);
                 return self.done(Some(text));
             }
         };
-        let mut extra: Vec<&String> = data.keys().filter(|k| !matches!(k.as_str(), "roles" | "agents")).collect();
-        extra.sort();
-        if !extra.is_empty() {
-            self.invalid(format!("unknown top-level tables {extra:?} (expected roles, agents)"));
+        for (name, role) in data.roles {
+            self.role(&name, role);
         }
-        for (name, raw) in self.table(&data, "roles") {
-            self.role(&name, &raw);
-        }
-        for (id, raw) in self.table(&data, "agents") {
-            self.agent(&id, &raw);
+        for (id, agent) in data.agents {
+            self.agent(&id, agent);
         }
         self.done(Some(text))
     }
 
-    /// 一张表的各节，按名字排（toml::Table 本身有序）。
-    fn table(&mut self, data: &toml::Table, key: &str) -> Vec<(String, toml::Value)> {
-        match data.get(key) {
-            None => Vec::new(),
-            Some(toml::Value::Table(t)) => t.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
-            Some(_) => {
-                self.invalid(format!("{key} must be a table ([{key}.<name>] sections)"));
-                Vec::new()
-            }
-        }
-    }
-
-    /// 读一节：只认 keys 里的字段，description 是字符串，其余是字符串列表；不合的整份作废。
-    fn entry(&mut self, raw: &toml::Value, keys: &[&str], what: &str) -> Option<Entry> {
-        let Some(table) = raw.as_table() else {
-            self.invalid(format!("{what}: must be a table"));
-            return None;
-        };
-        let mut entry = Entry { description: String::new(), roles: vec![], allow: vec![], deny: vec![] };
-        let mut ok = true;
-        for (k, v) in table {
-            let target = match k.as_str() {
-                "description" if keys.contains(&"description") => {
-                    match v.as_str() {
-                        Some(s) => entry.description = s.to_owned(),
-                        None => {
-                            self.invalid(format!("{what}: description must be a string"));
-                            ok = false;
-                        }
-                    }
-                    continue;
-                }
-                "roles" if keys.contains(&"roles") => &mut entry.roles,
-                "allow" => &mut entry.allow,
-                "deny" => &mut entry.deny,
-                _ => {
-                    self.invalid(format!("{what}: unknown key {k:?} (expected {keys:?})"));
-                    ok = false;
-                    continue;
-                }
-            };
-            match v.as_array().and_then(|a| a.iter().map(|x| x.as_str().map(str::to_owned)).collect::<Option<_>>()) {
-                Some(list) => *target = list,
-                None => {
-                    self.invalid(format!("{what}: {k} must be a list of strings"));
-                    ok = false;
-                }
-            }
-        }
-        ok.then_some(entry)
-    }
-
-    fn role(&mut self, name: &str, raw: &toml::Value) {
+    fn role(&mut self, name: &str, entry: StoredRole) {
         let what = format!("role {name:?}");
-        let entry = self.entry(raw, &["description", "allow", "deny"], &what);
         if let Err(e) = validate_slug("role", name) {
             self.invalid(e.message);
         }
-        let Some(entry) = entry else { return };
         let mut description = entry.description.trim().to_owned();
         if description.is_empty() {
             description = builtin_description(name).unwrap_or_default().to_owned();
@@ -232,14 +203,13 @@ impl<'a> Parser<'a> {
         if description.is_empty() {
             self.invalid(format!("{what}: description must not be empty"));
         }
-        let rules = Rules::new(self.patterns(&entry.allow, &what, None), self.patterns(&entry.deny, &what, None));
+        let rules = Rules::new(self.patterns(entry.allow, &what, None), self.patterns(entry.deny, &what, None));
         let fixed = self.roles.get(name).filter(|r| r.builtin()).map(|r| r.fixed.clone()).unwrap_or_default();
         self.roles.insert(name.to_owned(), Role { name: name.to_owned(), description, rules, fixed });
     }
 
-    fn agent(&mut self, id: &str, raw: &toml::Value) {
+    fn agent(&mut self, id: &str, entry: StoredAgent) {
         let what = format!("[agents.{id}]");
-        let Some(entry) = self.entry(raw, &["roles", "allow", "deny"], &what) else { return };
         if !is_agent_id(id) {
             // 照旧习惯写成了名字：不报的话这一节的规则（尤其 deny）悄悄不生效
             self.invalid(format!(
@@ -249,8 +219,8 @@ impl<'a> Parser<'a> {
             return;
         }
         let agent_id = Some(AgentId::new(id)).filter(|a| self.agents.contains(a));
-        let allow = self.patterns(&entry.allow, &what, agent_id.clone());
-        let deny = self.patterns(&entry.deny, &what, agent_id.clone());
+        let allow = self.patterns(entry.allow, &what, agent_id.clone());
+        let deny = self.patterns(entry.deny, &what, agent_id.clone());
         // 角色定义与对它的引用在同一个文件里：引用了没定义的角色是文件自相矛盾（拼错、手删了定义），跳过它会丢掉那个
         // 角色的 deny，所以整份作废；写了隐含的 base 只是多余
         let unknown: Vec<&String> = entry.roles.iter().filter(|r| !self.roles.contains_key(*r)).collect();
@@ -279,26 +249,23 @@ impl<'a> Parser<'a> {
         self.rules.insert(agent_id, AgentRules { roles: kept, allow, deny });
     }
 
-    /// 形式不对的整份作废；一个工具都匹配不上的只是引用了不存在的工具（留着也什么都不匹配），记一条问题；重复的去重。
-    fn patterns(&mut self, patterns: &[String], what: &str, agent_id: Option<AgentId>) -> Vec<Rule> {
+    /// 一个工具都匹配不上的只是引用了不存在的工具（留着也什么都不匹配），记一条问题；重复的去重。
+    fn patterns(&mut self, rules: RuleList, what: &str, agent_id: Option<AgentId>) -> Vec<Rule> {
         let mut unique: Vec<Rule> = Vec::new();
-        for p in patterns {
-            match Rule::parse(p) {
-                Err(e) => self.invalid(format!("{what}: {e}")),
-                Ok(rule) if unique.contains(&rule) => {}
-                Ok(rule) => {
-                    if rule.matches_no_tool(self.tools) {
-                        self.problem(
-                            format!(
-                                "{what}: rule {p:?} matches no tool; tools are listed by get_agent, e.g. \
-                                 'use:tool:issue_*'"
-                            ),
-                            agent_id.clone(),
-                        );
-                    }
-                    unique.push(rule);
-                }
+        for rule in rules.0 {
+            if unique.contains(&rule) {
+                continue;
             }
+            if rule.matches_no_tool(self.tools) {
+                self.problem(
+                    format!(
+                        "{what}: rule {:?} matches no tool; tools are listed by get_agent, e.g. 'use:tool:issue_*'",
+                        rule.to_string()
+                    ),
+                    agent_id.clone(),
+                );
+            }
+            unique.push(rule);
         }
         unique
     }
@@ -373,31 +340,24 @@ pub fn vet(before: Option<&str>, after: &str, tools: &ToolTable, addressable: &[
 /// agent（known）的那些。抄错的 id 会让这一节的 deny 不生效（等于放宽权限），所以写入口拒绝；已有的节不查（agent 删除时
 /// 由平台去掉它那一节）。平台自己改它（[`plan`]）只写认得的 id，不经这里。
 pub fn unknown_new_agents(before: Option<&str>, after: &str, known: &BTreeSet<AgentId>) -> Vec<AgentId> {
-    // 节名就是 agent 编号：在这里读入
-    let sections = |text: Option<&str>| -> Vec<AgentId> {
-        let Some(Ok(data)) = text.map(|t| t.parse::<toml::Table>()) else { return Vec::new() };
-        let ids = data.get("agents").and_then(toml::Value::as_table).map(|t| t.keys().map(AgentId::new).collect());
-        ids.unwrap_or_default()
-    };
+    let sections =
+        |text: Option<&str>| -> Vec<AgentId> { stored_or_empty(text).agents.into_keys().map(AgentId::new).collect() };
     let old = sections(before);
     sections(Some(after)).into_iter().filter(|id| !old.contains(id) && !known.contains(id)).collect()
 }
 
-/// 文件里写着的每一条读得出的规则（[roles.*] 与 [agents.*] 的 allow、deny），不管所在的节对不对；读不出时没有。
+/// 读得出的文件；没有文件或读不出时是空的（给只比较前后的 [`vet`] 与 [`unknown_new_agents`]：读不出的 after 已由 vet 拒绝，
+/// 读不出的 before 当作什么都没有，只会多查）。
+fn stored_or_empty(text: Option<&str>) -> Stored {
+    text.and_then(|t| stored(t).ok()).unwrap_or(Stored { roles: BTreeMap::new(), agents: BTreeMap::new() })
+}
+
+/// 文件里写着的每一条规则（[roles.*] 与 [agents.*] 的 allow、deny），不管所在的节对不对。
 fn rules_in(text: Option<&str>) -> Vec<Rule> {
-    let Some(Ok(data)) = text.map(|t| t.parse::<toml::Table>()) else { return Vec::new() };
-    let mut out = Vec::new();
-    for section in ["roles", "agents"] {
-        let Some(entries) = data.get(section).and_then(toml::Value::as_table) else { continue };
-        for entry in entries.values().filter_map(toml::Value::as_table) {
-            for key in ["allow", "deny"] {
-                if let Some(list) = entry.get(key).and_then(toml::Value::as_array) {
-                    out.extend(list.iter().filter_map(|r| r.as_str().and_then(|s| Rule::parse(s).ok())));
-                }
-            }
-        }
-    }
-    out
+    let data = stored_or_empty(text);
+    let roles = data.roles.into_values().flat_map(|r| [r.allow.0, r.deny.0]);
+    let agents = data.agents.into_values().flat_map(|a| [a.allow.0, a.deny.0]);
+    roles.chain(agents).flatten().collect()
 }
 
 /// 平台改 access.toml 的唯一入口：从快照读到的原文出发（不存在就是空文档）、交给 change 改、按 [`vet`] 校验，返回还没写

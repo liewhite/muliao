@@ -41,6 +41,8 @@ pub enum FireWhen {
     Changed,
 }
 
+muliao_platform::serde_names!(FireWhen);
+
 /// 命令最多这么多字符
 const SCRIPT_MAX_CHARS: usize = 4000;
 
@@ -187,10 +189,10 @@ pub fn alert_letter(t: &Trigger, p: &Precheck, error: &str) -> String {
             "The precheck of your trigger `{}` (kind {}) just started failing, so the trigger did not fire this time. \
              You wrote this check, so it is yours to fix; the user has not been told.",
             t.name,
-            t.mode.kind().name()
+            t.mode.kind()
         ),
         String::new(),
-        format!("fire_when: {}", serde_json::to_value(p.fire_when).expect("serializes").as_str().unwrap_or("")),
+        format!("fire_when: {}", p.fire_when),
         format!("secrets: {}", if p.secrets.is_empty() { "(none)".to_owned() } else { p.secrets.join(", ") }),
         "command:".into(),
         "```bash".into(),

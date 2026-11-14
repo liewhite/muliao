@@ -29,7 +29,7 @@ use muliao_platform::bus::Bus;
 use muliao_platform::db::{Database, Tx};
 use muliao_platform::tool_views::ToolRender;
 use muliao_platform::tooling::Audience;
-use muliao_runtime::conventions::{attach, shared_attachments};
+use muliao_runtime::conventions::attach;
 use muliao_runtime::instructions::with_notices;
 use muliao_runtime::toolbox::Redaction;
 use muliao_runtime::{Run, RunSpec, Runtime, ToolsRun};
@@ -42,7 +42,7 @@ use crate::compaction::{Compactor, Verdict};
 use crate::content::{Content, append_content, content_of, request_of};
 use crate::conventions::{
     MadeUp, answer_text, attach_run_context, interrupted_response, is_stopped, made_up_result, results_request,
-    set_finished_at, unanswered_calls,
+    set_finished_at, shared_attachments, unanswered_calls,
 };
 use crate::directory::{self, Session};
 use crate::events::{Events, RunEnd, RunEnded};
@@ -410,7 +410,7 @@ fn finish_in(
         && done
     {
         let messages: Vec<Message> = saved.into_iter().map(|s| s.message).collect();
-        let shared = shared_attachments(&messages).map_err(broken)?;
+        let shared = shared_attachments(&messages);
         settle_finished_in(tx, waker, &session, answer, &shared)?;
     }
     // 最后发布：订阅者（推送、issue 的表态）看到的是结清之后的状态
@@ -661,7 +661,7 @@ impl Driver<'_> {
                 });
                 let mail = match first {
                     Some((content, mail)) => {
-                        append_content(&mut request, content)?;
+                        append_content(&mut request, content);
                         mail
                     }
                     None => Vec::new(),
@@ -683,7 +683,7 @@ impl Driver<'_> {
                             timestamp: Utc::now(),
                             metadata: None,
                         });
-                        append_content(r, content)?;
+                        append_content(r, content);
                         mail
                     }
                     None => Vec::new(),
@@ -717,7 +717,7 @@ impl Driver<'_> {
         if !arrived.is_empty() {
             let workspace = self.core.agents.workspace(&self.begun.session.agent_id);
             // 运行中途没有挂起的调用（调用只在运行结束时挂起），这时到达的回答都是迟到的
-            append_content(&mut request, content_of(&self.core.files, &workspace, &arrived).await?)?;
+            append_content(&mut request, content_of(&self.core.files, &workspace, &arrived).await?);
             mail.extend(arrived.iter().map(|m| m.id));
         }
         let attaching = self.run_context_row.is_none();
@@ -725,7 +725,7 @@ impl Driver<'_> {
         let context = with_notices(&run_context, notices);
         if !context.is_empty() {
             // 只挂在本次运行新增的第一条请求上（重发的那条已经在库里，不改它）；运行上下文已经挂出去了时，notices 单独挂
-            attach_run_context(&mut request, &context)?;
+            attach_run_context(&mut request, &context);
         }
         let ids = self.save(vec![Message::User(request)], mail).await?;
         let id = *ids.last().expect("one request saved");

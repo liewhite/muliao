@@ -111,14 +111,7 @@ pub enum Busy {
     Waiting,
 }
 
-impl Busy {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Busy::Running => "running",
-            Busy::Waiting => "waiting",
-        }
-    }
-}
+muliao_platform::serde_names!(Busy);
 
 /// 上一次触发开出的会话还没做完时：它的 id 与在干什么。从没触发过、会话已删除、idle 时 None。不是 idle 就还有没做完的事：
 /// 在运行或排着运行，或在等后台任务、委派、到点唤醒、用户回答——等着的结果回来会自动接着做，再开一个会重叠（#627）。
@@ -370,8 +363,7 @@ impl TriggerService {
             })
             .await?;
         self.changed();
-        let kind = created.mode.kind().name();
-        tracing::info!(trigger = %created.name, kind, agent = %created.agent_id, "trigger created");
+        tracing::info!(trigger = %created.name, kind = %created.mode.kind(), agent = %created.agent_id, "trigger created");
         Ok(created)
     }
 
@@ -608,7 +600,7 @@ impl TriggerService {
         };
         (t.last_fired_at, t.last_session_id) = (Some(now), Some(session_id.clone()));
         save_in(tx, t)?;
-        tracing::info!(trigger = %t.name, kind = t.mode.kind().name(), %session_id, "trigger fired");
+        tracing::info!(trigger = %t.name, kind = %t.mode.kind(), %session_id, "trigger fired");
         Ok(Outcome::Fired(Fired { session_id }))
     }
 }

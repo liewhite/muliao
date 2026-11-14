@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use rusqlite::Connection;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::actor::should_run;
 use crate::answers::Question;
@@ -28,7 +28,7 @@ use crate::thread_calls::owed_in;
 use crate::wakeups::pending_of_in;
 use muliao_platform::errors::Result;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkState {
     /// 有没结束的运行，或有要处理的信
@@ -38,15 +38,7 @@ pub enum WorkState {
     Idle,
 }
 
-impl WorkState {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            WorkState::Running => "running",
-            WorkState::Waiting => "waiting",
-            WorkState::Idle => "idle",
-        }
-    }
-}
+muliao_platform::serde_names!(WorkState);
 
 /// 一个会话为什么在 waiting（唯一定义）：active 占用，与还能回答的提问、还能批准的调用。
 #[derive(Debug, Clone, Default, PartialEq)]

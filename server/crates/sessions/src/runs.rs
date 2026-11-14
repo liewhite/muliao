@@ -22,12 +22,23 @@ pub enum Outcome {
     Failed(String),
 }
 
+/// 库里 outcome 列：结局的种类。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum OutcomeKind {
+    Done,
+    Stopped,
+    Failed,
+}
+
+muliao_platform::serde_names!(OutcomeKind);
+
 impl Outcome {
-    fn as_str(&self) -> &'static str {
+    fn kind(&self) -> OutcomeKind {
         match self {
-            Outcome::Done => "done",
-            Outcome::Stopped => "stopped",
-            Outcome::Failed(_) => "failed",
+            Outcome::Done => OutcomeKind::Done,
+            Outcome::Stopped => OutcomeKind::Stopped,
+            Outcome::Failed(_) => OutcomeKind::Failed,
         }
     }
 
@@ -82,18 +93,18 @@ impl RunRecord {
 
 const COLUMNS: &str = "id, session_id, started_at, ended_at, outcome, error";
 
-type Raw = (RunId, SessionId, DateTime<Utc>, Option<DateTime<Utc>>, Option<String>, Option<String>);
+type Raw = (RunId, SessionId, DateTime<Utc>, Option<DateTime<Utc>>, Option<OutcomeKind>, Option<String>);
 
 fn raw(r: &Row<'_>) -> rusqlite::Result<Raw> {
     Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
 }
 
 fn record((id, session_id, started_at, ended_at, outcome, error): Raw) -> Result<RunRecord> {
-    let state = match (ended_at, outcome.as_deref(), error) {
+    let state = match (ended_at, outcome, error) {
         (None, None, None) => RunState::Unfinished,
-        (Some(ended_at), Some("done"), None) => RunState::Done { ended_at },
-        (Some(ended_at), Some("stopped"), None) => RunState::Stopped { ended_at },
-        (Some(ended_at), Some("failed"), Some(error)) => RunState::Failed { ended_at, error },
+        (Some(ended_at), Some(OutcomeKind::Done), None) => RunState::Done { ended_at },
+        (Some(ended_at), Some(OutcomeKind::Stopped), None) => RunState::Stopped { ended_at },
+        (Some(ended_at), Some(OutcomeKind::Failed), Some(error)) => RunState::Failed { ended_at, error },
         (ended_at, outcome, error) => {
             return Err(broken(format!("run {id} has ended_at {ended_at:?}, outcome {outcome:?} and error {error:?}")));
         }
@@ -124,7 +135,7 @@ pub(crate) fn end_in(tx: &mut Tx<'_>, live: &Live, run_id: RunId, outcome: Outco
         .query_row(
             "UPDATE runs SET ended_at = ?1, outcome = ?2, error = ?3 WHERE id = ?4 AND ended_at IS NULL \
              RETURNING session_id",
-            params![Utc::now(), outcome.as_str(), outcome.error(), run_id],
+            params![Utc::now(), outcome.kind(), outcome.error(), run_id],
             |r| r.get(0),
         )
         .optional()?;

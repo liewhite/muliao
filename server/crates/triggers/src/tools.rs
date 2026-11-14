@@ -167,7 +167,7 @@ impl Tool<RunScope> for TriggerCreate {
         let view = self.service.view(created).await?;
         Ok(agenter::tool::text(format!(
             "created {} trigger {}; status: {}",
-            view.trigger.mode.kind().name(),
+            view.trigger.mode.kind(),
             view.trigger.name,
             view.kind.status_json()
         )))

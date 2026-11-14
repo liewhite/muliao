@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use agenter::{DynTool, Tool, ToolError};
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::errors::{DomainError, Error};
 use crate::tool_views::ToolRender;
@@ -45,9 +45,9 @@ pub struct RunScope {
     /// 这次运行里 read_file 读过（只读了一段也算）、或文件工具刚写过的文件：路径 → 当时的修改时间。write_file 整体覆盖
     /// 资源目录里已有的文件之前核对它（读过、之后没被别人改过），防止两处同时改时后写的静默盖掉先写的。只由文件工具读写
     pub reads: Mutex<HashMap<PathBuf, std::time::SystemTime>>,
-    /// 工具给这次调用的结果挂上的附加数据（按调用 id）：agenter 的工具只交回内容，运行端口在这一步结束时把它并进那次
-    /// 调用的结果（`ToolResult.metadata`），随消息入库。键的约定由写它的领域登记（如运行端口的 `TOOL_ATTACHMENTS`）
-    result_metadata: Mutex<HashMap<String, Map<String, Value>>>,
+    /// 工具给这次调用的结果挂上的附加数据（按调用 id）：agenter 的工具只交回内容，运行端口在这一步结束时把它作为那次
+    /// 调用结果的 metadata（`ToolResult.metadata`），随消息入库。形状由写它的运行端口定（`ResultFiles`）
+    result_metadata: Mutex<HashMap<String, Value>>,
 }
 
 impl RunScope {
@@ -60,14 +60,13 @@ impl RunScope {
         self.audience == Audience::User
     }
 
-    /// 给调用 `call_id` 的结果挂上一项附加数据（同一个键再写就覆盖）。
-    pub fn set_result_metadata(&self, call_id: &str, key: &str, value: Value) {
-        let mut all = self.result_metadata.lock().expect("result metadata lock");
-        all.entry(call_id.to_owned()).or_default().insert(key.to_owned(), value);
+    /// 给调用 `call_id` 的结果挂上附加数据（再写就覆盖）。
+    pub fn set_result_metadata(&self, call_id: &str, value: Value) {
+        self.result_metadata.lock().expect("result metadata lock").insert(call_id.to_owned(), value);
     }
 
     /// 取走调用 `call_id` 挂上的附加数据（运行端口在这一步结束时取一次）。
-    pub fn take_result_metadata(&self, call_id: &str) -> Option<Map<String, Value>> {
+    pub fn take_result_metadata(&self, call_id: &str) -> Option<Value> {
         self.result_metadata.lock().expect("result metadata lock").remove(call_id)
     }
 }
@@ -196,12 +195,9 @@ mod tests {
     #[test]
     fn result_metadata_is_taken_once_per_call() {
         let scope = RunScope::new(AgentId::new("a"), "/w".into(), SessionId::new("s"), Audience::None);
-        scope.set_result_metadata("c1", "k", Value::from(1));
-        scope.set_result_metadata("c1", "k", Value::from(2));
-        scope.set_result_metadata("c1", "j", Value::from(3));
-        let taken = scope.take_result_metadata("c1").unwrap();
-        assert_eq!(taken["k"], 2);
-        assert_eq!(taken["j"], 3);
+        scope.set_result_metadata("c1", Value::from(1));
+        scope.set_result_metadata("c1", Value::from(2));
+        assert_eq!(scope.take_result_metadata("c1"), Some(Value::from(2)));
         assert!(scope.take_result_metadata("c1").is_none());
         assert!(scope.take_result_metadata("c2").is_none());
     }

@@ -169,7 +169,7 @@ pub(crate) fn deferred_results(
                 decided.remove(id).expect("take_in resolves every decision among the answers")
             }
             (_, Some(a)) => {
-                return Err(broken(format!("call {id} of {} got an answer for {}", p.call.name, a.kind().as_str())));
+                return Err(broken(format!("call {id} of {} got an answer for {}", p.call.name, a.kind())));
             }
         };
         results.insert(id.clone(), r);

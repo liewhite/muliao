@@ -28,17 +28,10 @@ pub enum Kind {
     Stream,
 }
 
+muliao_platform::serde_names!(Kind);
+
 impl Kind {
     pub const ALL: [Kind; 3] = [Kind::Schedule, Kind::Once, Kind::Stream];
-
-    /// 存在 `triggers.kind` 的名字
-    pub fn name(self) -> &'static str {
-        match self {
-            Kind::Schedule => "schedule",
-            Kind::Once => "once",
-            Kind::Stream => "stream",
-        }
-    }
 
     /// 给模型与界面看的说明：什么时候触发、config 的格式
     pub fn description(self) -> &'static str {
@@ -63,7 +56,7 @@ impl NewConfig {
     /// 按种类解析 config；不合法是调用方的输入错误。
     pub fn parse(kind: Kind, config: Value) -> Result<Self> {
         serde_json::from_value(json!({ "kind": kind, "config": config }))
-            .map_err(|e| invalid(format!("invalid {} trigger config: {e}", kind.name())))
+            .map_err(|e| invalid(format!("invalid {kind} trigger config: {e}")))
     }
 
     /// 规范化并推导初始运行状态。创建、改配置、重新启用时调用：定时的下次时间从 now 算起，流式换一个 generation（重起进程）。
@@ -105,16 +98,16 @@ impl Mode {
     }
 
     /// 从 kind、config、state 三列读出。
-    pub(crate) fn from_columns(kind: &str, config: &str, state: &str) -> serde_json::Result<Self> {
+    pub(crate) fn from_columns(kind: Kind, config: &str, state: &str) -> serde_json::Result<Self> {
         let (config, state): (Value, Value) = (serde_json::from_str(config)?, serde_json::from_str(state)?);
         serde_json::from_value(json!({ "kind": kind, "config": config, "state": state }))
     }
 
     /// 写成 kind、config、state 三列。
-    pub(crate) fn to_columns(&self) -> (&'static str, String, String) {
+    pub(crate) fn to_columns(&self) -> (Kind, String, String) {
         let mut v = serde_json::to_value(self).expect("trigger mode serializes");
         let state = v.as_object_mut().and_then(|o| o.remove("state")).unwrap_or_else(|| json!({}));
-        (self.kind().name(), v["config"].to_string(), state.to_string())
+        (self.kind(), v["config"].to_string(), state.to_string())
     }
 
     /// 按存下的配置重新交进来（重新启用时从头推导）。

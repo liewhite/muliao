@@ -34,7 +34,7 @@ use muliao_platform::config::Settings;
 use muliao_platform::db::{Database, migrate};
 use muliao_platform::tooling::{RunScope, ToolTraits, builtin};
 use muliao_platform::vault::Vault;
-use muliao_runtime::conventions::{SharedFile, attach, shared_attachments};
+use muliao_runtime::conventions::{SharedFile, attach};
 use muliao_runtime::mcp::{Confine, McpConnector};
 use muliao_runtime::models::ModelRegistry;
 use muliao_runtime::toolbox::Toolbox;
@@ -515,7 +515,7 @@ async fn stopping_midway_keeps_the_attachments_of_finished_calls() {
     tokio::time::timeout(Duration::from_secs(5), shown).await.expect("share finishes");
     w.service.stop(&s).await.unwrap();
     let h = w.history(&s).await;
-    let shared = shared_attachments(&h).unwrap();
+    let shared = crate::conventions::shared_attachments(&h);
     assert_eq!(shared.len(), 1, "{h:#?}");
     assert_eq!(shared[0].name, "report.txt");
     let all: Vec<String> = h.iter().flat_map(texts).collect();

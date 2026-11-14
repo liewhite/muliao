@@ -36,7 +36,7 @@ async fn insert_at(log: &UsageLog, at: DateTime<Utc>, e: UsageEntry) {
                     at,
                     e.agent_id,
                     e.session_id,
-                    e.kind.as_str(),
+                    e.kind,
                     e.model,
                     t.requests,
                     t.input_tokens,

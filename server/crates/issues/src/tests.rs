@@ -162,7 +162,7 @@ fn session_deleted(w: &Subscribers) -> Vec<HandlerOf<SessionDeleted>> {
     w.session_deleted.clone()
 }
 
-fn kinds(t: &[activity::Activity]) -> Vec<&'static str> {
+fn kinds(t: &[activity::Activity]) -> Vec<String> {
     t.iter().map(|a| a.what.kind()).collect()
 }
 

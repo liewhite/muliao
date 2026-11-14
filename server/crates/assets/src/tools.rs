@@ -16,7 +16,7 @@ use crate::access::Actor;
 use crate::distribution::Distribution;
 use crate::formats::agent_file::{Grouping, Thinking};
 use crate::lifecycle::AgentLifecycle;
-use crate::rules::{AgentRules, Role, Rule, texts};
+use crate::rules::{AgentRules, Role, RuleList, texts};
 use crate::secrets::Secrets;
 use crate::service::{AgentService, AgentSpec, AgentView};
 use crate::tree::Owner;
@@ -214,10 +214,10 @@ pub struct CreateArgs {
     /// Extra rules `action:kind:name` (action use or write; kind tool, skill, mcp, secret or memory; fnmatch
     /// wildcards), e.g. `use:skill:relay-host`, `use:secret:RELAY_*`, `*:memory:trading`.
     #[serde(default)]
-    allow: Vec<String>,
+    allow: RuleList,
     /// Rules to deny; deny wins over every allow, e.g. `use:tool:trigger_*`.
     #[serde(default)]
-    deny: Vec<String>,
+    deny: RuleList,
     /// Thinking/reasoning effort of its model: `default` sets none (the model's own default), `off` disables it,
     /// the others set the effort level.
     #[serde(default)]
@@ -251,7 +251,7 @@ impl Tool<RunScope> for CreateAgent {
             model: a.model.as_deref().map(ModelRef::parse).transpose().map_err(ToolError::Retry)?,
             thinking: a.thinking,
             group: a.group.as_deref().map_or(Grouping::Ungrouped, Grouping::parse),
-            rules: AgentRules { roles: a.roles, allow: Rule::parse_all(&a.allow)?, deny: Rule::parse_all(&a.deny)? },
+            rules: AgentRules { roles: a.roles, allow: a.allow.0, deny: a.deny.0 },
         };
         let created = self.agents.create(spec, &Actor::Agent(ctx.deps.agent_id.clone())).await?;
         Ok(agenter::tool::text(format!("created agent {}", created.name)))

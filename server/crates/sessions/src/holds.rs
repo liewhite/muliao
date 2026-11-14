@@ -12,8 +12,10 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 use muliao_platform::db::placeholders;
 use muliao_platform::errors::{Result, broken};
 use muliao_platform::ids::{DelegationId, HoldId, JobId, SessionId};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum HoldStatus {
     Active,
     /// 结局已经交回（和一封信件同一事务）
@@ -22,24 +24,16 @@ pub enum HoldStatus {
     Cleared,
 }
 
-impl HoldStatus {
-    fn as_str(self) -> &'static str {
-        match self {
-            HoldStatus::Active => "active",
-            HoldStatus::Released => "released",
-            HoldStatus::Cleared => "cleared",
-        }
-    }
-
-    fn parse(s: &str) -> Result<Self> {
-        Ok(match s {
-            "active" => HoldStatus::Active,
-            "released" => HoldStatus::Released,
-            "cleared" => HoldStatus::Cleared,
-            _ => return Err(broken(format!("unknown hold status {s:?}"))),
-        })
-    }
+/// 库里 kind 列：占用的是哪种工作（委派的 thread 删了也还是委派）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum HoldKind {
+    Job,
+    Wake,
+    Delegation,
 }
+
+muliao_platform::serde_names!(HoldStatus, HoldKind);
 
 /// 占用的是哪种工作。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,11 +49,11 @@ pub enum HoldOf {
 }
 
 impl HoldOf {
-    fn kind(&self) -> &'static str {
+    fn kind(&self) -> HoldKind {
         match self {
-            HoldOf::Job { .. } => "job",
-            HoldOf::Wake => "wake",
-            HoldOf::Delegation { .. } | HoldOf::DeletedThread => "delegation",
+            HoldOf::Job { .. } => HoldKind::Job,
+            HoldOf::Wake => HoldKind::Wake,
+            HoldOf::Delegation { .. } | HoldOf::DeletedThread => HoldKind::Delegation,
         }
     }
 }
@@ -77,7 +71,7 @@ pub struct Hold {
 
 const COLUMNS: &str = "id, session_id, kind, job_id, thread_call_id, awaited, status, created_at";
 
-type Raw = (HoldId, SessionId, String, Option<JobId>, Option<DelegationId>, bool, String, DateTime<Utc>);
+type Raw = (HoldId, SessionId, HoldKind, Option<JobId>, Option<DelegationId>, bool, HoldStatus, DateTime<Utc>);
 
 fn from_row(r: &Row<'_>) -> rusqlite::Result<Raw> {
     Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?))
@@ -85,16 +79,16 @@ fn from_row(r: &Row<'_>) -> rusqlite::Result<Raw> {
 
 /// 读库时解析一次：种类与它的列对不上是数据坏了。
 fn hold((id, session_id, kind, job_id, row, awaited, status, created_at): Raw) -> Result<Hold> {
-    let of = match (kind.as_str(), job_id) {
-        ("job", Some(job_id)) => HoldOf::Job { job_id },
-        ("wake", None) => HoldOf::Wake,
-        ("delegation", None) => match row {
+    let of = match (kind, job_id) {
+        (HoldKind::Job, Some(job_id)) => HoldOf::Job { job_id },
+        (HoldKind::Wake, None) => HoldOf::Wake,
+        (HoldKind::Delegation, None) => match row {
             Some(row) => HoldOf::Delegation { row },
             None => HoldOf::DeletedThread,
         },
         _ => return Err(broken(format!("hold {id} of kind {kind:?} does not match its columns"))),
     };
-    Ok(Hold { id, session_id, of, awaited, status: HoldStatus::parse(&status)?, created_at })
+    Ok(Hold { id, session_id, of, awaited, status, created_at })
 }
 
 fn query(c: &Connection, filter: &str, params: impl rusqlite::Params) -> Result<Vec<Hold>> {
@@ -133,8 +127,8 @@ fn insert(c: &Connection, session_id: &SessionId, of: HoldOf, awaited: bool) -> 
     let now = Utc::now();
     c.execute(
         "INSERT INTO session_holds (session_id, kind, job_id, thread_call_id, awaited, status, created_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6)",
-        params![session_id, of.kind(), job_id, row, awaited, now],
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![session_id, of.kind(), job_id, row, awaited, HoldStatus::Active, now],
     )?;
     let id = HoldId::new(c.last_insert_rowid());
     Ok(Hold { id, session_id: session_id.clone(), of, awaited, status: HoldStatus::Active, created_at: now })
@@ -147,32 +141,32 @@ pub(crate) fn job_in(c: &Connection, job_id: JobId) -> Result<Option<Hold>> {
 
 /// 还 active 的到点唤醒占用，按登记先后；session_id：只看这个会话的。
 pub(crate) fn active_wakes_in(c: &Connection, session_id: Option<&SessionId>) -> Result<Vec<Hold>> {
-    active_of(c, "wake", session_id)
+    active_of(c, HoldKind::Wake, session_id)
 }
 
 /// 还 active 的委派占用（委派还没结清），按登记先后；session_id：只看这个会话发起的。
 pub(crate) fn active_delegations_in(c: &Connection, session_id: Option<&SessionId>) -> Result<Vec<Hold>> {
-    active_of(c, "delegation", session_id)
+    active_of(c, HoldKind::Delegation, session_id)
 }
 
-fn active_of(c: &Connection, kind: &str, session_id: Option<&SessionId>) -> Result<Vec<Hold>> {
+fn active_of(c: &Connection, kind: HoldKind, session_id: Option<&SessionId>) -> Result<Vec<Hold>> {
+    let active = HoldStatus::Active;
     match session_id {
-        Some(s) => query(c, "status = 'active' AND kind = ?1 AND session_id = ?2 ORDER BY id", params![kind, s]),
-        None => query(c, "status = 'active' AND kind = ?1 ORDER BY id", [kind]),
+        Some(s) => query(c, "status = ?1 AND kind = ?2 AND session_id = ?3 ORDER BY id", params![active, kind, s]),
+        None => query(c, "status = ?1 AND kind = ?2 ORDER BY id", params![active, kind]),
     }
 }
 
 /// 把还 active 的占用改成 status（按库里的现状，不按调用方手里的副本）。返回改之前的状态。
 fn end_active(c: &Connection, hold_id: HoldId, status: HoldStatus) -> Result<HoldStatus> {
     let n = c.execute(
-        "UPDATE session_holds SET status = ?1, ended_at = ?2 WHERE id = ?3 AND status = 'active'",
-        params![status.as_str(), Utc::now(), hold_id],
+        "UPDATE session_holds SET status = ?1, ended_at = ?2 WHERE id = ?3 AND status = ?4",
+        params![status, Utc::now(), hold_id, HoldStatus::Active],
     )?;
     if n == 1 {
         return Ok(HoldStatus::Active);
     }
-    let now: String = c.query_row("SELECT status FROM session_holds WHERE id = ?1", [hold_id], |r| r.get(0))?;
-    HoldStatus::parse(&now)
+    Ok(c.query_row("SELECT status FROM session_holds WHERE id = ?1", [hold_id], |r| r.get(0))?)
 }
 
 /// 记为已释放，返回释放前的状态。已经被清掉或释放的不变：调用方按返回值决定。
@@ -190,7 +184,7 @@ pub(crate) fn abandon_in(c: &Connection, hold: &Hold) -> Result<()> {
 
 /// 会话被停止：全部 active 占用记为 cleared，返回它们。
 pub(crate) fn clear_in(c: &Connection, session_id: &SessionId) -> Result<Vec<Hold>> {
-    let holds = query(c, "session_id = ?1 AND status = 'active' ORDER BY id", [session_id])?;
+    let holds = query(c, "session_id = ?1 AND status = ?2 ORDER BY id", params![session_id, HoldStatus::Active])?;
     for h in &holds {
         end_active(c, h.id, HoldStatus::Cleared)?;
     }
@@ -199,8 +193,8 @@ pub(crate) fn clear_in(c: &Connection, session_id: &SessionId) -> Result<Vec<Hol
 
 pub(crate) fn has_active_in(c: &Connection, session_id: &SessionId) -> Result<bool> {
     Ok(c.query_row(
-        "SELECT 1 FROM session_holds WHERE session_id = ?1 AND status = 'active' LIMIT 1",
-        [session_id],
+        "SELECT 1 FROM session_holds WHERE session_id = ?1 AND status = ?2 LIMIT 1",
+        params![session_id, HoldStatus::Active],
         |r| r.get::<_, i64>(0),
     )
     .optional()?
@@ -213,8 +207,10 @@ pub(crate) fn active_among(c: &Connection, session_ids: &[SessionId]) -> Result<
     if session_ids.is_empty() {
         return Ok(held);
     }
-    let filter = format!("status = 'active' AND session_id IN ({}) ORDER BY id", placeholders(session_ids.len()));
-    for h in query(c, &filter, rusqlite::params_from_iter(session_ids))? {
+    let filter = format!("status = ? AND session_id IN ({}) ORDER BY id", placeholders(session_ids.len()));
+    let mut values: Vec<&dyn rusqlite::ToSql> = vec![&HoldStatus::Active];
+    values.extend(session_ids.iter().map(|s| s as &dyn rusqlite::ToSql));
+    for h in query(c, &filter, values.as_slice())? {
         held.entry(h.session_id.clone()).or_default().push(h);
     }
     Ok(held)
