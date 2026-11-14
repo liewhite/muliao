@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use axum::extract::State;
 use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
-use muliao_sessions::activity::{Wait, WorkState};
+use muliao_sessions::activity::{Delegated, Wait, WorkState};
 use muliao_sessions::answers::{CallResult, Choice, QuestionAnswer};
 use muliao_sessions::directory::{Listing, Session};
 use muliao_sessions::inbound::{UserMessage, UserTarget};
@@ -227,7 +227,7 @@ pub enum WaitOut {
     /// 后台任务（run_shell background）
     Job { job_id: JobId, since: DateTime<Utc>, job: JobOut },
     /// 委派出去的工作（ask_agent，或 delegate_task 带 report_back）
-    Delegation { thread_session_id: SessionId, check_seconds: Option<f64>, since: DateTime<Utc> },
+    Delegation { thread_session_id: SessionId, mode: Delegated, since: DateTime<Utc> },
     /// 自己约的到点唤醒
     Wake { due_at: DateTime<Utc>, note: String, since: DateTime<Utc> },
     /// 用户回答提问
@@ -251,8 +251,8 @@ async fn wait_outs(s: &AppState, agent_id: &AgentId, waits: Vec<Wait>) -> ApiRes
                 };
                 WaitOut::Job { job_id, since, job }
             }
-            Wait::Delegation { thread_session_id, check_seconds, since } => {
-                WaitOut::Delegation { thread_session_id, check_seconds, since }
+            Wait::Delegation { thread_session_id, mode, since } => {
+                WaitOut::Delegation { thread_session_id, mode, since }
             }
             Wait::Wake { due_at, note, since } => WaitOut::Wake { due_at, note, since },
             Wait::Ask { call_id, headers } => WaitOut::Ask { call_id, headers },

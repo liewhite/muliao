@@ -23,6 +23,7 @@ use crate::origins::Sender;
 use crate::paused_calls::kinds_among;
 use crate::pending::{OpenAsk, OpenAsks, open_asks_of, position};
 use crate::runs::{latest_among, unfinished_among};
+pub use crate::thread_calls::Delegated;
 use crate::thread_calls::owed_in;
 use crate::wakeups::pending_of_in;
 use muliao_platform::errors::Result;
@@ -139,7 +140,7 @@ pub enum Wait {
     /// 后台任务（run_shell background）
     Job { job_id: JobId, since: DateTime<Utc> },
     /// 委派出去的工作（ask_agent，或 delegate_task 带 report_back）
-    Delegation { thread_session_id: SessionId, check_seconds: Option<f64>, since: DateTime<Utc> },
+    Delegation { thread_session_id: SessionId, mode: Delegated, since: DateTime<Utc> },
     /// 自己约的到点唤醒
     Wake { due_at: DateTime<Utc>, note: String, since: DateTime<Utc> },
     /// 用户回答提问
@@ -162,7 +163,7 @@ pub(crate) fn waits_of_in(c: &Connection, session_id: &SessionId, waiting: &Wait
     held.extend(owed_in(c, None, Some(session_id))?.into_iter().map(|o| {
         let wait = Wait::Delegation {
             thread_session_id: o.delegation.thread_id,
-            check_seconds: o.delegation.check_seconds,
+            mode: o.delegation.kind,
             since: o.hold.created_at,
         };
         (o.hold.id, wait)

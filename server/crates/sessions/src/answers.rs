@@ -296,7 +296,9 @@ impl Decision {
         match self.choice {
             Choice::Deny => Resolution::Denied(DENIED.to_owned()),
             Choice::Approve | Choice::Always if taken => Resolution::Denied(APPROVAL_INTERRUPTED.to_owned()),
-            Choice::Approve | Choice::Always => Resolution::Approved(Approval { always: self.choice == Choice::Always, pin }),
+            Choice::Approve | Choice::Always => {
+                Resolution::Approved(Approval { always: self.choice == Choice::Always, pin })
+            }
         }
     }
 }

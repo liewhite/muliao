@@ -179,6 +179,9 @@ impl SessionWork {
     }
 }
 
+/// 运行中检查（后台任务、委派）与到点唤醒多久看一次（唯一一份）。
+pub const TICK: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// 运行中检查的节拍：每项工作上一次检查的时刻（还没检查过的以工作开始的时刻算）。只是节拍，重启后从开始的时刻重新算。
 #[derive(Debug)]
 pub struct CheckBeats<K: Ord + Clone> {

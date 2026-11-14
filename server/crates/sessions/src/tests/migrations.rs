@@ -272,8 +272,7 @@ fn pending_calls_move_into_one_table() {
     assert_eq!(kinds, expected.iter().map(|(k, w)| ((*k).to_owned(), *w)).collect());
     // 老行没有 pin 的读成空指纹；第二次交给运行的批准不再执行：取走的时间一起搬过来了
     let approve = || CallResult::Approval(Decision { choice: Choice::Approve });
-    let answers =
-        std::collections::HashMap::from([("g1".to_owned(), approve()), ("g2".to_owned(), approve())]);
+    let answers = std::collections::HashMap::from([("g1".to_owned(), approve()), ("g2".to_owned(), approve())]);
     let decided = crate::paused_calls::take_in(&c, &sid, &answers).unwrap();
     assert_eq!(
         decided["g1"],
@@ -469,4 +468,60 @@ fn part_marks_stored_as_strings_are_parsed_back() {
     assert_eq!(last.metadata.as_ref(), Some(&right));
     db.upgrade_to_latest();
     assert_eq!(db.marks(), expected);
+}
+
+#[test]
+fn delegation_mode_is_recorded_on_the_call() {
+    use crate::thread_calls::{CallMode, Delegated, call_in, record_call_in};
+    let db = OldDb::at(9);
+    let c = db.conn();
+    let now = Utc::now();
+    c.execute(
+        "INSERT INTO sessions (id, agent_id, title, origin, created_at, updated_at) VALUES ('t', 'a', 't', 'user', ?1, ?1)",
+        [now],
+    )
+    .unwrap();
+    for (id, call, check) in [(1, "r", Some(60.0)), (2, "k", None), (3, "p", None), (5, "gone", None)] {
+        c.execute(
+            "INSERT INTO thread_calls (id, parent_session_id, call_id, thread_session_id, check_seconds) \
+             VALUES (?1, ?2, ?3, 't', ?4)",
+            params![id, SESSION, call, check],
+        )
+        .unwrap();
+    }
+    c.execute("DELETE FROM thread_calls WHERE id = 5", []).unwrap();
+    c.execute(
+        "INSERT INTO paused_calls (session_id, call_id, kind, created_at) VALUES (?1, 'k', 'ask_agent', ?2)",
+        params![SESSION, now],
+    )
+    .unwrap();
+    c.execute(
+        "INSERT INTO session_holds (session_id, kind, thread_call_id, awaited, status, created_at) \
+         VALUES (?1, 'delegation', 1, 0, 'active', ?2)",
+        params![SESSION, now],
+    )
+    .unwrap();
+    drop(c);
+    db.upgrade_to(10);
+    let c = db.conn();
+    let sid = SessionId::new(SESSION);
+    let mode = |call: &str| call_in(&c, &sid, call).unwrap().unwrap().mode;
+    assert_eq!(mode("r"), CallMode::Delegated(Delegated::ReportBack { check_seconds: 60.0 }));
+    assert_eq!(mode("k"), CallMode::Delegated(Delegated::Ask));
+    assert_eq!(mode("p"), CallMode::Plain);
+    // 子表仍引用重建后的表，删过的委派号不被重用
+    let held: i64 = c
+        .query_row("SELECT t.id FROM session_holds h JOIN thread_calls t ON t.id = h.thread_call_id", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(held, 1);
+    assert_eq!(record_call_in(&c, &sid, "new", &SessionId::new("t"), CallMode::Plain).unwrap().id.get(), 6);
+    // 只有 report_back 带间隔
+    let bad = c.execute(
+        "INSERT INTO thread_calls (parent_session_id, call_id, thread_session_id, mode, check_seconds) \
+         VALUES (?1, 'x', 't', 'ask', 30)",
+        [SESSION],
+    );
+    assert!(bad.is_err());
+    drop(c);
+    db.upgrade_to_latest();
 }

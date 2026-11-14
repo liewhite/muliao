@@ -22,6 +22,7 @@ use crate::answers::AskArgs;
 use crate::delegation::{Mode, send_in, threads_in, validate_thread};
 use crate::halt::Halted;
 use crate::paused_calls::{self, Pause};
+use crate::thread_calls::Delegated;
 use crate::wakeups::{WAKE_ME, cancel_in, local_time, schedule_in};
 use crate::work::check_interval;
 use muliao_platform::errors::{Error, Result, invalid, not_found};
@@ -163,7 +164,11 @@ impl Tool<RunScope> for DelegateTask {
             .db
             .write(move |tx| {
                 let target = named_in(tx, &agent)?;
-                let mode = if report_back { Mode::ReportBack { check_seconds: check, awaited } } else { Mode::Plain };
+                let mode = if report_back {
+                    Mode::Delegated { kind: Delegated::ReportBack { check_seconds: check }, awaited }
+                } else {
+                    Mode::Plain
+                };
                 send_in(tx, &waker, &parent, &target.id, &name, &task, &call, mode)?;
                 Ok::<_, Error>(target.name)
             })
@@ -219,7 +224,16 @@ impl Tool<RunScope> for AskAgent {
         self.db
             .write(move |tx| {
                 let target = named_in(tx, &agent)?.id;
-                send_in(tx, &waker, &parent, &target, &thread, &message, &call, Mode::Ask { awaited })
+                send_in(
+                    tx,
+                    &waker,
+                    &parent,
+                    &target,
+                    &thread,
+                    &message,
+                    &call,
+                    Mode::Delegated { kind: Delegated::Ask, awaited },
+                )
             })
             .await?;
         // 发问方的运行停在这次调用上；对方的结局作为这次调用的结果交回

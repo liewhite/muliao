@@ -15,7 +15,6 @@ use muliao_platform::ids::SessionId;
 use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, Mutex, Weak};
-use std::time::Duration;
 
 use futures::FutureExt;
 use muliao_platform::db::Tx;
@@ -31,7 +30,7 @@ use crate::pending::Position;
 use crate::run::{Core, PartialSlot, execute, unsaved_of};
 use crate::runs::{self, Outcome, RunRecord};
 use crate::settlement::settle_failure_in;
-use crate::work::CheckBeats;
+use crate::work::{CheckBeats, TICK};
 use crate::{directory, wakeups};
 use muliao_platform::errors::{Error, Result, broken, conflict, not_found};
 
@@ -72,9 +71,6 @@ pub(crate) fn should_run(queued: &[Mail], latest: Option<&RunRecord>, at: &Posit
     }
     !at.waiting_for_answers()
 }
-
-/// 到点唤醒与委派运行中检查的节拍
-const TICK: Duration = Duration::from_secs(5);
 
 enum Command {
     Wake,

@@ -11,7 +11,7 @@ use crate::directory::{NewSession, add_in, delete_in};
 use crate::holds::{HoldOf, HoldStatus, active_wakes_in, hold_delegation_in};
 use crate::mailbox::{MailBody, queued_in};
 use crate::origins::SessionOrigin;
-use crate::thread_calls::{owed_in, record_call_in};
+use crate::thread_calls::{CallMode, Delegated, owed_in, record_call_in};
 use crate::wakeups::{deliver_due, pending_of_in, schedule_in};
 
 fn db() -> (tempfile::TempDir, Arc<Database>) {
@@ -96,8 +96,14 @@ async fn a_deleted_thread_is_no_longer_owed() {
                 let origin = SessionOrigin::Delegation { thread: t.into(), parent_session_id: Some(p.clone()) };
                 add_in(tx, session(&sid(t), &agent, origin))?;
             }
-            let r1 = record_call_in(tx, &p, "c1", &sid("t1"), None)?;
-            let r2 = record_call_in(tx, &p, "c2", &sid("t2"), Some(60.0))?;
+            let r1 = record_call_in(tx, &p, "c1", &sid("t1"), CallMode::Delegated(Delegated::Ask))?;
+            let r2 = record_call_in(
+                tx,
+                &p,
+                "c2",
+                &sid("t2"),
+                CallMode::Delegated(Delegated::ReportBack { check_seconds: 60.0 }),
+            )?;
             hold_delegation_in(tx, &SessionId::new("p"), r1.id, false)?;
             hold_delegation_in(tx, &SessionId::new("p"), r2.id, false)?;
             let before = owed_in(tx, None, Some(&SessionId::new("p")))?;

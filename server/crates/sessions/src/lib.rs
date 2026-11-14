@@ -50,5 +50,6 @@ pub const MIGRATION: Migration = Migration {
         include_str!("../migrations/007_part_marks_as_array.sql"),
         include_str!("../migrations/008_hold_columns.sql"),
         include_str!("../migrations/009_paused_calls.sql"),
+        include_str!("../migrations/010_thread_call_mode.sql"),
     ],
 };

@@ -27,7 +27,7 @@ use muliao_platform::shell::{DRAIN, LEFT_RUNNING_NOTE, Spawned, kill_group};
 use muliao_platform::tooling::RunScope;
 use muliao_sessions::events::SessionStopped;
 use muliao_sessions::holds::HoldOf;
-use muliao_sessions::work::{CheckBeats, SessionWork};
+use muliao_sessions::work::{CheckBeats, SessionWork, TICK};
 use rusqlite::{Connection, Row, params};
 use tokio::sync::watch;
 
@@ -47,8 +47,6 @@ pub fn log_path(job_id: JobId) -> String {
     format!("{JOBS_DIR}/{job_id}.log")
 }
 
-/// 运行中检查的节拍（同会话领域的委派检查）
-pub const TICK: Duration = Duration::from_secs(5);
 /// 关停时等照看者写完结局最多这么久
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(2 * DRAIN.as_secs());
 

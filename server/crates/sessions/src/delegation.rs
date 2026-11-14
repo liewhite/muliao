@@ -29,7 +29,7 @@ use crate::holds::hold_delegation_in;
 use crate::inbound::{Inbound, Opener, create_session_in, receive_in};
 use crate::paused_calls::{self, Pause};
 use crate::runs::{RunRecord, latest_among};
-use crate::thread_calls::{Owed, owed_in, record_call_in};
+use crate::thread_calls::{CallMode, Delegated, Owed, owed_in, record_call_in};
 use crate::work::{CheckBeats, EventSource, deliver_in, post_check_in};
 use muliao_platform::errors::{Result, invalid};
 
@@ -61,11 +61,8 @@ pub(crate) fn open_in(c: &Connection, parent_id: &SessionId, agent_id: &AgentId,
 pub(crate) enum Mode {
     /// delegate_task：不交回结局，thread 的回答推给用户（用户在等 thread）
     Plain,
-    /// delegate_task(report_back)：结局作为事件交回发起方，按间隔投运行中检查。awaited：用户是否在等发起方的回答（交回的
-    /// 结局随之推送）
-    ReportBack { check_seconds: f64, awaited: bool },
-    /// ask_agent：发起方停在这次调用上，结局作为它的结果交回，没有检查也没有超时
-    Ask { awaited: bool },
+    /// 一项委派（report_back 或 ask_agent）。awaited：用户是否在等发起方的回答（交回的结局随之推送）
+    Delegated { kind: Delegated, awaited: bool },
 }
 
 /// 往 thread 投信（见模块说明）：打开或找到 thread，记下是这次调用开出或续写了它；要交回结局的再在发起方登记引用它的
@@ -83,16 +80,16 @@ pub(crate) fn send_in(
     mode: Mode,
 ) -> Result<Session> {
     let child = open_in(tx, parent_id, agent_id, thread)?;
-    let check_seconds = match mode {
-        Mode::ReportBack { check_seconds, .. } => Some(check_seconds),
-        Mode::Plain | Mode::Ask { .. } => None,
+    let recorded = match mode {
+        Mode::Plain => CallMode::Plain,
+        Mode::Delegated { kind, .. } => CallMode::Delegated(kind),
     };
-    let call = record_call_in(tx, parent_id, call_id, &child.id, check_seconds)?;
+    let call = record_call_in(tx, parent_id, call_id, &child.id, recorded)?;
     let inbound = match mode {
         Mode::Plain => Inbound::delegated(parent_id, &child.id, prompt, true, None),
-        Mode::ReportBack { awaited, .. } | Mode::Ask { awaited } => {
+        Mode::Delegated { kind, awaited } => {
             hold_delegation_in(tx, parent_id, call.id, awaited)?;
-            if matches!(mode, Mode::Ask { .. }) {
+            if kind == Delegated::Ask {
                 // 和投信同一个事务：thread 可能在发问方这一步保存完之前就答完，交回时要认得出这是挂起调用的回答
                 paused_calls::record_in(tx, parent_id, call_id, &Pause::AskAgent)?;
             }
@@ -206,8 +203,13 @@ pub(crate) async fn check_threads(
     let (waker, beats) = (waker.clone(), beats.clone());
     db.write(move |tx| {
         let now = Utc::now();
-        let reporting: Vec<(Owed, f64)> =
-            owed_in(tx, None, None)?.into_iter().filter_map(|o| o.delegation.check_seconds.map(|s| (o, s))).collect();
+        let reporting: Vec<(Owed, f64)> = owed_in(tx, None, None)?
+            .into_iter()
+            .filter_map(|o| match o.delegation.kind {
+                Delegated::ReportBack { check_seconds } => Some((o, check_seconds)),
+                Delegated::Ask => None,
+            })
+            .collect();
         let mut beats = beats.lock().expect("beats lock");
         beats.keep(&reporting.iter().map(|(o, _)| o.delegation.id).collect::<BTreeSet<_>>());
         // (发起会话, thread) -> 到期的委派与它的间隔：同一个发起方对同一个 thread 的几项委派同时到期，检查一次
