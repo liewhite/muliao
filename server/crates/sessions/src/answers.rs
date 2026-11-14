@@ -364,7 +364,7 @@ pub enum CallResult {
 
 impl CallResult {
     /// 用户给的（回答提问、批准调用）；否则是被问的 agent 交回的结局。
-    pub(crate) fn from_user(&self) -> bool {
+    pub(crate) fn is_from_user(&self) -> bool {
         match self {
             CallResult::AskUser(_) | CallResult::Approval(_) => true,
             CallResult::AskAgent(_) => false,

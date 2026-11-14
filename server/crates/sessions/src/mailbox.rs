@@ -28,7 +28,7 @@ pub enum MailBody {
     /// 发送方来源，「用户说了什么」只按它认；delegation_id：委派来的信件是哪项委派（thread_calls 的行）
     Message { origin: Origin, content: String, attachments: Vec<String>, delegation_id: Option<DelegationId> },
     /// 对一次挂起调用的回答：作为那次调用的结果交回，不是一段新消息。是用户的回答还是交回的结局由结果的种类定
-    /// （[`CallResult::from_user`]）
+    /// （[`CallResult::is_from_user`]）
     Answer { call_id: String, result: CallResult },
     /// 后台任务、交回的结果、运行中检查（check_in）：套上来源（如 job:12、thread:<会话 id>）交给模型，界面单独显示
     Event { source: EventSource, content: String, check_in: bool },
@@ -47,7 +47,7 @@ impl MailBody {
     pub(crate) fn origin(&self) -> Option<Origin> {
         match self {
             MailBody::Message { origin, .. } => Some(*origin),
-            MailBody::Answer { result, .. } => result.from_user().then_some(Origin::User),
+            MailBody::Answer { result, .. } => result.is_from_user().then_some(Origin::User),
             MailBody::Event { .. } => None,
         }
     }
@@ -198,7 +198,7 @@ impl RawMail {
                 let (Some((call_id, result)), None) = (answers.next(), answers.next()) else {
                     return Err(broken(format!("answer mail {id} does not answer exactly one call")));
                 };
-                if result.from_user() != origin.is_some() {
+                if result.is_from_user() != origin.is_some() {
                     return Err(broken(format!(
                         "answer mail {id} has origin {origin:?} for a {:?} result",
                         result.kind()

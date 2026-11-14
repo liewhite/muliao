@@ -32,7 +32,7 @@ pub(crate) async fn content_of(files: &FileStore, workspace: &Path, mail: &[Mail
     for m in mail {
         match &m.body {
             MailBody::Answer { result, .. } => {
-                if result.from_user() {
+                if result.is_from_user() {
                     c.marks.push(PartMark { part: c.parts.len(), kind: PartKind::Message { origin: Origin::User } });
                 }
                 c.parts.push(RequestPart::Text { text: result.late_text() });

@@ -520,6 +520,11 @@ async fn issues_triggers_notifications_usage_and_history() {
         .unwrap();
     assert_eq!(zipped.headers()[header::CONTENT_ENCODING], "gzip");
     w.call(Method::GET, "/api/issues?status=nope", None, 422).await;
+    // 指派人的种类写在值里：写错的（如大写的 User、裸的 agent id）不当成 agent id
+    assert!(w.get("/api/issues?assignee=user").await.as_array().unwrap().is_empty(), "the assignee was cleared above");
+    assert!(w.get(&format!("/api/issues?assignee=agent:{id}")).await.as_array().unwrap().is_empty());
+    w.call(Method::GET, "/api/issues?assignee=User", None, 422).await;
+    w.call(Method::GET, &format!("/api/issues?assignee={id}"), None, 422).await;
     w.call(Method::DELETE, &format!("/api/issues/{n}"), None, 204).await;
 
     // 触发器：按方式校验配置
