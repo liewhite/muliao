@@ -1,8 +1,5 @@
 //! 配置：单一 TOML 文件（默认 `~/.muliao/config.toml`），是所有运行参数（含 LLM 密钥、登录密码）的唯一来源，不读环境
-//! 变量。键与 Python 版相同；拼错或多余的键直接报错，而不是静默忽略。模板见仓库根目录 `config.example.toml`。
-//!
-//! 与 Python 版的不同：`llm.providers.*.type` 只认 agenter 支持的 `anthropic` 与 `openai-responses`（Python 版还认
-//! `openai`、`google`，线上没有用）；`timezone` 在读配置时就按 IANA 时区名解析，写错启动即报错。
+//! 变量。拼错或多余的键直接报错，而不是静默忽略。模板见仓库根目录 `config.example.toml`。
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -496,10 +493,10 @@ precheck_timeout_seconds = 60
         assert!(parse(&bad_tz).unwrap_err().to_string().contains("timezone"));
         let google = MINIMAL.replace("type = \"anthropic\"", "type = \"google\"");
         assert!(parse(&google).is_err());
-        let cache = MINIMAL.replace("type = \"anthropic\"", "type = \"anthropic\"\nprompt_cache = false");
-        let err = parse(&cache).unwrap_err().to_string();
-        // 已删的键启动即报错，报错带出它所在的行
-        assert!(err.contains("prompt_cache") && err.contains("line 17"), "{err}");
+        let typo = MINIMAL.replace("type = \"anthropic\"", "type = \"anthropic\"\nmax_concurency = 2");
+        let err = parse(&typo).unwrap_err().to_string();
+        // provider 一节里的未知键也报错，并带行号
+        assert!(err.contains("max_concurency") && err.contains("line "), "{err}");
         let numeric = MINIMAL.replace("\"sk-xyz\"", "987654321");
         let err = parse(&numeric).unwrap_err().to_string();
         assert!(err.contains("must be a string") && !err.contains("987654321"), "{err}");

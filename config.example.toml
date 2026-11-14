@@ -55,18 +55,14 @@ api_key = ""
 # max_concurrency = 4
 
 # [llm.providers.openai]
-# type = "openai"
+# type = "openai-responses"
 # api_key = ""
 
-# 兼容服务示例：名称随意，用 type 选协议、base_url 指向该服务。模型写成 "my-compatible:deepseek-chat"
+# 兼容服务示例：名称随意，用 type 选协议、base_url 指向该服务。模型写成 "my-compatible:<模型名>"
 # [llm.providers.my-compatible]
-# type = "openai"
+# type = "openai-responses"
 # api_key = ""
-# base_url = "https://api.deepseek.com"
-
-# [llm.providers.gemini]
-# type = "google"
-# api_key = ""
+# base_url = "https://example.com/v1"
 
 # 可选：网页搜索与抓取（web 工具组）。不配置就没有这个工具组。type 可选：
 #   deepseek  DeepSeek Search / Fetch API（https://api-docs.deepseek.com/zh-cn/guides/search），按次计费
