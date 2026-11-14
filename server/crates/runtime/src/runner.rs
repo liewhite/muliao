@@ -17,10 +17,7 @@ use agenter::{
 };
 use chrono::Utc;
 use chrono_tz::Tz;
-use muliao_assets::kinds::ASSETS_SKILL;
 use muliao_assets::run_assets::RunAssets;
-use muliao_assets::service::AgentService;
-use muliao_assets::source::AssetSource;
 use muliao_files::FileStore;
 use muliao_platform::errors::Error;
 use muliao_platform::tooling::{Audience, RunScope};
@@ -37,8 +34,6 @@ pub struct RuntimeDeps {
     pub models: Arc<ModelRegistry>,
     pub toolbox: Arc<Toolbox>,
     pub mcp: Arc<McpConnector>,
-    pub source: Arc<AssetSource>,
-    pub agents: Arc<AgentService>,
     pub files: Arc<FileStore>,
     pub usage: Arc<UsageLog>,
     /// 告诉 agent 当前本地时间用的时区
@@ -51,7 +46,7 @@ pub struct Runtime {
 
 /// 开始一次运行要的东西（会话领域给）。
 pub struct RunSpec<'a> {
-    /// 这次运行用的资源（[`Runtime::run_assets`] 在运行开头取的一份，整次运行与压缩都用它）
+    /// 这次运行用的资源（会话领域在运行开头取的一份，整次运行与压缩都用它）
     pub assets: &'a RunAssets,
     pub session_id: &'a SessionId,
     pub audience: Audience,
@@ -93,12 +88,6 @@ impl Runtime {
         &self.d.models
     }
 
-    /// agent 现在的配置与它能用的资源，出自同一份快照（[`RunAssets`]）：没加载时 NotFound（带上原因），要它的运行当场失败，
-    /// 不沿用旧值。会话的一次运行在开头取一份，整次运行与压缩都用它。
-    pub async fn run_assets(&self, agent_id: &AgentId) -> Result<RunAssets, Error> {
-        RunAssets::of(&*self.d.source.snapshot().await?, agent_id)
-    }
-
     /// 这次运行开头交给模型的运行上下文（当前时间、回答交给谁），由会话领域挂到本次新增的第一条请求上；开始运行时发现的
     /// 问题（[`Run::notices`]）用 [`crate::instructions::with_notices`] 接在后面。
     pub fn run_context(&self, audience: Audience) -> String {
@@ -107,19 +96,12 @@ impl Runtime {
 
     /// 这个 agent 在这个会话里的指令：只由会话级、agent 级的稳定内容组成，同一个会话的两次运行得到同一段文字（缓存前缀）。
     fn instructions(&self, assets: &RunAssets, origin_note: &str, summary: Option<&str>) -> String {
-        let agent = &assets.agent;
-        let id = &agent.id;
-        let workspace = self.d.agents.workspace(id);
         build_instructions(&InstructionParts {
-            agent_id: id,
-            agent_name: agent.name.as_str(),
-            agent_description: agent.file.description(),
-            workspace: &workspace,
-            asset_dir: &agent.path,
+            agent_name: assets.agent.name.as_str(),
+            agent_description: assets.agent.file.description(),
+            workspace: &assets.workspace,
             origin_note,
-            memories: &assets.memories,
-            skills: &assets.skills,
-            memory_limit: self.d.source.memory_max_chars(),
+            assets: &assets.instruction_sections(),
             summary,
         })
     }
@@ -129,22 +111,11 @@ impl Runtime {
         let (assets, dir) = (spec.assets, &spec.assets.agent);
         let agent_id = &dir.id;
         let model = self.d.models.resolve(dir.file.model())?;
-        let workspace = self.d.agents.workspace(agent_id);
+        let workspace = &assets.workspace;
         // 资源目录里与它相关、没加载的文件（读坏、名字冲突），告诉模型去修
-        let mut notices: Vec<String> = assets
-            .problems
-            .iter()
-            .map(|p| {
-                format!(
-                    "Asset file not loaded: {}: {}. Fix the file (or tell an admin if you cannot write it); formats \
-                     are in the {ASSETS_SKILL} skill.",
-                    p.path.display(),
-                    p.reason
-                )
-            })
-            .collect();
+        let mut notices = assets.notices();
         let mut tools = self.d.toolbox.allowed(&assets.rules);
-        let reachable = self.d.mcp.connect_for(agent_id, &assets.mcp, &workspace).await?;
+        let reachable = self.d.mcp.connect_for(agent_id, &assets.mcp, workspace).await?;
         notices.extend(reachable.notices);
         for connection in reachable.connections {
             let mine = connection.tools::<RunScope>();
@@ -174,7 +145,7 @@ impl Runtime {
         );
         Ok(Run {
             agent,
-            scope: RunScope::new(agent_id.clone(), workspace, spec.session_id.clone(), spec.audience),
+            scope: RunScope::new(agent_id.clone(), workspace.clone(), spec.session_id.clone(), spec.audience),
             notices,
             redaction: self.d.toolbox.redaction(),
             files: self.d.files.clone(),

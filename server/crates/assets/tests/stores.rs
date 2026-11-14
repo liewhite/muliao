@@ -15,7 +15,6 @@ use muliao_assets::kinds::{Kind, StoredKind};
 use muliao_assets::mcp::McpRegistry;
 use muliao_assets::memory::{MemoryAccess, MemoryStore};
 use muliao_assets::rules::{AgentRules, Rules};
-use muliao_assets::run_assets::RunAssets;
 use muliao_assets::secrets::{SecretUse, Secrets};
 use muliao_assets::skills::SkillStore;
 use muliao_assets::tree::Owner;
@@ -67,7 +66,7 @@ async fn skills_index_scripts_and_edit() {
     assert_eq!(scripts.fingerprint().unwrap(), before, "hidden files do not count");
     write(&w.root().join("alice/skills/tool/run.sh"), "echo 2");
     assert_ne!(scripts.fingerprint().unwrap(), before);
-    assert_eq!(RunAssets::of(&w.source.snapshot().await.unwrap(), &a).unwrap().skills.len(), 1);
+    assert_eq!(w.service.run_assets(&a).await.unwrap().skills.len(), 1);
     let b = w.create("bob").await;
     assert!(skills.scripts("tool", &b).await.is_err(), "not shared with bob");
     // 编辑时保留 approval，旧版本冲突
@@ -107,9 +106,9 @@ async fn mcp_add_probe_and_toggle() {
     let probe = async |_: &muliao_assets::mcp::McpServer| Ok(vec!["t1".to_owned()]);
     let (_, tools) = registry.add("srv", config.clone(), Owner::Agent(a.clone()), Some(probe)).await.unwrap();
     assert_eq!(tools, vec!["t1"]);
-    assert_eq!(RunAssets::of(&w.source.snapshot().await.unwrap(), &a).unwrap().mcp.len(), 1);
+    assert_eq!(w.service.run_assets(&a).await.unwrap().mcp.len(), 1);
     registry.set_enabled("srv", false).await.unwrap();
-    assert!(RunAssets::of(&w.source.snapshot().await.unwrap(), &a).unwrap().mcp.is_empty());
+    assert!(w.service.run_assets(&a).await.unwrap().mcp.is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]

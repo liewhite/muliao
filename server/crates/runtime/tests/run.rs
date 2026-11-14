@@ -210,8 +210,6 @@ base_url = "{}"
         models,
         toolbox,
         mcp: mcp.clone(),
-        source: source.clone(),
-        agents: agents.clone(),
         files: files.clone(),
         usage: usage.clone(),
         tz: chrono_tz::Asia::Shanghai,
@@ -245,7 +243,7 @@ async fn a_run_from_start_to_finish() {
     // 一个读坏的 skill
     write(&w.root.join("me/skills/broken/SKILL.md"), "no frontmatter\n");
 
-    let assets = w.runtime.run_assets(&me).await.unwrap();
+    let assets = w.agents.run_assets(&me).await.unwrap();
     let run = w
         .runtime
         .start(RunSpec {

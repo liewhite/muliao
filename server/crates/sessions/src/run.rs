@@ -211,7 +211,7 @@ pub(crate) async fn execute(
             return Ok(Ran::Finished);
         }
     };
-    let assets = core.runtime.run_assets(&begun.session.agent_id).await?;
+    let assets = core.agents.run_assets(&begun.session.agent_id).await?;
     let audience = audience_of(&begun.audience_mail.iter().collect::<Vec<_>>(), begun.delegated);
     let mut driver = Driver {
         core,

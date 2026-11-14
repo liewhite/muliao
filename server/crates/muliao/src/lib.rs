@@ -193,8 +193,6 @@ pub async fn assemble(settings: Settings, web_dir: PathBuf) -> anyhow::Result<Ap
         models: models.clone(),
         toolbox: toolbox.clone(),
         mcp: mcp_connector.clone(),
-        source: source.clone(),
-        agents: agents.clone(),
         files: files.clone(),
         usage: usage.clone(),
         tz,

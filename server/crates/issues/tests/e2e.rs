@@ -184,16 +184,8 @@ async fn world() -> World {
     let confine: Confine =
         Arc::new(|_agent: AgentId| async { Err(muliao_platform::errors::broken("no MCP in this test")) }.boxed());
     let mcp = Arc::new(McpConnector::new(secrets, confine));
-    let runtime = Arc::new(Runtime::new(RuntimeDeps {
-        models,
-        toolbox: toolbox.clone(),
-        mcp,
-        source: source.clone(),
-        agents: agents.clone(),
-        files: files.clone(),
-        usage,
-        tz,
-    }));
+    let runtime =
+        Arc::new(Runtime::new(RuntimeDeps { models, toolbox: toolbox.clone(), mcp, files: files.clone(), usage, tz }));
     let spec = |name: &str| AgentSpec { name: name.into(), description: "测试".into(), ..Default::default() };
     let me = agents.create(spec("me"), &Actor::User).await.unwrap().id;
     let other = agents.create(spec("other"), &Actor::User).await.unwrap().id;

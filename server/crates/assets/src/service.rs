@@ -18,6 +18,7 @@ use crate::agents::{self, AgentInfo, AgentNames};
 use crate::formats::agent_file::{self, AGENT_FILE, AgentConfig, AgentFile, Grouping, Thinking};
 use crate::naming::{AgentName, new_agent_id};
 use crate::rules::{AgentRules, Rule};
+use crate::run_assets::RunAssets;
 use crate::source::AssetSource;
 use crate::tree::{AgentDir, PRIVATE_MEMORY_FILE, Snapshot, move_to, remove};
 use muliao_platform::config::ModelRef;
@@ -78,6 +79,19 @@ impl AgentService {
 
     pub fn workspace(&self, agent_id: &AgentId) -> PathBuf {
         workspace_of(&self.workspaces_dir, agent_id)
+    }
+
+    /// agent 现在的配置与它能用的资源，出自同一份快照（[`RunAssets`]）：没加载时 NotFound（带上原因），要它的运行当场
+    /// 失败，不沿用旧值。会话的一次运行在开头取一份，整次运行与压缩都用它。
+    pub async fn run_assets(&self, agent_id: &AgentId) -> Result<RunAssets> {
+        let snapshot = self.source.snapshot().await?;
+        RunAssets::of(
+            &snapshot,
+            agent_id,
+            self.workspace(agent_id),
+            self.source.root().to_path_buf(),
+            self.source.memory_max_chars(),
+        )
     }
 
     /// actor：创建者。建资源目录（agent.toml、空的私有记忆）、写它的规则、建工作目录、插行。

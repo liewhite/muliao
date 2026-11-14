@@ -10,7 +10,6 @@ use agenter::{Content, ToolCall, ToolCtx};
 use futures::FutureExt;
 use muliao_assets::access::Actor;
 use muliao_assets::rules::ToolTable;
-use muliao_assets::run_assets::RunAssets;
 use muliao_assets::secrets::Secrets;
 use muliao_assets::service::{AgentService, AgentSpec};
 use muliao_assets::source::AssetSource;
@@ -128,7 +127,7 @@ async fn stdio_server_runs_in_the_users_write_sandbox() {
         .boxed()
     });
     let connector = McpConnector::new(secrets, confine);
-    let servers = async || RunAssets::of(&source.snapshot().await.unwrap(), &me).unwrap().mcp;
+    let servers = async || agents.run_assets(&me).await.unwrap().mcp;
 
     let reachable = connector.connect_for(&me, &servers().await, &workspace).await.unwrap();
     assert!(reachable.notices.is_empty(), "{:?}", reachable.notices);

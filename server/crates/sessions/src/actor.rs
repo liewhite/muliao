@@ -476,7 +476,7 @@ async fn compact(core: &Core, id: &SessionId) -> Result<usize> {
         })
         .await?;
     let result = async {
-        let assets = core.runtime.run_assets(&agent_id).await?;
+        let assets = core.agents.run_assets(&agent_id).await?;
         core.compactor.compact(id, &assets).await
     }
     .await;

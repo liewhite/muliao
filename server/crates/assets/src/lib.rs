@@ -25,6 +25,7 @@ pub mod lifecycle;
 pub mod mcp;
 pub mod memory;
 pub mod naming;
+pub mod prompt;
 pub mod rules;
 pub mod run_assets;
 pub mod secrets;

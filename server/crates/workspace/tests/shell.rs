@@ -275,10 +275,7 @@ async fn stopping_the_session_kills_its_jobs() {
     let jobs = w.workspace.jobs.clone();
     let session = w.session.clone();
     w.db.write(move |tx| {
-        jobs.on_stopped(
-            tx,
-            &SessionStopped { session_id: session, jobs: vec![id] },
-        );
+        jobs.on_stopped(tx, &SessionStopped { session_id: session, jobs: vec![id] });
         Ok::<_, rusqlite::Error>(())
     })
     .await
