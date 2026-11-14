@@ -95,7 +95,11 @@ pub async fn world(max_output_chars: usize) -> World {
     let (table, binder) = ToolTable::pending();
     let source = Arc::new(AssetSource::new(db.clone(), root.clone(), 4000, Arc::new(|_| Ok(())), table.clone()));
     let workspaces = dir.path().join("workspaces");
-    let agents = AgentService::new(source.clone(), workspaces.clone(), "claude:m".parse().unwrap());
+    let agents = AgentService::new(
+        source.clone(),
+        workspaces.clone(),
+        muliao_platform::config::ModelRef::parse("claude:m").unwrap(),
+    );
     let vault = Arc::new(Vault::new("3QOHdQSfwdIhMog5wkCMiIBXFANh4YdV-XA9xY3RmyY=").unwrap());
     let secrets = Arc::new(Secrets::new(source.clone(), vault));
     let files = Arc::new(FileStore::open(db.clone(), dir.path().join("files"), 1 << 20).unwrap());

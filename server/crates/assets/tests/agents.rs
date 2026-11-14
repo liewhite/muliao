@@ -48,7 +48,7 @@ async fn create_writes_files_rules_and_row() {
         let spec = AgentSpec {
             name: name.into(),
             description: "d".into(),
-            model: model.map(|m| m.parse().unwrap()),
+            model: model.map(|m| muliao_platform::config::ModelRef::parse(m).unwrap()),
             rules,
             ..Default::default()
         };
@@ -122,7 +122,10 @@ async fn update_renames_and_rolls_back() {
     let toml_before = read(w.root().join("Alice2/agent.toml"));
     let patch = AgentPatch {
         name: Some("bob".into()),
-        config: AgentConfig { model: Some("p:other".parse().unwrap()), ..Default::default() },
+        config: AgentConfig {
+            model: Some(muliao_platform::config::ModelRef::parse("p:other").unwrap()),
+            ..Default::default()
+        },
         allow: Some(vec!["use:tool:read_file".parse().unwrap()]),
         ..Default::default()
     };

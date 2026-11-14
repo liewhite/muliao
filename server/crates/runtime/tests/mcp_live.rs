@@ -85,7 +85,11 @@ async fn stdio_server_runs_in_the_users_write_sandbox() {
         Arc::new(|_: &muliao_platform::config::ModelRef| Ok(())),
         Arc::new(ToolTable::of(vec![])),
     ));
-    let agents = AgentService::new(source.clone(), base.join("workspaces"), "p:m".parse().unwrap());
+    let agents = AgentService::new(
+        source.clone(),
+        base.join("workspaces"),
+        muliao_platform::config::ModelRef::parse("p:m").unwrap(),
+    );
     let me = agents
         .create(AgentSpec { name: "me".into(), description: "d".into(), ..Default::default() }, &Actor::User)
         .await

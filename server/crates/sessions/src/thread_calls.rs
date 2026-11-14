@@ -160,11 +160,9 @@ pub(crate) fn owed_in(
     let mut records = delegations_among(c, &rows)?;
     let mut owed = Vec::new();
     for (row, hold) in held {
-        let Some(r) = records.remove(&row) else { continue };
-        // 占用只在委派时登记（delegation::send_in）
-        let CallMode::Delegated(kind) = r.mode else {
-            return Err(broken(format!("hold {} refers to thread call {row}, which is not a delegation", hold.id)));
-        };
+        // 占用只在委派时登记（delegation::send_in），指向的总是委派行；不是的与行不在一样不算
+        let Some(CallRecord { mode: CallMode::Delegated(kind), .. }) = records.get(&row) else { continue };
+        let (kind, r) = (*kind, records.remove(&row).expect("just found"));
         let delegation =
             Delegation { id: r.id, parent_id: r.parent_id, call_id: r.call_id, thread_id: r.thread_id, kind };
         owed.push(Owed { delegation, hold });

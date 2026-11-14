@@ -316,8 +316,8 @@ impl ModelRef {
     /// 文字形式 "<provider 名>:<模型名>"。
     pub fn parse(text: &str) -> Result<ModelRef, String> {
         match text.split_once(':') {
-            Some((provider, model)) if !provider.is_empty() && !model.is_empty() => Self::new(provider, model),
-            _ => Err(format!("model {text:?} must be '<provider>:<model>'")),
+            Some((provider, model)) => Self::new(provider, model),
+            None => Err(format!("model {text:?} must be '<provider>:<model>'")),
         }
     }
 
@@ -333,13 +333,6 @@ impl ModelRef {
 impl fmt::Display for ModelRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}:{}", self.provider, self.model)
-    }
-}
-
-impl std::str::FromStr for ModelRef {
-    type Err = String;
-    fn from_str(text: &str) -> Result<ModelRef, String> {
-        ModelRef::parse(text)
     }
 }
 

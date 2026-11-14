@@ -1,6 +1,7 @@
 -- 委派方式只存一份（#847）：以前没有存下来，靠占用、挂起记录和 check_seconds 拼出来。thread_calls 加 mode 列，
 -- 只有 report_back 带间隔（CHECK 约束）。旧行换算：有间隔的是 report_back；发起方在这次调用上挂起成 ask_agent 的是 ask；
--- 其余是普通 delegate_task（plain）。重建表以加上跨列约束；迁移连接已关外键，子表（mail、session_holds）按表名引用，
+-- 其余是普通 delegate_task（plain；线上有 1 行 #823 之前的 ask_agent 没有挂起记录、记成 plain，无占用与信件引用它，
+-- 只是历史记录标错方式，不为它按工具名推断）。重建表以加上跨列约束；迁移连接已关外键，子表（mail、session_holds）按表名引用，
 -- 改名后仍指向新表；自增序号搬过去，删过的委派号不被重用。
 CREATE TABLE thread_calls_new (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

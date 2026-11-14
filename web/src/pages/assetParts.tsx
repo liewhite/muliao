@@ -67,6 +67,7 @@ type Transferable = Exclude<CatalogAsset, { kind: 'tool' }>
 export function AssetAccess({ asset }: { asset: CatalogAsset }) {
   const agents = useAgents()
   const [transferring, setTransferring] = useState(false)
+  // kind 只为让类型收窄到可转移的那几种（转移接口不收工具）；能不能转只看 transferable
   const transferable = asset.transferable && asset.kind !== 'tool' ? asset : null
   return (
     <div className="flex flex-col gap-2">

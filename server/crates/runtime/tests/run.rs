@@ -169,8 +169,11 @@ base_url = "{}"
     let models = Arc::new(ModelRegistry::new(&settings.llm, reqwest::Client::new()));
     let (table, binder) = ToolTable::pending();
     let source = Arc::new(AssetSource::new(db.clone(), root.clone(), 4000, models.model_check(), table.clone()));
-    let agents =
-        Arc::new(AgentService::new(source.clone(), dir.path().join("workspaces"), "claude:m".parse().unwrap()));
+    let agents = Arc::new(AgentService::new(
+        source.clone(),
+        dir.path().join("workspaces"),
+        muliao_platform::config::ModelRef::parse("claude:m").unwrap(),
+    ));
     let files = Arc::new(FileStore::open(db.clone(), dir.path().join("files"), 1 << 20).unwrap());
     let usage = Arc::new(UsageLog::new(db.clone(), chrono_tz::UTC));
     let vault = Arc::new(Vault::new("3QOHdQSfwdIhMog5wkCMiIBXFANh4YdV-XA9xY3RmyY=").unwrap());

@@ -67,8 +67,11 @@ pub async fn world() -> World {
     std::fs::create_dir_all(root.join("platform/memory")).unwrap();
     std::fs::write(root.join("platform/memory/global.md"), "全局\n").unwrap();
     let source = Arc::new(AssetSource::new(db.clone(), root, 100, model_check(), tools()));
-    let service =
-        Arc::new(AgentService::new(source.clone(), dir.path().join("workspaces"), "p:default".parse().unwrap()));
+    let service = Arc::new(AgentService::new(
+        source.clone(),
+        dir.path().join("workspaces"),
+        muliao_platform::config::ModelRef::parse("p:default").unwrap(),
+    ));
     World { dir, db, source, service }
 }
 

@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use agenter::Resolution;
 use chrono::Utc;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, params};
 
 use crate::answers::{CallResult, Waiting};
 use muliao_platform::db::placeholders;
@@ -94,15 +94,12 @@ pub(crate) fn take_in(
     let mut results = HashMap::new();
     for (call_id, r) in answers {
         let CallResult::Approval(d) = r else { continue };
-        let (pin, taken): (String, Option<String>) = c
-            .query_row(
-                "SELECT pin, taken_at FROM paused_calls WHERE session_id = ?1 AND call_id = ?2 AND kind = 'approval'",
-                params![session_id, call_id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .optional()?
-            // 回答只对着挂起记录提交（resolve_reply），走到这里是记录被删了或数据对不上
-            .ok_or_else(|| broken(format!("decided call {call_id} has no approval recorded")))?;
+        // 回答只对着挂起记录提交（resolve_reply），记录永久保留
+        let (pin, taken): (String, Option<String>) = c.query_row(
+            "SELECT pin, taken_at FROM paused_calls WHERE session_id = ?1 AND call_id = ?2 AND kind = 'approval'",
+            params![session_id, call_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
         if d.approved() && taken.is_none() {
             c.execute(
                 "UPDATE paused_calls SET taken_at = ?1 WHERE session_id = ?2 AND call_id = ?3",
