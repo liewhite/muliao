@@ -23,9 +23,22 @@ export function sourceKey(s: ItemSource): string {
   }
 }
 
+/** 调用参数原文里值得显示的：没有参数（空串，或解析出空对象，不管模型怎么写空白）时为 null；不是合法 JSON 的照原文显示 */
+export function argsShown(text: string): string | null {
+  if (text.trim() === '') return null
+  try {
+    const v: unknown = JSON.parse(text)
+    if (typeof v === 'object' && v !== null && !Array.isArray(v) && Object.keys(v).length === 0) return null
+  } catch {
+    // 不是 JSON：照原文显示
+  }
+  return text
+}
+
 /** 一次工具调用的调用这一半（调用条目给出） */
 export interface ToolCall {
-  args: string
+  /** 参数原文；没有参数（空串、空对象）时为 null，不显示 */
+  args: string | null
   /** 开始执行的时间（由后端给出）；拿不到的为 null */
   at: string | null
   /** 参数按工具的展示规则画成的块；null 时显示原文 */
@@ -129,7 +142,7 @@ export function toBlocks(items: Item[]): Block[] {
         const tool: CalledTool = {
           name: item.tool_name,
           threads: item.threads,
-          call: { args: item.text, at: item.at, view: item.view },
+          call: { args: argsShown(item.text), at: item.at, view: item.view },
           outcome: null,
         }
         tools.set(item.tool_call_id, tool)

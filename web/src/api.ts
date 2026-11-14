@@ -197,10 +197,8 @@ async function send<T>(
   if (resp.status === 204) return undefined as T
   if (raw) return resp as T
   // 其余按响应的类型解码：JSON 响应体缺失时 resp.json() 直接报错；没有响应体的接口（stop 这类 202，接口描述里
-  // 没有 content，类型为 void）必须真的没有响应体
+  // 没有 content，类型为 void）不读响应体
   if (resp.headers.get('Content-Type')?.startsWith('application/json')) return (await resp.json()) as T
-  const text = await resp.text()
-  if (text !== '') throw new Error(`${method} ${path} answered ${resp.status} with an unexpected non-JSON body`)
   return undefined as T
 }
 

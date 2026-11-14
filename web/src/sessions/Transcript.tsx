@@ -73,7 +73,7 @@ function ToolDetail({ tool }: { tool: ToolView }) {
           {callView !== null ? (
             <ToolViewBlocks blocks={callView} />
           ) : (
-            tool.call && tool.call.args !== '{}' && <pre className={CODE_BLOCK}>{tool.call.args}</pre>
+            tool.call && tool.call.args !== null && <pre className={CODE_BLOCK}>{tool.call.args}</pre>
           )}
           {resultView !== null ? (
             <ToolViewBlocks blocks={resultView} />

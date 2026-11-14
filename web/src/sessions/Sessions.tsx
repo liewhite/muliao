@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Card, Chip, SearchField, Spinner } from '@heroui/react'
+import { Button, Card, Chip, SearchField, Spinner } from '@heroui/react'
 import { ChevronDown, ChevronRight, Hourglass } from 'lucide-react'
 import { Link, useMatch } from 'react-router-dom'
 import { api, type AgentId, type SessionListItem } from '../api'
@@ -18,6 +18,9 @@ const parseFilter = oneOf(Object.keys(FILTERS) as Filter[], 'chat')
 
 // 折叠起来的 agent 分组，跨刷新记住
 const COLLAPSED_KEY = 'muliao.sessions.collapsed'
+
+// 一页的会话数
+const PAGE = 200
 
 // 在运行的会话：卡片左侧描强调色边、标题前转圈、带「运行中」标签；在等待的（后台任务、委派、用户回答）：
 // 浅色边、沙漏、「等待中」。置顶区里不在 agent 分组下，带上 agent 名和它现在配置的模型
@@ -93,13 +96,17 @@ export default function Sessions() {
     const timer = setTimeout(() => setKeyword(text.trim()), 300)
     return () => clearTimeout(timer)
   }, [text])
+  // 一次多取一页：列表满了就在底下给「显示更多」；换分类、换关键字时回到第一页（记下是给哪个筛选加的页）
+  const listKey = `${filter}\n${keyword}`
+  const [more, setMore] = useState({ key: listKey, limit: PAGE })
+  const limit = more.key === listKey ? more.limit : PAGE
   const sessions = useLoad(() =>
       api.sessions({
         origin: FILTERS[filter].origins ?? undefined,
         q: keyword === '' ? undefined : keyword,
-        limit: 200,
+        limit,
       }),
-    [filter, keyword],
+    [filter, keyword, limit],
   )
 
   return (
@@ -171,6 +178,11 @@ export default function Sessions() {
                   </section>
                 )
               })}
+              {list.length === limit && (
+                <Button variant="secondary" onPress={() => setMore({ key: listKey, limit: limit + PAGE })}>
+                  显示更多
+                </Button>
+              )}
             </div>
           )
         }}

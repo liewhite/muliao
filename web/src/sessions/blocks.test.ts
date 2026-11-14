@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { asSessionId, type AskView, type CallId, type Item, type ItemSource, type JobId } from '../api'
-import { foldCheckIns, groupSteps, sourceKey, stepAttachments, stepThreads, summarizeSteps, toBlocks, unlinkedThreads, type Step } from './blocks'
+import { argsShown, foldCheckIns, groupSteps, sourceKey, stepAttachments, stepThreads, summarizeSteps, toBlocks, unlinkedThreads, type Step } from './blocks'
 
 type Of<T extends Item['type']> = Extract<Item, { type: T }>
 const user = (text: string): Item => ({ type: 'user', text, attachments: [] })
@@ -355,5 +355,15 @@ describe('approvals', () => {
     const last = views[1]
     if (last.kind !== 'approval') throw new Error('expected an approval block')
     expect([last.approval.callId, last.approval.status, last.approval.tool.name]).toEqual(['g1', 'pending', 'skill_run'])
+  })
+})
+
+describe('argsShown', () => {
+  it('hides calls without arguments however the model wrote them', () => {
+    expect(['', '{}', '{ }', ' {\n} '].map(argsShown)).toEqual([null, null, null, null])
+  })
+
+  it('shows real arguments and text that is not JSON as written', () => {
+    expect(['{"a":1}', '[]', 'oops{'].map(argsShown)).toEqual(['{"a":1}', '[]', 'oops{'])
   })
 })

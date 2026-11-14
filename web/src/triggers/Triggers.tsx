@@ -685,8 +685,7 @@ function TriggerFields({ kinds, onCreated }: { kinds: TriggerKind[]; onCreated: 
 
   async function create() {
     const ok = await action.run(async () => {
-      if (kind === null || agentId === null) throw new Error('请选择触发方式和 agent')
-      if (draft === null) throw new Error('配置不合法')
+      if (agentId === null || draft === null) throw new Error('请选择 agent 并填好配置')
       await api.createTrigger({
         ...draft,
         name,
@@ -704,9 +703,8 @@ function TriggerFields({ kinds, onCreated }: { kinds: TriggerKind[]; onCreated: 
       <SelectInput
         label="触发方式"
         value={kind}
-        onChange={(id) => {
-          const k = kinds.find((x) => x.name === id)?.name
-          const next = k ? emptyConfig(k) : null
+        onChange={(k) => {
+          const next = emptyConfig(k)
           setInitial(next)
           setDraft(next)
         }}

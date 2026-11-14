@@ -45,6 +45,8 @@ export function needsReconnect(closed: boolean, lastMessageAt: number, now: numb
 const WATCHDOG_MS = 5000
 
 const listeners = new Set<Listener>()
+// 第一个订阅者来了之后为 true；连接本身在页面隐藏时断开（source 为 null）
+let started = false
 let source: EventSource | null = null
 let lastMessageAt = 0
 // 当前这条连接是否已经发过 connected（第一次心跳时发）
@@ -102,7 +104,7 @@ function emit(event: PageEvent) {
   })
 }
 
-/** 连接已死就丢掉它重新连接；连上时页面收到 connected，从数据库重新拉取 */
+/** 连接已死就丢掉它重新连接；连上时页面收到 connected，从数据库重新拉取。页面隐藏时没有连接，不检查 */
 function checkAlive() {
   if (source === null) return
   const closed = source.readyState === EventSource.CLOSED
@@ -116,21 +118,30 @@ function checkAlive() {
   connect()
 }
 
-const onVisible = () => {
-  // 从后台回来时计时器可能还没跑，立刻检查
-  if (document.visibilityState === 'visible') checkAlive()
+/**
+ * 页面隐藏（切到别的标签页、手机切后台）时断开连接：没人看的页面不随 changed 一轮轮重拉数据。回到前台重新连接，
+ * 第一次心跳时照常发 connected，页面按它拉一次，隐藏期间错过的变化都在里面。
+ */
+const onVisibilityChange = () => {
+  if (document.visibilityState === 'visible') {
+    if (source === null) connect()
+  } else {
+    source?.close()
+    source = null
+  }
 }
 
 function start() {
-  connect()
+  started = true
+  if (document.visibilityState === 'visible') connect()
   watchdog = setInterval(checkAlive, WATCHDOG_MS)
-  document.addEventListener('visibilitychange', onVisible)
+  document.addEventListener('visibilitychange', onVisibilityChange)
 }
 
 /** 订阅页面事件（组件外用，如共享缓存）；第一个订阅者建立连接。返回取消订阅 */
 export function listenServerEvents(listener: Listener): () => void {
   listeners.add(listener)
-  if (source === null) start()
+  if (!started) start()
   return () => {
     listeners.delete(listener)
   }
@@ -204,8 +215,9 @@ export function useUiOutdated(): boolean {
 export function closeServerEvents() {
   source?.close()
   source = null
+  started = false
   heartbeatSeconds = null
   if (watchdog !== null) clearInterval(watchdog)
   watchdog = null
-  document.removeEventListener('visibilitychange', onVisible)
+  document.removeEventListener('visibilitychange', onVisibilityChange)
 }

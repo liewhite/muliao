@@ -40,9 +40,4 @@ describe('send decodes responses by HTTP status and type', () => {
     vi.stubGlobal('fetch', fetch)
     await expect(api.issues()).rejects.toThrow(/请求超时（120 秒没有响应）：GET \/api\/issues/)
   })
-
-  it('fails when a response without a declared body has one', async () => {
-    respond(202, '<html>proxy page</html>', { 'Content-Type': 'text/html' })
-    await expect(api.stop(asSessionId('s1'))).rejects.toThrow(/unexpected non-JSON body/)
-  })
 })
