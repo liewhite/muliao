@@ -26,12 +26,12 @@ import {
   TextInput,
   ToggleSwitch,
   useAction,
-  useAgents,
   useConfirm,
 } from '../ui'
 import { agentLabel } from '../agents/agentGroups'
 import { useLoad } from '../load'
 import { agentRoute } from '../routes'
+import { useAgents } from '../agents/agentList'
 
 const ACCESS: Record<ToolPermission['access'], { label: string; color: 'default' | 'warning' }> = {
   read: { label: '读', color: 'default' },

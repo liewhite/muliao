@@ -6,7 +6,8 @@ import { api, href, type AgentId, type AssetOf, type Skill } from '../api'
 import { FileBrowser } from '../FileBrowser'
 import { AssetAccess, OwnerSelect } from './assetParts'
 import { useDraft } from '../drafts'
-import { ActionButton,
+import {
+  ActionButton,
   EmptyHint,
   ErrorAlert,
   LinkButton,
@@ -15,11 +16,11 @@ import { ActionButton,
   TextAreaInput,
   TextInput,
   useAction,
-  useAgents,
   useConfirm,
 } from '../ui'
 import { agentLabel } from '../agents/agentGroups'
 import { useLoad } from '../load'
+import { useAgents } from '../agents/agentList'
 
 const SKILLS = '/ai-assets?kind=skill'
 

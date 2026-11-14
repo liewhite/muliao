@@ -15,9 +15,9 @@ import {
   Page,
   TextAreaInput,
   useAction,
-  useAgents,
 } from '../ui'
 import { sessionRoute } from '../routes'
+import { useAgents } from '../agents/agentList'
 
 
 export default function NewSession() {

@@ -2,9 +2,10 @@ import { useState } from 'react'
 import { Button, Chip } from '@heroui/react'
 import { Link } from 'react-router-dom'
 import { api, type AgentId, type CatalogAsset } from '../api'
-import { ActionButton, ErrorAlert, SelectInput, useAction, useAgents } from '../ui'
+import { ActionButton, ErrorAlert, SelectInput, useAction } from '../ui'
 import { agentLabel } from '../agents/agentGroups'
 import { agentRoute } from '../routes'
+import { useAgents } from '../agents/agentList'
 
 const PLATFORM = 'platform' as const
 

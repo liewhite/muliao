@@ -8,10 +8,11 @@ import { Link } from 'react-router-dom'
 import { api, asAgentId, type AgentId, type SitePage } from '../api'
 import { useReturnState, useRouteParam } from '../nav'
 import { groupPagesByAgent } from './pageGroups'
-import { CardGrid, EmptyHint, ErrorAlert, GroupSection, Loading, Page, relativeTime, useAgents } from '../ui'
+import { CardGrid, EmptyHint, ErrorAlert, GroupSection, Loading, Page, relativeTime } from '../ui'
 import { agentLabel } from '../agents/agentGroups'
 import { useLoad } from '../load'
 import { sitePageRoute } from '../routes'
+import { useAgents } from '../agents/agentList'
 
 // 与服务端页面响应的 CSP sandbox（server/crates/http/src/api/sites.rs PAGE_HEADERS）一致：浏览器取交集，改就两处一起改
 const SANDBOX = 'allow-scripts allow-forms allow-popups allow-modals allow-downloads'

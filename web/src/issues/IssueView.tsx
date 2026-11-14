@@ -36,14 +36,14 @@ import {
   TextInput,
   formatTime,
   useAction,
-  useAgents,
   useConfirm,
 } from '../ui'
 import { agentLabel } from '../agents/agentGroups'
 import { useLoad } from '../load'
 import { useDraft } from '../drafts'
-import { OwnerSelect, StatusDot } from './Issues'
+import { OwnerSelect, StatusDot } from './issueParts'
 import { issueRoute, sessionRoute } from '../routes'
+import { useAgents } from '../agents/agentList'
 
 function actorName(agents: Agent[] | undefined, actor: Actor) {
   switch (actor.kind) {

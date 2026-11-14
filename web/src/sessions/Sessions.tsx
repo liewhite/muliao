@@ -6,9 +6,10 @@ import { api, type AgentId, type SessionListItem } from '../api'
 import { agentModel, agentLabel } from '../agents/agentGroups'
 import { oneOf, parseStringList, useStoredState } from '../storedState'
 import { FILTERS, ORIGIN_LABEL, groupByAgent, splitActive, type Filter } from './sessionGroups'
-import { EmptyHint, Loading, Page, Segmented, relativeTime, useAgents } from '../ui'
+import { EmptyHint, Loading, Page, Segmented, relativeTime } from '../ui'
 import { useLoad } from '../load'
 import { sessionRoute } from '../routes'
+import { useAgents } from '../agents/agentList'
 
 // 选中的分类跨刷新、跨页面记住：从会话或 issue 回来时停在原来的分类（不放 URL：宽屏分屏时右侧切会话会换掉 URL）
 const FILTER_KEY = 'muliao.sessions.filter'

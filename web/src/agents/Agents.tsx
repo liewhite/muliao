@@ -25,7 +25,6 @@ import {
   formatTime,
   GroupSection,
   useAction,
-  useAgents,
   useConfirm,
 } from '../ui'
 import { never, useLoad } from '../load'
@@ -37,6 +36,7 @@ import { FileBrowser } from '../FileBrowser'
 import { SitePageList } from '../sites/SitePages'
 import { useDraft } from '../drafts'
 import { groupAgents } from './agentGroups'
+import { useAgents } from './agentList'
 
 /** 目录没加载（agent.toml 坏了、目录名对不上等）：不能运行 */
 const CONFIG_NOT_LOADED = '配置未加载，不能运行（原因见资源问题）'

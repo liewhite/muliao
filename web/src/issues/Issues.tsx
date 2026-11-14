@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ComponentProps, type CSSProperties } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { Card, Chip } from '@heroui/react'
 import {
   DndContext,
@@ -12,13 +12,11 @@ import {
   type DragEndEvent,
 } from '@dnd-kit/core'
 import { Link, useNavigate } from 'react-router-dom'
-import { selectableAgents } from '../agents/agentGroups'
 import { api, type AgentId, type Issue, type IssueId, type IssuePriority, type IssueStatus } from '../api'
 import {
   PRIORITIES,
   PRIORITY_LABEL,
   STATUSES,
-  STATUS_COLOR,
   STATUS_LABEL,
   UNASSIGNED,
   assigneeLabel,
@@ -27,7 +25,6 @@ import {
   FOLD_LIMIT,
   foldIssues,
   ownerHue,
-  ownerLabel,
   groupByStatus,
   moveIssues,
   type AssigneeChoice,
@@ -36,6 +33,7 @@ import {
   issueRefs,
   parseIssueRefs,
 } from './model'
+import { OwnerChip, OwnerDot, OwnerSelect, StatusDot, ownerStyle } from './issueParts'
 import { NODE_HEIGHT, NODE_WIDTH, edgePath, graphIssues, layoutIssueGraph, type GraphScope } from './issueGraph'
 import { oneOf, useStoredState } from '../storedState'
 import {
@@ -44,7 +42,6 @@ import {
   EmptyHint,
   ErrorAlert,
   Loading,
-  type Option,
   Page,
   Segmented,
   SelectInput,
@@ -52,79 +49,16 @@ import {
   TextInput,
   relativeTime,
   useAction,
-  useAgents,
 } from '../ui'
 import { useLoad } from '../load'
 import { issueRoute } from '../routes'
+import { useAgents } from '../agents/agentList'
 
 type View = 'board' | 'list' | 'graph'
 // 「所有项目」选项的 id；查询时映射为不过滤
 const ALL_OWNERS = '@all'
 const VIEW_KEY = 'muliao.issues.view'
 const GRAPH_SCOPE_KEY = 'muliao.issues.graphScope'
-
-export function StatusDot({ status }: { status: IssueStatus }) {
-  return <span className={`inline-block size-3 shrink-0 rounded-full border-2 ${STATUS_COLOR[status]}`} aria-hidden />
-}
-
-/** 带负责项目色相的样式：配合 owner-color 类（styles.css）得到 --owner-fg / --owner-bg；不着色时为 undefined */
-function ownerStyle(hue: number | null): CSSProperties | undefined {
-  return hue === null ? undefined : ({ '--owner-hue': hue } as CSSProperties)
-}
-
-/** 负责项目的色点；不着色时是灰点 */
-export function OwnerDot({ owner }: { owner: AgentId | null }) {
-  const agents = useAgents().data
-  const hue = ownerHue(agents, owner)
-  return (
-    <span
-      className={`inline-block size-2.5 shrink-0 rounded-full ${hue === null ? 'bg-muted' : 'owner-color bg-(--owner-fg)'}`}
-      style={ownerStyle(hue)}
-      aria-hidden
-    />
-  )
-}
-
-/** 负责项目的胶囊：浅色底 + owner 色文字 */
-function OwnerChip({ owner }: { owner: AgentId }) {
-  const agents = useAgents().data
-  const hue = ownerHue(agents, owner)
-  return (
-    <span
-      className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ${
-        hue === null ? 'bg-default text-muted' : 'owner-color bg-(--owner-bg) text-(--owner-fg)'
-      }`}
-      style={ownerStyle(hue)}
-    >
-      <OwnerDot owner={owner} />
-      {ownerLabel(agents, owner)}
-    </span>
-  )
-}
-
-/** 选负责项目的下拉框：每个 agent 前带它的色点；leading 是排在 agent 前面的额外选项（如「所有项目」）。
- * assignable：是在给 issue 定 owner（不是筛选），归档的 agent 不列，当前值除外 */
-export function OwnerSelect<L extends string = never>({
-  value,
-  onChange,
-  leading = [],
-  assignable = false,
-  ...props
-}: Omit<ComponentProps<typeof SelectInput>, 'options' | 'value' | 'onChange'> & {
-  // 哨兵选项（如「所有项目」）的 id 只从 leading 推断，没有 leading 时只能选 agent
-  value: AgentId | NoInfer<L> | null
-  onChange: (value: AgentId | NoInfer<L>) => void
-  leading?: Option<L>[]
-  assignable?: boolean
-}) {
-  const agents = useAgents().data
-  const listed = assignable ? selectableAgents(agents, value) : (agents ?? [])
-  const options: Option<AgentId | L>[] = [
-    ...leading,
-    ...listed.map((a) => ({ id: a.id, label: a.name, prefix: <OwnerDot owner={a.id} /> })),
-  ]
-  return <SelectInput<AgentId | L> {...props} value={value} onChange={onChange} options={options} />
-}
 
 function IssueCard({ issue }: { issue: Issue }) {
   const agents = useAgents().data

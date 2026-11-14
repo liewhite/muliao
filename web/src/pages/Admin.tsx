@@ -13,12 +13,12 @@ import {
   TextInput,
   formatTime,
   useAction,
-  useAgents,
   useConfirm,
 } from '../ui'
 import { agentLabel } from '../agents/agentGroups'
 import { useLoad, errorMessage } from '../load'
 import { sessionRoute } from '../routes'
+import { useAgents } from '../agents/agentList'
 
 const PUSH_TEXT: Record<PushState, string> = {
   unsupported: '此浏览器不支持推送通知。',

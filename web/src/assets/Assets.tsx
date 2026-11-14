@@ -8,8 +8,9 @@ import { MemoryTab } from './Memory'
 import { ToolLine } from './Permissions'
 import { SecretTab } from './Vault'
 import { SkillTab } from './Skills'
-import { EmptyHint, Loading, Page, SelectInput, useAgents } from '../ui'
+import { EmptyHint, Loading, Page, SelectInput } from '../ui'
 import { useLoad } from '../load'
+import { useAgents } from '../agents/agentList'
 
 /** 内置工具：归平台、代码里定义，不能改；只看它被哪些角色收录 */
 function ToolTab({ assets }: { assets: AssetOf<'tool'>[] }) {

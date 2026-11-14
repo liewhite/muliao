@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { Card } from '@heroui/react'
 import { api, type Usage } from '../api'
-import { EmptyHint, Loading, Page, Segmented, useAgents } from '../ui'
+import { EmptyHint, Loading, Page, Segmented } from '../ui'
 import { agentLabel } from '../agents/agentGroups'
 import { useLoad } from '../load'
 import { cacheHitPercent, formatTokens as tokens, windowOf } from '../usage'
+import { useAgents } from '../agents/agentList'
 
 const WINDOWS = {
   '7': { label: '近 7 天', days: 7 },

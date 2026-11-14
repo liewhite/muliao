@@ -67,10 +67,11 @@ import { liveItems, mergeLive, useServerEvents, withoutCovered, type PageEvent, 
 import { STATUS_LABEL } from '../issues/model'
 import { useReturnState, useRouteParam } from '../nav'
 import { cacheHitPercent, contextText, formatTokens } from '../usage'
-import { StatusDot } from '../issues/Issues'
-import { ActionButton, AgentName, CODE_BLOCK, ErrorAlert, Loading, Markdown, Page, formatTime, useAction, useConfirm } from '../ui'
+import { StatusDot } from '../issues/issueParts'
+import { ActionButton, CODE_BLOCK, ErrorAlert, Loading, Markdown, Page, formatTime, useAction, useConfirm } from '../ui'
 import { useLoad } from '../load'
 import { agentRoute, issueRoute, sessionRoute } from '../routes'
+import { AgentName } from '../agents/agentList'
 
 /**
  * issue 会话的页头标题：指回它的 issue，显示编号、标题、当前状态（随 issue 变化刷新）；在 issue 页返回回到这个会话。
