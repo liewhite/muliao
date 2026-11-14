@@ -7,12 +7,13 @@
 //! - 每一步保存：请求模型前，这条请求与它带上的信件（记为已处理）同一个事务提交；模型回复后提交回复；工具做完，结果与新到
 //!   的信并成下一条请求再提交。失败或重启后从上一步续跑。停在挂起的调用上时，已经做完的工具结果先存成一条请求，继续时把
 //!   它们连同回答交回 agenter，只把新出的结果接在后面存（库里的消息不改写）。
-//! - 被用户停止时 actor 丢掉这次运行，已产生的部分（生成到一半的回复、做完的工具结果）在 [`Partial`] 里，由停止事务保存。
+//! - 被用户停止：actor 发出停止信号，运行在等模型、等工具、压缩、组装运行处看到它就不再往下走，把这一步已产生、
+//!   还没保存的部分（生成到一半的回复、做完的工具结果）交回（[`Ran::Stopped`]），由停止事务保存。保存一步的事务不被打断。
 //! - 收尾（[`finish_in`]）：记下运行的结局、结清做完的委派、发布 RunEnded。
 
 use muliao_platform::ids::{MailId, RunId, SessionId};
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use agenter::{
     DeltaKind, Event, Message, Request, RequestPart, Resolution, ResponseBuilder, ResponsePart, RunEvent, ToolCall,
@@ -30,8 +31,9 @@ use muliao_platform::tooling::Audience;
 use muliao_runtime::conventions::{attach, shared_attachments};
 use muliao_runtime::instructions::with_notices;
 use muliao_runtime::toolbox::Redaction;
-use muliao_runtime::{Run, RunSpec, Runtime};
+use muliao_runtime::{Run, RunSpec, Runtime, ToolsRun};
 use rusqlite::Connection;
+use tokio_util::sync::CancellationToken;
 
 use crate::actor::Waker;
 use crate::answers::{CallResult, Waiting, approvals_waiting_text, questions_of, questions_waiting_text};
@@ -72,30 +74,42 @@ pub struct Core {
     pub bus: Arc<Bus>,
 }
 
-/// 一次运行已产生、还没保存的部分（被停止时由停止事务保存）。保存一步的事务在写线程上取走它对应的部分，所以停止事务（排在
-/// 后面）不会再存一遍。运行记录建好之后才有（[`PartialSlot`]）。
-pub(crate) struct Partial {
-    /// 这次运行（被停止时，停止事务把补的结果记在它名下）
-    run_id: RunId,
-    /// 生成到一半的回复
-    pub streaming: Option<ResponseBuilder>,
-    /// 这一步里已经做完的工具调用（原样）
-    pub finished: Vec<ToolResult>,
-    /// 这一步里已做完调用的结束时刻
-    pub finished_at: HashMap<String, chrono::DateTime<Utc>>,
-    /// 驱动这次运行的运行端口（存储形态的转换要用它）
-    pub run: Option<Arc<Run>>,
-}
-
-pub(crate) type SharedPartial = Arc<Mutex<Partial>>;
-
-/// 一次尝试的已产生部分的登记处（actor 停止时从这里取）：开头的事务建好运行记录才登记，没登记的尝试没有要保存的。
-pub(crate) type PartialSlot = Arc<std::sync::OnceLock<SharedPartial>>;
-
 /// 被停止时这次运行已产生、还没保存的部分（存储形态）：记在哪次运行名下、哪些消息。
 pub(crate) struct Unsaved {
     pub run_id: RunId,
     pub messages: Vec<Message>,
+}
+
+/// 一次运行怎么结束的（失败不在这里，是 [`Failure`]）。
+pub(crate) enum Ran {
+    /// 走到了结局，已经收尾
+    Finished,
+    /// 看到停止信号停下：没有收尾，已产生、没保存的部分交给停止事务
+    Stopped(Unsaved),
+}
+
+/// 驱动没走到结局就停下了：失败，或被停止（带着这一步已产生、还没保存的消息）。用 `?` 一路传回 [`execute`]。
+enum Cut {
+    Failed(Failure),
+    Stopped(Vec<Message>),
+}
+
+impl From<Failure> for Cut {
+    fn from(f: Failure) -> Self {
+        Cut::Failed(f)
+    }
+}
+
+impl From<Error> for Cut {
+    fn from(e: Error) -> Self {
+        Cut::Failed(e.into())
+    }
+}
+
+impl From<muliao_runtime::StepError> for Cut {
+    fn from(e: muliao_runtime::StepError) -> Self {
+        Cut::Failed(e.into())
+    }
 }
 
 /// 运行失败：暂时性的（模型或外部服务一时不可用）由 actor 退避重试，其余最终失败。
@@ -183,30 +197,23 @@ struct Begun {
     settled: Option<RunEnd>,
 }
 
-/// 一次运行（或从上次的尝试接着跑）：返回时运行已经收尾（结局已记下）。Err 是失败，由 actor 决定重试还是最终失败。
+/// 一次运行（或从上次的尝试接着跑）。Finished：运行已经收尾（结局已记下）；Stopped：看到 stop 停下、交出没保存的部分
+/// （由 actor 执行停止事务）。Err 是失败，由 actor 决定重试还是最终失败。
 pub(crate) async fn execute(
     core: &Core,
     session_id: &SessionId,
-    slot: &PartialSlot,
-) -> std::result::Result<(), Failure> {
+    stop: &CancellationToken,
+) -> std::result::Result<Ran, Failure> {
     let begun = begin(core, session_id).await?;
-    let partial: SharedPartial = Arc::new(Mutex::new(Partial {
-        run_id: begun.run_id,
-        streaming: None,
-        finished: Vec::new(),
-        finished_at: HashMap::new(),
-        run: None,
-    }));
-    slot.set(partial.clone()).unwrap_or_else(|_| unreachable!("each attempt has its own slot"));
     let start = match plan(core, &begun).await? {
         Plan::Drive(start) => start,
         Plan::Settle(end) => {
             finish(core, &begun, Ending::Ended(end)).await?;
-            return Ok(());
+            return Ok(Ran::Finished);
         }
         Plan::Idle => {
             finish(core, &begun, Ending::Idle).await?;
-            return Ok(());
+            return Ok(Ran::Finished);
         }
     };
     let assets = core.runtime.run_assets(&begun.session.agent_id).await?;
@@ -216,20 +223,21 @@ pub(crate) async fn execute(
         begun: &begun,
         assets: &assets,
         audience,
-        partial,
+        stop,
         history: begun.context.messages.clone(),
         summary: begun.context.summary.clone(),
         stale_responses: begun.context.stale_responses,
         run_context_row: None,
         compaction_exhausted: false,
     };
-    // 上下文超过阈值时先压缩：放在确认有要交给模型的之后、交出信件与批准之前
-    if driver.compaction_due() {
-        driver.compact().await?;
+    match driver.drive(start).await {
+        Ok(end) => {
+            finish(core, &begun, Ending::Ended(end)).await?;
+            Ok(Ran::Finished)
+        }
+        Err(Cut::Stopped(messages)) => Ok(Ran::Stopped(Unsaved { run_id: begun.run_id, messages })),
+        Err(Cut::Failed(f)) => Err(f),
     }
-    let end = driver.drive(start).await?;
-    finish(core, &begun, Ending::Ended(end)).await?;
-    Ok(())
 }
 
 /// 开头的事务：取（或接着）这次运行的记录，读出状态；被打断的那一步补上「被中断」的结果。
@@ -432,7 +440,8 @@ struct Driver<'a> {
     begun: &'a Begun,
     assets: &'a RunAssets,
     audience: Audience,
-    partial: SharedPartial,
+    /// 停止信号：等模型、等工具、压缩、组装运行时看它，保存一步时不看
+    stop: &'a CancellationToken,
     /// 发给模型的历史（存储形态）：保存一步就接上这一步，压缩后从库里重新加载。这次运行新增的工具调用不脱敏（库里那份
     /// 脱敏）：下一步执行的就是它们（#770）
     history: Vec<Message>,
@@ -457,24 +466,34 @@ impl Driver<'_> {
         &self.begun.session.id
     }
 
-    async fn start_run(&self) -> std::result::Result<Arc<Run>, Failure> {
-        let run = self
-            .core
-            .runtime
-            .start(RunSpec {
-                assets: self.assets,
-                session_id: self.session_id(),
-                audience: self.audience,
-                origin_note: self.core.notes.of(self.begun.session.origin.origin()),
-                summary: self.summary.as_deref(),
-            })
-            .await?;
-        let run = Arc::new(run);
-        self.partial.lock().expect("partial lock").run = Some(run.clone());
-        Ok(run)
+    /// fut 做完之前被停止就丢掉它（None）。
+    async fn unless_stopped<T>(&self, fut: impl Future<Output = T>) -> Option<T> {
+        tokio::select! {
+            biased;
+            r = fut => Some(r),
+            () = self.stop.cancelled() => None,
+        }
     }
 
-    async fn drive(&mut self, start: Start) -> std::result::Result<RunEnd, Failure> {
+    async fn start_run(&self) -> std::result::Result<Arc<Run>, Cut> {
+        let spec = RunSpec {
+            assets: self.assets,
+            session_id: self.session_id(),
+            audience: self.audience,
+            origin_note: self.core.notes.of(self.begun.session.origin.origin()),
+            summary: self.summary.as_deref(),
+        };
+        let Some(run) = self.unless_stopped(self.core.runtime.start(spec)).await else {
+            return Err(Cut::Stopped(Vec::new()));
+        };
+        Ok(Arc::new(run?))
+    }
+
+    async fn drive(&mut self, start: Start) -> std::result::Result<RunEnd, Cut> {
+        // 上下文超过阈值时先压缩：放在确认有要交给模型的之后、交出信件与批准之前
+        if self.compaction_due() {
+            self.compact().await?;
+        }
         let mut run = self.start_run().await?;
         let mut notices: Vec<String> = run.notices().to_vec();
         let session_id = self.session_id().to_owned();
@@ -489,7 +508,7 @@ impl Driver<'_> {
         run: &mut Arc<Run>,
         notices: &mut Vec<String>,
         start: Start,
-    ) -> std::result::Result<RunEnd, Failure> {
+    ) -> std::result::Result<RunEnd, Cut> {
         // 挂起调用的结局（停在挂起的调用上、能继续时）
         let mut resolved: Option<HashMap<String, Resolution>> = None;
         // 继续挂起的调用时开头的内容与信件：并进这次运行新增的第一条请求（随交回的结果）
@@ -547,12 +566,29 @@ impl Driver<'_> {
         deferred_results(p, decided)
     }
 
-    /// 历史末尾是用户一方的消息：请求模型，保存回复。
-    async fn request(&mut self, run: &Run) -> std::result::Result<Next, Failure> {
-        self.partial.lock().expect("partial lock").streaming = Some(ResponseBuilder::new());
-        let mut on_event = self.on_event();
-        let response = run.respond(&self.history, &mut on_event).await?;
-        self.save(vec![Message::Assistant(response)], Vec::new(), Clear::Streaming).await?;
+    /// 历史末尾是用户一方的消息：请求模型，保存回复。生成到一半被停止时交出已生成的部分。
+    async fn request(&mut self, run: &Run) -> std::result::Result<Next, Cut> {
+        let mut streamed = ResponseBuilder::new();
+        let responded = {
+            let mut live = self.on_event();
+            let mut on_event = |event: RunEvent<'_>| {
+                if let RunEvent::Model(e) = &event {
+                    let _ = streamed.apply(e);
+                }
+                live(event)
+            };
+            self.unless_stopped(run.respond(&self.history, &mut on_event)).await
+        };
+        let Some(response) = responded else {
+            let parts = streamed.into_parts();
+            let unsaved = if parts.is_empty() {
+                Vec::new()
+            } else {
+                vec![Message::Assistant(interrupted_response(parts, "", ""))]
+            };
+            return Err(Cut::Stopped(unsaved));
+        };
+        self.save(vec![Message::Assistant(response?)], Vec::new()).await?;
         Ok(Next::Continue)
     }
 
@@ -563,7 +599,7 @@ impl Driver<'_> {
         resolved: Option<HashMap<String, Resolution>>,
         first: Option<(Content, Vec<MailId>)>,
         notices: &mut Vec<String>,
-    ) -> std::result::Result<Next, Failure> {
+    ) -> std::result::Result<Next, Cut> {
         // 末尾那条回复（之后可能跟着挂起前存下的结果）
         let (at, response) = self
             .history
@@ -593,14 +629,18 @@ impl Driver<'_> {
             resolved.insert(t.call_id.clone(), Resolution::Result { content: t.content.clone(), is_error: t.is_error });
         }
         let already: HashSet<String> = saved.iter().map(|t| t.call_id.clone()).collect();
-        {
-            let mut p = self.partial.lock().expect("partial lock");
-            p.finished.clear();
-            p.finished_at.clear();
-        }
-        let mut on_event = self.on_event();
-        let done = run.run_tools(&self.history[..at], response, &resolved, &mut on_event).await?;
-        let finished_at = std::mem::take(&mut self.partial.lock().expect("partial lock").finished_at);
+        // 做完的调用各自的结束时刻
+        let mut finished_at: HashMap<String, chrono::DateTime<Utc>> = HashMap::new();
+        let done = {
+            let mut live = self.on_event();
+            let mut on_event = |event: RunEvent<'_>| {
+                if let RunEvent::ToolFinished(r) = &event {
+                    finished_at.insert(r.call_id.clone(), Utc::now());
+                }
+                live(event)
+            };
+            run.run_tools(&self.history[..at], response, &resolved, self.stop.cancelled(), &mut on_event).await?
+        };
         let fresh = |results: Vec<ToolResult>| -> Vec<ToolResult> {
             results
                 .into_iter()
@@ -613,14 +653,12 @@ impl Driver<'_> {
                 .collect()
         };
         match done {
-            ToolsDone::Results(results) => {
+            // 停在工具还没做完时：做完的结果交给停止事务，没做完的由它补「被停止」
+            ToolsRun::Stopped(results) => {
+                Err(Cut::Stopped(results_request(fresh(results)).map(Message::User).into_iter().collect()))
+            }
+            ToolsRun::Done(ToolsDone::Results(results)) => {
                 let results = fresh(results);
-                {
-                    // 整理好的结果换掉事件里的原样：保存之前被停止时停止事务存的就是它们
-                    let mut p = self.partial.lock().expect("partial lock");
-                    p.finished = results.clone();
-                    p.finished_at.clear();
-                }
                 let mut request = results_request(results).unwrap_or_else(|| Request {
                     parts: Vec::new(),
                     timestamp: Utc::now(),
@@ -636,7 +674,7 @@ impl Driver<'_> {
                 self.save_request(request, mail, notices).await?;
                 Ok(Next::Continue)
             }
-            ToolsDone::Paused { results, approvals, .. } => {
+            ToolsRun::Done(ToolsDone::Paused { results, approvals, .. }) => {
                 // 停在挂起的调用上：已做完的结果与这次请求批准的调用同一个事务记下（分开提交时，进程在两者之间退出会留下
                 // 一个没有结果、又不算在等批准的调用）。交回 Defer 的调用由工具自己在挂起前记过；停在哪些调用上只问 position
                 let requested: Vec<(String, Pause)> =
@@ -658,7 +696,7 @@ impl Driver<'_> {
                 let new: Vec<Message> =
                     request.filter(|r| !r.parts.is_empty()).map(Message::User).into_iter().collect();
                 let session_id = self.session_id().to_owned();
-                self.save_with(new, mail, Clear::Finished, move |tx| {
+                self.save_with(new, mail, move |tx| {
                     requested.iter().try_for_each(|(call_id, pause)| record_in(tx, &session_id, call_id, pause))
                 })
                 .await?;
@@ -694,7 +732,7 @@ impl Driver<'_> {
             // 只挂在本次运行新增的第一条请求上（重发的那条已经在库里，不改它）；运行上下文已经挂出去了时，notices 单独挂
             attach_run_context(&mut request, &context)?;
         }
-        let ids = self.save(vec![Message::User(request)], mail, Clear::Finished).await?;
+        let ids = self.save(vec![Message::User(request)], mail).await?;
         let id = *ids.last().expect("one request saved");
         if attaching {
             self.run_context_row = Some(id);
@@ -705,7 +743,7 @@ impl Driver<'_> {
     }
 
     /// 刚保存了一条请求：上下文超过阈值时压缩，从库里重新加载上下文续跑（新的摘要在指令里，所以重新组装这次运行）。
-    async fn after_request(&mut self, notices: &mut Vec<String>) -> std::result::Result<Option<Arc<Run>>, Failure> {
+    async fn after_request(&mut self, notices: &mut Vec<String>) -> std::result::Result<Option<Arc<Run>>, Cut> {
         if !self.compaction_due() {
             return Ok(None);
         }
@@ -729,8 +767,13 @@ impl Driver<'_> {
         }
     }
 
-    async fn compact(&mut self) -> std::result::Result<(), Failure> {
-        let compacted = self.core.compactor.compact(self.session_id(), self.assets).await?;
+    /// 压缩到一半被停止：没写完的这一批作废，已提交的批次保留。
+    async fn compact(&mut self) -> std::result::Result<(), Cut> {
+        let Some(compacted) = self.unless_stopped(self.core.compactor.compact(self.session_id(), self.assets)).await
+        else {
+            return Err(Cut::Stopped(Vec::new()));
+        };
+        let compacted = compacted?;
         let session_id = self.session_id().to_owned();
         let (context, through) = self
             .core
@@ -753,21 +796,20 @@ impl Driver<'_> {
     }
 
     /// 保存这次运行的这些消息，并把它们带上的信件记为已处理。返回写下的消息 id。
-    async fn save(&mut self, messages: Vec<Message>, mail: Vec<MailId>, clear: Clear) -> Result<Vec<i64>> {
-        self.save_with(messages, mail, clear, |_| Ok(())).await
+    async fn save(&mut self, messages: Vec<Message>, mail: Vec<MailId>) -> Result<Vec<i64>> {
+        self.save_with(messages, mail, |_| Ok(())).await
     }
 
     async fn save_with(
         &mut self,
         messages: Vec<Message>,
         mail: Vec<MailId>,
-        clear: Clear,
         also: impl FnOnce(&mut Tx<'_>) -> Result<()> + Send + 'static,
     ) -> Result<Vec<i64>> {
         // 脱敏只作用于存下的那份；这次运行内存里的历史留明文：下一步执行的就是这些调用，执行时要拿到真的参数（#770）
         let mut stored = messages.clone();
         self.core.redaction.messages(&mut stored);
-        let (session_id, run_id, partial) = (self.session_id().to_owned(), self.begun.run_id, self.partial.clone());
+        let (session_id, run_id) = (self.session_id().to_owned(), self.begun.run_id);
         let ids = self
             .core
             .db
@@ -775,12 +817,6 @@ impl Driver<'_> {
                 let ids = history::append_in(tx, &session_id, run_id, &stored)?;
                 consume_in(tx, &mail, run_id)?;
                 also(tx)?;
-                // 在写线程上、和保存同一个事务里取走已保存的部分：之后的停止事务不会再存一遍
-                let mut p = partial.lock().expect("partial lock");
-                match clear {
-                    Clear::Streaming => p.streaming = None,
-                    Clear::Finished => p.finished.clear(),
-                }
                 tracing::info!(%session_id, %run_id, messages = ids.len(), consumed_mail = ?mail, "step saved");
                 Ok::<_, Error>(ids)
             })
@@ -789,42 +825,31 @@ impl Driver<'_> {
         Ok(ids)
     }
 
-    /// 给界面的实时事件，同时攒下被停止时要保存的部分。
+    /// 给界面的实时事件。
     fn on_event(&self) -> impl FnMut(RunEvent<'_>) + Send + use<> {
-        let (live, partial) = (self.core.live.clone(), self.partial.clone());
+        let live = self.core.live.clone();
         let (session_id, agent) = (self.session_id().to_owned(), self.begun.agent_name.clone());
         let renders = self.core.renders.clone();
         move |event| match event {
-            RunEvent::Model(e) => {
-                if let Some(b) = partial.lock().expect("partial lock").streaming.as_mut() {
-                    let _ = b.apply(e);
+            RunEvent::Model(e) => match e {
+                Event::PartStart { part: ResponsePart::Text { text, .. }, .. } => {
+                    live.delta(&session_id, &agent, DeltaType::Assistant, text)
                 }
-                match e {
-                    Event::PartStart { part: ResponsePart::Text { text, .. }, .. } => {
-                        live.delta(&session_id, &agent, DeltaType::Assistant, text)
-                    }
-                    Event::PartStart { part: ResponsePart::Thinking { text, .. }, .. } => {
-                        live.delta(&session_id, &agent, DeltaType::Thinking, text)
-                    }
-                    Event::Delta { kind: DeltaKind::Text, text, .. } => {
-                        live.delta(&session_id, &agent, DeltaType::Assistant, text)
-                    }
-                    Event::Delta { kind: DeltaKind::Thinking, text, .. } => {
-                        live.delta(&session_id, &agent, DeltaType::Thinking, text)
-                    }
-                    _ => {}
+                Event::PartStart { part: ResponsePart::Thinking { text, .. }, .. } => {
+                    live.delta(&session_id, &agent, DeltaType::Thinking, text)
                 }
-            }
+                Event::Delta { kind: DeltaKind::Text, text, .. } => {
+                    live.delta(&session_id, &agent, DeltaType::Assistant, text)
+                }
+                Event::Delta { kind: DeltaKind::Thinking, text, .. } => {
+                    live.delta(&session_id, &agent, DeltaType::Thinking, text)
+                }
+                _ => {}
+            },
             RunEvent::ToolStarted(call) => live.item(&session_id, &agent, call_item(call, Some(Utc::now()), &renders)),
             RunEvent::ToolFinished(result) => {
-                let now = Utc::now();
-                {
-                    let mut p = partial.lock().expect("partial lock");
-                    p.finished.push(result.clone());
-                    p.finished_at.insert(result.call_id.clone(), now);
-                }
                 let mut shown = result.clone();
-                set_finished_at(&mut shown, now);
+                set_finished_at(&mut shown, Utc::now());
                 match result_item(&shown, &renders) {
                     Ok(item) => live.item(&session_id, &agent, item),
                     // 只是实时展示：这一条不显示，保存后历史里照常报出
@@ -833,46 +858,4 @@ impl Driver<'_> {
             }
         }
     }
-}
-
-/// 一步保存时同一个事务里取走的已产生部分。
-#[derive(Clone, Copy)]
-enum Clear {
-    Streaming,
-    Finished,
-}
-
-/// 被停止时这次尝试已产生、还没保存的部分（存储形态），由停止事务保存在最前面；还没建好运行记录的尝试没有。
-pub(crate) async fn unsaved_of(slot: &PartialSlot) -> Result<Option<Unsaved>> {
-    let Some(partial) = slot.get().cloned() else { return Ok(None) };
-    let (run_id, streaming, finished, finished_at, run) = {
-        let mut p = partial.lock().expect("partial lock");
-        (
-            p.run_id,
-            p.streaming.take(),
-            std::mem::take(&mut p.finished),
-            std::mem::take(&mut p.finished_at),
-            p.run.clone(),
-        )
-    };
-    let mut messages = Vec::new();
-    if let Some(b) = streaming {
-        let parts = b.into_parts();
-        if !parts.is_empty() {
-            messages.push(Message::Assistant(interrupted_response(parts, "", "")));
-        }
-    }
-    if !finished.is_empty() {
-        let run = run.expect("tool results come from a started run");
-        let mut results = Vec::new();
-        for r in finished {
-            let mut r = run.settled(r).await?;
-            if let Some(at) = finished_at.get(&r.call_id) {
-                set_finished_at(&mut r, *at);
-            }
-            results.push(r);
-        }
-        messages.extend(results_request(results).map(Message::User));
-    }
-    Ok(Some(Unsaved { run_id, messages }))
 }

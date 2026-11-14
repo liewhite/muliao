@@ -7,8 +7,8 @@
 //!   丢掉它：没写完的这一批作废，已提交的批次保留。
 //! - 运行失败：暂时性的（模型或外部服务一时不可用）退避重试，从同一个运行接着跑，约 30 分钟后算最终失败；其余当场最终失败：
 //!   记在运行记录上（会话页显示错误与「重试」），结清交给它的委派，发布 RunFailed。
-//! - 停止：在跑就丢掉这次运行（Rust 里丢掉即取消；数据库事务在写线程上，不会被打断一半），先存下它已产生的部分，再在同一个
-//!   actor 里执行停止事务；不在跑就直接执行。返回时停止事务已提交。
+//! - 停止：在跑就给这次运行发停止信号，等它自己停下、交出已产生而没保存的部分（[`crate::run::Ran::Stopped`]），再在同一个
+//!   actor 里执行停止事务把它们存在最前面；不在跑就直接执行。返回时停止事务已提交。
 //! - 到点唤醒与委派的运行中检查：一个节拍循环（[`Actors::start`]）。
 
 use muliao_platform::ids::SessionId;
@@ -20,6 +20,7 @@ use futures::FutureExt;
 use muliao_platform::db::Tx;
 use muliao_platform::retry::Retry;
 use tokio::sync::{mpsc, oneshot};
+use tokio_util::sync::CancellationToken;
 
 use crate::activity::{WorkState, work_state_in};
 use crate::delegation::check_threads;
@@ -27,7 +28,7 @@ use crate::events::RunFailed;
 use crate::halt::{Halted, StopThread, halt};
 use crate::mailbox::{self, Mail};
 use crate::pending::Position;
-use crate::run::{Core, PartialSlot, execute, unsaved_of};
+use crate::run::{Core, Ran, execute};
 use crate::runs::{self, Outcome, RunRecord};
 use crate::settlement::settle_failure_in;
 use crate::work::{CheckBeats, TICK};
@@ -272,48 +273,54 @@ async fn run_with_retries(inner: &Arc<Inner>, id: &SessionId, rx: &mut mpsc::Unb
     let mut backoff = Retry::default().start();
     loop {
         let before = last_message(core, id).await;
-        let partial: PartialSlot = Arc::default();
+        let stop = CancellationToken::new();
+        // 停止：发出信号后接着等这次运行自己停下（它交出没保存的部分），其间的命令留在信箱里，停完再处理
+        let mut stopping: Option<oneshot::Sender<Result<Halted>>> = None;
         let outcome = {
-            let run = AssertUnwindSafe(execute(core, id, &partial)).catch_unwind();
+            let run = AssertUnwindSafe(execute(core, id, &stop)).catch_unwind();
             tokio::pin!(run);
             loop {
                 tokio::select! {
-                    r = &mut run => break Ok(r),
-                    cmd = rx.recv() => match cmd {
-                        Some(Command::Stop(reply)) => break Err(reply),
+                    r = &mut run => break r,
+                    cmd = rx.recv(), if stopping.is_none() => match cmd {
+                        Some(Command::Stop(reply)) => {
+                            stop.cancel();
+                            stopping = Some(reply);
+                        }
                         Some(Command::Compact(reply)) => refuse_compaction_while_running(reply),
                         Some(Command::Retry(reply)) => { let _ = reply.send(Err(conflict("the session is running"))); }
                         Some(Command::Wake) | None => {}
                     }
                 }
             }
-            // 离开这个块时运行被丢掉（停止时）
         };
-        let failure = match outcome {
-            Err(reply) => {
-                // 等排在前面的写事务做完（写线程先进先出）：被丢掉的运行如果正等着保存一步，那一步先提交并取走对应的已产生
-                // 部分，这里才取剩下的，不会存两遍
-                if let Err(e) = core.db.write(|_| Ok::<_, rusqlite::Error>(())).await {
-                    let _ = reply.send(Err(e.into()));
-                    return true;
+        let outcome = outcome.unwrap_or_else(|panic| {
+            let message = panic
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| panic.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+                .unwrap_or_else(|| "the run panicked".to_owned());
+            Err(crate::run::Failure::Final(format!("panicked: {message}")))
+        });
+        let failure = match (outcome, stopping) {
+            (Ok(Ran::Stopped(unsaved)), reply) => {
+                let halted = halt(core, id, Some(unsaved), Actors::stop_thread(Arc::downgrade(inner))).await;
+                if let Some(reply) = reply {
+                    let _ = reply.send(halted);
                 }
-                let halted = match unsaved_of(&partial).await {
-                    Ok(unsaved) => halt(core, id, unsaved, Actors::stop_thread(Arc::downgrade(inner))).await,
-                    Err(e) => Err(e),
-                };
+                return true;
+            }
+            // 停止信号到达时运行恰好走完或失败了：照样停止（失败只记下，不重试）
+            (outcome, Some(reply)) => {
+                if let Err(f) = &outcome {
+                    tracing::warn!(session_id = %id, error = %f.message(), "the run failed while being stopped");
+                }
+                let halted = halt(core, id, None, Actors::stop_thread(Arc::downgrade(inner))).await;
                 let _ = reply.send(halted);
                 return true;
             }
-            Ok(Ok(Ok(()))) => return true,
-            Ok(Ok(Err(f))) => f,
-            Ok(Err(panic)) => {
-                let message = panic
-                    .downcast_ref::<String>()
-                    .cloned()
-                    .or_else(|| panic.downcast_ref::<&str>().map(|s| (*s).to_owned()))
-                    .unwrap_or_else(|| "the run panicked".to_owned());
-                crate::run::Failure::Final(format!("panicked: {message}"))
-            }
+            (Ok(Ran::Finished), None) => return true,
+            (Err(f), None) => f,
         };
         if last_message(core, id).await != before {
             backoff.reset();

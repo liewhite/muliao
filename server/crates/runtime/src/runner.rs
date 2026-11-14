@@ -217,6 +217,14 @@ impl Runtime {
     }
 }
 
+/// [`Run::run_tools`] 交回的：结果都是存储形态。
+pub enum ToolsRun {
+    /// 调用都有了结局（或停在挂起的调用上）
+    Done(ToolsDone),
+    /// 被 stop 打断：已经做完的那些调用的结果（按做完的先后）
+    Stopped(Vec<ToolResult>),
+}
+
 /// 一次运行（见模块说明）。
 pub struct Run {
     agent: Agent<RunScope>,
@@ -262,6 +270,9 @@ impl Run {
     /// 调用的结局与挂起前已有的结果（按调用 id，它们不再执行），不是从挂起处继续时为空。交回的结果是存储形态：能内联的
     /// 图片存进文件存储换成引用，工具挂上的附加数据并进结果。
     ///
+    /// stop 完成时不再等还在跑的调用（丢掉它们），交回已经做完的那些（[`ToolsRun::Stopped`]）。只有执行可以被它打断：
+    /// 做完之后把结果变成存储形态（取走工具挂上的附加数据、存图片）不看 stop，所以交回的结果总是完整的。
+    ///
     /// on_event 里工具调用的参数已经脱敏（[`Redaction::preview`]）；`ToolFinished` 的结果还是工具交回的原样（图片是内容、
     /// 没有附加数据），保存的以返回值为准。
     pub async fn run_tools(
@@ -269,21 +280,35 @@ impl Run {
         earlier: &[Message],
         response: &Response,
         resolved: &HashMap<String, Resolution>,
+        stop: impl Future<Output = ()>,
         on_event: &mut (dyn FnMut(RunEvent<'_>) + Send),
-    ) -> Result<ToolsDone, StepError> {
-        let mut preview = self.redaction.preview(on_event);
-        let mut done = self.agent.call_tools(&self.scope, earlier, response, resolved, &mut preview).await?;
+    ) -> Result<ToolsRun, StepError> {
+        let mut finished = Vec::new();
+        let done = {
+            let mut preview = self.redaction.preview(on_event);
+            let mut collect = |event: RunEvent<'_>| {
+                if let RunEvent::ToolFinished(r) = &event {
+                    finished.push((*r).clone());
+                }
+                preview(event)
+            };
+            tokio::select! {
+                biased;
+                done = self.agent.call_tools(&self.scope, earlier, response, resolved, &mut collect) => Some(done?),
+                () = stop => None,
+            }
+        };
+        let Some(mut done) = done else {
+            for t in &mut finished {
+                self.settle(t).await?;
+            }
+            return Ok(ToolsRun::Stopped(finished));
+        };
         let (ToolsDone::Results(results) | ToolsDone::Paused { results, .. }) = &mut done;
         for t in results {
             self.settle(t).await?;
         }
-        Ok(done)
-    }
-
-    /// 一步没走完就被停下时，已经做完的工具结果（取自 `ToolFinished` 事件）变成存储形态（同 [`Run::run_tools`] 交回的）。
-    pub async fn settled(&self, mut result: ToolResult) -> Result<ToolResult, Error> {
-        self.settle(&mut result).await?;
-        Ok(result)
+        Ok(ToolsRun::Done(done))
     }
 
     /// 工具结果变成存储形态：挂上的附加数据并进 metadata，图片存进文件存储。

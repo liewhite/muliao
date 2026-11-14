@@ -18,4 +18,4 @@ pub mod models;
 pub mod runner;
 pub mod toolbox;
 
-pub use runner::{Run, RunSpec, Runtime, RuntimeDeps, StepError};
+pub use runner::{Run, RunSpec, Runtime, RuntimeDeps, StepError, ToolsRun};

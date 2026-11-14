@@ -34,6 +34,7 @@ use muliao_platform::config::Settings;
 use muliao_platform::db::{Database, migrate};
 use muliao_platform::tooling::{RunScope, ToolTraits, builtin};
 use muliao_platform::vault::Vault;
+use muliao_runtime::conventions::{SharedFile, attach, shared_attachments};
 use muliao_runtime::mcp::{Confine, McpConnector};
 use muliao_runtime::models::ModelRegistry;
 use muliao_runtime::toolbox::Toolbox;
@@ -163,6 +164,28 @@ impl Tool<RunScope> for Stash {
     }
 }
 
+/// 把一个文件挂到这次调用的结果上给用户看（像 share_file）
+struct Share;
+
+impl Tool<RunScope> for Share {
+    type Args = NoArgs;
+    fn name(&self) -> &str {
+        "share"
+    }
+    fn description(&self) -> &str {
+        "Share a file."
+    }
+    async fn call(&self, ctx: ToolCtx<'_, RunScope>, _a: NoArgs) -> Result<ToolOutput, ToolError> {
+        let file = SharedFile {
+            file_id: "f-shared".into(),
+            name: "report.txt".into(),
+            media_type: muliao_platform::ids::MediaType::parse("text/plain").unwrap(),
+        };
+        attach(ctx.deps, &ctx.call.id, &[file]);
+        Ok(agenter::tool::text("shared"))
+    }
+}
+
 // ---- 世界 ----
 
 struct World {
@@ -223,6 +246,7 @@ async fn world() -> World {
     let mut tools = crate::tools::tools(db.clone(), waker.clone(), stopper.clone(), tz);
     tools.push(builtin(Slow(release.clone()), ToolTraits::read()));
     tools.push(builtin(Echo, ToolTraits::read()));
+    tools.push(builtin(Share, ToolTraits::read()));
     let flaky_calls = Arc::new(Mutex::new(0));
     tools.push(builtin(Flaky(flaky_calls.clone()), ToolTraits::read()));
     let stashed = Arc::new(Mutex::new(Vec::new()));
@@ -463,6 +487,60 @@ async fn stopping_a_running_tool_saves_what_happened() {
     assert_eq!(w.settled(&s).await, WorkState::Idle);
     assert_eq!(texts(w.history(&s).await.last().unwrap())[0], "继续");
     w.release.notify_waiters();
+}
+
+/// 同一条回复里一个调用已经做完（挂了附件）、另一个还在跑时被停止：做完的那个连同附件存下，另一个补「被停止」。
+#[tokio::test]
+async fn stopping_midway_keeps_the_attachments_of_finished_calls() {
+    let w = world().await;
+    w.script.push(ok_blocks(
+        &[
+            json!({"type": "tool_use", "id": "f1", "name": "share", "input": {}}),
+            json!({"type": "tool_use", "id": "s1", "name": "slow", "input": {}}),
+        ],
+        "tool_use",
+    ));
+    let mut events = w.bus.subscribe();
+    let s = w.new_chat("发个文件，再慢慢做").await;
+    // 等 share 做完（实时展示出它的结果）
+    let shown = async {
+        loop {
+            let e = events.next().await.unwrap();
+            let data = e.data.to_string();
+            if e.kind == "run" && data.contains("\"tool_result\"") && data.contains("\"f1\"") {
+                return;
+            }
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(5), shown).await.expect("share finishes");
+    w.service.stop(&s).await.unwrap();
+    let h = w.history(&s).await;
+    let shared = shared_attachments(&h).unwrap();
+    assert_eq!(shared.len(), 1, "{h:#?}");
+    assert_eq!(shared[0].name, "report.txt");
+    let all: Vec<String> = h.iter().flat_map(texts).collect();
+    assert!(all.iter().any(|t| t.starts_with("result s1") && t.contains(STOPPED_TOOL_RESULT)), "{all:?}");
+    w.release.notify_waiters();
+}
+
+/// 等模型回复时被停止：不等回复，立即停下，没得到回复的请求标上停止。
+#[tokio::test]
+async fn stopping_while_waiting_for_the_model_takes_effect_at_once() {
+    let w = world().await;
+    w.script.push(ok(json!({"type": "text", "text": "迟到的回复"}), "end_turn").set_delay(Duration::from_secs(60)));
+    let s = w.new_chat("慢慢想").await;
+    for _ in 0..200 {
+        if w.history(&s).await.len() == 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    tokio::time::timeout(Duration::from_secs(5), w.service.stop(&s)).await.expect("stop is not held up").unwrap();
+    assert_eq!(w.state(&s).await, WorkState::Idle);
+    let h = w.history(&s).await;
+    assert_eq!(h.len(), 1, "{h:#?}");
+    assert!(is_stopped(&h[0]));
 }
 
 #[tokio::test]

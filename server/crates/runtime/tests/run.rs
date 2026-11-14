@@ -28,7 +28,7 @@ use muliao_runtime::conventions::{SharedFile, TOOL_ATTACHMENTS, attach, tool_att
 use muliao_runtime::mcp::{Confine, McpConnector};
 use muliao_runtime::models::ModelRegistry;
 use muliao_runtime::toolbox::Toolbox;
-use muliao_runtime::{RunSpec, Runtime, RuntimeDeps};
+use muliao_runtime::{RunSpec, Runtime, RuntimeDeps, ToolsRun};
 use muliao_usage::UsageLog;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -323,7 +323,9 @@ async fn a_run_from_start_to_finish() {
 
     // 执行工具：图片存成引用，附件并进结果
     let earlier = &history[..history.len() - 1];
-    let ToolsDone::Results(results) = run.run_tools(earlier, &r, &resolved, &mut |_| {}).await.unwrap() else {
+    let ToolsRun::Done(ToolsDone::Results(results)) =
+        run.run_tools(earlier, &r, &resolved, std::future::pending(), &mut |_| {}).await.unwrap()
+    else {
         panic!()
     };
     let t = &results[0];
