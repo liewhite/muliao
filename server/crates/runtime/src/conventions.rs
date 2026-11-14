@@ -3,17 +3,17 @@
 //!
 //! | 约定 | 记在哪里 | 谁写 | 谁读 |
 //! |---|---|---|---|
-//! | `muliao_attachments`：工具挂给用户的文件（[`SharedFile`]，只存文件编号、名字与类型） | `ToolResult.metadata`（[`ResultFiles`]） | share_file、ask_agent（经 [`attach`]） | 会话领域（它的结果 metadata 平铺了 [`ResultFiles`]）：会话条目、实时事件、转交给调用方 |
+//! | `muliao_attachments`：工具挂给用户的文件（[`SharedFile`]，只存文件编号、名字与类型） | `ToolResult.metadata`（[`ResultFiles`]） | share_file（经 [`attach`]）、ask_agent 交回的结局（经 [`files_metadata`]） | 会话领域（它的结果 metadata 平铺了 [`ResultFiles`]）：会话条目、实时事件、转交给调用方 |
 //! | 工具交回的图片（[`result_images`]） | `ToolResult.content` 里的文件引用 | 运行端口存图（如 MCP 截图、read_file 读图） | 模型（展开）、会话条目、实时事件；不转交调用方 |
 //!
-//! 工具结果的 metadata 在 agenter 交回时是空的，运行端口这一步结束时写下 [`ResultFiles`]（[`crate::runner`]），会话领域
-//! 之后再往同一个对象里加自己的键（都带 `muliao_` 前缀）。
+//! 工具结果的 metadata 由工具随结果交回（agenter 的 `ToolOutput.metadata`），只有 [`ResultFiles`] 一种；会话领域存下前
+//! 再往同一个对象里加自己的键（都带 `muliao_` 前缀）。
 
-use agenter::{Content, File, FileSource, ToolResult};
+use agenter::{Content, File, FileSource, ToolOutput, ToolResult};
 use muliao_files::{FileMeta, file_url, parse_file_url};
 use muliao_platform::ids::MediaType;
-use muliao_platform::tooling::RunScope;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// 运行端口写在工具结果 metadata 上的部分。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,10 +67,15 @@ pub fn attachment_of_ref(file: &File) -> Option<Attachment> {
     Some(Attachment { url: url.clone(), name, inline: media_type.is_inline_image(), media_type })
 }
 
-/// 在工具里调用：把这些文件挂到这次调用的结果上给用户看（运行端口在这一步结束时并进结果）。
-pub fn attach(scope: &RunScope, call_id: &str, files: &[SharedFile]) {
-    let meta = ResultFiles { attachments: files.to_vec() };
-    scope.set_result_metadata(call_id, serde_json::to_value(meta).expect("shared files serialize"));
+/// 挂给用户的文件作为工具结果的 metadata（[`ResultFiles`]）；没有文件时为 None。
+pub fn files_metadata(files: &[SharedFile]) -> Option<Value> {
+    (!files.is_empty())
+        .then(|| serde_json::to_value(ResultFiles { attachments: files.to_vec() }).expect("shared files serialize"))
+}
+
+/// 在工具里调用：把这些文件挂到这次调用的结果上给用户看（随结果交回，成为它的 metadata）。
+pub fn attach(output: ToolOutput, files: &[SharedFile]) -> ToolOutput {
+    ToolOutput { metadata: files_metadata(files), ..output }
 }
 
 /// 工具交回、已存进文件存储的图片的展示形式。它们是给模型看的结果，会话里显示在这次调用的过程里；不是挂给用户的文件，

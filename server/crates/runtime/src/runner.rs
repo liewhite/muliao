@@ -1,8 +1,7 @@
 //! 会话运行的端口：组装一次运行（指令、模型、按规则开放的内置工具、连上的 MCP），然后由会话领域一步步驱动，每步是两种之一
 //! （返回这一步的产物，库不管存库）：[`Run::respond`] 请求模型，[`Run::run_tools`] 执行一条回复里的工具调用，分别对应 agenter
 //! 的 `respond`、`call_tools`。下一步做哪种只由会话领域按历史定。每一步里运行端口做三件事：发给模型前把附件展开成模型
-//! 形态，模型回复后记一笔用量，工具执行完把交回的图片存进文件存储、把工具挂上的附加数据并进结果——所以会话领域拿到、
-//! 存下的总是存储形态。
+//! 形态，模型回复后记一笔用量，工具执行完把交回的图片存进文件存储——所以会话领域拿到、存下的总是存储形态。
 //!
 //! 一次运行（[`Run`]）从会话的一次运行开始到结束或挂起：工具组（含 MCP 连接）与这次的 [`RunScope`] 都跟着它，丢掉它就
 //! 断开 MCP。压缩（[`Runtime::summarize`]）是另一个入口：无工具的一次文本生成。
@@ -238,14 +237,14 @@ impl Run {
 
     /// 执行 `response` 里的工具调用：earlier 是这条回复之前的存储形态的历史（数工具连续出错的次数用）；resolved 是挂起
     /// 调用的结局与挂起前已有的结果（按调用 id，它们不再执行），不是从挂起处继续时为空。交回的结果是存储形态：能内联的
-    /// 图片存进文件存储换成引用，工具挂上的附加数据并进结果。
+    /// 图片存进文件存储换成引用。
     ///
     /// stop 完成时不再等还在跑的调用（丢掉它们；一开始就已完成则一个也不启动），交回已经做完的那些
     /// （[`ToolsRun::Stopped`]）。只有执行可以被它打断：
-    /// 做完之后把结果变成存储形态（取走工具挂上的附加数据、存图片）不看 stop，所以交回的结果总是完整的。
+    /// 做完之后把结果变成存储形态（存图片）不看 stop，所以交回的结果总是完整的。
     ///
-    /// on_event 里工具调用的参数已经脱敏（[`Redaction::preview`]）；`ToolFinished` 的结果还是工具交回的原样（图片是内容、
-    /// 没有附加数据），保存的以返回值为准。
+    /// on_event 里工具调用的参数已经脱敏（[`Redaction::preview`]）；`ToolFinished` 的结果还是工具交回的原样（图片是内容），
+    /// 保存的以返回值为准。
     pub async fn run_tools(
         &self,
         earlier: &[Message],
@@ -282,13 +281,8 @@ impl Run {
         Ok(ToolsRun::Done(done))
     }
 
-    /// 工具结果变成存储形态：挂上的附加数据作为 metadata，图片存进文件存储。
+    /// 工具结果变成存储形态：图片存进文件存储。
     async fn settle(&self, result: &mut ToolResult) -> Result<(), Error> {
-        // agenter 交回的工具结果不带 metadata：挂上的附加数据就是它的全部 metadata
-        if let Some(meta) = self.scope.take_result_metadata(&result.call_id) {
-            let before = result.metadata.replace(meta);
-            assert!(before.is_none(), "agenter gave the result of {} its own metadata", result.tool_name);
-        }
         store_tool_images(&self.files, result).await
     }
 }

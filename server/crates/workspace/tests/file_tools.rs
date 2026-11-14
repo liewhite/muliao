@@ -355,7 +355,7 @@ async fn read_file_returns_images_as_content() {
     let (out, content) = w.call_in(&w.scope(), "read_file", json!({"path": "shot.png"}), None).await;
     assert!(out.ok().ends_with("shot.png (image/png, 9 bytes)"));
     assert!(
-        matches!(&content[1], Content::File(f) if f.media_type == "image/png" && f.source == FileSource::Data(b"\x89PNG fake".to_vec()))
+        matches!(&content.content[1], Content::File(f) if f.media_type == "image/png" && f.source == FileSource::Data(b"\x89PNG fake".to_vec()))
     );
     let out = w
         .run(vec![
@@ -376,9 +376,9 @@ async fn share_file_attaches_the_file_to_the_result() {
     let w = world(20_000).await;
     std::fs::write(w.ws().join("report.pdf"), b"%PDF").unwrap();
     let scope = w.scope();
-    let (out, _) = w.call_in(&scope, "share_file", json!({"path": "report.pdf"}), None).await;
+    let (out, output) = w.call_in(&scope, "share_file", json!({"path": "report.pdf"}), None).await;
     assert_eq!(out.ok(), "shared file report.pdf with the user; it is shown with your reply");
-    let meta = scope.take_result_metadata("call-share_file").unwrap();
+    let meta = output.metadata.unwrap();
     let meta: muliao_runtime::conventions::ResultFiles = serde_json::from_value(meta).unwrap();
     let attached = &meta.attachments[0];
     assert_eq!((attached.name.as_str(), attached.media_type.as_str()), ("report.pdf", "application/pdf"));

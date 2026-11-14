@@ -61,12 +61,12 @@ impl Tool<RunScope> for Snap {
     fn description(&self) -> &str {
         "Take a picture."
     }
-    async fn call(&self, ctx: ToolCtx<'_, RunScope>, _a: SnapArgs) -> Result<ToolOutput, ToolError> {
-        attach(ctx.deps, &ctx.call.id, std::slice::from_ref(&self.attachment));
-        Ok(vec![
+    async fn call(&self, _ctx: ToolCtx<'_, RunScope>, _a: SnapArgs) -> Result<ToolOutput, ToolError> {
+        let output = vec![
             Content::text("took it"),
             Content::File(agenter::File { media_type: "image/png".into(), source: FileSource::Data(PNG.to_vec()) }),
-        ])
+        ];
+        Ok(attach(output.into(), std::slice::from_ref(&self.attachment)))
     }
 }
 

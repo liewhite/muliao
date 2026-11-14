@@ -28,7 +28,7 @@ impl Kit {
         let scope = RunScope::new(me.clone(), "/w".into(), SessionId::new("s"), Audience::User);
         let call = ToolCall { id: "c".into(), name: name.into(), args: args.into(), meta: None };
         let out = tool.tool.call(ToolCtx { deps: &scope, call: &call, retries: 0, approval: None }, args).await?;
-        match out.as_slice() {
+        match out.content.as_slice() {
             [Content::Text { text }] => Ok(text.clone()),
             other => panic!("{other:?}"),
         }

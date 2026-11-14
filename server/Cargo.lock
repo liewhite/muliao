@@ -46,7 +46,7 @@ dependencies = [
 [[package]]
 name = "agenter"
 version = "0.1.0"
-source = "git+ssh://git@github.com/liewhite/agenter.git?branch=main#aa7af959ca62752411dd772070bc9835c03ccb34"
+source = "git+ssh://git@github.com/liewhite/agenter.git?branch=main#92fd8e0539d6e6c62c9729da03c5b50353696aba"
 dependencies = [
  "base64 0.23.1",
  "bytes",

@@ -29,7 +29,6 @@ use muliao_platform::bus::Bus;
 use muliao_platform::db::{Database, Tx};
 use muliao_platform::tool_views::ToolRender;
 use muliao_platform::tooling::Audience;
-use muliao_runtime::conventions::attach;
 use muliao_runtime::instructions::with_notices;
 use muliao_runtime::toolbox::Redaction;
 use muliao_runtime::{Run, RunSpec, Runtime, ToolsRun};
@@ -37,7 +36,7 @@ use rusqlite::Connection;
 use tokio_util::sync::CancellationToken;
 
 use crate::actor::Waker;
-use crate::answers::{CallResult, Waiting, approvals_waiting_text, questions_of, questions_waiting_text};
+use crate::answers::{Waiting, approvals_waiting_text, questions_of, questions_waiting_text};
 use crate::compaction::{Compactor, Verdict};
 use crate::content::{Content, append_content, content_of, request_of};
 use crate::conventions::{
@@ -511,7 +510,7 @@ impl Driver<'_> {
         match start {
             Start::Resend => {}
             Start::Resume { paused, content, mail } => {
-                resolved = Some(self.hand_over(run, &paused).await?);
+                resolved = Some(self.hand_over(&paused).await?);
                 first = Some((content, mail));
             }
             Start::Fresh { content, mail } => {
@@ -544,20 +543,13 @@ impl Driver<'_> {
     }
 
     /// 停在挂起的调用上、能继续：开头取走的信件交给这次运行，被批准的调用记为已交给运行执行（之前交过的不再执行，给「被
-    /// 中断」）；被问的 agent 挂给用户的文件挂到这次调用的结果上。
+    /// 中断」）；被问的 agent 挂给用户的文件随它的结局交回（成为这次调用结果的 metadata）。
     ///
     /// 「交给过运行」单独一个事务提交（Python 与取走信件同一事务）：之后到这一步保存之间失败的，重试时这个批准给「被中断」、
     /// 不执行——偏保守，不会重复执行，窗口只有交出回答到工具开始执行之间。
-    async fn hand_over(&self, run: &Run, p: &Paused) -> Result<HashMap<String, Resolution>> {
+    async fn hand_over(&self, p: &Paused) -> Result<HashMap<String, Resolution>> {
         let (session_id, answers) = (self.session_id().to_owned(), p.answers.clone());
         let decided = self.core.db.write(move |tx| crate::paused_calls::take_in(tx, &session_id, &answers)).await?;
-        for (call_id, answer) in &p.answers {
-            if let CallResult::AskAgent(a) = answer
-                && !a.attachments.is_empty()
-            {
-                attach(run.scope(), call_id, &a.attachments);
-            }
-        }
         deferred_results(p, decided)
     }
 
@@ -621,7 +613,7 @@ impl Driver<'_> {
             .collect();
         let mut resolved = resolved.unwrap_or_default();
         for t in &saved {
-            resolved.insert(t.call_id.clone(), Resolution::Result { content: t.content.clone(), is_error: t.is_error });
+            resolved.insert(t.call_id.clone(), Resolution::from(t.clone()));
         }
         let already: HashSet<String> = saved.iter().map(|t| t.call_id.clone()).collect();
         // 做完的调用各自的结束时刻

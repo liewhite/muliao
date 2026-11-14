@@ -3,7 +3,7 @@
 //! 挂起、唤醒与交回的规则在 [`crate::pending`]。存下的形状是 `{"tool": ..., "result": ...}`。
 
 use agenter::{Approval, Content, Resolution};
-use muliao_runtime::conventions::SharedFile;
+use muliao_runtime::conventions::{SharedFile, files_metadata};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -184,7 +184,7 @@ impl AskResult {
 
     /// 交给模型的结果。
     pub(crate) fn resolution(&self) -> Resolution {
-        Resolution::Result { content: self.content(), is_error: false }
+        text(self.text())
     }
 }
 
@@ -255,7 +255,11 @@ impl AgentAnswer {
                 names.join(", ")
             ));
         }
-        text(t)
+        Resolution::Result {
+            content: vec![Content::text(t)],
+            is_error: false,
+            metadata: files_metadata(&self.attachments),
+        }
     }
 }
 
@@ -393,7 +397,7 @@ pub(crate) fn skipped(kind: Waiting, given: &[&CallResult]) -> Resolution {
 }
 
 fn text(t: String) -> Resolution {
-    Resolution::Result { content: vec![Content::text(t)], is_error: false }
+    Resolution::Result { content: vec![Content::text(t)], is_error: false, metadata: None }
 }
 
 #[cfg(test)]

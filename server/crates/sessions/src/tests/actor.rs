@@ -175,14 +175,13 @@ impl Tool<RunScope> for Share {
     fn description(&self) -> &str {
         "Share a file."
     }
-    async fn call(&self, ctx: ToolCtx<'_, RunScope>, _a: NoArgs) -> Result<ToolOutput, ToolError> {
+    async fn call(&self, _ctx: ToolCtx<'_, RunScope>, _a: NoArgs) -> Result<ToolOutput, ToolError> {
         let file = SharedFile {
             file_id: "f-shared".into(),
             name: "report.txt".into(),
             media_type: muliao_platform::ids::MediaType::parse("text/plain").unwrap(),
         };
-        attach(ctx.deps, &ctx.call.id, &[file]);
-        Ok(agenter::tool::text("shared"))
+        Ok(attach(agenter::tool::text("shared"), &[file]))
     }
 }
 

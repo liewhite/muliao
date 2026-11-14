@@ -12,12 +12,12 @@
 //! - 其余（配置或账户问题、程序错误、系统自己的数据坏了）→ `ToolError::Abort`：整次运行失败，让人看见。
 
 use crate::ids::{AgentId, SessionId};
+use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use agenter::{DynTool, Tool, ToolError};
-use serde_json::Value;
 
 use crate::errors::{DomainError, Error};
 use crate::tool_views::ToolRender;
@@ -35,24 +35,30 @@ pub enum Audience {
 }
 
 /// 一次运行（会话的一次运行，从开始到结束或挂起）交给所有工具的上下文。每次运行新建一个，不和别的运行共用。
-#[derive(Debug)]
 pub struct RunScope {
     pub agent_id: AgentId,
     /// agent 的工作目录（相对路径与 shell 的 cwd 以它为准）
     pub workspace: PathBuf,
     pub session_id: SessionId,
     pub audience: Audience,
-    /// 这次运行里 read_file 读过（只读了一段也算）、或文件工具刚写过的文件：路径 → 当时的修改时间。write_file 整体覆盖
-    /// 资源目录里已有的文件之前核对它（读过、之后没被别人改过），防止两处同时改时后写的静默盖掉先写的。只由文件工具读写
-    pub reads: Mutex<HashMap<PathBuf, std::time::SystemTime>>,
-    /// 工具给这次调用的结果挂上的附加数据（按调用 id）：agenter 的工具只交回内容，运行端口在这一步结束时把它作为那次
-    /// 调用结果的 metadata（`ToolResult.metadata`），随消息入库。形状由写它的运行端口定（`ResultFiles`）
-    result_metadata: Mutex<HashMap<String, Value>>,
+    /// 别的领域的工具在这次运行里要记的状态，按类型各一份（[`RunScope::state`]），随运行一起丢掉。平台不知道里面是什么
+    states: Mutex<HashMap<TypeId, Arc<dyn Any + Send + Sync>>>,
+}
+
+impl std::fmt::Debug for RunScope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RunScope")
+            .field("agent_id", &self.agent_id)
+            .field("workspace", &self.workspace)
+            .field("session_id", &self.session_id)
+            .field("audience", &self.audience)
+            .finish_non_exhaustive()
+    }
 }
 
 impl RunScope {
     pub fn new(agent_id: AgentId, workspace: PathBuf, session_id: SessionId, audience: Audience) -> Self {
-        Self { agent_id, workspace, session_id, audience, reads: Mutex::default(), result_metadata: Mutex::default() }
+        Self { agent_id, workspace, session_id, audience, states: Mutex::default() }
     }
 
     /// 用户在等这次运行的回答：它发起的后台任务、委派的结局随之推送。
@@ -60,15 +66,12 @@ impl RunScope {
         self.audience == Audience::User
     }
 
-    /// 给调用 `call_id` 的结果挂上附加数据（再写就覆盖）。只经运行端口的 `conventions::attach` 调用：形状由它定，形状
-    /// 不对的会原样入库、读历史时报错。
-    pub fn set_result_metadata(&self, call_id: &str, value: Value) {
-        self.result_metadata.lock().expect("result metadata lock").insert(call_id.to_owned(), value);
-    }
-
-    /// 取走调用 `call_id` 挂上的附加数据（运行端口在这一步结束时取一次）。
-    pub fn take_result_metadata(&self, call_id: &str) -> Option<Value> {
-        self.result_metadata.lock().expect("result metadata lock").remove(call_id)
+    /// 这次运行里类型 T 的那份状态（第一次取时是 T::default()）。用法同 axum 的 Extension：哪个领域的工具要跨调用记
+    /// 东西（如文件工具记读过哪些文件），就定义自己的类型放在这里，别的领域看不到也不用知道。
+    pub fn state<T: Default + Send + Sync + 'static>(&self) -> Arc<T> {
+        let mut states = self.states.lock().expect("run states lock");
+        let state = states.entry(TypeId::of::<T>()).or_insert_with(|| Arc::new(T::default())).clone();
+        state.downcast::<T>().expect("states are keyed by their type")
     }
 }
 
@@ -194,13 +197,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn result_metadata_is_taken_once_per_call() {
+    fn each_type_has_one_state_per_run() {
+        #[derive(Default)]
+        struct Seen(Mutex<Vec<u32>>);
         let scope = RunScope::new(AgentId::new("a"), "/w".into(), SessionId::new("s"), Audience::None);
-        scope.set_result_metadata("c1", Value::from(1));
-        scope.set_result_metadata("c1", Value::from(2));
-        assert_eq!(scope.take_result_metadata("c1"), Some(Value::from(2)));
-        assert!(scope.take_result_metadata("c1").is_none());
-        assert!(scope.take_result_metadata("c2").is_none());
+        scope.state::<Seen>().0.lock().unwrap().push(1);
+        scope.state::<Seen>().0.lock().unwrap().push(2);
+        assert_eq!(*scope.state::<Seen>().0.lock().unwrap(), [1, 2]);
+        assert_eq!(*scope.state::<Mutex<u8>>().lock().unwrap(), 0, "another type starts from its default");
+        let next = RunScope::new(AgentId::new("a"), "/w".into(), SessionId::new("s"), Audience::None);
+        assert!(next.state::<Seen>().0.lock().unwrap().is_empty(), "a new run starts empty");
     }
 
     #[test]

@@ -103,15 +103,20 @@ fn image_type(path: &Path) -> Option<MediaType> {
 
 // ---- 读过的文件（write_file 覆盖资源文件前核对） ----
 
+/// 这次运行里 read_file 读过（只读了一段也算）、或文件工具刚写过的文件：真实路径 → 当时的修改时间。只由文件工具读写，
+/// 放在这次运行的状态里（`RunScope::state`），随运行丢掉。
+#[derive(Default)]
+struct Reads(std::sync::Mutex<HashMap<PathBuf, SystemTime>>);
+
 fn modified(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
-/// 记下这次运行读到（或刚写成）的文件当时的修改时间（`RunScope::reads`）。读之前记：读的过程中被改了，记下的是旧的，之后
+/// 记下这次运行读到（或刚写成）的文件当时的修改时间（[`Reads`]）。读之前记：读的过程中被改了，记下的是旧的，之后
 /// 覆盖时按「改过了」拒绝，不会放过。写入口写成的给出它在锁里取的时间（之后别处的写入不会被记成这次的）。
 fn remember(scope: &RunScope, target: &Path, at: Option<SystemTime>) {
     let (Ok(identity), Some(at)) = (real(target), at.or_else(|| modified(target))) else { return };
-    scope.reads.lock().expect("reads lock").insert(identity.into_path_buf(), at);
+    scope.state::<Reads>().0.lock().expect("reads lock").insert(identity.into_path_buf(), at);
 }
 
 /// write_file 整体覆盖资源目录里的文件：已有的要这次运行读过、之后没被改过（写入口核对），免得盖掉别处刚做的修改（共享
@@ -120,7 +125,8 @@ fn expect_for_write(scope: &RunScope, target: &Path) -> Result<Expect, DomainErr
     if !target.is_file() {
         return Ok(Expect::Absent);
     }
-    let seen = real(target).ok().and_then(|r| scope.reads.lock().expect("reads lock").get(r.as_path()).copied());
+    let reads = scope.state::<Reads>();
+    let seen = real(target).ok().and_then(|r| reads.0.lock().expect("reads lock").get(r.as_path()).copied());
     seen.map(Expect::Modified).ok_or_else(|| {
         DomainError::invalid(format!(
             "{} is an existing AI asset file and write_file replaces it whole: read it with read_file first (in this \
@@ -274,7 +280,8 @@ async fn read_image(target: &Path, media_type: &MediaType, max_bytes: u64) -> Re
     Ok(vec![
         Content::text(format!("{} ({media_type}, {} bytes)", target.display(), data.len())),
         Content::File(File { media_type: media_type.to_string(), source: FileSource::Data(data) }),
-    ])
+    ]
+    .into())
 }
 
 enum ReadError {
@@ -847,7 +854,7 @@ impl Tool<RunScope> for ShareFile {
         let name = target.file_name().unwrap_or_default().to_string_lossy().into_owned();
         let meta = deps.files.put_path(&name, media_type_of(&name), &target).await.map_err(|e| store_error(e, ""))?;
         tracing::info!(agent = %scope.agent_id, session_id = %scope.session_id, file_id = %meta.id, "file shared with user");
-        attach(scope, &ctx.call.id, &[SharedFile::of(&meta)]);
-        Ok(agenter::tool::text(format!("shared file {} with the user; it is shown with your reply", meta.name)))
+        let text = agenter::tool::text(format!("shared file {} with the user; it is shown with your reply", meta.name));
+        Ok(attach(text, &[SharedFile::of(&meta)]))
     }
 }

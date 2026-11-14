@@ -153,7 +153,8 @@ impl World {
         let args = args.to_string();
         let call = ToolCall { id: "c".into(), name: name.into(), args: args.clone(), meta: None };
         match tool.tool.call(ToolCtx { deps: &scope, call: &call, retries: 0, approval: None }, &args).await {
-            Ok(content) => Ok(content
+            Ok(output) => Ok(output
+                .content
                 .iter()
                 .filter_map(|c| if let Content::Text { text } = c { Some(text.clone()) } else { None })
                 .collect()),

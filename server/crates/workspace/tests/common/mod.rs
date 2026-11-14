@@ -6,7 +6,7 @@ use muliao_platform::ids::{AgentId, SessionId};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use agenter::{Approval, Content, ToolCall, ToolCtx, ToolError};
+use agenter::{Approval, Content, ToolCall, ToolCtx, ToolError, ToolOutput};
 use chrono::Utc;
 use muliao_assets::access::Actor;
 use muliao_assets::distribution::Distribution;
@@ -162,14 +162,15 @@ impl World {
         name: &str,
         args: serde_json::Value,
         approval: Option<&Approval>,
-    ) -> (Out, Vec<Content>) {
+    ) -> (Out, ToolOutput) {
         let tool = self.tools.iter().find(|t| t.name() == name).unwrap_or_else(|| panic!("no tool {name}"));
         let args = args.to_string();
         let call = ToolCall { id: format!("call-{name}"), name: name.into(), args: args.clone(), meta: None };
         let ctx = ToolCtx { deps: scope, call: &call, retries: 0, approval };
         match tool.tool.call(ctx, &args).await {
-            Ok(content) => {
-                let text = content
+            Ok(output) => {
+                let text = output
+                    .content
                     .iter()
                     .filter_map(|c| match c {
                         Content::Text { text } => Some(text.clone()),
@@ -177,11 +178,11 @@ impl World {
                     })
                     .collect::<Vec<_>>()
                     .join("");
-                (Out::Ok(text), content)
+                (Out::Ok(text), output)
             }
-            Err(ToolError::Retry(m)) => (Out::Retry(m), Vec::new()),
-            Err(ToolError::NeedsApproval { pin }) => (Out::NeedsApproval(pin), Vec::new()),
-            Err(e) => (Out::Other(format!("{e:?}")), Vec::new()),
+            Err(ToolError::Retry(m)) => (Out::Retry(m), ToolOutput::default()),
+            Err(ToolError::NeedsApproval { pin }) => (Out::NeedsApproval(pin), ToolOutput::default()),
+            Err(e) => (Out::Other(format!("{e:?}")), ToolOutput::default()),
         }
     }
 

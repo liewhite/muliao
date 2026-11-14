@@ -142,7 +142,7 @@ mod tests {
     async fn call(t: &Arc<dyn agenter::DynTool<()>>, args: &str) -> Result<String, ToolError> {
         let tc = ToolCall { id: "1".into(), name: t.def().name.clone(), args: args.into(), meta: None };
         let out = t.call(ToolCtx { deps: &(), call: &tc, retries: 0, approval: None }, args).await?;
-        match out.as_slice() {
+        match out.content.as_slice() {
             [Content::Text { text, .. }] => Ok(text.clone()),
             other => panic!("{other:?}"),
         }

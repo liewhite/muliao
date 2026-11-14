@@ -138,7 +138,7 @@ async fn stdio_server_runs_in_the_users_write_sandbox() {
             let args = args.to_string();
             let c = ToolCall { id: "1".into(), name: t.def().name.clone(), args: args.clone(), meta: None };
             let out = t.call(ToolCtx { deps: &(), call: &c, retries: 0, approval: None }, &args).await.unwrap();
-            match out.as_slice() {
+            match out.content.as_slice() {
                 [Content::Text { text }] => text.clone(),
                 other => panic!("{other:?}"),
             }
