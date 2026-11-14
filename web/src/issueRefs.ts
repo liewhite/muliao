@@ -1,6 +1,6 @@
 import { findAndReplace } from 'mdast-util-find-and-replace'
 import { asIssueId } from './api'
-import { issueRoute } from './issues'
+import { issueRoute } from './issues/model'
 
 /**
  * 正文里独立的 `#数字` 是本站 issue 引用。前面紧挨字母、数字、下划线或 & / # 的不算：

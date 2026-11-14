@@ -16,7 +16,7 @@ import {
   useAgents,
   useConfirm,
 } from '../ui'
-import { agentLabel } from '../agentGroups'
+import { agentLabel } from '../agents/agentGroups'
 import { useLoad, errorMessage } from '../load'
 
 const PUSH_TEXT: Record<PushState, string> = {

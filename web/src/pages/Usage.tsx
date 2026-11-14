@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Card } from '@heroui/react'
 import { api, type Usage } from '../api'
 import { EmptyHint, Loading, Page, Segmented, useAgents } from '../ui'
-import { agentLabel } from '../agentGroups'
+import { agentLabel } from '../agents/agentGroups'
 import { useLoad } from '../load'
 import { cacheHitPercent, formatTokens as tokens, windowOf } from '../usage'
 

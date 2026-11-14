@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import swSource from "../public/sw.js?raw";
 import { asIssueId } from "./api";
-import { issueRoute } from "./issues";
+import { issueRoute } from "./issues/model";
 
 // public/sw.js 不经打包，不能 import issueRoute：它按地址的形状认出待审核 issue 的通知（加「通过/打回」），这里核对
 // 那个形状与 issueRoute 一致，改了 issue 页的路由这里会失败
