@@ -168,7 +168,7 @@ impl Runtime {
         tracing::info!(
             agent = %agent_id,
             session_id = %spec.session_id,
-            model = dir.file.model(),
+            model = %dir.file.model(),
             thinking = dir.file.thinking().as_str(),
             tools = agent.tools().len(),
             "agent run started"
@@ -179,7 +179,13 @@ impl Runtime {
             notices,
             redaction: self.d.toolbox.redaction(),
             files: self.d.files.clone(),
-            meter: Meter::new(self.d.usage.clone(), agent_id, Some(spec.session_id), dir.file.model(), RunKind::Run),
+            meter: Meter::new(
+                self.d.usage.clone(),
+                agent_id,
+                Some(spec.session_id),
+                &dir.file.model().to_string(),
+                RunKind::Run,
+            ),
         })
     }
 
@@ -200,7 +206,13 @@ impl Runtime {
             timestamp: Utc::now(),
             metadata: None,
         })];
-        let meter = Meter::new(self.d.usage.clone(), &dir.id, Some(session_id), dir.file.model(), RunKind::Compaction);
+        let meter = Meter::new(
+            self.d.usage.clone(),
+            &dir.id,
+            Some(session_id),
+            &dir.file.model().to_string(),
+            RunKind::Compaction,
+        );
         let response = agent.respond(&history, &mut |_| {}).await.map_err(|e: RunError| {
             let message = format!("summarizing for compaction failed: {e}");
             if e.is_transient() { Error::Unavailable(message) } else { Error::Upstream(message) }

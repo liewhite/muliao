@@ -10,6 +10,7 @@ use muliao_assets::agents;
 use muliao_assets::rules::{ToolAccess, ToolSpec, ToolTable};
 use muliao_assets::service::{AgentService, AgentSpec};
 use muliao_assets::source::{AssetSource, ModelCheck};
+use muliao_platform::config::ModelRef;
 use muliao_platform::db::{Database, migrate};
 
 pub struct World {
@@ -50,7 +51,11 @@ pub fn tools() -> Arc<ToolTable> {
 
 /// 模型只认 `p:` 开头的
 pub fn model_check() -> ModelCheck {
-    Arc::new(|model: &str| if model.starts_with("p:") { Ok(()) } else { Err(format!("unknown provider in {model:?}")) })
+    Arc::new(
+        |model: &ModelRef| {
+            if model.provider() == "p" { Ok(()) } else { Err(format!("unknown provider in {:?}", model.to_string())) }
+        },
+    )
 }
 
 pub async fn world() -> World {
@@ -62,7 +67,8 @@ pub async fn world() -> World {
     std::fs::create_dir_all(root.join("platform/memory")).unwrap();
     std::fs::write(root.join("platform/memory/global.md"), "全局\n").unwrap();
     let source = Arc::new(AssetSource::new(db.clone(), root, 100, model_check(), tools()));
-    let service = Arc::new(AgentService::new(source.clone(), dir.path().join("workspaces"), "p:default".into()));
+    let service =
+        Arc::new(AgentService::new(source.clone(), dir.path().join("workspaces"), "p:default".parse().unwrap()));
     World { dir, db, source, service }
 }
 

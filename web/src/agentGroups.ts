@@ -56,7 +56,7 @@ export function agentLabel(agents: Agent[] | undefined, id: string): string {
   return findAgent(agents, id)?.name ?? id
 }
 
-/** agent 现在配置的模型（`<provider>:<model>`）；agent 列表尚未加载完、没有这个 agent 或它的配置没加载时没有 */
+/** agent 现在配置的模型名（不带 provider）；agent 列表尚未加载完、没有这个 agent 或它的配置没加载时没有 */
 export function agentModel(agents: Agent[] | undefined, id: AgentId): string | undefined {
-  return findAgent(agents, id)?.config?.model
+  return findAgent(agents, id)?.config?.model.model
 }

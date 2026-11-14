@@ -33,8 +33,12 @@ export function waitDetail(w: Wait, now: number): string {
     case 'delegation': {
       const waited = `已等 ${elapsed(w.since, now)}`
       // ask_agent 是阻塞的，没有心跳也没有超时；report_back 有心跳
-      if (w.check_seconds === null) return `ask_agent · ${waited}`
-      return `report_back · 每 ${formatDuration(w.check_seconds * 1000, true)} 检查 · ${waited}`
+      switch (w.mode.kind) {
+        case 'ask':
+          return `ask_agent · ${waited}`
+        case 'report_back':
+          return `report_back · 每 ${formatDuration(w.mode.check_seconds * 1000, true)} 检查 · ${waited}`
+      }
     }
     case 'wake': {
       const due = Date.parse(w.due_at)

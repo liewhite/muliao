@@ -39,7 +39,7 @@ export function OwnerSelect({
 }
 
 /** 把资产转给另一个 owner：内容与收录它的角色不变，记一版（列表随 changed 更新） */
-function TransferOwner({ asset, onDone }: { asset: Exclude<CatalogAsset, { kind: 'tool' }>; onDone: () => void }) {
+function TransferOwner({ asset, onDone }: { asset: Transferable; onDone: () => void }) {
   const [owner, setOwner] = useState<AgentId | null>(asset.owner)
   const action = useAction()
   return (
@@ -60,12 +60,14 @@ function TransferOwner({ asset, onDone }: { asset: Exclude<CatalogAsset, { kind:
   )
 }
 
-/** 资产归谁、被哪些角色收录；没被收录时说明谁能用。skill、MCP、secret 可以转移 owner（内置工具归平台；记忆不转移：私有记忆
- * 只属于它的 agent） */
+/** 转移接口按种类走路径，内置工具不在其中；能不能转由服务端的 transferable 定 */
+type Transferable = Exclude<CatalogAsset, { kind: 'tool' }>
+
+/** 资产归谁、被哪些角色收录；没被收录时说明谁能用；服务端说能转的可以转移 owner */
 export function AssetAccess({ asset }: { asset: CatalogAsset }) {
   const agents = useAgents()
   const [transferring, setTransferring] = useState(false)
-  const transferable = asset.kind !== 'tool' && asset.kind !== 'memory'
+  const transferable = asset.transferable && asset.kind !== 'tool' ? asset : null
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-1.5 text-xs">
@@ -98,13 +100,13 @@ export function AssetAccess({ asset }: { asset: CatalogAsset }) {
           </Chip>
         )}
         {asset.shared && asset.roles.length === 0 && <span className="text-muted">经 agent 自己的 allow 分发</span>}
-        {transferable && (
+        {transferable !== null && (
           <Button size="sm" variant="ghost" className="h-6 px-2 text-xs text-accent" onPress={() => setTransferring(!transferring)}>
             {transferring ? '取消转移' : '转移 owner'}
           </Button>
         )}
       </div>
-      {transferable && transferring && <TransferOwner asset={asset} onDone={() => setTransferring(false)} />}
+      {transferable !== null && transferring && <TransferOwner asset={transferable} onDone={() => setTransferring(false)} />}
     </div>
   )
 }

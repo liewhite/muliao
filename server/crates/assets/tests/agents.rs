@@ -34,7 +34,7 @@ async fn create_writes_files_rules_and_row() {
     assert_eq!(info.name.as_str(), "交易");
     let view = w.service.view(&info.id).await.unwrap();
     let config = view.config.unwrap();
-    assert_eq!(config.file.model(), "p:default");
+    assert_eq!(config.file.model().to_string(), "p:default");
     assert_eq!(config.file.group(), Some("组"));
     assert_eq!(config.file.thinking(), Thinking::High);
     assert_eq!(muliao_assets::rules::texts(&view.rules.allow), ["use:tool:create_agent"]);
@@ -48,7 +48,7 @@ async fn create_writes_files_rules_and_row() {
         let spec = AgentSpec {
             name: name.into(),
             description: "d".into(),
-            model: model.map(str::to_owned),
+            model: model.map(|m| m.parse().unwrap()),
             rules,
             ..Default::default()
         };
@@ -122,7 +122,7 @@ async fn update_renames_and_rolls_back() {
     let toml_before = read(w.root().join("Alice2/agent.toml"));
     let patch = AgentPatch {
         name: Some("bob".into()),
-        config: AgentConfig { model: Some("p:other".into()), ..Default::default() },
+        config: AgentConfig { model: Some("p:other".parse().unwrap()), ..Default::default() },
         allow: Some(vec!["use:tool:read_file".parse().unwrap()]),
         ..Default::default()
     };

@@ -79,12 +79,20 @@ impl rusqlite::types::FromSql for Status {
     }
 }
 
-/// 时间线里记下的状态：现有的取值，或 #258 之前去掉的（todo、waiting，只在旧动态里；时间线只增不改）。存成文字。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(from = "String", into = "String")]
+/// 时间线里记下的状态：现有的取值，或 #258 之前去掉的（[`Retired`]，只在旧动态里；时间线只增不改）。存成文字。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(untagged)]
 pub enum Recorded {
     Now(Status),
-    Retired(String),
+    Retired(Retired),
+}
+
+/// #258 去掉的状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Retired {
+    Todo,
+    Waiting,
 }
 
 impl Recorded {
@@ -94,30 +102,19 @@ impl Recorded {
     }
 }
 
-impl From<Status> for Recorded {
-    fn from(s: Status) -> Self {
-        Recorded::Now(s)
-    }
-}
-
-impl From<String> for Recorded {
-    fn from(s: String) -> Self {
-        Status::parse(&s).map_or(Recorded::Retired(s), Recorded::Now)
-    }
-}
-
-impl From<Recorded> for String {
-    fn from(r: Recorded) -> Self {
-        r.to_string()
-    }
-}
-
 impl fmt::Display for Recorded {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Recorded::Now(s) => f.write_str(s.as_str()),
-            Recorded::Retired(s) => f.write_str(s),
+            Recorded::Retired(Retired::Todo) => f.write_str("todo"),
+            Recorded::Retired(Retired::Waiting) => f.write_str("waiting"),
         }
+    }
+}
+
+impl From<Status> for Recorded {
+    fn from(s: Status) -> Self {
+        Recorded::Now(s)
     }
 }
 

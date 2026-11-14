@@ -20,6 +20,7 @@ use crate::naming::{AgentName, new_agent_id};
 use crate::rules::{AgentRules, Rule};
 use crate::source::AssetSource;
 use crate::tree::{AgentDir, PRIVATE_MEMORY_FILE, Snapshot, move_to, remove};
+use muliao_platform::config::ModelRef;
 use muliao_platform::errors::{Result, invalid};
 
 /// 新建 agent。model 为 None 时取服务端配置的默认模型。roles 不含 base（每个 agent 隐含）。
@@ -27,7 +28,7 @@ use muliao_platform::errors::{Result, invalid};
 pub struct AgentSpec {
     pub name: String,
     pub description: String,
-    pub model: Option<String>,
+    pub model: Option<ModelRef>,
     pub thinking: Thinking,
     /// 分组名（去掉首尾空白，空串与 None 都是不分组）
     pub group: Option<String>,
@@ -63,16 +64,16 @@ pub struct AgentService {
     db: Arc<Database>,
     source: Arc<AssetSource>,
     workspaces_dir: PathBuf,
-    default_model: String,
+    default_model: ModelRef,
 }
 
 impl AgentService {
-    pub fn new(source: Arc<AssetSource>, workspaces_dir: PathBuf, default_model: String) -> Self {
+    pub fn new(source: Arc<AssetSource>, workspaces_dir: PathBuf, default_model: ModelRef) -> Self {
         Self { db: source.db().clone(), source, workspaces_dir, default_model }
     }
 
     /// 新建时没给模型用的默认值（服务端配置的 llm.default_model）
-    pub fn default_model(&self) -> &str {
+    pub fn default_model(&self) -> &ModelRef {
         &self.default_model
     }
 

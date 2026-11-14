@@ -1,7 +1,7 @@
 // issue 看板的纯逻辑：状态与优先级的展示顺序、按状态分列、时间线文字
 
 import { agentLabel, selectableAgents } from './agentGroups'
-import { asAgentId, type Agent, type Assignee, type Issue, type IssueActivity, type IssuePriority, type IssueStatus } from './api'
+import { asAgentId, type Agent, type Assignee, type Issue, type IssueActivity, type IssuePriority, type IssueStatus, type Schemas } from './api'
 
 /** 状态的标签；键的顺序就是看板的列顺序（也是列表视图的分组顺序）：受阻排在进行中和待审核之间 */
 export const STATUS_LABEL: Record<IssueStatus, string> = {
@@ -125,8 +125,9 @@ export function moveIssues(issues: Issue[], moves: ReadonlyMap<number, PendingMo
   })
 }
 
-/** 时间线里的状态可能是已去掉的旧状态（todo、waiting，历史不改），没有中文名时原样显示 */
-const statusLabel = (v: string) => (Object.hasOwn(STATUS_LABEL, v) ? STATUS_LABEL[v as IssueStatus] : v)
+/** 时间线里的状态还可能是 #258 去掉的旧状态（历史不改），没有中文名，原样显示 */
+const RECORDED_LABEL: Record<Schemas['Recorded'], string> = { ...STATUS_LABEL, todo: 'todo', waiting: 'waiting' }
+const statusLabel = (v: Schemas['Recorded']) => RECORDED_LABEL[v]
 
 /** issue 编号列表的文字：「#1, #2」，空为「无」 */
 export function issueRefs(ids: readonly number[]): string {

@@ -21,7 +21,7 @@ use crate::conventions::{PartKind, event_content, finished_at, is_stopped, made_
 use crate::origins::Origin;
 use crate::pending::{OpenAsk, OpenAsks};
 use crate::tools::ASK_USER;
-use crate::work::EventSource;
+use crate::work::{EventSource, is_no_progress};
 use muliao_platform::errors::{Result, broken};
 
 /// 各工具的展示规则（`Toolbox::renders`）；只要文字的投影给空的。
@@ -138,6 +138,8 @@ pub enum Item<U = UserItem> {
     Event(EventItem),
     Assistant {
         text: String,
+        /// 只是没有新进展时的占位答复（[`crate::work::NO_PROGRESS_REPLY`]）：界面合并运行中检查时一起收起
+        no_progress: bool,
     },
     Thinking {
         text: String,
@@ -162,7 +164,7 @@ impl<U: AsRef<UserItem>> Item<U> {
         match self {
             Item::User(u) => &u.as_ref().text,
             Item::Event(EventItem { text, .. })
-            | Item::Assistant { text }
+            | Item::Assistant { text, .. }
             | Item::Thinking { text }
             | Item::ToolCall(CallItem { text, .. })
             | Item::ToolResult(ResultItem { text, .. })
@@ -197,7 +199,7 @@ impl Item {
             }
             Item::User(UserItem { text, .. })
             | Item::Event(EventItem { text, .. })
-            | Item::Assistant { text }
+            | Item::Assistant { text, .. }
             | Item::Thinking { text }
             | Item::ToolError(ErrorItem { text, .. }) => *text = truncate(text, max_chars),
             Item::Stopped => {}
@@ -383,7 +385,7 @@ pub(crate) fn to_items_with<'a, U>(
                 for part in &response.parts {
                     match part {
                         ResponsePart::Text { text, .. } if !text.is_empty() => {
-                            items.push(Item::Assistant { text: text.clone() });
+                            items.push(Item::Assistant { text: text.clone(), no_progress: is_no_progress(text) });
                         }
                         ResponsePart::Thinking { text, .. } if !text.is_empty() => {
                             items.push(Item::Thinking { text: text.clone() });

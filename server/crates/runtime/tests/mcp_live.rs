@@ -78,9 +78,14 @@ async fn stdio_server_runs_in_the_users_write_sandbox() {
     let db = Arc::new(Database::open(&db_path, Arc::new(|| {})).unwrap());
     let root = base.join("assets");
     std::fs::create_dir_all(root.join("platform/memory")).unwrap();
-    let source =
-        Arc::new(AssetSource::new(db, root.clone(), 4000, Arc::new(|_: &str| Ok(())), Arc::new(ToolTable::of(vec![]))));
-    let agents = AgentService::new(source.clone(), base.join("workspaces"), "p:m".into());
+    let source = Arc::new(AssetSource::new(
+        db,
+        root.clone(),
+        4000,
+        Arc::new(|_: &muliao_platform::config::ModelRef| Ok(())),
+        Arc::new(ToolTable::of(vec![])),
+    ));
+    let agents = AgentService::new(source.clone(), base.join("workspaces"), "p:m".parse().unwrap());
     let me = agents
         .create(AgentSpec { name: "me".into(), description: "d".into(), ..Default::default() }, &Actor::User)
         .await

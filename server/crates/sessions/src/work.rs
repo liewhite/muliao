@@ -179,6 +179,20 @@ impl SessionWork {
     }
 }
 
+/// 收到运行中检查、没有要做的事时只回的占位答复（唯一一份：检查信件与工具说明教 agent 这样回，界面按
+/// [`is_no_progress`] 认出它并收起）。
+pub const NO_PROGRESS_REPLY: &str = "…";
+
+/// 教 agent 怎么回运行中检查的那半句（检查信件与工具说明共用）。
+pub fn no_progress_hint() -> String {
+    format!("if nothing needs doing, reply with just '{NO_PROGRESS_REPLY}'")
+}
+
+/// 这段回答只是占位答复（模型有时写成三个点）。
+pub(crate) fn is_no_progress(text: &str) -> bool {
+    matches!(text.trim(), "" | NO_PROGRESS_REPLY | "...")
+}
+
 /// 运行中检查（后台任务、委派）与到点唤醒多久看一次（唯一一份）。
 pub const TICK: std::time::Duration = std::time::Duration::from_secs(5);
 

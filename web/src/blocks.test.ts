@@ -5,7 +5,9 @@ import { foldCheckIns, groupSteps, stepAttachments, stepThreads, summarizeSteps,
 type Of<T extends Item['type']> = Extract<Item, { type: T }>
 const user = (text: string): Item => ({ type: 'user', text, attachments: [] })
 const thinking = (text: string): Item => ({ type: 'thinking', text })
-const assistant = (text: string): Item => ({ type: 'assistant', text })
+const assistant = (text: string): Item => ({ type: 'assistant', text, no_progress: false })
+/** 服务端认出的占位答复 */
+const filler = (text: string): Item => ({ type: 'assistant', text, no_progress: true })
 const stopped: Item = { type: 'stopped' }
 const call = (tool_call_id: string, text = '{}', at: string | null = null): Of<'tool_call'> => ({
   type: 'tool_call',
@@ -285,9 +287,9 @@ describe('foldCheckIns', () => {
   it('folds consecutive check-ins of a source with the filler replies between them into one line', () => {
     const views = fold([
       check('thread:t1', 'still working (1 min)', '10:01'),
-      assistant('…'),
+      filler('…'),
       check('thread:t1', 'still working (2 min)', '10:02'),
-      assistant(' ... '),
+      filler(' ... '),
       check('thread:t1', 'still working (3 min)', '10:03'),
       ending('thread:t1', 'finished your task'),
       assistant('它做完了'),
@@ -303,7 +305,7 @@ describe('foldCheckIns', () => {
         ],
       },
       { kind: 'event', source: src('thread:t1'), text: 'finished your task', checkIn: false, at: '10:00' },
-      { kind: 'assistant', text: '它做完了' },
+      { kind: 'assistant', text: '它做完了', noProgress: false },
     ])
   })
 
@@ -311,7 +313,7 @@ describe('foldCheckIns', () => {
     const views = fold([
       check('job:3', 'running', '1'),
       check('thread:t1', 'working', '2'),
-      assistant('…'),
+      filler('…'),
       check('job:3', 'running', '3'),
       assistant('日志里有报错，我去看看'),
       check('job:3', 'running', '4'),
@@ -328,7 +330,7 @@ describe('foldCheckIns', () => {
     const views = fold([
       check('job:3', 'running', '1'),
       thinking('还在跑，等着'),
-      assistant('…'),
+      filler('…'),
       check('job:3', 'running', '2'),
       thinking('输出卡住了'),
       assistant('我去看看日志'),
@@ -341,7 +343,7 @@ describe('foldCheckIns', () => {
   })
 
   it('leaves a filler reply that does not follow a check-in alone', () => {
-    expect(fold([user('hi'), assistant('…')]).map((v) => v.kind)).toEqual(['user', 'assistant'])
+    expect(fold([user('hi'), filler('…')]).map((v) => v.kind)).toEqual(['user', 'assistant'])
   })
 })
 

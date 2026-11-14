@@ -15,7 +15,7 @@ import {
 import { Pencil, Trash2 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { agentRoute, api, type AgentId, type Reach, type Role, type RoleInput, type ToolPermission } from '../api'
-import { KIND_LABEL, ruleCandidates } from '../rules'
+import { KIND_LABEL } from '../rules'
 import {
   ActionButton,
   CollapsibleForm,
@@ -170,10 +170,9 @@ export function RulesInput({
   )
 }
 
-/** 规则补全的候选：全部资产（含工具）及每种的 `use:kind:*` */
+/** 规则补全的候选（服务端按规则语法给出：每种的 `use:kind:*`，再是每项资产） */
 function useCandidates(): string[] {
-  const assets = useLoad(() => api.assets(), [])
-  return ruleCandidates(assets.data ?? [])
+  return useLoad(() => api.ruleCandidates(), []).data ?? []
 }
 
 export type PermissionValue = { roles: string[]; allow: string[]; deny: string[] }

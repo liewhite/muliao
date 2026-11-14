@@ -89,6 +89,25 @@ pub fn permission_of(action: Action, kind: Kind, name: &str) -> String {
     format!("{}:{kind}:{name}", action.as_str())
 }
 
+/// 这种资源能不能写（改、删）：内置工具只有 use。
+fn writable(kind: Kind) -> bool {
+    match kind {
+        Kind::Tool => false,
+        Kind::Skill | Kind::Mcp | Kind::Secret | Kind::Memory => true,
+    }
+}
+
+/// 规则补全的候选（界面填规则时用）：每种的 `use:kind:*` 在前，然后每项资产（kind 与它在规则里的名字，按给的顺序）的
+/// `use:kind:name`，能写的种类再加 `*:kind:name`（能用也能改）。
+pub fn rule_candidates<'a>(assets: impl IntoIterator<Item = (Kind, &'a str)>) -> Vec<String> {
+    let every = Kind::ALL.map(|k| permission_of(Action::Use, k, "*"));
+    let named = assets.into_iter().flat_map(|(kind, name)| {
+        let both = writable(kind).then(|| format!("{}:{kind}:{name}", Actions::Any.as_str()));
+        std::iter::once(permission_of(Action::Use, kind, name)).chain(both)
+    });
+    every.into_iter().chain(named).collect()
+}
+
 /// Python 的 fnmatchcase：`*` 任意串、`?` 任一字符、`[seq]` / `[!seq]` 字符集（含 `a-z` 区间）；`[` 没闭合时按字面。
 pub fn fnmatch(text: &str, pattern: &str) -> bool {
     let t: Vec<char> = text.chars().collect();
@@ -238,7 +257,7 @@ impl Rule {
             return Ok(Rule::Path(glob.to_owned()));
         }
         let kind = Kind::parse(kind).ok_or_else(malformed)?;
-        if kind == Kind::Tool && actions == Actions::One(Action::Write) {
+        if !writable(kind) && actions == Actions::One(Action::Write) {
             return Err(format!("rule {pattern:?}: built-in tools can only be used ('use:tool:...')"));
         }
         Ok(Rule::Named { actions, kind, glob: glob.to_owned() })
@@ -485,6 +504,25 @@ mod tests {
 
     fn rules(patterns: &[&str]) -> Vec<Rule> {
         patterns.iter().map(|p| Rule::parse(p).unwrap()).collect()
+    }
+
+    #[test]
+    fn candidates_are_valid_rules() {
+        let got = rule_candidates([(Kind::Tool, "run_shell"), (Kind::Skill, "relay-host")]);
+        assert_eq!(
+            got,
+            [
+                "use:tool:*",
+                "use:skill:*",
+                "use:mcp:*",
+                "use:secret:*",
+                "use:memory:*",
+                "use:tool:run_shell",
+                "use:skill:relay-host",
+                "*:skill:relay-host",
+            ]
+        );
+        assert!(got.iter().all(|r| Rule::parse(r).is_ok()));
     }
 
     #[test]

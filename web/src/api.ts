@@ -280,6 +280,7 @@ export const api = {
   previewRole: (body: Schemas['RolePreviewIn']) => call('post', '/api/role-preview', { body }),
   /** 全部 AI 资源：内置工具在前，资源文件按种类、名称 */
   assets: () => call('get', '/api/assets'),
+  ruleCandidates: () => call('get', '/api/assets/rule-candidates'),
   /** 删掉 skill（整个目录）/ MCP server / secret / 平台记忆的文件；全局记忆不能删，私有记忆随 agent */
   deleteAsset: (kind: StoredKind, name: string) => {
     const path = { path: { name } }

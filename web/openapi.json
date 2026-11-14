@@ -931,6 +931,29 @@
         }
       }
     },
+    "/api/assets/rule-candidates": {
+      "get": {
+        "tags": [
+          "assets"
+        ],
+        "summary": "填分发规则时的补全候选：每种的 `use:kind:*`，然后每项资源的 `use:kind:name`，能写的种类再加 `*:kind:name`。",
+        "operationId": "rule_candidates",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/assets/{kind}/{name}/owner": {
       "put": {
         "tags": [
@@ -3883,7 +3906,7 @@
             "type": "string"
           },
           "model": {
-            "type": "string"
+            "$ref": "#/components/schemas/ModelIo"
           },
           "thinking": {
             "$ref": "#/components/schemas/Thinking"
@@ -3911,11 +3934,15 @@
             "type": "string"
           },
           "model": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "缺省（null）时使用服务端配置的默认值"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ModelIo",
+                "description": "缺省（null）时使用服务端配置的默认值"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "roles": {
             "type": "array",
@@ -3970,7 +3997,7 @@
             "type": "string"
           },
           "model": {
-            "type": "string"
+            "$ref": "#/components/schemas/ModelIo"
           },
           "roles": {
             "type": "array",
@@ -4129,9 +4156,13 @@
             ]
           },
           "model": {
-            "type": [
-              "string",
-              "null"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ModelIo"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "roles": {
@@ -4683,7 +4714,8 @@
               "shared",
               "updated_at",
               "path",
-              "deletable"
+              "deletable",
+              "transferable"
             ],
             "properties": {
               "name": {
@@ -4732,6 +4764,10 @@
               "deletable": {
                 "type": "boolean",
                 "description": "用户能在界面上删它（内置工具、全局记忆、私有记忆不能）"
+              },
+              "transferable": {
+                "type": "boolean",
+                "description": "用户能在界面上把它转给别的 owner（内置工具、记忆不能）"
               }
             }
           }
@@ -4999,6 +5035,39 @@
         },
         "additionalProperties": false
       },
+      "Change_Recorded": {
+        "type": "object",
+        "description": "属性从什么改成什么（存为 `{\"from\": ..., \"to\": ...}`）。",
+        "required": [
+          "from",
+          "to"
+        ],
+        "properties": {
+          "from": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Status"
+              },
+              {
+                "$ref": "#/components/schemas/Retired"
+              }
+            ],
+            "description": "时间线里记下的状态：现有的取值，或 #258 之前去掉的（[`Retired`]，只在旧动态里；时间线只增不改）。存成文字。"
+          },
+          "to": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Status"
+              },
+              {
+                "$ref": "#/components/schemas/Retired"
+              }
+            ],
+            "description": "时间线里记下的状态：现有的取值，或 #258 之前去掉的（[`Retired`]，只在旧动态里；时间线只增不改）。存成文字。"
+          }
+        },
+        "additionalProperties": false
+      },
       "Change_String": {
         "type": "object",
         "description": "属性从什么改成什么（存为 `{\"from\": ..., \"to\": ...}`）。",
@@ -5123,19 +5192,55 @@
       },
       "Decision": {
         "type": "object",
-        "description": "用户对一次等批准的调用的决定。pin：用户批准的是哪一份（请求批准时工具定下、记在挂起记录里的指纹），批准时\n交回工具比对。迁移来的旧信件没有它或为 null（都已处理，不会再交给运行），读入时当作空指纹：工具给的指纹不会是空的，\n比对对不上。",
+        "description": "用户对一次等批准的调用的决定。批准的是哪一份（pin）只记在挂起记录里（[`crate::paused_calls`]），交给运行时从那里取；\n旧信件里多存的 pin 读入时忽略。",
         "required": [
-          "choice",
-          "pin"
+          "choice"
         ],
         "properties": {
           "choice": {
             "$ref": "#/components/schemas/Choice"
-          },
-          "pin": {
-            "type": "string"
           }
         }
+      },
+      "Delegated": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "delegate_task(report_back)：结局作为事件交回，每隔 check_seconds 秒给发起方投一封运行中检查",
+            "required": [
+              "check_seconds",
+              "kind"
+            ],
+            "properties": {
+              "check_seconds": {
+                "type": "number",
+                "format": "double"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "report_back"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "ask_agent：发起方停在这次调用上，没有检查也没有超时",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "ask"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "委派是哪一种。"
       },
       "DeltaType": {
         "type": "string",
@@ -5159,10 +5264,10 @@
             "description": "完成的那个上游"
           },
           "from": {
-            "type": "string"
+            "$ref": "#/components/schemas/Recorded"
           },
           "to": {
-            "type": "string"
+            "$ref": "#/components/schemas/Recorded"
           }
         },
         "additionalProperties": false
@@ -5547,7 +5652,7 @@
             ],
             "properties": {
               "change": {
-                "$ref": "#/components/schemas/Change_String"
+                "$ref": "#/components/schemas/Change_Recorded"
               },
               "kind": {
                 "type": "string",
@@ -6075,11 +6180,16 @@
             "type": "object",
             "required": [
               "text",
+              "no_progress",
               "type"
             ],
             "properties": {
               "text": {
                 "type": "string"
+              },
+              "no_progress": {
+                "type": "boolean",
+                "description": "只是没有新进展时的占位答复（[`crate::work::NO_PROGRESS_REPLY`]）：界面合并运行中检查时一起收起"
               },
               "type": {
                 "type": "string",
@@ -6842,6 +6952,22 @@
           }
         }
       },
+      "ModelIo": {
+        "type": "object",
+        "description": "一个模型：哪个 provider（服务端配置的 `[llm.providers]`）的哪个模型；agent.toml 里写作 `<provider>:<model>`。",
+        "required": [
+          "provider",
+          "model"
+        ],
+        "properties": {
+          "provider": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          }
+        }
+      },
       "NewConfig": {
         "oneOf": [
           {
@@ -7240,6 +7366,17 @@
           }
         }
       },
+      "Recorded": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/Status"
+          },
+          {
+            "$ref": "#/components/schemas/Retired"
+          }
+        ],
+        "description": "时间线里记下的状态：现有的取值，或 #258 之前去掉的（[`Retired`]，只在旧动态里；时间线只增不改）。存成文字。"
+      },
       "RejectIn": {
         "type": "object",
         "required": [
@@ -7387,6 +7524,14 @@
             "description": "工具结束的时间；事后补的结果、没记结束时间的结果为 None"
           }
         }
+      },
+      "Retired": {
+        "type": "string",
+        "description": "#258 去掉的状态。",
+        "enum": [
+          "todo",
+          "waiting"
+        ]
       },
       "Retrying": {
         "type": "object",
@@ -9180,7 +9325,7 @@
             "description": "委派出去的工作（ask_agent，或 delegate_task 带 report_back）",
             "required": [
               "thread_session_id",
-              "check_seconds",
+              "mode",
               "since",
               "kind"
             ],
@@ -9188,12 +9333,8 @@
               "thread_session_id": {
                 "$ref": "#/components/schemas/SessionId"
               },
-              "check_seconds": {
-                "type": [
-                  "number",
-                  "null"
-                ],
-                "format": "double"
+              "mode": {
+                "$ref": "#/components/schemas/Delegated"
               },
               "since": {
                 "type": "string",

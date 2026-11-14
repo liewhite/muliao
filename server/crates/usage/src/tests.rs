@@ -93,7 +93,7 @@ async fn summarize_groups_by_day_in_the_configured_timezone() {
         vec![
             UsageBucket {
                 agent_id: Some(AgentId::new("a")),
-                model: Some("p:m".into()),
+                model: Some("p:m".parse().unwrap()),
                 day: None,
                 totals: totals(1, 10) + totals(1, 20)
             },

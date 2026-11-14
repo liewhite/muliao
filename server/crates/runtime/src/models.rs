@@ -11,7 +11,7 @@ use agenter::anthropic::AnthropicModel;
 use agenter::openai_responses::OpenAIResponsesModel;
 use agenter::{Effort, Limit, Model};
 use muliao_assets::formats::agent_file::Thinking;
-use muliao_platform::config::{LlmConfig, Protocol, split_model};
+use muliao_platform::config::{LlmConfig, ModelRef, Protocol};
 use muliao_platform::errors::{DomainError, Error};
 
 /// 各协议的官方地址：配置不写 base_url 时用（永远显式给地址，不让 SDK 读环境变量）。
@@ -66,26 +66,26 @@ impl ModelRegistry {
         Self { providers, http }
     }
 
-    fn split<'a>(&self, model: &'a str) -> Result<(&Provider, &'a str), DomainError> {
-        let (name, model_name) = split_model(model).map_err(DomainError::invalid)?;
-        let provider = self.providers.get(name).ok_or_else(|| {
+    fn provider(&self, model: &ModelRef) -> Result<&Provider, DomainError> {
+        self.providers.get(model.provider()).ok_or_else(|| {
             DomainError::invalid(format!(
-                "model {model:?}: provider {name:?} is not configured, have {:?}",
+                "model {:?}: provider {:?} is not configured, have {:?}",
+                model.to_string(),
+                model.provider(),
                 self.provider_names()
             ))
-        })?;
-        Ok((provider, model_name))
+        })
     }
 
     /// agent 的模型在当前配置下能不能运行（新建、修改与读资源树时，资源目录的 ModelCheck）。不访问网络。
-    pub fn check(&self, model: &str) -> Result<(), DomainError> {
-        self.split(model).map(drop)
+    pub fn check(&self, model: &ModelRef) -> Result<(), DomainError> {
+        self.provider(model).map(drop)
     }
 
     /// 交给资源目录的模型检查（组合根装配时用）。
     pub fn model_check(self: &Arc<Self>) -> muliao_assets::source::ModelCheck {
         let models = self.clone();
-        Arc::new(move |model: &str| models.check(model).map_err(|e| e.message))
+        Arc::new(move |model: &ModelRef| models.check(model).map_err(|e| e.message))
     }
 
     pub fn provider_names(&self) -> Vec<String> {
@@ -93,8 +93,8 @@ impl ModelRegistry {
     }
 
     /// 所有模型调用（会话运行、压缩）都经这里拿到模型，并发上限在这里统一套上。
-    pub fn resolve(&self, model: &str) -> Result<Arc<dyn Model>, DomainError> {
-        let (p, name) = self.split(model)?;
+    pub fn resolve(&self, model: &ModelRef) -> Result<Arc<dyn Model>, DomainError> {
+        let (p, name) = (self.provider(model)?, model.model());
         let http = self.http.clone();
         Ok(match p.protocol {
             Protocol::Anthropic => Arc::new(p.limit.wrap(AnthropicModel::new(http, &p.base_url, &p.api_key, name))),
@@ -168,11 +168,12 @@ mod tests {
     fn resolves_configured_providers_and_reports_the_rest() {
         let r = registry();
         assert_eq!(r.provider_names(), ["claude", "ds"]);
-        assert_eq!(r.resolve("claude:claude-x").unwrap().name(), "claude-x");
-        assert_eq!(r.resolve("ds:deepseek-v9").unwrap().name(), "deepseek-v9");
-        let e = r.check("nope:x").unwrap_err();
+        let m = |t: &str| ModelRef::parse(t).unwrap();
+        assert_eq!(r.resolve(&m("claude:claude-x")).unwrap().name(), "claude-x");
+        assert_eq!(r.resolve(&m("ds:deepseek-v9")).unwrap().name(), "deepseek-v9");
+        let e = r.check(&m("nope:x")).unwrap_err();
         assert!(e.message.contains("provider \"nope\" is not configured"), "{e}");
-        assert!(r.check("no-colon").is_err());
+        assert!(ModelRef::parse("no-colon").is_err());
     }
 
     #[tokio::test]

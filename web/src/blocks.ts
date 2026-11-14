@@ -63,7 +63,8 @@ export type Block =
   | { kind: 'user'; text: string; attachments: Attachment[] }
   /** checkIn：运行中检查（工作还在进行，后端显式标记）；at：交给 agent 的时间 */
   | { kind: 'event'; source: ItemSource; text: string; checkIn: boolean; at: string | null }
-  | { kind: 'assistant'; text: string }
+  /** noProgress：只是运行中检查时没有新进展的占位答复（服务端判断），合并检查时一起收起 */
+  | { kind: 'assistant'; text: string; noProgress: boolean }
   | { kind: 'thinking'; text: string }
   | { kind: 'tool'; tool: ToolView }
   | { kind: 'ask'; ask: AskBlock }
@@ -101,8 +102,10 @@ export function toBlocks(items: Item[]): Block[] {
         blocks.push({ kind: 'stopped' })
         break
       case 'assistant':
+        blocks.push({ kind: 'assistant', text: item.text, noProgress: item.no_progress })
+        break
       case 'thinking':
-        blocks.push({ kind: item.type, text: item.text })
+        blocks.push({ kind: 'thinking', text: item.text })
         break
       case 'tool_call': {
         if (item.wait?.kind === 'ask') {
@@ -192,8 +195,8 @@ export function groupSteps(blocks: Block[]): View[] {
   return views
 }
 
-/** agent 对检查只回的占位答复（全局约定：没有新进展时回“…”），合并检查时一起收起 */
-const isFiller = (v: View | undefined) => v?.kind === 'assistant' && ['', '…', '...'].includes(v.text.trim())
+/** agent 对检查只回的占位答复，合并检查时一起收起 */
+const isFiller = (v: View | undefined) => v?.kind === 'assistant' && v.noProgress
 const onlyThinking = (v: View) => v.kind === 'process' && v.steps.every((s) => s.kind === 'thinking')
 
 /**

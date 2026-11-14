@@ -169,7 +169,8 @@ base_url = "{}"
     let models = Arc::new(ModelRegistry::new(&settings.llm, reqwest::Client::new()));
     let (table, binder) = ToolTable::pending();
     let source = Arc::new(AssetSource::new(db.clone(), root.clone(), 4000, models.model_check(), table.clone()));
-    let agents = Arc::new(AgentService::new(source.clone(), dir.path().join("workspaces"), "claude:m".into()));
+    let agents =
+        Arc::new(AgentService::new(source.clone(), dir.path().join("workspaces"), "claude:m".parse().unwrap()));
     let files = Arc::new(FileStore::open(db.clone(), dir.path().join("files"), 1 << 20).unwrap());
     let usage = Arc::new(UsageLog::new(db.clone(), chrono_tz::UTC));
     let vault = Arc::new(Vault::new("3QOHdQSfwdIhMog5wkCMiIBXFANh4YdV-XA9xY3RmyY=").unwrap());
@@ -377,7 +378,7 @@ async fn probe_reports_connection_failures_to_the_caller() {
         Arc::new(Database::open(&w._dir.path().join("t.db"), Arc::new(|| {})).unwrap()),
         w.root.clone(),
         4000,
-        Arc::new(|_: &str| Ok(())),
+        Arc::new(|_: &muliao_platform::config::ModelRef| Ok(())),
         Arc::new(ToolTable::of(vec![])),
     )));
     let shared = registry.get("shared").await.unwrap();

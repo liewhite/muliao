@@ -51,8 +51,11 @@ export function liveItems(events: RunEvent[]): Item[] {
       continue
     }
     const last = items.at(-1)
-    if (last?.type === e.item_type) items[items.length - 1] = { type: last.type, text: last.text + e.text }
-    else items.push({ type: e.item_type, text: e.text })
+    // 还在流式生成的回答不知道是不是占位答复（由服务端判断，保存后以历史为准）
+    const item = (text: string): Item =>
+      e.item_type === 'assistant' ? { type: 'assistant', text, no_progress: false } : { type: 'thinking', text }
+    if (last?.type === e.item_type) items[items.length - 1] = item(last.text + e.text)
+    else items.push(item(e.text))
   }
   return items
 }

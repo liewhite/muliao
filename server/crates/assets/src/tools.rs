@@ -6,6 +6,7 @@ use muliao_platform::ids::AgentId;
 use std::sync::Arc;
 
 use agenter::{Tool, ToolCtx, ToolError, ToolOutput};
+use muliao_platform::config::ModelRef;
 use muliao_platform::errors::DomainError;
 use muliao_platform::tooling::{BuiltinTool, RunScope, ToolTraits, builtin};
 use schemars::JsonSchema;
@@ -183,7 +184,7 @@ impl Tool<RunScope> for GetAgent {
             description: config.file.description().to_owned(),
             group: config.file.group().map(str::to_owned),
             archived: view.info.archived(),
-            model: config.file.model().to_owned(),
+            model: config.file.model().to_string(),
             thinking: config.file.thinking(),
             roles: view.rules.roles.clone(),
             allow: texts(&view.rules.allow),
@@ -247,7 +248,7 @@ impl Tool<RunScope> for CreateAgent {
         let spec = AgentSpec {
             name: a.name,
             description: a.description,
-            model: a.model,
+            model: a.model.as_deref().map(ModelRef::parse).transpose().map_err(ToolError::Retry)?,
             thinking: a.thinking,
             group: a.group,
             rules: AgentRules { roles: a.roles, allow: Rule::parse_all(&a.allow)?, deny: Rule::parse_all(&a.deny)? },

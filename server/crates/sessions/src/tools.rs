@@ -24,7 +24,7 @@ use crate::halt::Halted;
 use crate::paused_calls::{self, Pause};
 use crate::thread_calls::Delegated;
 use crate::wakeups::{WAKE_ME, cancel_in, local_time, schedule_in};
-use crate::work::check_interval;
+use crate::work::{check_interval, no_progress_hint};
 use muliao_platform::errors::{Error, Result, invalid, not_found};
 
 /// 停止会话的入口，在 actor 系统起来之后接上（工具先于 actor 系统构造：工具 → 运行端口 → actor 系统）。
@@ -48,7 +48,10 @@ const ASK_AGENT: &str = "ask_agent";
 pub fn tools(db: Arc<Database>, waker: Waker, stopper: Stopper, tz: Tz) -> Vec<BuiltinTool> {
     vec![
         builtin(AskUser { db: db.clone() }, ToolTraits::read()),
-        builtin(DelegateTask { db: db.clone(), waker: waker.clone() }, ToolTraits::write()),
+        builtin(
+            DelegateTask { db: db.clone(), waker: waker.clone(), description: delegate_description() },
+            ToolTraits::write(),
+        ),
         builtin(AskAgent { db: db.clone(), waker }, ToolTraits::write()),
         builtin(StopThread { db: db.clone(), stopper }, ToolTraits::write()),
         builtin(ListThreads { db: db.clone() }, ToolTraits::read()),
@@ -128,6 +131,21 @@ pub struct DelegateArgs {
 pub struct DelegateTask {
     db: Arc<Database>,
     waker: Waker,
+    description: String,
+}
+
+fn delegate_description() -> String {
+    format!(
+        "Hand a task to an agent and keep going without waiting (non-blocking, no timeout). It runs in a thread the \
+         user can see and reply in. By default the user is notified with its answer and you do NOT get it back. With \
+         `report_back: true` the answer (or its failure) comes back to you as an event in this conversation instead \
+         (events reach you like messages, between your tool calls if you are busy), and while it is still working you \
+         get a check-in event every `heartbeat_seconds` (default 60) saying what the thread is doing: then either keep \
+         waiting ({}; `list_threads` shows its latest reply) or stop it with `stop_thread`. If you need the answer \
+         before you can continue, use `ask_agent`. The agent can be yourself (your own name): a fresh conversation of \
+         you, with your memory, skills and tools, for work to run on the side.",
+        no_progress_hint()
+    )
 }
 
 impl Tool<RunScope> for DelegateTask {
@@ -138,14 +156,7 @@ impl Tool<RunScope> for DelegateTask {
     }
 
     fn description(&self) -> &str {
-        "Hand a task to an agent and keep going without waiting (non-blocking, no timeout). It runs in a thread the \
-         user can see and reply in. By default the user is notified with its answer and you do NOT get it back. With \
-         `report_back: true` the answer (or its failure) comes back to you as an event in this conversation instead \
-         (events reach you like messages, between your tool calls if you are busy), and while it is still working you \
-         get a check-in event every `heartbeat_seconds` (default 60) saying what the thread is doing: then either keep \
-         waiting (if nothing needs doing, reply with just '…'; `list_threads` shows its latest reply) or stop it with \
-         `stop_thread`. If you need the answer before you can continue, use `ask_agent`. The agent can be yourself \
-         (your own name): a fresh conversation of you, with your memory, skills and tools, for work to run on the side."
+        &self.description
     }
 
     async fn call(&self, ctx: ToolCtx<'_, RunScope>, a: DelegateArgs) -> std::result::Result<ToolOutput, ToolError> {

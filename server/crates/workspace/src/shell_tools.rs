@@ -40,8 +40,9 @@ pub fn tools(deps: Arc<ShellTools>) -> Vec<BuiltinTool> {
     // 输出上限是配置的值，写进说明：模型不知道它，长输出被截了才学会
     let description = format!(
         "{}{BACKGROUND_DESCRIPTION}",
-        SHELL_DESCRIPTION.replace("{max_output}", &deps.max_output_chars.to_string())
-    );
+        SHELL_DESCRIPTION.replace("{max_output}", &deps.max_output_chars.to_string()),
+    )
+    .replace("{no_progress}", &muliao_sessions::work::no_progress_hint());
     vec![
         builtin(RunShell { deps: deps.clone(), description }, ToolTraits::write().render(shell_render())),
         builtin(SkillRun(deps.clone()), ToolTraits::write().render(skill_run_render())),
@@ -68,7 +69,7 @@ const BACKGROUND_DESCRIPTION: &str = " To keep working while a long command runs
 It returns a job id at once and the job runs alongside you with no time limit; its output goes to \
 jobs/<id>.log in your workspace. While it runs you get a check-in event every `heartbeat_seconds` (default \
 60; choose it from how long you expect the job to take, e.g. 300 for a half-hour build) with its run time and \
-last output lines: then either keep waiting (if nothing needs doing, reply with just '…') or stop it with \
+last output lines: then either keep waiting ({no_progress}) or stop it with \
 `job_kill`; `job_status` shows it at any time. When it ends you get an event with its exit code and last \
 output.";
 

@@ -11,6 +11,8 @@ use muliao_assets::formats::mcp::McpTransport;
 use muliao_assets::kinds::Shown;
 use muliao_assets::rules::{AgentRules, Rule, Rules, ToolSpec, texts};
 use muliao_assets::service::{AgentPatch, AgentSpec, AgentView};
+use muliao_platform::config::ModelRef;
+use muliao_platform::errors::DomainError;
 use muliao_platform::ids::AgentId;
 use muliao_platform::tooling::ToolAccess;
 use serde::{Deserialize, Serialize};
@@ -38,11 +40,28 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(get_private_memory, put_private_memory))
 }
 
+/// 一个模型：哪个 provider（服务端配置的 `[llm.providers]`）的哪个模型；agent.toml 里写作 `<provider>:<model>`。
+#[derive(Serialize, Deserialize, ToSchema)]
+pub struct ModelIo {
+    pub provider: String,
+    pub model: String,
+}
+
+impl ModelIo {
+    fn of(m: &ModelRef) -> Self {
+        ModelIo { provider: m.provider().to_owned(), model: m.model().to_owned() }
+    }
+
+    fn parse(self) -> ApiResult<ModelRef> {
+        Ok(ModelRef::new(&self.provider, &self.model).map_err(DomainError::invalid)?)
+    }
+}
+
 /// agent.toml 里的配置。
 #[derive(Serialize, ToSchema)]
 pub struct AgentConfigOut {
     pub description: String,
-    pub model: String,
+    pub model: ModelIo,
     pub thinking: Thinking,
     /// 分组名，null 为不分组
     pub group: Option<String>,
@@ -73,7 +92,7 @@ impl AgentOut {
             name: info.name.to_string(),
             config: config.map(|d| AgentConfigOut {
                 description: d.file.description().to_owned(),
-                model: d.file.model().to_owned(),
+                model: ModelIo::of(d.file.model()),
                 thinking: d.file.thinking(),
                 group: d.file.group().map(str::to_owned),
             }),
@@ -97,7 +116,7 @@ async fn out(s: &AppState, agent_id: &AgentId) -> ApiResult<AgentOut> {
 pub struct AgentDefaults {
     pub name: String,
     pub description: String,
-    pub model: String,
+    pub model: ModelIo,
     pub roles: Vec<String>,
     pub allow: Vec<String>,
     pub deny: Vec<String>,
@@ -113,7 +132,7 @@ async fn agent_defaults(State(s): State<AppState>) -> axum::Json<AgentDefaults> 
     axum::Json(AgentDefaults {
         name: spec.name,
         description: spec.description,
-        model: s.services.agents.default_model().to_owned(),
+        model: ModelIo::of(s.services.agents.default_model()),
         roles: spec.rules.roles,
         allow: texts(&spec.rules.allow),
         deny: texts(&spec.rules.deny),
@@ -317,7 +336,7 @@ pub struct AgentCreate {
     pub description: String,
     /// 缺省（null）时使用服务端配置的默认值
     #[serde(default)]
-    pub model: Option<String>,
+    pub model: Option<ModelIo>,
     /// 角色，不含每个 agent 隐含的 base
     #[serde(default)]
     pub roles: Vec<String>,
@@ -342,7 +361,7 @@ async fn create_agent(
     let spec = AgentSpec {
         name: body.name,
         description: body.description,
-        model: body.model,
+        model: body.model.map(ModelIo::parse).transpose()?,
         thinking: body.thinking,
         group: body.group,
         rules: AgentRules {
@@ -371,7 +390,7 @@ pub struct AgentUpdate {
     #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
-    pub model: Option<String>,
+    pub model: Option<ModelIo>,
     #[serde(default)]
     pub roles: Option<Vec<String>>,
     #[serde(default)]
@@ -398,7 +417,7 @@ async fn update_agent(
         name: body.name,
         config: AgentConfig {
             description: body.description,
-            model: body.model,
+            model: body.model.map(ModelIo::parse).transpose()?,
             thinking: body.thinking,
             group: body.group,
         },

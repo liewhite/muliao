@@ -285,7 +285,7 @@ impl Changes {
         if let Some(was) = finishing(happened) {
             let downstream = downstream_in(tx, issue.id)?;
             for down in &downstream {
-                let change = DependencyChange { issue: issue.id, before: was.clone(), to: issue.status.into() };
+                let change = DependencyChange { issue: issue.id, before: was, to: issue.status.into() };
                 self.open_in(tx, *down, by, Routing::ByRules, |d| {
                     d.record(Happening::Dependency { change }).map(drop)
                 })?;

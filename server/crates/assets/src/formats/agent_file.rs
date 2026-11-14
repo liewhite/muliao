@@ -10,6 +10,7 @@
 
 use std::fmt;
 
+use muliao_platform::config::ModelRef;
 use serde::{Deserialize, Serialize};
 
 pub const AGENT_FILE: &str = "agent.toml";
@@ -60,7 +61,7 @@ impl fmt::Display for Thinking {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentFile {
     description: String,
-    model: String,
+    model: ModelRef,
     thinking: Thinking,
     group: Option<String>,
 }
@@ -69,7 +70,7 @@ pub struct AgentFile {
 #[derive(Debug, Clone, Default)]
 pub struct AgentConfig {
     pub description: Option<String>,
-    pub model: Option<String>,
+    pub model: Option<ModelRef>,
     pub thinking: Option<Thinking>,
     /// 分组名：Some("") 是不分组（界面与工具给的会去掉首尾空白）
     pub group: Option<String>,
@@ -85,7 +86,12 @@ pub(crate) fn group_of(input: &str) -> Option<String> {
 }
 
 impl AgentFile {
-    pub fn new(description: String, model: String, thinking: Thinking, group: Option<String>) -> Result<Self, String> {
+    pub fn new(
+        description: String,
+        model: ModelRef,
+        thinking: Thinking,
+        group: Option<String>,
+    ) -> Result<Self, String> {
         if description.trim().is_empty() {
             return Err(invalid("description must not be empty"));
         }
@@ -116,7 +122,7 @@ impl AgentFile {
     pub fn description(&self) -> &str {
         &self.description
     }
-    pub fn model(&self) -> &str {
+    pub fn model(&self) -> &ModelRef {
         &self.model
     }
     pub fn thinking(&self) -> Thinking {
@@ -140,8 +146,13 @@ const KEYS: [&str; 4] = ["description", "model", "thinking", "group"];
 
 impl AgentFile {
     /// 每个键要写成的值（None 为没有这个键：不分组）。顺序同 [`KEYS`]。
-    fn fields(&self) -> [Option<&str>; 4] {
-        [Some(&self.description), Some(&self.model), Some(self.thinking.as_str()), self.group.as_deref()]
+    fn fields(&self) -> [Option<String>; 4] {
+        [
+            Some(self.description.clone()),
+            Some(self.model.to_string()),
+            Some(self.thinking.as_str().to_owned()),
+            self.group.clone(),
+        ]
     }
 }
 
@@ -159,7 +170,8 @@ pub fn parse(text: &str) -> Result<AgentFile, String> {
             invalid(format!("thinking must be one of {:?}, got {t:?}", Thinking::ALL.map(Thinking::as_str)))
         })?,
     };
-    AgentFile::new(required("description")?, required("model")?, thinking, string(&table, "group")?)
+    let model = ModelRef::parse(&required("model")?).map_err(invalid)?;
+    AgentFile::new(required("description")?, model, thinking, string(&table, "group")?)
 }
 
 /// 要写成 data 时的全文：current 是已有文件的原文（在它上面改，保留注释与别的排版），没有文件为 None。值没变的键原样
@@ -175,7 +187,7 @@ pub fn render(current: Option<&str>, data: &AgentFile) -> Result<String, String>
             continue;
         };
         match doc.get_mut(key).and_then(|i| i.as_value_mut()) {
-            Some(old) if old.as_str() == Some(value) => {}
+            Some(old) if old.as_str() == Some(value.as_str()) => {}
             Some(old) => {
                 let decor = old.decor().clone();
                 *old = value.into();
@@ -204,10 +216,11 @@ mod tests {
         assert!(out.contains("model = \"p:m\" # 模型\n"), "{out}");
         assert!(!out.contains("group"));
         assert_eq!(parse(&out).unwrap(), changed);
-        assert!(parse("description = \" \"\nmodel = \"m\"").is_err());
-        assert!(parse("description = \"d\"\nmodel = \"m\"\nextra = 1").is_err());
-        assert!(parse("description = \"d\"\nmodel = \"m\"\nthinking = \"max\"").is_err());
-        assert!(parse("description = \"d\"\nmodel = \"m\"\ngroup = \" g\"").is_err());
-        assert!(parse("id = \"a\"\ndescription = \"d\"\nmodel = \"m\"").is_err());
+        assert!(parse("description = \" \"\nmodel = \"p:m\"").is_err());
+        assert!(parse("description = \"d\"\nmodel = \"m\"").is_err());
+        assert!(parse("description = \"d\"\nmodel = \"p:m\"\nextra = 1").is_err());
+        assert!(parse("description = \"d\"\nmodel = \"p:m\"\nthinking = \"max\"").is_err());
+        assert!(parse("description = \"d\"\nmodel = \"p:m\"\ngroup = \" g\"").is_err());
+        assert!(parse("id = \"a\"\ndescription = \"d\"\nmodel = \"p:m\"").is_err());
     }
 }

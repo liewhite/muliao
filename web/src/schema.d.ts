@@ -286,6 +286,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/assets/rule-candidates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 填分发规则时的补全候选：每种的 `use:kind:*`，然后每项资源的 `use:kind:name`，能写的种类再加 `*:kind:name`。 */
+        get: operations["rule_candidates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/assets/{kind}/{name}/owner": {
         parameters: {
             query?: never;
@@ -1145,7 +1162,7 @@ export interface components {
         /** @description agent.toml 里的配置。 */
         AgentConfigOut: {
             description: string;
-            model: string;
+            model: components["schemas"]["ModelIo"];
             thinking: components["schemas"]["Thinking"];
             /** @description 分组名，null 为不分组 */
             group: string | null;
@@ -1153,8 +1170,7 @@ export interface components {
         AgentCreate: {
             name: string;
             description: string;
-            /** @description 缺省（null）时使用服务端配置的默认值 */
-            model?: string | null;
+            model?: components["schemas"]["ModelIo"] | null;
             /** @description 角色，不含每个 agent 隐含的 base */
             roles?: string[];
             allow?: string[];
@@ -1168,7 +1184,7 @@ export interface components {
         AgentDefaults: {
             name: string;
             description: string;
-            model: string;
+            model: components["schemas"]["ModelIo"];
             roles: string[];
             allow: string[];
             deny: string[];
@@ -1207,7 +1223,7 @@ export interface components {
         AgentUpdate: {
             name?: string | null;
             description?: string | null;
-            model?: string | null;
+            model?: components["schemas"]["ModelIo"] | null;
             roles?: string[] | null;
             allow?: string[] | null;
             deny?: string[] | null;
@@ -1363,6 +1379,8 @@ export interface components {
             path: string | null;
             /** @description 用户能在界面上删它（内置工具、全局记忆、私有记忆不能） */
             deletable: boolean;
+            /** @description 用户能在界面上把它转给别的 owner（内置工具、记忆不能） */
+            transferable: boolean;
         };
         CatalogDetail: {
             access: components["schemas"]["Access"];
@@ -1415,6 +1433,13 @@ export interface components {
             from: "none" | "urgent" | "high" | "medium" | "low";
             /** @enum {string} */
             to: "none" | "urgent" | "high" | "medium" | "low";
+        };
+        /** @description 属性从什么改成什么（存为 `{"from": ..., "to": ...}`）。 */
+        Change_Recorded: {
+            /** @description 时间线里记下的状态：现有的取值，或 #258 之前去掉的（[`Retired`]，只在旧动态里；时间线只增不改）。存成文字。 */
+            from: components["schemas"]["Status"] | components["schemas"]["Retired"];
+            /** @description 时间线里记下的状态：现有的取值，或 #258 之前去掉的（[`Retired`]，只在旧动态里；时间线只增不改）。存成文字。 */
+            to: components["schemas"]["Status"] | components["schemas"]["Retired"];
         };
         /** @description 属性从什么改成什么（存为 `{"from": ..., "to": ...}`）。 */
         Change_String: {
@@ -1471,13 +1496,21 @@ export interface components {
          */
         Debounce: number;
         /**
-         * @description 用户对一次等批准的调用的决定。pin：用户批准的是哪一份（请求批准时工具定下、记在挂起记录里的指纹），批准时
-         *     交回工具比对。迁移来的旧信件没有它或为 null（都已处理，不会再交给运行），读入时当作空指纹：工具给的指纹不会是空的，
-         *     比对对不上。
+         * @description 用户对一次等批准的调用的决定。批准的是哪一份（pin）只记在挂起记录里（[`crate::paused_calls`]），交给运行时从那里取；
+         *     旧信件里多存的 pin 读入时忽略。
          */
         Decision: {
             choice: components["schemas"]["Choice"];
-            pin: string;
+        };
+        /** @description 委派是哪一种。 */
+        Delegated: {
+            /** Format: double */
+            check_seconds: number;
+            /** @enum {string} */
+            kind: "report_back";
+        } | {
+            /** @enum {string} */
+            kind: "ask";
         };
         /** @enum {string} */
         DeltaType: "assistant" | "thinking";
@@ -1488,8 +1521,8 @@ export interface components {
              * @description 完成的那个上游
              */
             issue: number;
-            from: string;
-            to: string;
+            from: components["schemas"]["Recorded"];
+            to: components["schemas"]["Recorded"];
         };
         EnabledIn: {
             enabled: boolean;
@@ -1597,7 +1630,7 @@ export interface components {
             /** @enum {string} */
             kind: "title";
         } | {
-            change: components["schemas"]["Change_String"];
+            change: components["schemas"]["Change_Recorded"];
             /** @enum {string} */
             kind: "status";
         } | {
@@ -1725,6 +1758,8 @@ export interface components {
             type: "event";
         }) | {
             text: string;
+            /** @description 只是没有新进展时的占位答复（[`crate::work::NO_PROGRESS_REPLY`]）：界面合并运行中检查时一起收起 */
+            no_progress: boolean;
             /** @enum {string} */
             type: "assistant";
         } | {
@@ -1924,6 +1959,11 @@ export interface components {
             /** @description content 的版本：保存时交回 */
             version: string;
         };
+        /** @description 一个模型：哪个 provider（服务端配置的 `[llm.providers]`）的哪个模型；agent.toml 里写作 `<provider>:<model>`。 */
+        ModelIo: {
+            provider: string;
+            model: string;
+        };
         /** @description 建、改时交进来的配置（未知字段报错）。 */
         NewConfig: {
             config: components["schemas"]["ScheduleConfig"];
@@ -2037,6 +2077,8 @@ export interface components {
             /** Format: date-time */
             created_at: string;
         };
+        /** @description 时间线里记下的状态：现有的取值，或 #258 之前去掉的（[`Retired`]，只在旧动态里；时间线只增不改）。存成文字。 */
+        Recorded: components["schemas"]["Status"] | components["schemas"]["Retired"];
         RejectIn: {
             /** @description 打回的理由，记成评论 */
             reason: string;
@@ -2076,6 +2118,11 @@ export interface components {
              */
             at: string | null;
         };
+        /**
+         * @description #258 去掉的状态。
+         * @enum {string}
+         */
+        Retired: "todo" | "waiting";
         /** @description 运行出了暂时性的错、在等下一次尝试（只在内存里，重启后从上一步续跑、不再有它）：会话页显示错误与下次尝试的时间。 */
         Retrying: {
             error: string;
@@ -2546,8 +2593,7 @@ export interface components {
             kind: "job";
         } | {
             thread_session_id: components["schemas"]["SessionId"];
-            /** Format: double */
-            check_seconds: number | null;
+            mode: components["schemas"]["Delegated"];
             /** Format: date-time */
             since: string;
             /** @enum {string} */
@@ -3336,6 +3382,25 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CatalogAssetOut"][];
+                };
+            };
+        };
+    };
+    rule_candidates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
                 };
             };
         };

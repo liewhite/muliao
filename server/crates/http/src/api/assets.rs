@@ -33,6 +33,7 @@ use crate::state::AppState;
 pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list_assets))
+        .routes(routes!(rule_candidates))
         .routes(routes!(transfer_asset))
         .routes(routes!(get_memory, put_memory, delete_memory))
         .routes(routes!(get_skill, put_skill, delete_skill))
@@ -84,6 +85,8 @@ pub struct CatalogAssetOut {
     pub path: Option<String>,
     /// 用户能在界面上删它（内置工具、全局记忆、私有记忆不能）
     pub deletable: bool,
+    /// 用户能在界面上把它转给别的 owner（内置工具、记忆不能）
+    pub transferable: bool,
     #[serde(flatten)]
     pub detail: CatalogDetail,
 }
@@ -149,6 +152,7 @@ fn catalog_out(e: CatalogAsset) -> CatalogAssetOut {
         updated_at: e.updated_at,
         path: e.path.map(|p| p.display().to_string()),
         deletable: e.deletable,
+        transferable: e.transferable,
         detail,
     }
 }
@@ -158,6 +162,12 @@ fn catalog_out(e: CatalogAsset) -> CatalogAssetOut {
 #[utoipa::path(get, path = "/api/assets", tag = "assets", responses((status = 200, body = Vec<CatalogAssetOut>)))]
 async fn list_assets(State(s): State<AppState>) -> ApiResult<axum::Json<Vec<CatalogAssetOut>>> {
     Ok(axum::Json(s.services.catalog.catalog().await?.into_iter().map(catalog_out).collect()))
+}
+
+/// 填分发规则时的补全候选：每种的 `use:kind:*`，然后每项资源的 `use:kind:name`，能写的种类再加 `*:kind:name`。
+#[utoipa::path(get, path = "/api/assets/rule-candidates", tag = "assets", responses((status = 200, body = Vec<String>)))]
+async fn rule_candidates(State(s): State<AppState>) -> ApiResult<axum::Json<Vec<String>>> {
+    Ok(axum::Json(s.services.catalog.rule_candidates().await?))
 }
 
 // ---- 存成文件的资源通用：删除、owner ----

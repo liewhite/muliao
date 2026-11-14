@@ -30,7 +30,7 @@ use crate::inbound::{Inbound, Opener, create_session_in, receive_in};
 use crate::paused_calls::{self, Pause};
 use crate::runs::{RunRecord, latest_among};
 use crate::thread_calls::{CallMode, Delegated, Owed, owed_in, record_call_in};
-use crate::work::{CheckBeats, EventSource, deliver_in, post_check_in};
+use crate::work::{CheckBeats, EventSource, deliver_in, no_progress_hint, post_check_in};
 use muliao_platform::errors::{Result, invalid};
 
 pub const THREAD_MAX: usize = 100;
@@ -254,9 +254,10 @@ pub(crate) fn check_text(
     let name = thread_name(child);
     let who = format!("Thread {name:?} ({})", agent.name);
     let keep = format!(
-        "Keep waiting (if nothing needs doing, reply with just '…'): you will get another check-in in {check_seconds} \
+        "Keep waiting ({}): you will get another check-in in {check_seconds} \
          seconds and an event with its answer; list_threads shows its latest reply. If it is no longer needed, call \
          stop_thread(thread={name:?}, agent={:?}).",
+        no_progress_hint(),
         agent.name
     );
     let running = run.filter(|r| r.unfinished());

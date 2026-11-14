@@ -72,7 +72,7 @@ function AgentCard({ a }: { a: Agent }) {
             ) : (
               <>
                 <Chip size="sm" variant="secondary">
-                  {config.model}
+                  {config.model.provider} · {config.model.model}
                 </Chip>
                 {config.thinking !== 'default' && (
                   <Chip size="sm" variant="secondary">
@@ -156,21 +156,22 @@ const THINKING_LABEL: Record<Thinking, string> = {
 // THINKING_LABEL 的类型要求每种档位都有显示名，所以它的键恰好是全部档位（唯一一份）
 const THINKINGS = Object.keys(THINKING_LABEL) as Thinking[]
 
-/** agent 的模型 "<provider 名>:<模型名>"：provider 来自服务端配置，模型名向该 provider 实时查询；旁边是它的思考档位 */
+type Model = AgentInput['model']
+
+/** agent 的模型：provider 来自服务端配置，模型名向该 provider 实时查询；旁边是它的思考档位 */
 function ModelInput({
   value,
   onChange,
   thinking,
   onThinkingChange,
 }: {
-  value: string
-  onChange: (v: string) => void
+  value: Model
+  onChange: (v: Model) => void
   thinking: Thinking
   onThinkingChange: (v: Thinking) => void
 }) {
-  const sep = value.indexOf(':')
-  const provider = sep > 0 ? value.slice(0, sep) : null
-  const model = sep > 0 ? value.slice(sep + 1) : ''
+  const provider = value.provider || null
+  const model = value.model
   const providers = useLoad(() => api.providers(), [], never)
   const models = useLoad(() => (provider ? api.providerModels(provider) : Promise.resolve([])), [provider], never)
   const listed = models.data ?? []
@@ -182,7 +183,7 @@ function ModelInput({
           hint="来自服务端配置的 [llm.providers]"
           value={provider}
           // 换 provider 后模型需重新选择；未选就保存会被服务端拒绝
-          onChange={(p) => onChange(`${p}:`)}
+          onChange={(p) => onChange({ provider: p, model: '' })}
           options={(providers.data ?? []).map((p) => ({ id: p, label: p }))}
           isDisabled={providers.loading}
         />
@@ -194,7 +195,7 @@ function ModelInput({
               : '向 provider 实时查询'
           }
           value={model || null}
-          onChange={(m) => onChange(`${provider}:${m}`)}
+          onChange={(m) => onChange({ provider: value.provider, model: m })}
           options={listed.map((m) => ({ id: m, label: m }))}
           placeholder={models.loading ? '查询中…' : '请选择'}
           isDisabled={!provider || models.loading}

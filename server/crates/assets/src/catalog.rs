@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 
 use crate::access::Sharing;
 use crate::kinds::{Kind, Shown, StoredKind};
-use crate::rules::{GLOBAL_MEMORY, ToolSpec};
+use crate::rules::{GLOBAL_MEMORY, ToolSpec, rule_candidates};
 use crate::source::AssetSource;
 use crate::tree::{Owner, remove};
 use muliao_platform::errors::{Result, conflict, invalid};
@@ -35,6 +35,8 @@ pub struct CatalogAsset {
     pub path: Option<PathBuf>,
     /// 用户能在界面上删它（[`undeletable`]）
     pub deletable: bool,
+    /// 能转给别的 owner（[`untransferable`]）
+    pub transferable: bool,
     pub detail: Detail,
 }
 
@@ -65,6 +67,19 @@ fn undeletable(kind: Kind, name: &str, owner: &Owner) -> Option<String> {
     }
 }
 
+/// 这一种转不了 owner 的原因（资源池的「能不能转」和转移入口都用它）；能转为 None。
+fn untransferable(kind: Kind) -> Option<&'static str> {
+    match kind {
+        Kind::Tool => Some("built-in tools are defined in code and belong to the platform"),
+        // 平台的记忆归了 agent 就是第二块私有记忆（每个 agent 只有一块）；要共享就把内容放进一块平台记忆
+        Kind::Memory => Some(
+            "memories are not transferred: each agent has exactly one private memory, which belongs to it; to share \
+             content, put it into a platform memory",
+        ),
+        Kind::Skill | Kind::Mcp | Kind::Secret => None,
+    }
+}
+
 impl AssetCatalog {
     pub fn new(source: Arc<AssetSource>) -> Self {
         Self { source }
@@ -83,6 +98,7 @@ impl AssetCatalog {
             shared: sharing.shared(Kind::Tool, Some(&t.name), &Owner::Platform),
             path: None,
             deletable: undeletable(Kind::Tool, &t.name, &Owner::Platform).is_none(),
+            transferable: untransferable(Kind::Tool).is_none(),
             detail: Detail::Tool(t.clone()),
         });
         let files = StoredKind::BY_NAME.into_iter().flat_map(|k| snapshot.of_kind(k)).map(|a| CatalogAsset {
@@ -94,6 +110,7 @@ impl AssetCatalog {
             shared: sharing.shared(a.kind().kind(), a.rule_name(), &a.owner),
             path: Some(a.path.clone()),
             deletable: undeletable(a.kind().kind(), &a.name, &a.owner).is_none(),
+            transferable: untransferable(a.kind().kind()).is_none(),
             detail: Detail::Stored(a.content.shown()),
         });
         Ok(tools.chain(files).collect())
@@ -112,14 +129,21 @@ impl AssetCatalog {
         Ok(())
     }
 
-    /// 把资源挪到 owner 的目录下（用户在界面上转）。内容不变；谁能用随 owner 变。记忆不转移：平台的记忆归了 agent 就是第二
-    /// 块私有记忆（每个 agent 只有一块）；要共享就把内容放进一块平台记忆。
+    /// 规则补全的候选（[`crate::rules::rule_candidates`]）：内置工具与按名字认的资源（私有记忆在规则里没有名字，不在内）。
+    pub async fn rule_candidates(&self) -> Result<Vec<String>> {
+        let snapshot = self.source.snapshot().await?;
+        let tools = snapshot.tools.specs().iter().map(|t| (Kind::Tool, t.name.as_str()));
+        let files = StoredKind::BY_NAME
+            .into_iter()
+            .flat_map(|k| snapshot.of_kind(k))
+            .filter_map(|a| a.rule_name().map(|n| (a.kind().kind(), n)));
+        Ok(rule_candidates(tools.chain(files)))
+    }
+
+    /// 把资源挪到 owner 的目录下（用户在界面上转）。内容不变；谁能用随 owner 变。转不了的见 [`untransferable`]。
     pub async fn transfer(&self, kind: StoredKind, name: &str, owner: &Owner) -> Result<()> {
-        if kind == StoredKind::Memory {
-            return Err(invalid(
-                "memories are not transferred: each agent has exactly one private memory, which belongs to it; to \
-                 share content, put it into a platform memory",
-            ));
+        if let Some(reason) = untransferable(kind.kind()) {
+            return Err(invalid(reason));
         }
         let w = self.source.writing().await?;
         let snapshot = &w.snapshot;

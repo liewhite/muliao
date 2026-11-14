@@ -142,7 +142,7 @@ fn default_max_concurrency() -> NonZeroUsize {
 #[serde(deny_unknown_fields)]
 pub struct LlmConfig {
     /// 新建 agent 时的默认模型，格式 "<provider 名>:<模型名>"
-    pub default_model: String,
+    pub default_model: ModelRef,
     pub providers: BTreeMap<String, ProviderConfig>,
 }
 
@@ -295,11 +295,58 @@ pub struct Settings {
     pub runtime: RuntimeConfig,
 }
 
-/// 把 "<provider 名>:<模型名>" 拆开；两部分都不能为空。
-pub fn split_model(model: &str) -> Result<(&str, &str), String> {
-    match model.split_once(':') {
-        Some((provider, name)) if !provider.is_empty() && !name.is_empty() => Ok((provider, name)),
-        _ => Err(format!("model {model:?} must be '<provider>:<model>'")),
+/// 一个模型：哪个 provider（配置里 `[llm.providers.<名>]`）的哪个模型。文字形式 "<provider 名>:<模型名>"（agent.toml、
+/// 配置、工具参数里都这样写）。只经 [`ModelRef::parse`] 或 [`ModelRef::new`] 得到，两部分都不空。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelRef {
+    provider: String,
+    model: String,
+}
+
+impl ModelRef {
+    pub fn new(provider: &str, model: &str) -> Result<ModelRef, String> {
+        if provider.is_empty() || provider.contains(':') || model.is_empty() {
+            return Err(format!(
+                "model {provider:?} / {model:?}: give a provider (without ':') and a model, both non-empty"
+            ));
+        }
+        Ok(ModelRef { provider: provider.to_owned(), model: model.to_owned() })
+    }
+
+    /// 文字形式 "<provider 名>:<模型名>"。
+    pub fn parse(text: &str) -> Result<ModelRef, String> {
+        match text.split_once(':') {
+            Some((provider, model)) if !provider.is_empty() && !model.is_empty() => Self::new(provider, model),
+            _ => Err(format!("model {text:?} must be '<provider>:<model>'")),
+        }
+    }
+
+    pub fn provider(&self) -> &str {
+        &self.provider
+    }
+
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+}
+
+impl fmt::Display for ModelRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:{}", self.provider, self.model)
+    }
+}
+
+impl std::str::FromStr for ModelRef {
+    type Err = String;
+    fn from_str(text: &str) -> Result<ModelRef, String> {
+        ModelRef::parse(text)
+    }
+}
+
+/// 配置里写成文字形式
+impl<'de> Deserialize<'de> for ModelRef {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        ModelRef::parse(&String::deserialize(d)?).map_err(serde::de::Error::custom)
     }
 }
 
@@ -411,13 +458,12 @@ impl Raw {
         for (name, p) in &self.llm.providers {
             at_least(&mut e, &format!("llm.providers.{name}.api_key length"), p.api_key.0.len(), 1);
         }
-        match split_model(&self.llm.default_model) {
-            Ok((provider, _)) if !self.llm.providers.contains_key(provider) => e.push(format!(
+        let provider = self.llm.default_model.provider();
+        if !self.llm.providers.contains_key(provider) {
+            e.push(format!(
                 "llm.default_model provider {provider:?} is not in {:?}",
                 self.llm.providers.keys().collect::<Vec<_>>()
-            )),
-            Ok(_) => {}
-            Err(m) => e.push(format!("llm.default_model: {m}")),
+            ));
         }
         if let Some(w) = &self.web {
             at_least(&mut e, "web.api_key length", w.api_key.0.len(), 1);

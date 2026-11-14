@@ -35,9 +35,7 @@ pub struct DependencyChange {
     /// 完成的那个上游
     pub issue: i64,
     #[serde(rename = "from")]
-    #[schema(value_type = String)]
     pub before: Recorded,
-    #[schema(value_type = String)]
     pub to: Recorded,
 }
 
@@ -66,7 +64,6 @@ pub enum Happening {
     },
     /// 状态：#258 之前的历史里有已去掉的 todo、waiting（[`Recorded`]）
     Status {
-        #[schema(value_type = Change<String>)]
         change: Change<Recorded>,
     },
     Priority {
@@ -218,6 +215,7 @@ pub(crate) fn forget_session_in(c: &Connection, session_id: &SessionId) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{Retired, Status};
 
     #[test]
     fn happenings_round_trip_through_the_stored_columns() {
@@ -225,16 +223,12 @@ mod tests {
             Happening::Created,
             Happening::Comment { body: "hi".into() },
             Happening::Description,
-            Happening::Status { change: Change::new(String::from("todo").into(), String::from("done").into()) },
+            Happening::Status { change: Change::new(Recorded::Retired(Retired::Todo), Status::Done.into()) },
             Happening::Assignee { change: Change::new(None, Some(Assignee::User)) },
             Happening::Owner { change: Change::new(Some(AgentId::new("abc")), None) },
             Happening::DependsOn { change: Change::new(vec![1], vec![]) },
             Happening::Dependency {
-                change: DependencyChange {
-                    issue: 3,
-                    before: String::from("in_progress").into(),
-                    to: String::from("done").into(),
-                },
+                change: DependencyChange { issue: 3, before: Status::InProgress.into(), to: Status::Done.into() },
             },
             Happening::Stopped { change: Arrival { before: (), to: AgentId::new("abc") } },
             Happening::Unsettled,
@@ -253,6 +247,9 @@ mod tests {
         assert!(Happening::parse("comment", None, None).is_err());
         assert!(Happening::parse("title", None, Some(r#"{"from":"a","to":"b","x":1}"#)).is_err());
         assert!(Happening::parse("nope", None, None).is_err());
+        // 状态只认现有的与 #258 去掉的那两个
+        assert!(Happening::parse("status", None, Some(r#"{"from":"todo","to":"done"}"#)).is_ok());
+        assert!(Happening::parse("status", None, Some(r#"{"from":"later","to":"done"}"#)).is_err());
     }
 
     #[test]

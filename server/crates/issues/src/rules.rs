@@ -103,9 +103,7 @@ pub fn handed_to_user<'a>(actor: &'a Actor, assignee: Option<&Assignee>, happene
 /// 这次的状态变更让 issue 进入 done / cancelled（下游因此少等一个上游）：返回进入前的状态（原文），否则 None。
 pub fn finishing(happened: &[Activity]) -> Option<Recorded> {
     happened.iter().find_map(|a| match &a.what {
-        Happening::Status { change } => {
-            (!change.before.finished() && change.to.finished()).then(|| change.before.clone())
-        }
+        Happening::Status { change } => (!change.before.finished() && change.to.finished()).then_some(change.before),
         _ => None,
     })
 }

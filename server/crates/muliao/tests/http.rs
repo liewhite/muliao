@@ -280,11 +280,17 @@ async fn a_conversation_over_http_with_live_events() {
 async fn agents_roles_assets_and_memory() {
     let w = world().await;
     let defaults = w.get("/api/agent-defaults").await;
-    assert_eq!(defaults["model"], "claude:m");
+    assert_eq!(defaults["model"], json!({"provider": "claude", "model": "m"}));
     assert_eq!(defaults["thinking"], "default");
+    let candidates = w.get("/api/assets/rule-candidates").await;
+    assert_eq!(candidates[0], "use:tool:*");
+    assert!(candidates.as_array().unwrap().iter().any(|c| c == "*:memory:global"), "{candidates}");
     let id = w.agent("writer").await;
     let a = w.get(&format!("/api/agents/{id}")).await;
-    assert_eq!(a["config"]["model"], "claude:m");
+    assert_eq!(a["config"]["model"], json!({"provider": "claude", "model": "m"}));
+    // 模型按 provider 与模型名两部分给，空的不收
+    let bad = json!({"model": {"provider": "claude", "model": ""}});
+    w.call(Method::PATCH, &format!("/api/agents/{id}"), Some(bad), 422).await;
     assert_eq!(a["is_default"], false);
     w.call(Method::POST, "/api/agents", Some(json!({"name": "writer", "description": "x"})), 409).await;
     let patched = w
@@ -576,8 +582,9 @@ fn every_route_is_described() {
     let doc = muliao_http::openapi();
     let json = serde_json::to_value(&doc).unwrap();
     let ops: usize = json["paths"].as_object().unwrap().values().map(|p| p.as_object().unwrap().len()).sum();
-    // Python 版 84 个，删了任务页 2 个、加了会话重试 1 个；资源的删除从一个通用路径拆到四种资源各自的路径（加 3 个）
-    assert_eq!(ops, 86);
+    // Python 版 84 个，删了任务页 2 个、加了会话重试 1 个；资源的删除从一个通用路径拆到四种资源各自的路径（加 3 个）；
+    // 规则补全候选（#847）
+    assert_eq!(ops, 87);
     // 引用都能解析：参数里用到的类型 utoipa 不自动登记进 components（要 `#[param(inline)]`）
     fn refs<'a>(v: &'a Value, out: &mut Vec<&'a str>) {
         match v {

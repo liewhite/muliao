@@ -6,7 +6,7 @@ function agent(name: string, group: string | null = null, archived = false, desc
   return {
     id: asAgentId(name),
     name,
-    config: { description, model: 'p:m', thinking: 'default', group },
+    config: { description, model: { provider: 'p', model: 'm' }, thinking: 'default', group },
     roles: [],
     allow: [],
     deny: [],
@@ -63,7 +63,7 @@ describe('selectableAgents', () => {
 describe('agentModel', () => {
   it('gives the configured model, or nothing when the list, the agent or its config is missing', () => {
     const list = [agent('a'), { ...agent('b'), config: null }]
-    expect(agentModel(list, asAgentId('a'))).toBe('p:m')
+    expect(agentModel(list, asAgentId('a'))).toBe('m')
     expect(agentModel(list, asAgentId('b'))).toBeUndefined()
     expect(agentModel(list, asAgentId('zzz'))).toBeUndefined()
     expect(agentModel(undefined, asAgentId('a'))).toBeUndefined()

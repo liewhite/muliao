@@ -13,12 +13,12 @@ describe('waitDetail', () => {
   })
 
   it('shows how long an ask_agent has been waiting', () => {
-    const w: Wait = { kind: 'delegation', thread_session_id: asSessionId('t'), check_seconds: null, since: ago(30) }
+    const w: Wait = { kind: 'delegation', thread_session_id: asSessionId('t'), mode: { kind: 'ask' }, since: ago(30) }
     expect(waitDetail(w, now)).toBe('ask_agent · 已等 30s')
   })
 
   it('shows the heartbeat of a report_back delegation', () => {
-    const w: Wait = { kind: 'delegation', thread_session_id: asSessionId('t'), check_seconds: 300, since: ago(5) }
+    const w: Wait = { kind: 'delegation', thread_session_id: asSessionId('t'), mode: { kind: 'report_back', check_seconds: 300 }, since: ago(5) }
     expect(waitDetail(w, now)).toBe('report_back · 每 5m00s 检查 · 已等 5s')
   })
 

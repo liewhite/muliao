@@ -27,7 +27,7 @@ use muliao_platform::shell::{DRAIN, LEFT_RUNNING_NOTE, Spawned, kill_group};
 use muliao_platform::tooling::RunScope;
 use muliao_sessions::events::SessionStopped;
 use muliao_sessions::holds::HoldOf;
-use muliao_sessions::work::{CheckBeats, SessionWork, TICK};
+use muliao_sessions::work::{CheckBeats, SessionWork, TICK, no_progress_hint};
 use rusqlite::{Connection, Row, params};
 use tokio::sync::watch;
 
@@ -298,11 +298,12 @@ fn final_text(job: &Job, end: End, now: DateTime<Utc>, last: &str, note: Option<
 fn check_text(job: &Job, now: DateTime<Utc>, last: &str) -> String {
     format!(
         "Background job {id} is still running ({} so far).\nCommand: {}\n{}\nIf it looks stuck or is no longer needed, \
-         call job_kill({id}); otherwise keep waiting (if nothing needs doing, reply with just '…'): you will get \
+         call job_kill({id}); otherwise keep waiting ({}): you will get \
          another check-in in {} seconds and an event when it finishes.",
         duration(job.started_at, now),
         job.command,
         output(job, last),
+        no_progress_hint(),
         job.check_seconds,
         id = job.id,
     )

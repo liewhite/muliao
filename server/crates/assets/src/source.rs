@@ -27,10 +27,11 @@ use crate::formats::agent_file::{AGENT_FILE, AgentFile};
 use crate::kinds::StoredKind;
 use crate::rules::{GLOBAL_MEMORY, ToolTable};
 use crate::tree::{Expect, Owner, Problem, Snapshot, fingerprint, load_tree};
+use muliao_platform::config::ModelRef;
 use muliao_platform::errors::Result;
 
 /// 模型在当前配置下能不能运行；不能时的原因（运行端口的模型注册表给）。
-pub type ModelCheck = Arc<dyn Fn(&str) -> std::result::Result<(), String> + Send + Sync>;
+pub type ModelCheck = Arc<dyn Fn(&ModelRef) -> std::result::Result<(), String> + Send + Sync>;
 
 /// 写入口写成的一份文件。
 #[derive(Debug, Clone, PartialEq, Eq)]
