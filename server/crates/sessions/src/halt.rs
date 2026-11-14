@@ -10,7 +10,7 @@
 //!    跑完的结局因占用已清掉而不投（罕见、只多花一段 token，不为它持久化停止任务）。
 //! 6. 发布 SessionStopped：工作区领域在提交后结束被清掉的后台任务。
 
-use muliao_platform::ids::{DelegationId, SessionId};
+use muliao_platform::ids::{DelegationId, RunId, SessionId};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -58,12 +58,12 @@ pub(crate) async fn halt(
                 tracing::info!(%session_id, "stopping a deleted session: nothing to do");
                 return Ok(Halted::Gone);
             };
+            // 存下的和补上的消息都记在最近一次运行名下（被停的运行，或调用挂起时的那次）
+            let latest = runs::latest_in(tx, &session_id)?.map(|r| r.id);
             if !unsaved.is_empty() {
-                let run = runs::unfinished_in(tx, &session_id)?
-                    .ok_or_else(|| broken(format!("session {session_id} has unsaved messages but no running run")))?;
-                history::append_in(tx, &session_id, run.id, &unsaved)?;
+                history::append_in(tx, &session_id, run_of(&session_id, latest)?, &unsaved)?;
             }
-            close_history_in(tx, &session_id)?;
+            close_history_in(tx, &session_id, latest)?;
             let stopped_runs = runs::stop_unfinished_in(tx, &live, &session_id)?;
             // 没在跑的会话（在等后台任务、委派、唤醒）没有运行记录可改，可停止照样改了它看得见的内容（补上的结果、清掉的
             // 等待项、丢弃的信）：看着它的页面也要重拉
@@ -95,17 +95,19 @@ pub(crate) async fn halt(
         .await
 }
 
+/// 停止时要写进历史的消息记在哪次运行名下：有这样的消息，会话就一定跑过。
+fn run_of(session_id: &SessionId, latest: Option<RunId>) -> Result<RunId> {
+    latest.ok_or_else(|| broken(format!("session {session_id} has messages to close but no run")))
+}
+
 /// 让会话历史停在不会被续跑的地方：哪些调用补「已停止」、哪些写上已提交的回答按会话停在哪定，用上的回答信件随之记为已处理。
-/// 补的结果记在最近一次运行名下（被停的运行，或调用挂起时的那次）。
-fn close_history_in(tx: &mut Tx<'_>, session_id: &SessionId) -> Result<()> {
+fn close_history_in(tx: &mut Tx<'_>, session_id: &SessionId, latest: Option<RunId>) -> Result<()> {
     let tail = since_last_response(tx, session_id)?;
     let closing = closing_on_stop(&position_in(tx, session_id)?);
     let mut results: Vec<_> = closing.stopped.iter().map(|c| made_up_result(c, MadeUp::Stopped)).collect();
     results.extend(closing.answered);
     if let Some(request) = results_request(results) {
-        let run_id = runs::latest_in(tx, session_id)?
-            .map(|r| r.id)
-            .ok_or_else(|| broken(format!("session {session_id} has tool calls but no run")))?;
+        let run_id = run_of(session_id, latest)?;
         let mut message = Message::User(request);
         mark_stopped(&mut message);
         history::append_in(tx, session_id, run_id, &[message])?;
