@@ -50,9 +50,6 @@ export const PRIORITY_LABEL: Record<IssuePriority, string> = {
 /** 优先级的展示顺序：从 PRIORITY_LABEL 的键推导 */
 export const PRIORITIES = Object.keys(PRIORITY_LABEL) as readonly IssuePriority[]
 
-/** issue 页；与后端 muliao_issues::route 一致（交给用户审核的通知点开它，server/crates/muliao/tests/frontend_contract.rs 核对）。Service Worker（public/sw.js）按这个形状认出待审核 issue 的通知 */
-export const issueRoute = (id: IssueId) => `/issues/${id}`
-
 /** 指派人下拉框里「未指派」「我」的选项 id（选项 id 必须非空；agent id 是 12 位十六进制，不会与它们相同） */
 export const UNASSIGNED = '@none'
 const ME = '@me'

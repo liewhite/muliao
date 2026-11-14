@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Card } from '@heroui/react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { AgentPicker } from './AgentPicker'
-import { api, asAgentId, sessionRoute, type AgentId } from '../api'
+import { api, asAgentId, type AgentId } from '../api'
 import { AttachButton, PendingUploads, useUploads } from './attachments'
 import { appendTranscript, useVoiceInput } from './voice'
 import { VoiceButton } from './VoiceButton'
@@ -17,6 +17,7 @@ import {
   useAction,
   useAgents,
 } from '../ui'
+import { sessionRoute } from '../routes'
 
 
 export default function NewSession() {

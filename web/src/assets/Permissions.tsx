@@ -14,7 +14,7 @@ import {
 } from '@heroui/react'
 import { Pencil, Trash2 } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { agentRoute, api, type AgentId, type Reach, type Role, type RoleInput, type ToolPermission } from '../api'
+import { api, type AgentId, type Reach, type Role, type RoleInput, type ToolPermission } from '../api'
 import { KIND_LABEL } from './rules'
 import {
   ActionButton,
@@ -31,6 +31,7 @@ import {
 } from '../ui'
 import { agentLabel } from '../agents/agentGroups'
 import { useLoad } from '../load'
+import { agentRoute } from '../routes'
 
 const ACCESS: Record<ToolPermission['access'], { label: string; color: 'default' | 'warning' }> = {
   read: { label: '读', color: 'default' },

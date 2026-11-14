@@ -29,7 +29,6 @@ import {
   ownerHue,
   ownerLabel,
   groupByStatus,
-  issueRoute,
   moveIssues,
   type AssigneeChoice,
   type PendingMove,
@@ -56,6 +55,7 @@ import {
   useAgents,
 } from '../ui'
 import { useLoad } from '../load'
+import { issueRoute } from '../routes'
 
 type View = 'board' | 'list' | 'graph'
 // 「所有项目」选项的 id；查询时映射为不过滤

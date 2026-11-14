@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Button, Card, toast } from '@heroui/react'
 import { Plus, Trash2 } from 'lucide-react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { api, skillFileUrl, type AgentId, type AssetOf, type Skill } from '../api'
+import { api, href, type AgentId, type AssetOf, type Skill } from '../api'
 import { FileBrowser } from '../FileBrowser'
 import { AssetAccess, OwnerSelect } from './assetParts'
 import { useDraft } from '../drafts'
@@ -187,7 +187,7 @@ function SkillDraft({ latest }: { latest: Skill }) {
           source={{
             id: name,
             list: (path) => api.skillFiles(name, path),
-            fileUrl: (path) => skillFileUrl(name, path),
+            fileUrl: (path) => href('/api/assets/skill/{name}/file', { path: { name }, query: { path } }),
           }}
           label="skill 目录"
           emptyText="skill 目录是空的"

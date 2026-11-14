@@ -4158,7 +4158,7 @@ export interface operations {
             query?: {
                 agent_id?: components["schemas"]["AgentId"];
                 /** @description 只列这些来源的会话（可以重复给） */
-                origin?: string[];
+                origin?: ("user" | "trigger" | "delegation" | "issue")[];
                 /** @description 只列这个触发器发起的会话（不能再给 origin） */
                 trigger_id?: components["schemas"]["TriggerId"];
                 /** @description 关键字：只列标题或消息含有它的会话（不区分 ASCII 大小写；空串不过滤） */

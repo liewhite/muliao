@@ -33,7 +33,7 @@ pub use board::{
 pub use change::Patch;
 pub use model::{Actor, Assignee, By, Issue, Priority, Status};
 
-/// issue 页（前端路由，与 web/src/issues.ts 的 issueRoute 一致，由 crates/muliao/tests/frontend_contract.rs 核对）：交给
+/// issue 页（前端路由，与 web/src/routes.ts 的 issueRoute 一致，由 crates/muliao/tests/frontend_contract.rs 核对）：交给
 /// 用户的通知点开打开它。
 pub fn route(issue_id: IssueId) -> String {
     format!("/issues/{issue_id}")

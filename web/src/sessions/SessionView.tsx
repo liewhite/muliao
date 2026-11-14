@@ -19,7 +19,6 @@ import {
 } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
-  agentRoute,
   api,
   asSessionId,
   type AgentId,
@@ -39,7 +38,6 @@ import {
   type Wait,
   type IssueId,
   type CallId,
-  sessionRoute,
 } from '../api'
 import { approvalAnchor, askAnchor, waitDetail, waitKey } from './waits'
 import {
@@ -66,12 +64,13 @@ import { appendTranscript, useVoiceInput, type VoiceInput } from './voice'
 import { VoiceButton } from './VoiceButton'
 import { isSendShortcut, SEND_HINT } from '../sendKey'
 import { liveItems, mergeLive, useServerEvents, withoutCovered, type PageEvent, type RunEvent } from '../events'
-import { STATUS_LABEL, issueRoute } from '../issues/model'
+import { STATUS_LABEL } from '../issues/model'
 import { useReturnState, useRouteParam } from '../nav'
 import { cacheHitPercent, contextText, formatTokens } from '../usage'
 import { StatusDot } from '../issues/Issues'
 import { ActionButton, AgentName, CODE_BLOCK, ErrorAlert, Loading, Markdown, Page, formatTime, useAction, useConfirm } from '../ui'
 import { useLoad } from '../load'
+import { agentRoute, issueRoute, sessionRoute } from '../routes'
 
 /**
  * issue 会话的页头标题：指回它的 issue，显示编号、标题、当前状态（随 issue 变化刷新）；在 issue 页返回回到这个会话。

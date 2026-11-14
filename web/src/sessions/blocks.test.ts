@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { asSessionId, sourceKey, type AskView, type CallId, type Item, type ItemSource, type JobId } from '../api'
-import { foldCheckIns, groupSteps, stepAttachments, stepThreads, summarizeSteps, toBlocks, unlinkedThreads, type Step } from './blocks'
+import { asSessionId, type AskView, type CallId, type Item, type ItemSource, type JobId } from '../api'
+import { foldCheckIns, groupSteps, sourceKey, stepAttachments, stepThreads, summarizeSteps, toBlocks, unlinkedThreads, type Step } from './blocks'
 
 type Of<T extends Item['type']> = Extract<Item, { type: T }>
 const user = (text: string): Item => ({ type: 'user', text, attachments: [] })

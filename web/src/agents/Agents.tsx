@@ -3,12 +3,11 @@ import { Button, Card, Chip, Tabs, toast, type Key } from '@heroui/react'
 import { Archive, ArchiveRestore, Copy, MessageSquarePlus, Plus, Star, Trash2 } from 'lucide-react'
 import { Link, NavLink, useNavigate } from 'react-router-dom'
 import { useRouteParam } from '../nav'
+import { agentRoute, newSessionRoute } from '../routes'
 import {
-  agentRoute,
   api,
   asAgentId,
-  newSessionRoute,
-  workspaceFileUrl,
+  href,
   type Agent,
   type AgentId,
   type AgentInput,
@@ -474,7 +473,7 @@ export function AgentDetail() {
                 source={{
                   id: a.id,
                   list: (path) => api.workspace(a.id, path),
-                  fileUrl: (path) => workspaceFileUrl(a.id, path),
+                  fileUrl: (path) => href('/api/agents/{agent_id}/workspace/file', { path: { agent_id: a.id }, query: { path } }),
                 }}
                 label="工作目录"
                 emptyText="工作目录是空的"

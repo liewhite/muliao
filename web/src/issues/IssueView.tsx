@@ -6,7 +6,6 @@ import {
   api,
   asAgentId,
   asIssueId,
-  sessionRoute,
   type Actor,
   type Agent,
   type IssueDetail,
@@ -24,7 +23,6 @@ import {
   assigneeOptions,
   assigneeValue,
   issueRefs,
-  issueRoute,
   parseIssueRefs,
 } from './model'
 import {
@@ -45,6 +43,7 @@ import { agentLabel } from '../agents/agentGroups'
 import { useLoad } from '../load'
 import { useDraft } from '../drafts'
 import { OwnerSelect, StatusDot } from './Issues'
+import { issueRoute, sessionRoute } from '../routes'
 
 function actorName(agents: Agent[] | undefined, actor: Actor) {
   switch (actor.kind) {

@@ -1853,7 +1853,14 @@
             "schema": {
               "type": "array",
               "items": {
-                "type": "string"
+                "type": "string",
+                "description": "来源的种类：用户在界面发起、触发器、agent 之间委派、issue 看板。",
+                "enum": [
+                  "user",
+                  "trigger",
+                  "delegation",
+                  "issue"
+                ]
               }
             }
           },

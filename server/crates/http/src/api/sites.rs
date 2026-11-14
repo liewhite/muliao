@@ -30,7 +30,7 @@ use crate::state::AppState;
 
 pub const SITES_PATH: &str = "/sites";
 
-/// 沙箱权限与前端 iframe 的 sandbox 属性（web/src/pages/SitePages.tsx SANDBOX）一致：浏览器取两者交集，改就两处一起改。
+/// 沙箱权限与前端 iframe 的 sandbox 属性（web/src/sites/SitePages.tsx SANDBOX）一致：浏览器取两者交集，改就两处一起改。
 /// 签名不过期、按页面签：地址可以收藏、在新窗口常开；泄露了改密码即失效。
 const PAGE_HEADERS: [(&str, &str); 5] = [
     ("content-security-policy", "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads"),

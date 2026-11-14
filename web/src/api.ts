@@ -37,9 +37,8 @@ export type SessionListItem = Schemas['SessionListItem']
 /** 一条通知（不叫 Notification：那是浏览器的全局对象） */
 export type AppNotification = Schemas['Notification']
 
-// 下面这个值与两个路由（sessionRoute、issues.ts 的 issueRoute）前后端各写一份，server/crates/muliao/tests/frontend_contract.rs 核对
-
-/** 引用文件的地址前缀（与后端 files 的 FILES_PATH 一致）：回答里只有指向这里的图片会被渲染 */
+/** 引用文件的地址前缀（与后端 files 的 FILES_PATH 一致，server/crates/muliao/tests/frontend_contract.rs 核对）：
+ * 回答里只有指向这里的图片会被渲染 */
 export const FILES_PATH = '/api/files'
 
 export type FileInfo = Schemas['FileOut']
@@ -74,17 +73,6 @@ export type MailState = Schemas['MailState']
 export type Mail = Schemas['SessionDetail']['mail'][number]
 /** 事件的来源：后台任务、thread 或到点唤醒（后端解析好的种类） */
 export type ItemSource = Schemas['EventSource']
-/** 同一来源的事件归在一起用的键 */
-export function sourceKey(s: ItemSource): string {
-  switch (s.kind) {
-    case 'job':
-      return `job:${s.job_id}`
-    case 'thread':
-      return `thread:${s.session_id}`
-    case 'wake':
-      return 'wake'
-  }
-}
 export type SessionDetail = Schemas['SessionDetail']
 export type LiveSegment = Schemas['LiveSegment']
 /** 会话在等的东西（按 kind 区分）：后台任务（job 字段带详情）、委派、到点唤醒、提问、等批准 */
@@ -145,7 +133,7 @@ export class ApiError extends Error {
 type Query = Record<string, string | number | boolean | null | undefined | string[]>
 
 function withQuery(path: string, query?: Query): string {
-  if (!query) return path
+  if (query === undefined) return path
   const params = new URLSearchParams()
   for (const [k, v] of Object.entries(query)) {
     if (v === null || v === undefined) continue
@@ -169,8 +157,8 @@ const FILE_TIMEOUT_MS = 600_000
 /** 所有请求的唯一出口：统一的时限、401 处理与错误信息 */
 async function send<T>(
   method: string,
+  /** 已带上查询参数的地址 */
   path: string,
-  query: Query | undefined,
   body?: { type: string; data: BodyInit },
   // 响应体是文件（如预览的文件）：成功时交出响应本身，由调用方读 Blob
   raw = false,
@@ -179,7 +167,7 @@ async function send<T>(
   const timeoutMs = raw || body?.data instanceof Blob ? FILE_TIMEOUT_MS : REQUEST_TIMEOUT_MS
   let resp: Response
   try {
-    resp = await fetch(withQuery(path, query), {
+    resp = await fetch(path, {
       method,
       credentials: 'same-origin',
       headers: body === undefined ? undefined : { 'Content-Type': body.type },
@@ -236,44 +224,41 @@ type WithoutNever<T> = { [K in keyof T as [T[K]] extends [never] ? never : K]: T
 /** 查询参数都可选时，query 本身也可以不给 */
 type QueryArg<Q> = [Q] extends [never] ? object : object extends Q ? { query?: Q } : { query: Q }
 type Args<O> = WithoutNever<{ path: PathParams<O>; body: Body<O> }> & QueryArg<QueryParams<O>> & { untimed?: true }
+/** 参数都可省时，整个参数对象也可以不给 */
+type ArgsTuple<A> = object extends A ? [A?] : [A]
 
-export function call<P extends Path, M extends MethodOf<P>>(
-  method: M,
-  path: P,
-  ...[args]: object extends Args<Operation<P, M>> ? [Args<Operation<P, M>>?] : [Args<Operation<P, M>>]
-): Promise<Result<Operation<P, M>>> {
-  const given = (args ?? {}) as {
-    path?: Record<string, string | number>
-    query?: Query
-    body?: unknown
-    untimed?: true
-  }
-  const url = path.replace(/\{(\w+)\}/g, (_, name: string) => {
+type Given = { path?: Record<string, string | number>; query?: Query; body?: unknown; untimed?: true }
+
+/** 代入路径参数，接上查询参数 */
+function urlOf(path: string, given: Given): string {
+  const filled = path.replace(/\{(\w+)\}/g, (_, name: string) => {
     const value = given.path?.[name]
     if (value === undefined) throw new Error(`missing path parameter ${name} for ${path}`)
     return encodeURIComponent(String(value))
   })
-  // 只有接口描述里有 JSON 请求体的调用才发请求体
-  const body = given.body === undefined ? undefined : { type: 'application/json', data: JSON.stringify(given.body) }
-  return send(method.toUpperCase(), url, given.query, body, false, given.untimed)
+  return withQuery(filled, given.query)
 }
 
-/** 前端路由：agent 页按 id（名称可改） */
-export const agentRoute = (id: AgentId) => `/agents/${id}`
-/** 会话页；通知点开的地址由后端 notifications 的 inbox::url_of 生成，与它一致 */
-export const sessionRoute = (id: SessionId) => `/sessions/${id}`
-export const newSessionRoute = (agentId: AgentId) => `/new?${new URLSearchParams({ agent: agentId })}`
-/** agent 自定义页面的界面路由（页面本身在沙箱 iframe 里按接口给的签名地址打开） */
-export const sitePageRoute = (agentId: AgentId, name: string) =>
-  `/pages/${encodeURIComponent(agentId)}/${encodeURIComponent(name)}`
-export type SitePage = Schemas['SitePageOut']
-/** agent 工作目录里一个文件的内容（path 相对工作目录）：图片可直接内联，其余作为附件下载 */
-export const workspaceFileUrl = (agentId: AgentId, path: string) =>
-  `/api/agents/${encodeURIComponent(agentId)}/workspace/file?${new URLSearchParams({ path })}`
+export function call<P extends Path, M extends MethodOf<P>>(
+  method: M,
+  path: P,
+  ...[args]: ArgsTuple<Args<Operation<P, M>>>
+): Promise<Result<Operation<P, M>>> {
+  const given: Given = args ?? {}
+  // 只有接口描述里有 JSON 请求体的调用才发请求体
+  const body = given.body === undefined ? undefined : { type: 'application/json', data: JSON.stringify(given.body) }
+  return send(method.toUpperCase(), urlOf(path, given), body, false, given.untimed)
+}
 
-/** skill 目录里一个文件的内容（path 相对 skill 目录），同 workspaceFileUrl */
-export const skillFileUrl = (name: string, path: string) =>
-  `/api/assets/skill/${encodeURIComponent(name)}/file?${new URLSearchParams({ path })}`
+/** GET 接口的地址，参数同 call：给浏览器直接打开的（图片、下载链接）或响应体是文件的（fileBlob） */
+export function href<P extends { [K in Path]: 'get' extends MethodOf<K> ? K : never }[Path]>(
+  path: P,
+  ...[args]: ArgsTuple<Omit<Args<Operation<P, 'get'>>, 'untimed'>>
+): string {
+  return urlOf(path, args ?? {})
+}
+
+export type SitePage = Schemas['SitePageOut']
 
 export const api = {
   login: (password: string) => call('post', '/api/auth/login', { body: { password } }),
@@ -321,8 +306,8 @@ export const api = {
   /** agent 工作目录里 path（相对工作目录，空为根）这一层：目录在前，各自按名称 */
   workspace: (agent_id: AgentId, path: string) =>
     call('get', '/api/agents/{agent_id}/workspace', { path: { agent_id }, query: { path } }),
-  /** 浏览中的一个文件的内容（workspaceFileUrl / skillFileUrl；响应体是文件本身，接口描述里没有 JSON 响应体） */
-  fileBlob: (url: string) => send<Response>('GET', url, undefined, undefined, true).then((r) => r.blob()),
+  /** 浏览中的一个文件的内容（地址由 href 生成；响应体是文件本身，接口描述里没有 JSON 响应体） */
+  fileBlob: (url: string) => send<Response>('GET', url, undefined, true).then((r) => r.blob()),
   /** 全部 agent 的自定义页面（工作目录 site/<名>/index.html），各带打开它的签名地址 */
   pages: () => call('get', '/api/pages'),
   /** 服务端配置决定的可选能力（如语音输入）与默认值（如压缩阈值） */
@@ -366,16 +351,8 @@ export const api = {
   skillFiles: (name: string, path: string) =>
     call('get', '/api/assets/skill/{name}/files', { path: { name }, query: { path } }),
 
-  /** trigger_id：只列这个触发器发起过的会话（不能再给 origin）；q 是关键字（标题或消息含有它，不能为空串） */
-  sessions: (query: {
-    agent_id?: AgentId
-    origin?: Origin[]
-    trigger_id?: TriggerId
-    q?: string
-    limit?: number
-    offset?: number
-  }) =>
-    call('get', '/api/sessions', { query }),
+  /** 查询参数的含义见接口描述（schema.d.ts 的 list_sessions） */
+  sessions: (query: QueryParams<Operation<'/api/sessions', 'get'>>) => call('get', '/api/sessions', { query }),
   session: (session_id: SessionId) =>
     call('get', '/api/sessions/{session_id}', { path: { session_id } }),
   startSession: (agent_id: AgentId, prompt: string, attachments: FileId[]) =>
@@ -404,10 +381,10 @@ export const api = {
     call('delete', '/api/script-grants/{grant_id}', { path: { grant_id } }),
   /** 请求体就是文件内容，Content-Type 是它的类型（接口描述里没有 JSON 请求体）；浏览器认不出类型时 file.type 为空，按「未知二进制」上传 */
   uploadFile: (file: File) =>
-    send<FileInfo>('POST', FILES_PATH, { name: file.name }, { type: file.type || 'application/octet-stream', data: file }),
+    send<FileInfo>('POST', withQuery(FILES_PATH, { name: file.name }), { type: file.type || 'application/octet-stream', data: file }),
   /** 请求体是一段录音，Content-Type 是它的类型；返回转写出的文字（听不到人说话时为空） */
   transcribe: (audio: Blob) =>
-    send<Schemas['TranscriptOut']>('POST', '/api/transcriptions', undefined, { type: audio.type || 'audio/webm', data: audio }),
+    send<Schemas['TranscriptOut']>('POST', '/api/transcriptions', { type: audio.type || 'audio/webm', data: audio }),
   /** 同时把指向这个会话的通知标为已读 */
   markRead: (session_id: SessionId) => call('post', '/api/sessions/{session_id}/read', { path: { session_id } }),
   notifications: () => call('get', '/api/notifications'),

@@ -45,6 +45,6 @@ fn frontend_constants_match_the_backend() {
 #[test]
 fn notification_urls_are_the_frontend_routes() {
     use muliao_notifications::inbox::url_of;
-    assert_eq!(url_of(Some(&SessionId::new("s1")), None).unwrap(), route("api.ts", "sessionRoute", "s1"));
-    assert_eq!(muliao_issues::route(muliao_platform::ids::IssueId::new(7)), route("issues.ts", "issueRoute", "7"));
+    assert_eq!(url_of(Some(&SessionId::new("s1")), None).unwrap(), route("routes.ts", "sessionRoute", "s1"));
+    assert_eq!(muliao_issues::route(muliao_platform::ids::IssueId::new(7)), route("routes.ts", "issueRoute", "7"));
 }

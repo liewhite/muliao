@@ -1,7 +1,6 @@
 // 会话条目（历史与运行中的事件流共用 Item）到展示块的整理，纯函数，与渲染分开。
 
 import {
-  sourceKey,
   type AskView,
   type Attachment,
   type CallId,
@@ -11,6 +10,18 @@ import {
   type ViewBlock,
 } from '../api'
 import { assertNever } from '../exhaustive'
+
+/** 同一来源的事件归在一起用的键 */
+export function sourceKey(s: ItemSource): string {
+  switch (s.kind) {
+    case 'job':
+      return `job:${s.job_id}`
+    case 'thread':
+      return `thread:${s.session_id}`
+    case 'wake':
+      return 'wake'
+  }
+}
 
 /** 一次工具调用的调用这一半（调用条目给出） */
 export interface ToolCall {

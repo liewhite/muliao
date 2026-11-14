@@ -91,7 +91,7 @@ pub struct ListQuery {
     pub agent_id: Option<AgentId>,
     /// 只列这些来源的会话（可以重复给）
     #[serde(default)]
-    #[param(value_type = Option<Vec<String>>)]
+    #[param(inline)]
     pub origin: Option<Vec<Origin>>,
     /// 只列这个触发器发起的会话（不能再给 origin）
     pub trigger_id: Option<TriggerId>,

@@ -13,7 +13,6 @@ import {
   type TriggerCreate,
   type TriggerId,
   type TriggerKindName,
-  sessionRoute,
 } from '../api'
 import { selectableAgents, agentLabel } from '../agents/agentGroups'
 import { groupTriggersByAgent } from './triggerGroups'
@@ -40,6 +39,7 @@ import {
   useConfirm,
 } from '../ui'
 import { never, useLoad } from '../load'
+import { sessionRoute } from '../routes'
 
 /** kind 与它的配置成对出现，形状同新建请求（有服务端默认值的配置项可省，读到的配置也合这个形状），编辑器按 kind 收窄 */
 type KindConfig = { [K in TriggerKindName]: Pick<Extract<TriggerCreate, { kind: K }>, 'kind' | 'config'> }[TriggerKindName]

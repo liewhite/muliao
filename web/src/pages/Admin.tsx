@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Button, Card, Chip, Form, toast } from '@heroui/react'
 import { BellRing, LogOut, ShieldCheck, Trash2 } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
-import { api, unauthorizedEvent, sessionRoute, type GrantId } from '../api'
+import { api, unauthorizedEvent, type GrantId } from '../api'
 import { useReturnState } from '../nav'
 import { enablePush, pushState, unsubscribePush, type PushState } from '../push'
 import {
@@ -18,6 +18,7 @@ import {
 } from '../ui'
 import { agentLabel } from '../agents/agentGroups'
 import { useLoad, errorMessage } from '../load'
+import { sessionRoute } from '../routes'
 
 const PUSH_TEXT: Record<PushState, string> = {
   unsupported: '此浏览器不支持推送通知。',
