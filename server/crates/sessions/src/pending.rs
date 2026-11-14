@@ -2,11 +2,10 @@
 //! 批准。运行停在这里正常结束；回信是一封回答信件，作为那次调用的结果交回，模型看到的就是「我问了，对方这样答」。
 //! 设计见 docs/architecture.md「挂起的调用」。
 //!
-//! - 三种的差别只写在 [`Waiting`] 的几个方法里（要不要占用才算挂起、没交出去时能否原样重放、停止时是否仍挂着），各处查它，
-//!   不按工具名分支。ask_user、ask_agent 按工具名认；等批准的按记录认（同一个工具多数调用不用批准）。一次调用是哪一种只经
-//!   [`kind_of`] 认。
-//! - 会话停在哪（[`position`]，纯函数，唯一的判断）：空闲、新开、从历史续跑、被打断、等回答。由历史、交出去的永久事实
-//!   （[`HandedOut`]）与信箱推导，不另存状态；actor、唤醒、停止、等用户的调用、交回结局都 match 它。
+//! - 一次调用在不在等、等的是哪一种，只看挂起时记下的那一行（[`crate::paused_calls`]，#823），不按工具名认；三种的差别
+//!   只写在 [`Waiting`] 的方法里，各处查它。
+//! - 会话停在哪（[`position`]，纯函数，唯一的判断）：空闲、新开、从历史续跑、被打断、等回答。由历史、挂起记录与信箱
+//!   推导；actor、唤醒、停止、等用户的调用、交回结局都 match 它。
 //! - 什么时候继续（[`Paused::ready`]）：用户发了新消息（跳过还没回答的），或挂起的调用都有了回答；事件留在信箱里等它们
 //!   一起交给模型。
 
@@ -20,65 +19,15 @@ use crate::conventions::{is_stopped, unanswered_calls};
 use crate::mailbox::{Mail, MailBody};
 use muliao_platform::errors::{Result, broken};
 
-pub const ASK_USER: &str = "ask_user";
-pub const ASK_AGENT: &str = "ask_agent";
-
 impl Waiting {
-    /// 交出去时留下带调用 id 的占用，有占用才算挂起；没有占用的调用是工具还没执行完。
-    fn needs_hold(self) -> bool {
-        self == Waiting::AskAgent
-    }
-
-    /// 没有挂起、也没有结果的调用可以原样重新执行（按调用 id 幂等，没有别的副作用），续跑时不补「被中断」。
-    fn replayable(self) -> bool {
-        self == Waiting::AskAgent
-    }
-
     /// 用户停止时不补「已停止」，仍挂着等回答（只有提问，它的回答是 [`CallResult::AskUser`]）。
     fn kept_open_on_stop(self) -> bool {
         self == Waiting::AskUser
     }
 }
 
-/// 这次调用若挂起，是哪一种：记过等批准的是等批准，否则按工具名认。提问的参数不合法（没有问题）时为 None：这样的
-/// 调用没执行过，不是在等用户回答，停止与续跑都按普通调用补结果。
-pub(crate) fn kind_of(call: &ToolCall, approvals: &HashSet<String>) -> Option<Waiting> {
-    if approvals.contains(&call.id) {
-        return Some(Waiting::Approval);
-    }
-    match call.name.as_str() {
-        ASK_USER if !questions_of(&call.args).is_empty() => Some(Waiting::AskUser),
-        ASK_AGENT => Some(Waiting::AskAgent),
-        _ => None,
-    }
-}
-
-/// 一步停在挂起的调用上时（agenter 的 `ToolsDone::Paused`）各调用是哪一种，同 [`kind_of`]：挂起的只能是 ask_user、ask_agent，
-/// 请求批准的不能是它们（按工具名认的与按记录认的会认不清）。不符合是工具与这里的约定不一致。
-pub(crate) fn paused_calls(deferred: Vec<ToolCall>, approvals: Vec<ToolCall>) -> Result<Vec<PendingCall>> {
-    let none = HashSet::new();
-    let mut out = Vec::new();
-    for call in deferred {
-        match kind_of(&call, &none) {
-            Some(kind @ (Waiting::AskUser | Waiting::AskAgent)) => out.push(PendingCall { call, kind }),
-            _ => return Err(broken(format!("run deferred an unexpected tool call: {}", call.name))),
-        }
-    }
-    for call in approvals {
-        if kind_of(&call, &none).is_some() {
-            return Err(broken(format!("a deferred tool asked for approval: {}", call.name)));
-        }
-        out.push(PendingCall { call, kind: Waiting::Approval });
-    }
-    Ok(out)
-}
-
-/// 挂起调用的永久事实（其余由历史推导）：已经交出去的 ask_agent 调用（带 call_id 的占用），与停下来等批准的调用。
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct HandedOut {
-    pub delegated: HashSet<String>,
-    pub approvals: HashSet<String>,
-}
+/// 一个会话里挂起过的调用（调用 id → 种类），来自 [`crate::paused_calls`]；行永久保留，没结果的才在等。
+pub(crate) type PausedKinds = HashMap<String, Waiting>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PendingCall {
@@ -97,8 +46,6 @@ pub struct Paused {
     pub answer_mail: Vec<(MailId, Vec<String>)>,
     /// 现在能不能继续
     pub ready: bool,
-    /// 同一条回复里没出结果、不挂起、能原样重新执行的调用（还没交出去的 ask_agent）：继续时执行，停止时补「已停止」
-    pub replays: Vec<ToolCall>,
 }
 
 impl Paused {
@@ -114,14 +61,11 @@ pub enum Position {
     Idle,
     /// 没有挂起的调用、没有要续跑的，信箱里有信：作为下一次运行的开头交给模型
     Fresh,
-    /// 从历史续跑：历史停在一条没得到回复、没标停止的请求上（重发它，replays 为空），或最后的回复里没出结果的调用都能原样
-    /// 重新执行
-    Resend {
-        replays: Vec<ToolCall>,
-    },
+    /// 从历史续跑：历史停在一条没得到回复、没标停止的请求上，重发它
+    Resend,
     Paused(Paused),
-    /// 被打断：最后的回复里有没出结果、也不在挂起的调用（执行工具时被打断）。它们不重新执行，先补上「被中断」的结果再看
-    /// after。只要有一个不能重放，整步都补
+    /// 被打断：最后的回复里有没出结果、也没记为挂起的调用（执行工具时被打断）。它们不重新执行，先补上「被中断」的结果
+    /// 再看 after
     Interrupted {
         calls: Vec<ToolCall>,
         after: AfterInterrupted,
@@ -140,7 +84,7 @@ pub enum AfterInterrupted {
 impl From<AfterInterrupted> for Position {
     fn from(after: AfterInterrupted) -> Self {
         match after {
-            AfterInterrupted::Resend => Position::Resend { replays: Vec::new() },
+            AfterInterrupted::Resend => Position::Resend,
             AfterInterrupted::Paused(p) => Position::Paused(p),
         }
     }
@@ -154,7 +98,7 @@ impl Position {
             Position::Interrupted { after: AfterInterrupted::Resend, .. }
             | Position::Idle
             | Position::Fresh
-            | Position::Resend { .. } => None,
+            | Position::Resend => None,
         }
     }
 
@@ -164,26 +108,17 @@ impl Position {
     }
 }
 
-/// 会话现在停在哪（纯函数）。history 至少要含最后一条回复起的那一段；handed 是交出去的永久事实；queued 是信箱里排着的
-/// 信件。
-pub(crate) fn position(history: &[Message], handed: &HandedOut, queued: &[Mail]) -> Result<Position> {
-    let unanswered = unanswered_calls(history)?;
+/// 会话现在停在哪（纯函数）。history 至少要含最后一条回复起的那一段；paused 是这个会话挂起过的调用；queued 是信箱里
+/// 排着的信件。
+pub(crate) fn position(history: &[Message], paused: &PausedKinds, queued: &[Mail]) -> Result<Position> {
     let mut pending: Vec<PendingCall> = Vec::new();
-    let mut others: Vec<ToolCall> = Vec::new();
-    for c in unanswered {
-        match kind_of(&c, &handed.approvals) {
-            Some(kind) if !kind.needs_hold() || handed.delegated.contains(&c.id) => {
-                pending.push(PendingCall { call: c, kind })
-            }
-            _ => others.push(c),
+    let mut interrupted: Vec<ToolCall> = Vec::new();
+    for c in unanswered_calls(history)? {
+        match paused.get(&c.id) {
+            Some(&kind) => pending.push(PendingCall { call: c, kind }),
+            None => interrupted.push(c),
         }
     }
-    let last = history.last();
-    let on_response = matches!(last, Some(Message::Assistant(_)));
-    let replayable = |c: &ToolCall| kind_of(c, &handed.approvals).is_some_and(Waiting::replayable);
-    // 只要有一个不能重放，整步都补「被中断」；全都能重放、历史又停在这条回复上时原样重新执行
-    let replays: Vec<ToolCall> = if on_response && others.iter().all(replayable) { others.clone() } else { Vec::new() };
-    let interrupted: Vec<ToolCall> = if replays.is_empty() { others } else { Vec::new() };
     let waiting = if pending.is_empty() {
         None
     } else {
@@ -195,7 +130,7 @@ pub(crate) fn position(history: &[Message], handed: &HandedOut, queued: &[Mail])
         let ready = queued.iter().any(|m| matches!(m.body, MailBody::Message { .. }))
             || ids.iter().all(|i| answers.contains_key(*i));
         let answer_mail = answer_mail.into_iter().map(|(id, a)| (id, a.keys().cloned().collect())).collect();
-        Some(Paused { pending, answers, answer_mail, ready, replays: replays.clone() })
+        Some(Paused { pending, answers, answer_mail, ready })
     };
     if !interrupted.is_empty() {
         let after = match waiting {
@@ -207,9 +142,8 @@ pub(crate) fn position(history: &[Message], handed: &HandedOut, queued: &[Mail])
     if let Some(p) = waiting {
         return Ok(Position::Paused(p));
     }
-    let resend_request = matches!(last, Some(m @ Message::User(_)) if !is_stopped(m));
-    if !replays.is_empty() || resend_request {
-        return Ok(Position::Resend { replays });
+    if matches!(history.last(), Some(m @ Message::User(_)) if !is_stopped(m)) {
+        return Ok(Position::Resend);
     }
     Ok(if queued.is_empty() { Position::Idle } else { Position::Fresh })
 }
@@ -245,7 +179,7 @@ pub(crate) fn deferred_results(
 }
 
 /// 用户停止时怎么关闭没出结果的调用：
-/// - stopped：补「已停止」——被打断的、能重放的，以及停止后不再挂着的挂起调用；
+/// - stopped：补「已停止」——被打断的，以及停止后不再挂着的挂起调用；
 /// - answered：停止后本该仍挂着、但回答已提交还排着的调用及其结果：回答是停止前用户已经给出的部分，照常写进历史；
 /// - used：这些回答所在的信件，随之记为已处理。其余仍挂着、没有回答的调用照旧挂着，用户仍可回答。
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -266,14 +200,13 @@ pub(crate) fn closing_on_stop(at: &Position) -> StopClosing {
             stopped.append(&mut rest.stopped);
             StopClosing { stopped, ..rest }
         }
-        Position::Resend { replays } => StopClosing { stopped: replays.clone(), ..Default::default() },
         Position::Paused(p) => closing_paused(p),
-        Position::Idle | Position::Fresh => StopClosing::default(),
+        Position::Resend | Position::Idle | Position::Fresh => StopClosing::default(),
     }
 }
 
 fn closing_paused(p: &Paused) -> StopClosing {
-    let mut closing = StopClosing { stopped: p.replays.clone(), ..Default::default() };
+    let mut closing = StopClosing::default();
     for pc in &p.pending {
         if !pc.kind.kept_open_on_stop() {
             closing.stopped.push(pc.call.clone());
@@ -379,6 +312,9 @@ mod tests {
     use crate::answers::{AgentAnswer, AskResult};
     use crate::mailbox::MailState;
     use crate::origins::Origin;
+    use crate::tools::ASK_USER;
+
+    const ASK_AGENT: &str = "ask_agent";
 
     fn call(id: &str, name: &str, args: &str) -> ToolCall {
         ToolCall { id: id.into(), name: name.into(), args: args.into(), meta: None }
@@ -431,13 +367,17 @@ mod tests {
         BTreeMap::from([(id.to_owned(), CallResult::AskUser(AskResult::Answered(vec![])))])
     }
 
+    fn kinds(of: &[(&str, Waiting)]) -> PausedKinds {
+        of.iter().map(|(id, k)| ((*id).to_owned(), *k)).collect()
+    }
+
     #[test]
     fn idle_fresh_and_resend() {
-        let none = HandedOut::default();
+        let none = PausedKinds::new();
         assert_eq!(position(&[response(vec![])], &none, &[]).unwrap(), Position::Idle);
         let q = [mail(1, message())];
         assert_eq!(position(&[response(vec![])], &none, &q).unwrap(), Position::Fresh);
-        assert_eq!(position(&[user()], &none, &[]).unwrap(), Position::Resend { replays: vec![] });
+        assert_eq!(position(&[user()], &none, &[]).unwrap(), Position::Resend);
         let mut stopped = user();
         crate::conventions::mark_stopped(&mut stopped);
         assert_eq!(position(&[stopped], &none, &[]).unwrap(), Position::Idle);
@@ -445,11 +385,11 @@ mod tests {
 
     #[test]
     fn asks_wait_until_answered_or_a_new_message() {
-        let none = HandedOut::default();
+        let asked = kinds(&[("q1", Waiting::AskUser)]);
         let h = [response(vec![call("q1", ASK_USER, ASK)])];
         let at = position(
             &h,
-            &none,
+            &asked,
             &[mail(
                 1,
                 MailBody::Event {
@@ -461,37 +401,38 @@ mod tests {
         )
         .unwrap();
         assert!(at.waiting_for_answers(), "events wait with the question");
-        let at = position(&h, &none, &[mail(1, answer_body(answered("q1")))]).unwrap();
+        let at = position(&h, &asked, &[mail(1, answer_body(answered("q1")))]).unwrap();
         assert!(at.paused().unwrap().ready);
-        let at = position(&h, &none, &[mail(1, message())]).unwrap();
+        let at = position(&h, &asked, &[mail(1, message())]).unwrap();
         assert!(at.paused().unwrap().ready, "a new message skips the question");
-        // 参数不合法的提问不是提问：被打断的普通调用
-        let bad = [response(vec![call("q1", ASK_USER, "{}")])];
-        assert!(matches!(position(&bad, &none, &[]).unwrap(), Position::Interrupted { .. }));
     }
 
+    /// 在不在等只看挂起记录，不看工具名（#823）：没记下的提问、问 agent 都是执行到一半被打断的调用，补「被中断」；
+    /// 以前没交出去的 ask_agent 会原样重放、没记下的提问按名字一直挂着。
     #[test]
-    fn ask_agent_replays_until_handed_out_and_other_calls_are_interrupted() {
+    fn only_recorded_calls_wait_and_the_rest_are_interrupted() {
+        let none = PausedKinds::new();
+        for name in [ASK_USER, ASK_AGENT, "run_shell"] {
+            let h = [response(vec![call("c1", name, ASK)])];
+            let Position::Interrupted { calls, after } = position(&h, &none, &[]).unwrap() else { panic!("{name}") };
+            assert_eq!((calls.len(), after), (1, AfterInterrupted::Resend), "{name}");
+        }
         let h = [response(vec![call("a1", ASK_AGENT, "{}")])];
-        let none = HandedOut::default();
-        assert_eq!(position(&h, &none, &[]).unwrap(), Position::Resend { replays: vec![call("a1", ASK_AGENT, "{}")] });
-        let handed = HandedOut { delegated: ["a1".to_owned()].into(), approvals: Default::default() };
-        let at = position(&h, &handed, &[]).unwrap();
-        assert!(at.waiting_for_answers());
+        let asked = kinds(&[("a1", Waiting::AskAgent)]);
+        assert!(position(&h, &asked, &[]).unwrap().waiting_for_answers());
         let answer = BTreeMap::from([(
             "a1".to_owned(),
             CallResult::AskAgent(AgentAnswer { text: "x".into(), attachments: vec![] }),
         )]);
-        assert!(position(&h, &handed, &[mail(1, answer_body(answer))]).unwrap().paused().unwrap().ready);
-        // 一个不能重放就整步补「被中断」
+        assert!(position(&h, &asked, &[mail(1, answer_body(answer))]).unwrap().paused().unwrap().ready);
+        // 同一条回复里记下的仍挂着，没记下的补「被中断」
         let mixed = [response(vec![call("a1", ASK_AGENT, "{}"), call("c1", "run_shell", "{}")])];
-        let Position::Interrupted { calls, after } = position(&mixed, &none, &[]).unwrap() else { panic!() };
-        assert_eq!(calls.len(), 2);
-        assert_eq!(after, AfterInterrupted::Resend);
-        // 等批准的按记录认
+        let Position::Interrupted { calls, after } = position(&mixed, &asked, &[]).unwrap() else { panic!() };
+        assert_eq!(calls, vec![call("c1", "run_shell", "{}")]);
+        assert!(matches!(after, AfterInterrupted::Paused(p) if p.pending.len() == 1));
+        // 等批准
         let gated = [response(vec![call("c1", "skill_run", "{}")])];
-        let approvals = HandedOut { delegated: Default::default(), approvals: ["c1".to_owned()].into() };
-        let at = position(&gated, &approvals, &[]).unwrap();
+        let at = position(&gated, &kinds(&[("c1", Waiting::Approval)]), &[]).unwrap();
         assert_eq!(open_asks_of(&at, &[]).0, vec![("c1".to_owned(), OpenAsk::Approval("skill_run".to_owned()))]);
         let closing = closing_on_stop(&at);
         assert_eq!(closing.stopped.len(), 1, "stopping does not keep calls waiting for approval");
@@ -499,9 +440,9 @@ mod tests {
 
     #[test]
     fn stop_keeps_unanswered_questions_and_writes_submitted_answers() {
-        let none = HandedOut::default();
+        let asked = kinds(&[("q1", Waiting::AskUser), ("q2", Waiting::AskUser)]);
         let h = [response(vec![call("q1", ASK_USER, ASK), call("q2", ASK_USER, ASK)])];
-        let at = position(&h, &none, &[mail(7, answer_body(answered("q1")))]).unwrap();
+        let at = position(&h, &asked, &[mail(7, answer_body(answered("q1")))]).unwrap();
         let closing = closing_on_stop(&at);
         assert!(closing.stopped.is_empty());
         assert_eq!(closing.answered.iter().map(|r| r.call_id.as_str()).collect::<Vec<_>>(), ["q1"]);

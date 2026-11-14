@@ -1461,7 +1461,7 @@ export interface components {
             threshold_tokens: number;
         };
         /**
-         * @description 用户对一次等批准的调用的决定。pin：用户批准的是哪一份（请求批准时工具定下、记在 approval_requests 的指纹），批准时
+         * @description 用户对一次等批准的调用的决定。pin：用户批准的是哪一份（请求批准时工具定下、记在挂起记录里的指纹），批准时
          *     交回工具比对。迁移来的旧信件没有它或为 null（都已处理，不会再交给运行），读入时当作空指纹：工具给的指纹不会是空的，
          *     比对对不上。
          */

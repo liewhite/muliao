@@ -2,10 +2,10 @@
 //! 委派。后台任务的占用记着任务编号（库里唯一），到点唤醒的行（`wakeups`）引用它的占用，委派的占用引用委派行。
 //!
 //! - 有 active 占用：工作还没做完，交给它的委派不结清。委派的占用还 active 就是这项委派还没结清（唯一的判断）。
-//! - 带 call_id 的委派占用：这次挂起调用（ask_agent）已经交出去了，不论状态都算，是永久事实。
+//! - 带 call_id 的委派占用：结局作为这次挂起调用（ask_agent）的结果交回；调用在不在等看挂起记录（[`crate::paused_calls`]）。
 //! - 结局交回时释放（和一封信件同一事务）；会话被停止、或自己放弃时清掉（之后的结局不再投）。行永久保留。
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, Row, params};
@@ -225,25 +225,4 @@ pub(crate) fn active_among(c: &Connection, session_ids: &[SessionId]) -> Result<
         held.entry(h.session_id.clone()).or_default().push(h);
     }
     Ok(held)
-}
-
-/// 这些会话里已经交出去的挂起调用 id（带 call_id 的占用，不论状态），每个会话都在结果里。
-pub(crate) fn called_among(c: &Connection, session_ids: &[SessionId]) -> Result<BTreeMap<SessionId, HashSet<String>>> {
-    let mut found: BTreeMap<SessionId, HashSet<String>> =
-        session_ids.iter().map(|s| (s.clone(), HashSet::new())).collect();
-    if session_ids.is_empty() {
-        return Ok(found);
-    }
-    let sql = format!(
-        "SELECT session_id, call_id FROM session_holds WHERE call_id IS NOT NULL AND session_id IN ({})",
-        placeholders(session_ids.len())
-    );
-    let mut stmt = c.prepare(&sql)?;
-    let rows =
-        stmt.query_map(rusqlite::params_from_iter(session_ids), |r| Ok((r.get::<_, SessionId>(0)?, r.get(1)?)))?;
-    for row in rows {
-        let (s, call) = row?;
-        found.entry(s).or_default().insert(call);
-    }
-    Ok(found)
 }

@@ -16,7 +16,8 @@ use crate::directory;
 use crate::history::since_last_response;
 use crate::holds::{self, Hold, HoldStatus};
 use crate::mailbox::{NewMail, has_queued_from, post_in, queued_in};
-use crate::pending::{HandedOut, Position, position};
+use crate::paused_calls::kinds_in;
+use crate::pending::{Position, position};
 use muliao_platform::errors::{Result, broken};
 
 /// 发起并发工作时不给 heartbeat_seconds 的默认间隔
@@ -31,12 +32,7 @@ pub fn check_interval(heartbeat_seconds: Option<f64>) -> Result<f64, String> {
 
 /// 会话现在停在哪（规则在 [`position`]）。没出结果的调用只可能在最后一条回复里，不加载整段上下文。
 pub(crate) fn position_in(c: &Connection, session_id: &SessionId) -> Result<Position> {
-    let ids = [session_id.to_owned()];
-    let handed = HandedOut {
-        delegated: holds::called_among(c, &ids)?.remove(session_id).unwrap_or_default(),
-        approvals: crate::approvals::requested_among(c, &ids)?.remove(session_id).unwrap_or_default(),
-    };
-    position(&since_last_response(c, session_id)?, &handed, &queued_in(c, session_id)?)
+    position(&since_last_response(c, session_id)?, &kinds_in(c, session_id)?, &queued_in(c, session_id)?)
 }
 
 /// 交回结局的结果。

@@ -50,7 +50,7 @@ fn query(c: &Connection, filter: &str, params: impl rusqlite::Params) -> Result<
     Ok(stmt.query_map(params, record)?.collect::<rusqlite::Result<_>>()?)
 }
 
-/// 记下这次调用开出或续写了这个 thread，返回这一行。同一次调用只记一次（调用方先查过 [`call_in`]，表上还有唯一索引）。
+/// 记下这次调用开出或续写了这个 thread，返回这一行。同一次调用只执行一次（被打断的调用不重做），表上的唯一索引挡住重复。
 pub(crate) fn record_call_in(
     c: &Connection,
     parent_id: &SessionId,

@@ -19,7 +19,8 @@ use crate::answers::Waiting;
 use crate::answers::{AnsweredQuestion, AskResult, Question, questions_of};
 use crate::conventions::{PartKind, event_content, finished_at, is_stopped, made_up, part_marks, run_context_index};
 use crate::origins::Origin;
-use crate::pending::{ASK_USER, OpenAsk, OpenAsks};
+use crate::pending::{OpenAsk, OpenAsks};
+use crate::tools::ASK_USER;
 use crate::work::EventSource;
 use muliao_platform::errors::{Result, broken};
 

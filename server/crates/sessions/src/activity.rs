@@ -15,13 +15,13 @@ use serde::Serialize;
 
 use crate::actor::should_run;
 use crate::answers::Question;
-use crate::approvals::requested_among;
 use crate::directory::{self, keyed_among};
 use crate::history::since_last_response_among;
-use crate::holds::{Hold, HoldOf, active_among, called_among};
+use crate::holds::{Hold, HoldOf, active_among};
 use crate::mailbox::queued_among;
 use crate::origins::Sender;
-use crate::pending::{HandedOut, OpenAsk, OpenAsks, open_asks_of, position};
+use crate::paused_calls::kinds_among;
+use crate::pending::{OpenAsk, OpenAsks, open_asks_of, position};
 use crate::runs::{latest_among, unfinished_among};
 use crate::thread_calls::owed_in;
 use crate::wakeups::pending_of_in;
@@ -71,18 +71,13 @@ pub(crate) fn statuses_in(c: &Connection, session_ids: &[SessionId]) -> Result<B
     let unfinished: BTreeSet<SessionId> = unfinished_among(c, session_ids)?.into_iter().collect();
     let mut queued = queued_among(c, session_ids)?;
     let mut tails = since_last_response_among(c, session_ids)?;
-    let mut called = called_among(c, session_ids)?;
-    let mut requested = requested_among(c, session_ids)?;
+    let mut paused = kinds_among(c, session_ids)?;
     let latest = latest_among(c, session_ids)?;
     let mut held = active_among(c, session_ids)?;
     let mut out = BTreeMap::new();
     for id in session_ids {
         let queued = queued.remove(id).unwrap_or_default();
-        let handed = HandedOut {
-            delegated: called.remove(id).unwrap_or_default(),
-            approvals: requested.remove(id).unwrap_or_default(),
-        };
-        let at = position(&tails.remove(id).unwrap_or_default(), &handed, &queued)?;
+        let at = position(&tails.remove(id).unwrap_or_default(), &paused.remove(id).unwrap_or_default(), &queued)?;
         let waiting = Waiting { holds: held.remove(id).unwrap_or_default(), asks: open_asks_of(&at, &queued) };
         let state = if unfinished.contains(id) || should_run(&queued, latest.get(id), &at) {
             WorkState::Running

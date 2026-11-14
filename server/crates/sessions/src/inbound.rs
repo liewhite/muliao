@@ -318,7 +318,7 @@ fn resolve_reply(c: &Connection, session_id: &SessionId, call_id: &str, reply: &
             if !asks.can_approve(call_id) {
                 return Err(conflict(format!("call {call_id:?} is not waiting for approval in session {session_id}")));
             }
-            let pin = crate::approvals::pin_in(c, session_id, call_id)?;
+            let pin = crate::paused_calls::pin_in(c, session_id, call_id)?;
             Ok(CallResult::Approval(Decision { choice: *choice, pin }))
         }
     }

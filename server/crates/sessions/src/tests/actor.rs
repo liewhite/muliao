@@ -694,3 +694,40 @@ async fn a_question_asked_next_to_another_tool_call_resumes_with_both_results() 
     let all: Vec<String> = h.iter().flat_map(texts).collect();
     assert!(all.iter().any(|t| t.contains("result q1")), "{all:?}");
 }
+
+/// thread 在发问方这一步保存完之前就答完了（同一条回复里另一个工具还在跑）：回答仍作为 ask_agent 的结果交回，发问方不会
+/// 把它当成迟到的事件、自己一直等下去（#823：ask_agent 在投信的同一事务里记为挂起）。
+#[tokio::test]
+async fn an_answer_arriving_before_the_asking_step_is_saved_still_answers_the_call() {
+    let w = world().await;
+    w.script.push(ok_blocks(
+        &[
+            json!({"type": "tool_use", "id": "a1", "name": "ask_agent",
+                "input": {"agent": "other", "message": "帮我算 1+1", "thread": "calc"}}),
+            json!({"type": "tool_use", "id": "s1", "name": "slow", "input": {}}),
+        ],
+        "tool_use",
+    ));
+    w.script.text("2");
+    w.script.text("对方说是 2");
+    let s = w.new_chat("问问 other，顺便慢慢做").await;
+    // 等 thread 跑完、交回（发问方的 slow 还没结束，这一步还没保存）
+    let threads = || {
+        let s = s.clone();
+        w.db.read(move |c| crate::directory::threads_named_in(c, &s, "calc"))
+    };
+    let thread = loop {
+        if let Some(t) = threads().await.unwrap().pop() {
+            break t;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    assert_eq!(w.settled(&thread.id).await, WorkState::Idle);
+    assert_eq!(w.history(&s).await.len(), 2, "the asking step is still running");
+    w.release.notify_waiters();
+    assert_eq!(w.settled(&s).await, WorkState::Idle);
+    let h = w.history(&s).await;
+    let all: Vec<String> = h.iter().flat_map(texts).collect();
+    assert!(all.iter().any(|t| t.starts_with("result a1") && t.contains('2')), "{all:?}");
+    assert_eq!(texts(h.last().unwrap())[0], "对方说是 2");
+}

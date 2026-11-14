@@ -21,7 +21,7 @@ use crate::actor::{Actors, Waker};
 use crate::answers::AskArgs;
 use crate::delegation::{Mode, send_in, threads_in, validate_thread};
 use crate::halt::Halted;
-use crate::pending::{ASK_AGENT, ASK_USER};
+use crate::paused_calls::{self, Pause};
 use crate::wakeups::{WAKE_ME, cancel_in, local_time, schedule_in};
 use crate::work::check_interval;
 use muliao_platform::errors::{Error, Result, invalid, not_found};
@@ -40,10 +40,13 @@ impl Stopper {
     }
 }
 
+pub(crate) const ASK_USER: &str = "ask_user";
+const ASK_AGENT: &str = "ask_agent";
+
 /// 会话领域的工具组。
 pub fn tools(db: Arc<Database>, waker: Waker, stopper: Stopper, tz: Tz) -> Vec<BuiltinTool> {
     vec![
-        builtin(AskUser, ToolTraits::read()),
+        builtin(AskUser { db: db.clone() }, ToolTraits::read()),
         builtin(DelegateTask { db: db.clone(), waker: waker.clone() }, ToolTraits::write()),
         builtin(AskAgent { db: db.clone(), waker }, ToolTraits::write()),
         builtin(StopThread { db: db.clone(), stopper }, ToolTraits::write()),
@@ -64,7 +67,9 @@ const ASKED_BY_AGENT: &str = "Another agent asked you this and is waiting for yo
      to answer questions. Decide yourself, or put what that agent must decide into your final answer; it can reply in \
      this same thread.";
 
-pub struct AskUser;
+pub struct AskUser {
+    db: Arc<Database>,
+}
 
 impl Tool<RunScope> for AskUser {
     type Args = AskArgs;
@@ -85,7 +90,12 @@ impl Tool<RunScope> for AskUser {
     async fn call(&self, ctx: ToolCtx<'_, RunScope>, args: AskArgs) -> std::result::Result<ToolOutput, ToolError> {
         args.check().map_err(ToolError::Retry)?;
         match ctx.deps.audience {
-            Audience::User => Err(ToolError::Defer),
+            Audience::User => {
+                // 挂起之前记下：之后只凭这一行认它在等回答
+                let (session_id, call) = (ctx.deps.session_id.clone(), call_id(&ctx));
+                self.db.write(move |tx| paused_calls::record_in(tx, &session_id, &call, &Pause::AskUser)).await?;
+                Err(ToolError::Defer)
+            }
             Audience::Agent => Err(ToolError::Retry(ASKED_BY_AGENT.to_owned())),
             Audience::None => Err(ToolError::Retry(NO_USER_WAITING.to_owned())),
         }
@@ -154,7 +164,6 @@ impl Tool<RunScope> for DelegateTask {
             .write(move |tx| {
                 let target = named_in(tx, &agent)?;
                 let mode = if report_back { Mode::ReportBack { check_seconds: check, awaited } } else { Mode::Plain };
-                // 续跑重新执行这次调用时按调用 id 去重
                 send_in(tx, &waker, &parent, &target.id, &name, &task, &call, mode)?;
                 Ok::<_, Error>(target.name)
             })
@@ -210,7 +219,6 @@ impl Tool<RunScope> for AskAgent {
         self.db
             .write(move |tx| {
                 let target = named_in(tx, &agent)?.id;
-                // 续跑时重新执行这次调用：已经投过就只再挂起（按调用 id 幂等）
                 send_in(tx, &waker, &parent, &target, &thread, &message, &call, Mode::Ask { awaited })
             })
             .await?;

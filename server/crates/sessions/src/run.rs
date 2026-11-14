@@ -1,9 +1,9 @@
 //! 一次运行：把信箱里的信交给模型，一步一步走到模型不再调用工具（或停在挂起的调用上），每一步保存。设计见
 //! docs/architecture.md「会话信箱」「每一步保存」「从哪里开始」。由会话 actor（[`crate::actor`]）调用，一次一个。
 //!
-//! - 起点由会话停在哪定（[`crate::pending::position`]）：从历史续跑（Resend）就重发末尾那条请求、或重新执行能安全重放的
-//!   调用；被打断（Interrupted）就先补上「被中断、没有重新执行」的结果再看补完之后停在哪；等回答（Paused）且能继续时把
-//!   回答作为挂起调用的结果交回；新开（Fresh）时把信箱里的信作为开头交给模型。
+//! - 起点由会话停在哪定（[`crate::pending::position`]）：从历史续跑（Resend）就重发末尾那条请求；被打断（Interrupted）就
+//!   先补上「被中断、没有重新执行」的结果再看补完之后停在哪；等回答（Paused）且能继续时把回答作为挂起调用的结果交回；
+//!   新开（Fresh）时把信箱里的信作为开头交给模型。
 //! - 每一步保存：请求模型前，这条请求与它带上的信件（记为已处理）同一个事务提交；模型回复后提交回复；工具做完，结果与新到
 //!   的信并成下一条请求再提交。失败或重启后从上一步续跑。停在挂起的调用上时，已经做完的工具结果先存成一条请求，继续时把
 //!   它们连同回答交回 agenter，只把新出的结果接在后面存（库里的消息不改写）。
@@ -47,7 +47,8 @@ use crate::history::{self, SessionContext, Stored};
 use crate::live::{DeltaType, Live};
 use crate::mailbox::{Mail, consume_in, consumed_by_in, give_in, queued_in};
 use crate::origins::OriginNotes;
-use crate::pending::{Paused, PendingCall, Position, deferred_results, paused_calls};
+use crate::paused_calls::{Pause, record_in};
+use crate::pending::{Paused, PendingCall, Position, deferred_results};
 use crate::runs::{self, Outcome};
 use crate::settlement::{delegated_in, settle_finished_in};
 use crate::transcript::{call_item, result_item};
@@ -195,7 +196,7 @@ pub(crate) async fn execute(
     }));
     slot.set(partial.clone()).unwrap_or_else(|_| unreachable!("each attempt has its own slot"));
     let opening = opening(core, &begun).await?;
-    let resend = matches!(begun.at, Position::Resend { .. });
+    let resend = matches!(begun.at, Position::Resend);
     if opening.is_none() && !resend {
         // 没有要交给模型的：信箱空了，或停在挂起的调用上、还不能继续
         let end = if begun.settled { Some(settled_end(&begun)?) } else { None };
@@ -246,7 +247,7 @@ async fn begin(core: &Core, session_id: &SessionId) -> Result<Begun> {
                 history::append_in(tx, &session_id, run_id, &[Message::User(request)])?;
                 at = after.into();
             }
-            let resuming = matches!(at, Position::Resend { .. });
+            let resuming = matches!(at, Position::Resend);
             let adopted = if resuming { adopted_in(tx, &session_id, run_id)? } else { Vec::new() };
             let earlier = consumed_by_in(tx, &session_id, run_id)?;
             let saved = history::saved_by_in(tx, &session_id, run_id)?;
@@ -501,7 +502,7 @@ impl Driver<'_> {
     /// 不执行——偏保守，不会重复执行，窗口只有交出回答到工具开始执行之间。
     async fn hand_over(&self, run: &Run, p: &Paused) -> Result<HashMap<String, Resolution>> {
         let (session_id, answers) = (self.session_id().to_owned(), p.answers.clone());
-        let replaced = self.core.db.write(move |tx| crate::approvals::take_in(tx, &session_id, &answers)).await?;
+        let replaced = self.core.db.write(move |tx| crate::paused_calls::take_in(tx, &session_id, &answers)).await?;
         for (call_id, answer) in &p.answers {
             if let CallResult::AskAgent(a) = answer
                 && !a.attachments.is_empty()
@@ -601,12 +602,11 @@ impl Driver<'_> {
                 self.save_request(request, mail, notices).await?;
                 Ok(Next::Continue)
             }
-            ToolsDone::Paused { results, deferred, approvals } => {
-                // 停在挂起的调用上：已做完的结果与这次新请求批准的调用同一个事务记下（分开提交时，进程在两者之间退出会留下
-                // 一个没有结果、又不算在等批准的调用）
-                let requested: Vec<(String, String)> =
-                    approvals.iter().map(|(c, pin)| (c.id.clone(), pin.clone())).collect();
-                let pending = paused_calls(deferred, approvals.into_iter().map(|(c, _)| c).collect())?;
+            ToolsDone::Paused { results, approvals, .. } => {
+                // 停在挂起的调用上：已做完的结果与这次请求批准的调用同一个事务记下（分开提交时，进程在两者之间退出会留下
+                // 一个没有结果、又不算在等批准的调用）。交回 Defer 的调用由工具自己在挂起前记过；停在哪些调用上只问 position
+                let requested: Vec<(String, Pause)> =
+                    approvals.into_iter().map(|(c, pin)| (c.id, Pause::Approval { pin })).collect();
                 let mut request = results_request(fresh(results));
                 // 继续之后又停在挂起的调用上：开头取走的信也在这一步记为已处理，内容随结果存下（下次随它们交给模型）
                 let mail = match first {
@@ -625,10 +625,12 @@ impl Driver<'_> {
                     request.filter(|r| !r.parts.is_empty()).map(Message::User).into_iter().collect();
                 let session_id = self.session_id().to_owned();
                 self.save_with(new, mail, Clear::Finished, move |tx| {
-                    crate::approvals::record_in(tx, &session_id, &requested)
+                    requested.iter().try_for_each(|(call_id, pause)| record_in(tx, &session_id, call_id, pause))
                 })
                 .await?;
-                Ok(Next::End(paused_end(&pending)))
+                let session_id = self.session_id().to_owned();
+                let at = self.core.db.read(move |c| position_in(c, &session_id)).await?;
+                Ok(Next::End(paused_end(at.paused().map_or(&[][..], |p| &p.pending))))
             }
         }
     }

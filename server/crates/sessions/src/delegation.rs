@@ -27,8 +27,9 @@ use crate::directory::{self, Session};
 use crate::history::latest_answers_among;
 use crate::holds::hold_delegation_in;
 use crate::inbound::{Inbound, Opener, create_session_in, receive_in};
+use crate::paused_calls::{self, Pause};
 use crate::runs::{RunRecord, latest_among};
-use crate::thread_calls::{Owed, call_in, owed_in, record_call_in};
+use crate::thread_calls::{Owed, owed_in, record_call_in};
 use crate::work::{CheckBeats, EventSource, deliver_in, post_check_in};
 use muliao_platform::errors::{Result, invalid};
 
@@ -68,8 +69,8 @@ pub(crate) enum Mode {
 }
 
 /// 往 thread 投信（见模块说明）：打开或找到 thread，记下是这次调用开出或续写了它；要交回结局的再在发起方登记引用它的
-/// 占用（这就是一项委派），信件引用它。续跑重做同一次调用时
-/// 只返回已经投到的 thread（调用行、占用与信件在同一个事务里写下：有行就是投过了）。
+/// 占用（这就是一项委派），信件引用它。ask_agent 同一事务里记为挂起。同一次调用不会再执行（被打断的调用补「被中断」、
+/// 不重做），调用行上的唯一索引挡住重复。
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn send_in(
     tx: &mut Tx<'_>,
@@ -81,10 +82,6 @@ pub(crate) fn send_in(
     call_id: &str,
     mode: Mode,
 ) -> Result<Session> {
-    if let Some(existing) = call_in(tx, parent_id, call_id)? {
-        // thread_calls.thread_session_id 引用 sessions（ON DELETE CASCADE）：调用行在，thread 就在
-        return Ok(directory::get_in(tx, &existing.thread_id)?.expect("a delegation's thread exists"));
-    }
     let child = open_in(tx, parent_id, agent_id, thread)?;
     let check_seconds = match mode {
         Mode::ReportBack { check_seconds, .. } => Some(check_seconds),
@@ -96,6 +93,10 @@ pub(crate) fn send_in(
         Mode::ReportBack { awaited, .. } | Mode::Ask { awaited } => {
             let suspends = matches!(mode, Mode::Ask { .. });
             hold_delegation_in(tx, parent_id, call.id, suspends.then(|| call_id.to_owned()), awaited)?;
+            if suspends {
+                // 和投信同一个事务：thread 可能在发问方这一步保存完之前就答完，交回时要认得出这是挂起调用的回答
+                paused_calls::record_in(tx, parent_id, call_id, &Pause::AskAgent)?;
+            }
             tracing::info!(session_id = %parent_id, thread_session_id = %child.id, delegation = %call.id, call_id,
                 "delegation dispatched");
             // 没有人等 thread 的回答：结局交回发起方，由它处理

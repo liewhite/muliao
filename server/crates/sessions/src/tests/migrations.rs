@@ -1,4 +1,4 @@
-//! 会话领域库结构升级里换算旧数据的几步（002、003、004、006、007、008）：在那一步之前的版本插入旧形状的行，升级到那一步，用
+//! 会话领域库结构升级里换算旧数据的几步（002、003、004、006、007、008、009）：在那一步之前的版本插入旧形状的行，升级到那一步，用
 //! 领域代码读出断言；再升级到最新，断言后面的步骤没有破坏换算结果。
 //!
 //! 只用程序内置的 SQLite（rusqlite bundled）：命令行 sqlite3 版本不同，对 JSON 子类型的处理也不同，拿它手验看不出 004
@@ -9,14 +9,15 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::MIGRATION;
-use crate::answers::{AgentAnswer, CallResult, Choice, Decision};
+use crate::answers::{AgentAnswer, CallResult, Choice, Decision, Waiting};
 use crate::conventions::{PartKind, PartMark, part_marks};
 use crate::history;
 use crate::holds::{self, HoldOf};
 use crate::mailbox;
 use crate::origins::Origin;
-use crate::work::EventSource;
-use agenter::{Content, File, FileSource, Message, Request, RequestPart, ToolResult};
+use crate::pending::{AfterInterrupted, Position};
+use crate::work::{EventSource, position_in};
+use agenter::{Content, File, FileSource, Message, Request, RequestPart, Response, ResponsePart, ToolCall, ToolResult};
 use chrono::Utc;
 use muliao_platform::db::{Migration, migrate};
 use muliao_runtime::conventions::{SharedFile, tool_attachments};
@@ -119,6 +120,19 @@ fn text(t: &str) -> RequestPart {
     RequestPart::Text { text: t.into() }
 }
 
+fn response(parts: Vec<ResponsePart>) -> Message {
+    Message::Assistant(Response {
+        parts,
+        protocol: "anthropic".into(),
+        model: "m".into(),
+        response_id: None,
+        finish_reason: None,
+        usage: Default::default(),
+        timestamp: Utc::now(),
+        metadata: None,
+    })
+}
+
 fn event_text(source: &str, body: &str) -> RequestPart {
     text(&format!("<event source=\"{source}\">\n{body}\n</event>"))
 }
@@ -209,6 +223,75 @@ fn holders_become_a_job_column_and_wakeups_point_at_their_hold() {
     assert_eq!(notes, ["later"], "only the wake-up whose hold is still active is waiting");
     let rows: i64 = c.query_row("SELECT count(*) FROM wakeups", [], |r| r.get(0)).unwrap();
     assert_eq!(rows, 2, "every wake-up row is kept");
+}
+
+#[test]
+fn pending_calls_move_into_one_table() {
+    let db = OldDb::at(8);
+    let run = db.run();
+    let ask = r#"{"questions":[{"question":"q","header":"h","options":[{"label":"a"},{"label":"b"}]}]}"#;
+    let call = |id: &str, name: &str, args: &str| {
+        ResponsePart::ToolCall(ToolCall { id: id.into(), name: name.into(), args: args.into(), meta: None })
+    };
+    let sid = SessionId::new(SESSION);
+    // 上一轮问过、已经答了的提问：不再挂起
+    history::append_in(&db.conn(), &sid, RunId::new(run), &[response(vec![call("q0", "ask_user", ask)])]).unwrap();
+    db.request(
+        run,
+        vec![RequestPart::ToolResult(ToolResult {
+            call_id: "q0".into(),
+            tool_name: "ask_user".into(),
+            content: vec![Content::text("answered")],
+            is_error: false,
+            metadata: None,
+        })],
+        None,
+    );
+    let last = response(vec![
+        call("q1", "ask_user", ask),
+        call("q2", "ask_user", "{}"),
+        call("a1", "ask_agent", "{}"),
+        call("g1", "skill_run", "{}"),
+        call("g2", "skill_run", "{}"),
+        call("c1", "run_shell", "{}"),
+    ]);
+    history::append_in(&db.conn(), &sid, RunId::new(run), &[last]).unwrap();
+    let c = db.conn();
+    let now = Utc::now();
+    c.execute(
+        "INSERT INTO session_holds (session_id, kind, call_id, awaited, status, created_at) \
+         VALUES (?1, 'delegation', 'a1', 1, 'active', ?2)",
+        params![SESSION, now],
+    )
+    .unwrap();
+    for (call_id, pin, taken) in [("g1", None, None), ("g2", Some("p"), Some(now))] {
+        c.execute(
+            "INSERT INTO approval_requests (session_id, call_id, pin, created_at, taken_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![SESSION, call_id, pin, now, taken],
+        )
+        .unwrap();
+    }
+    db.upgrade_to(9);
+    let c = db.conn();
+    let kinds = crate::paused_calls::kinds_in(&c, &sid).unwrap();
+    let expected =
+        [("q1", Waiting::AskUser), ("a1", Waiting::AskAgent), ("g1", Waiting::Approval), ("g2", Waiting::Approval)];
+    assert_eq!(kinds, expected.iter().map(|(k, w)| ((*k).to_owned(), *w)).collect());
+    assert_eq!(crate::paused_calls::pin_in(&c, &sid, "g1").unwrap(), "", "old rows without a pin read as empty");
+    assert_eq!(crate::paused_calls::pin_in(&c, &sid, "g2").unwrap(), "p");
+    // 第二次交给运行的批准不再执行：取走的时间一起搬过来了
+    let approve = CallResult::Approval(Decision { choice: Choice::Approve, pin: "p".into() });
+    let answers = std::collections::HashMap::from([("g2".to_owned(), approve)]);
+    assert!(crate::paused_calls::take_in(&c, &sid, &answers).unwrap().contains_key("g2"));
+    // 会话停在哪：参数不合法的提问与普通调用补「被中断」，其余照旧挂着
+    let Position::Interrupted { calls, after: AfterInterrupted::Paused(p) } = position_in(&c, &sid).unwrap() else {
+        panic!("expected interrupted calls before the paused ones")
+    };
+    assert_eq!(calls.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), ["q2", "c1"]);
+    assert_eq!(p.pending.iter().map(|c| c.call.id.as_str()).collect::<Vec<_>>(), ["q1", "a1", "g1", "g2"]);
+    let old: i64 =
+        c.query_row("SELECT count(*) FROM sqlite_master WHERE name = 'approval_requests'", [], |r| r.get(0)).unwrap();
+    assert_eq!(old, 0);
 }
 
 #[test]
