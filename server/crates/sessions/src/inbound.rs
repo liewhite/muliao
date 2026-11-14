@@ -19,7 +19,7 @@ use crate::actor::Waker;
 use crate::answers::{CallResult, Choice, Decision, QuestionAnswer, answer_result};
 use crate::directory::{self, NewSession, Session, keyed_among};
 use crate::mailbox::{MailBody, NewMail, post_in, queued_in};
-use crate::origins::{Origin, Sender, SessionOrigin};
+use crate::origins::{Origin, Sender, SessionOrigin, ThreadName};
 use crate::pending::open_asks_of;
 use crate::work::position_in;
 use muliao_platform::errors::{Error, Result, conflict, forbidden, invalid, not_found};
@@ -205,7 +205,7 @@ fn may_continue(session: &Session, from: &Party) -> bool {
 pub(crate) enum Opener<'a> {
     User,
     Sender(Sender),
-    Thread { parent: &'a SessionId, name: &'a str },
+    Thread { parent: &'a SessionId, name: &'a ThreadName },
 }
 
 /// 新建会话的唯一实现（来信与开 thread 都经过这里）：只为能运行的 agent 建。
@@ -220,7 +220,7 @@ pub(crate) fn create_session_in(
         Opener::User => SessionOrigin::User,
         Opener::Sender(s) => SessionOrigin::from(s),
         Opener::Thread { parent, name } => {
-            SessionOrigin::Delegation { thread: name.to_owned(), parent_session_id: Some(parent.to_owned()) }
+            SessionOrigin::Delegation { thread: name.clone(), parent_session_id: Some(parent.to_owned()) }
         }
     };
     let id = SessionId::new(new_id());

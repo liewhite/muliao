@@ -93,7 +93,10 @@ async fn a_deleted_thread_is_no_longer_owed() {
             let (agent, p) = (AgentId::new("a"), sid("p"));
             add_in(tx, session(&p, &agent, SessionOrigin::User))?;
             for t in ["t1", "t2"] {
-                let origin = SessionOrigin::Delegation { thread: t.into(), parent_session_id: Some(p.clone()) };
+                let origin = SessionOrigin::Delegation {
+                    thread: crate::origins::ThreadName::parse(t).unwrap(),
+                    parent_session_id: Some(p.clone()),
+                };
                 add_in(tx, session(&sid(t), &agent, origin))?;
             }
             let r1 = record_call_in(tx, &p, &CallId::new("c1"), &sid("t1"), CallMode::Delegated(Delegated::Ask))?;

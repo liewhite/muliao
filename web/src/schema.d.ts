@@ -2348,7 +2348,7 @@ export interface components {
             /** @enum {string} */
             kind: "user";
         } | {
-            thread: string;
+            thread: components["schemas"]["ThreadName"];
             parent_session_id: components["schemas"]["SessionId"] | null;
             /** @enum {string} */
             kind: "delegation";
@@ -2479,9 +2479,11 @@ export interface components {
          * @enum {string}
          */
         Thinking: "default" | "off" | "low" | "medium" | "high" | "xhigh";
+        /** @description thread 的名字：去掉首尾空白，1 到 100 个字符。同一个父会话里由（agent, 名字）确定一个 thread。 */
+        ThreadName: string;
         /** @description 会话开出的一个 thread：子会话与它的名字（与 origin 里的同一个，列 thread 时不用再按来源收窄）。 */
         ThreadOut: components["schemas"]["SessionOut"] & {
-            thread: string;
+            thread: components["schemas"]["ThreadName"];
         };
         /** @description 一个内置工具（当前配置下注册的，工具自己声明读写与是否管理类），在规则里写作 `tool:<name>`。 */
         ToolOut: {
@@ -2496,7 +2498,7 @@ export interface components {
         };
         /** @description 新建触发器：kind 与 config 按方式区分（有默认值的配置项可以不填）。 */
         TriggerCreate: components["schemas"]["NewConfig"] & {
-            name: string;
+            name: components["schemas"]["TriggerName"];
             agent_id: components["schemas"]["AgentId"];
             prompt: components["schemas"]["Prompt"];
             precheck?: components["schemas"]["Precheck"] | null;
@@ -2516,10 +2518,12 @@ export interface components {
             /** @description 什么时候触发、config 的格式 */
             description: string;
         };
+        /** @description 触发器的名称：小写字母、数字与 `-`，以字母或数字开头，最长 64。还会触发的触发器之间唯一。 */
+        TriggerName: string;
         /** @description 一个触发器：各方式共有的字段，加上按 kind 区分的 config 与 status。 */
         TriggerOut: components["schemas"]["KindView"] & {
             id: components["schemas"]["TriggerId"];
-            name: string;
+            name: components["schemas"]["TriggerName"];
             agent_id: components["schemas"]["AgentId"];
             prompt: string;
             enabled: boolean;

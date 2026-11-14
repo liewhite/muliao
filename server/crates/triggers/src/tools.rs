@@ -12,7 +12,7 @@ use serde_json::{Map, Value};
 use crate::faults::TriggerFault;
 use crate::kinds::{Kind, KindView, NewConfig};
 use crate::precheck::Precheck;
-use crate::service::{NewSpec, PrecheckChange, Prompt, TriggerService, TriggerView, Update};
+use crate::service::{NewSpec, PrecheckChange, Prompt, TriggerName, TriggerService, TriggerView, Update};
 use crate::store::Listing;
 use muliao_platform::errors::{Error, invalid};
 
@@ -25,7 +25,7 @@ struct KindInfo {
 /// 给模型看的一个触发器。
 #[derive(Serialize)]
 struct TriggerInfo {
-    name: String,
+    name: TriggerName,
     /// kind、config，以及 status：这种方式的运行状态，如下次触发时间
     #[serde(flatten)]
     kind: KindView,
@@ -118,7 +118,7 @@ impl Tool<RunScope> for TriggerList {
 #[derive(Deserialize, JsonSchema)]
 pub struct CreateArgs {
     /// Lowercase letters, digits and `-`, e.g. `daily-report`.
-    name: String,
+    name: TriggerName,
     /// Trigger kind from `trigger_kinds`.
     kind: Kind,
     /// What to do on each firing.
@@ -177,7 +177,7 @@ impl Tool<RunScope> for TriggerCreate {
 #[derive(Deserialize, JsonSchema)]
 pub struct UpdateArgs {
     /// Trigger name.
-    name: String,
+    name: TriggerName,
     /// New instructions for each firing.
     #[serde(default)]
     #[schemars(with = "Option<String>")]
@@ -228,7 +228,7 @@ impl Tool<RunScope> for TriggerUpdate {
 #[derive(Deserialize, JsonSchema)]
 pub struct NameArgs {
     /// Trigger name.
-    name: String,
+    name: TriggerName,
 }
 
 pub struct TriggerRun(TriggerService);

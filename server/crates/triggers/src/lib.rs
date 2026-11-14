@@ -35,7 +35,7 @@ use muliao_sessions::origins::Origin;
 use muliao_workspace::commands::AgentCommands;
 use tokio::task::JoinHandle;
 
-pub use service::{Fired, NewSpec, PrecheckChange, Prompt, TriggerService, TriggerView, Update};
+pub use service::{Fired, NewSpec, PrecheckChange, Prompt, TriggerName, TriggerService, TriggerView, Update};
 
 pub const MIGRATION: Migration = Migration {
     domain: "triggers",

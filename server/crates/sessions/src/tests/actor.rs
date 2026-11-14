@@ -787,7 +787,9 @@ async fn an_answer_arriving_before_the_asking_step_is_saved_still_answers_the_ca
     // 等 thread 跑完、交回（发问方的 slow 还没结束，这一步还没保存）
     let threads = || {
         let s = s.clone();
-        w.db.read(move |c| crate::directory::threads_named_in(c, &s, "calc"))
+        w.db.read(move |c| {
+            crate::directory::threads_named_in(c, &s, &crate::origins::ThreadName::parse("calc").unwrap())
+        })
     };
     let thread = loop {
         if let Some(t) = threads().await.unwrap().pop() {

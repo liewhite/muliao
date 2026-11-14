@@ -40,7 +40,9 @@ use tokio::time::Instant;
 use crate::faults::{FaultSource, TriggerFault, recovered};
 use crate::kinds::{Kind, Mode};
 use crate::precheck::{Script, tail_chars};
-use crate::service::{EVENT_MAX_BYTES, TriggerService, busy_previous_in, needs_waiting_notice, notify_waiting_in};
+use crate::service::{
+    EVENT_MAX_BYTES, TriggerName, TriggerService, busy_previous_in, needs_waiting_notice, notify_waiting_in,
+};
 use crate::store::{Listing, Trigger, load_in, save_in};
 use muliao_platform::errors::{Error, Result};
 
@@ -165,11 +167,11 @@ pub struct StreamStatus {
     pub stderr_log: String,
 }
 
-pub fn status(name: &str, p: Process) -> StreamStatus {
+pub fn status(name: &TriggerName, p: Process) -> StreamStatus {
     StreamStatus { running_since: p.running_since, failures: p.failures, stderr_log: stderr_log(name) }
 }
 
-pub fn stderr_log(name: &str) -> String {
+pub fn stderr_log(name: &TriggerName) -> String {
     format!("{LOG_DIR}/{name}.stderr.log")
 }
 
@@ -238,7 +240,7 @@ fn stream_alert(t: &Trigger, config: &StreamConfig, fault: &str) -> String {
 #[derive(Debug, Clone)]
 struct Spec {
     trigger_id: TriggerId,
-    name: String,
+    name: TriggerName,
     agent_id: AgentId,
     config: StreamConfig,
     generation: String,

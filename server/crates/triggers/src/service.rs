@@ -37,7 +37,7 @@ use crate::store::{
     Listing, NewTrigger, Trigger, baseline_in, delete_in, insert_in, list_in, load_in, named_in, save_in,
 };
 use crate::stream::Hosting;
-use muliao_platform::errors::{Error, Result, conflict, invalid, not_found};
+use muliao_platform::errors::{DomainError, Error, Result, conflict, invalid, not_found};
 
 /// 事件内容（流式命令的输出、前置检查的输出）原样进 prompt，过大的应由来源裁剪或改为传引用
 pub const EVENT_MAX_BYTES: usize = 256 * 1024;
@@ -49,18 +49,23 @@ pub const SESSION_NOTE: &str = "This run was started by a trigger (a schedule, o
 
 const NAME_MAX: usize = 64;
 
-/// 名称：小写字母、数字与 `-`，以字母或数字开头，最长 64。
-pub fn validate_name(name: &str) -> Result<()> {
+fn trigger_name(name: &str) -> std::result::Result<String, DomainError> {
     let ok = !name.is_empty()
         && name.len() <= NAME_MAX
         && name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
         && !name.starts_with('-');
     if ok {
-        Ok(())
+        Ok(name.to_owned())
     } else {
-        Err(invalid(format!("invalid trigger name {name:?}: must match ^[a-z0-9][a-z0-9-]{{0,63}}$")))
+        Err(DomainError::invalid(format!("invalid trigger name {name:?}: must match ^[a-z0-9][a-z0-9-]{{0,63}}$")))
     }
 }
+
+muliao_platform::checked_text!(
+    /// 触发器的名称：小写字母、数字与 `-`，以字母或数字开头，最长 64。还会触发的触发器之间唯一。
+    TriggerName,
+    trigger_name
+);
 
 pub fn event_prompt(instructions: &str, payload: Option<&str>) -> String {
     match payload {
@@ -207,7 +212,7 @@ pub struct TriggerView {
 /// 新建一个触发器。
 #[derive(Debug, Clone)]
 pub struct NewSpec {
-    pub name: String,
+    pub name: TriggerName,
     pub agent_id: AgentId,
     pub prompt: Prompt,
     pub config: NewConfig,
@@ -290,8 +295,8 @@ impl TriggerService {
     }
 
     /// 按名称找还会触发的那个：名称只在未结束的之间唯一，已结束的只能按 id 指。这个名字只剩已结束的时说清楚它已结束。
-    pub async fn get_by_name(&self, name: &str) -> Result<Trigger> {
-        let name = name.to_owned();
+    pub async fn get_by_name(&self, name: &TriggerName) -> Result<Trigger> {
+        let name = name.clone();
         self.0
             .db
             .read(move |c| {
@@ -346,7 +351,6 @@ impl TriggerService {
     }
 
     pub async fn create(&self, spec: NewSpec) -> Result<Trigger> {
-        validate_name(&spec.name)?;
         let mode = spec.config.configure(self.0.tz, Utc::now())?;
         let mut keys = mode.secrets().to_vec();
         keys.extend(spec.precheck.iter().flat_map(|p| p.secrets.clone()));

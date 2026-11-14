@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 use rusqlite::{Connection, Row, params};
 
 use crate::history::SESSIONS_MENTIONING;
-use crate::origins::{Origin, Sender, SessionOrigin};
+use crate::origins::{Origin, Sender, SessionOrigin, ThreadName};
 use muliao_platform::db::placeholders;
 use muliao_platform::db::{like_contains, like_prefix};
 use muliao_platform::errors::Result;
@@ -156,21 +156,21 @@ pub fn keyed_among(
 #[derive(Debug, Clone, PartialEq)]
 pub struct Thread {
     pub session: Session,
-    pub name: String,
+    pub name: ThreadName,
 }
 
-/// 父会话开出的 thread，按创建顺序。有父会话的只有委派会话（[`SessionOrigin::parse`]），所以都有名字。
+/// 作为 thread 的会话的名字。有父会话、欠着委派的只有委派会话（[`SessionOrigin::parse`]），所以都有名字；不是委派会话是
+/// 数据坏了。
+pub(crate) fn thread_name_of(session: &Session) -> Result<&ThreadName> {
+    session.origin.thread().ok_or_else(|| {
+        muliao_platform::errors::broken(format!("session {} is used as a thread but is none", session.id))
+    })
+}
+
+/// 父会话开出的 thread，按创建顺序。
 pub(crate) fn threads_of(c: &Connection, parent_id: &SessionId) -> Result<Vec<Thread>> {
     let children = query(c, "parent_session_id = ?1 ORDER BY created_at, id", [parent_id])?;
-    children
-        .into_iter()
-        .map(|session| match &session.origin {
-            SessionOrigin::Delegation { thread, .. } => Ok(Thread { name: thread.clone(), session }),
-            SessionOrigin::User | SessionOrigin::Trigger { .. } | SessionOrigin::Issue { .. } => {
-                Err(muliao_platform::errors::broken(format!("session {} has a parent but is no thread", session.id)))
-            }
-        })
-        .collect()
+    children.into_iter().map(|session| Ok(Thread { name: thread_name_of(&session)?.clone(), session })).collect()
 }
 
 /// thread 由（父会话, agent, 名字）确定。
@@ -178,14 +178,14 @@ pub(crate) fn thread_in(
     c: &Connection,
     parent_id: &SessionId,
     agent_id: &AgentId,
-    thread: &str,
+    thread: &ThreadName,
 ) -> Result<Option<Session>> {
     Ok(query(c, "parent_session_id = ?1 AND agent_id = ?2 AND thread = ?3", params![parent_id, agent_id, thread])?
         .pop())
 }
 
 /// 父会话里叫这个名字的 thread（每个 agent 至多一个），按创建顺序。
-pub(crate) fn threads_named_in(c: &Connection, parent_id: &SessionId, thread: &str) -> Result<Vec<Session>> {
+pub(crate) fn threads_named_in(c: &Connection, parent_id: &SessionId, thread: &ThreadName) -> Result<Vec<Session>> {
     query(c, "parent_session_id = ?1 AND thread = ?2 ORDER BY created_at, id", params![parent_id, thread])
 }
 

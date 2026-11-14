@@ -8,7 +8,7 @@ use muliao_triggers::faults::TriggerFault;
 use muliao_triggers::kinds::{Kind, KindView, NewConfig};
 use muliao_triggers::precheck::{Precheck, PrecheckOut};
 use muliao_triggers::store::Listing;
-use muliao_triggers::{NewSpec, PrecheckChange, Prompt, TriggerView, Update};
+use muliao_triggers::{NewSpec, PrecheckChange, Prompt, TriggerName, TriggerView, Update};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::{IntoParams, ToSchema};
@@ -44,7 +44,7 @@ async fn trigger_kinds() -> axum::Json<Vec<TriggerKindOut>> {
 #[derive(Serialize, ToSchema)]
 pub struct TriggerOut {
     id: TriggerId,
-    name: String,
+    name: TriggerName,
     agent_id: AgentId,
     prompt: String,
     enabled: bool,
@@ -105,7 +105,7 @@ async fn list_triggers(
 /// 新建触发器：kind 与 config 按方式区分（有默认值的配置项可以不填）。
 #[derive(Deserialize, ToSchema)]
 pub struct TriggerCreate {
-    name: String,
+    name: TriggerName,
     agent_id: AgentId,
     prompt: Prompt,
     /// 触发前的前置检查；不给则每次都交给 agent

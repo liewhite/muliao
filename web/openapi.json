@@ -8382,7 +8382,7 @@
             ],
             "properties": {
               "thread": {
-                "type": "string"
+                "$ref": "#/components/schemas/ThreadName"
               },
               "parent_session_id": {
                 "oneOf": [
@@ -8800,6 +8800,10 @@
           "xhigh"
         ]
       },
+      "ThreadName": {
+        "type": "string",
+        "description": "thread 的名字：去掉首尾空白，1 到 100 个字符。同一个父会话里由（agent, 名字）确定一个 thread。"
+      },
       "ThreadOut": {
         "allOf": [
           {
@@ -8812,7 +8816,7 @@
             ],
             "properties": {
               "thread": {
-                "type": "string"
+                "$ref": "#/components/schemas/ThreadName"
               }
             }
           }
@@ -8866,7 +8870,7 @@
             ],
             "properties": {
               "name": {
-                "type": "string"
+                "$ref": "#/components/schemas/TriggerName"
               },
               "agent_id": {
                 "$ref": "#/components/schemas/AgentId"
@@ -8928,6 +8932,10 @@
           }
         }
       },
+      "TriggerName": {
+        "type": "string",
+        "description": "触发器的名称：小写字母、数字与 `-`，以字母或数字开头，最长 64。还会触发的触发器之间唯一。"
+      },
       "TriggerOut": {
         "allOf": [
           {
@@ -8954,7 +8962,7 @@
                 "$ref": "#/components/schemas/TriggerId"
               },
               "name": {
-                "type": "string"
+                "$ref": "#/components/schemas/TriggerName"
               },
               "agent_id": {
                 "$ref": "#/components/schemas/AgentId"

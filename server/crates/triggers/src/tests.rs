@@ -153,7 +153,7 @@ impl World {
         let kind: Kind = serde_json::from_value(json!(kind)).map_err(|e| invalid(e.to_string()))?;
         self.svc()
             .create(NewSpec {
-                name: name.into(),
+                name: TriggerName::parse(name)?,
                 agent_id: self.me.clone(),
                 prompt: Prompt::new(format!("do {name}")).unwrap(),
                 config: NewConfig::parse(kind, config)?,
@@ -382,7 +382,10 @@ async fn once_fires_once_then_finishes_and_leaves_the_list() {
 
     assert!(w.svc().list(Listing::default()).await.unwrap().is_empty());
     assert_eq!(w.svc().list(Listing { finished: true, ..Listing::default() }).await.unwrap().len(), 1);
-    assert_eq!(kind_of(w.svc().get_by_name("later").await.unwrap_err()), ErrorKind::Conflict);
+    assert_eq!(
+        kind_of(w.svc().get_by_name(&TriggerName::parse("later").unwrap()).await.unwrap_err()),
+        ErrorKind::Conflict
+    );
     assert_eq!(kind_of(w.svc().run(t.id).await.unwrap_err()), ErrorKind::Conflict);
     let e = w
         .svc()
@@ -691,8 +694,8 @@ fn migration_002_makes_old_rows_readable() {
     let live = crate::store::list_in(&c, &Listing::default()).unwrap();
     let finished = crate::store::list_in(&c, &Listing { finished: true, ..Listing::default() }).unwrap();
     assert_eq!((live.len(), finished.len()), (2, 1));
-    let schedule = live.iter().find(|t| t.name == "t").unwrap();
+    let schedule = live.iter().find(|t| t.name.as_str() == "t").unwrap();
     assert_eq!(schedule.waiting_notified, Some(SessionId::new("sess")));
-    let stream = live.iter().find(|t| t.name == "s").unwrap();
+    let stream = live.iter().find(|t| t.name.as_str() == "s").unwrap();
     assert!(matches!(&stream.mode, crate::kinds::Mode::Stream { .. }));
 }

@@ -27,33 +27,24 @@ use crate::directory::{self, Session};
 use crate::history::latest_answers_among;
 use crate::holds::hold_delegation_in;
 use crate::inbound::{Handback, Inbound, Opener, create_session_in, receive_in};
+use crate::origins::ThreadName;
 use crate::paused_calls::{self, Pause};
 use crate::runs::{RunRecord, latest_among};
 use crate::thread_calls::{CallMode, Delegated, Owed, owed_in, record_call_in};
 use crate::work::{CheckBeats, EventSource, deliver_in, no_progress_hint, post_check_in};
-use muliao_platform::errors::{Result, invalid};
-
-pub const THREAD_MAX: usize = 100;
-
-pub(crate) fn validate_thread(name: &str) -> Result<String> {
-    let name = name.trim();
-    if name.is_empty() || name.chars().count() > THREAD_MAX {
-        return Err(invalid(format!("thread name must be 1-{THREAD_MAX} characters")));
-    }
-    Ok(name.to_owned())
-}
-
-pub(crate) fn thread_name(child: &Session) -> &str {
-    child.origin.thread().unwrap_or_else(|| panic!("session {} is a thread without a name", child.id))
-}
+use muliao_platform::errors::Result;
 
 /// 取已有 thread 或新建。
-pub(crate) fn open_in(c: &Connection, parent_id: &SessionId, agent_id: &AgentId, thread: &str) -> Result<Session> {
-    let thread = validate_thread(thread)?;
-    if let Some(existing) = directory::thread_in(c, parent_id, agent_id, &thread)? {
+pub(crate) fn open_in(
+    c: &Connection,
+    parent_id: &SessionId,
+    agent_id: &AgentId,
+    thread: &ThreadName,
+) -> Result<Session> {
+    if let Some(existing) = directory::thread_in(c, parent_id, agent_id, thread)? {
         return Ok(existing);
     }
-    create_session_in(c, Opener::Thread { parent: parent_id, name: &thread }, agent_id, &thread)
+    create_session_in(c, Opener::Thread { parent: parent_id, name: thread }, agent_id, thread.as_str())
 }
 
 /// 一次往 thread 投信的调用是哪一种。
@@ -74,7 +65,7 @@ pub(crate) fn send_in(
     waker: &Waker,
     parent_id: &SessionId,
     agent_id: &AgentId,
-    thread: &str,
+    thread: &ThreadName,
     prompt: &str,
     call_id: &CallId,
     mode: Mode,
@@ -148,7 +139,7 @@ pub(crate) fn hand_back_in(
     if owed.is_empty() {
         return Ok(());
     }
-    let name = thread_name(child);
+    let name = directory::thread_name_of(child)?.as_str();
     let agent = agent_in(tx, &child.agent_id)?;
     for o in owed {
         // 发起方还停在这次调用上（ask_agent）时作为它的结果：完成时就是回答本身（发问方问的就是它）
@@ -176,7 +167,7 @@ pub(crate) fn hand_back_in(
 #[derive(Debug, Clone, PartialEq)]
 pub struct ThreadView {
     pub session_id: SessionId,
-    pub thread: String,
+    pub thread: ThreadName,
     pub agent_id: AgentId,
     pub state: WorkState,
     /// 最近一次运行最终失败时的说明
@@ -242,7 +233,7 @@ pub(crate) async fn check_threads(
             // 同上：委派引用的 thread 由外键保证存在
             let child = &children[child_id];
             let agent = agent_in(tx, &child.agent_id)?;
-            let text = check_text(child, &agent, states[child_id], runs.get(child_id), now, *interval);
+            let text = check_text(child, &agent, states[child_id], runs.get(child_id), now, *interval)?;
             if post_check_in(tx, &waker, &o.hold, &EventSource::Thread { session_id: child_id.clone() }, &text)? {
                 posted += 1;
             }
@@ -260,8 +251,8 @@ pub(crate) fn check_text(
     run: Option<&RunRecord>,
     now: DateTime<Utc>,
     check_seconds: f64,
-) -> String {
-    let name = thread_name(child);
+) -> Result<String> {
+    let name = directory::thread_name_of(child)?;
     let who = format!("Thread {name:?} ({})", agent.name);
     let keep = format!(
         "Keep waiting ({}): you will get another check-in in {check_seconds} \
@@ -277,18 +268,18 @@ pub(crate) fn check_text(
             .to_owned(),
         (WorkState::Running, Some(r), _) => {
             let s = (now - r.started_at).num_seconds().max(0);
-            return format!("{who} is still working on your task ({}m{:02}s so far).\n{keep}", s / 60, s % 60);
+            return Ok(format!("{who} is still working on your task ({}m{:02}s so far).\n{keep}", s / 60, s % 60));
         }
         // 最终失败的收尾自己出错时，结清随收尾一起回滚：委派不会自己结束，如实说，让发起方能自己停
         (WorkState::Idle, _, Some(f)) => {
-            return format!(
+            return Ok(format!(
                 "{who} failed on its last run ({}) and will not continue on its own; its failure was not handed back to \
                  you. Call stop_thread(thread={name:?}, agent={:?}) to settle it.",
                 truncate(f, 300),
                 agent.name
-            );
+            ));
         }
         (WorkState::Running | WorkState::Idle, _, _) => "has your task queued and has not started on it yet".to_owned(),
     };
-    format!("{who} {doing}. {keep}")
+    Ok(format!("{who} {doing}. {keep}"))
 }

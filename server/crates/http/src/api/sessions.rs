@@ -12,7 +12,7 @@ use muliao_sessions::directory::{Listing, Session};
 use muliao_sessions::inbound::{UserMessage, UserTarget};
 use muliao_sessions::live::{LiveSegment, Retrying};
 use muliao_sessions::mailbox::{Mail, MailBody, MailState};
-use muliao_sessions::origins::{Origin, Sender, SessionOrigin};
+use muliao_sessions::origins::{Origin, Sender, SessionOrigin, ThreadName};
 use muliao_sessions::runs::RunRecord;
 use muliao_sessions::transcript::SavedItem;
 use muliao_sessions::work::EventSource;
@@ -305,7 +305,7 @@ pub struct SessionDetail {
 pub struct ThreadOut {
     #[serde(flatten)]
     pub session: SessionOut,
-    pub thread: String,
+    pub thread: ThreadName,
 }
 
 #[utoipa::path(get, path = "/api/sessions/{session_id}", tag = "sessions",
@@ -317,7 +317,8 @@ async fn get_session(
 ) -> ApiResult<axum::Json<SessionDetail>> {
     let view = s.services.sessions.detail(&session_id).await?;
     let agent_id = view.session.agent_id.clone();
-    let (names, children): (Vec<String>, Vec<Session>) = view.threads.into_iter().map(|t| (t.name, t.session)).unzip();
+    let (names, children): (Vec<ThreadName>, Vec<Session>) =
+        view.threads.into_iter().map(|t| (t.name, t.session)).unzip();
     let mut outs = session_outs(&s, std::iter::once(view.session).chain(children).collect()).await?;
     let session = outs.remove(0);
     let threads = outs.into_iter().zip(names).map(|(session, thread)| ThreadOut { session, thread }).collect();

@@ -19,6 +19,86 @@ pub fn new_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
+/// 规整过的名字（各领域自己的规则）：`checked_text!(名字类型, 检查函数)`，检查函数是
+/// `fn(&str) -> Result<String, DomainError>`，返回规整后的写法。只经 `parse` 构造，反序列化（HTTP、工具参数）与读库也走它；
+/// 序列化、存库、接口描述与工具参数的 JSON Schema 里都是普通字符串。使用方要依赖 serde、utoipa、schemars。
+#[macro_export]
+macro_rules! checked_text {
+    ($(#[$doc:meta])* $name:ident, $check:path) => {
+        $(#[$doc])*
+        #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, ::serde::Serialize, ::serde::Deserialize, ::utoipa::ToSchema)]
+        #[serde(into = "String", try_from = "String")]
+        #[schema(value_type = String)]
+        pub struct $name(String);
+
+        impl $name {
+            pub fn parse(raw: &str) -> ::std::result::Result<Self, $crate::errors::DomainError> {
+                $check(raw).map(Self)
+            }
+
+            pub fn as_str(&self) -> &str {
+                &self.0
+            }
+        }
+
+        impl ::std::convert::TryFrom<String> for $name {
+            type Error = $crate::errors::DomainError;
+
+            fn try_from(raw: String) -> ::std::result::Result<Self, $crate::errors::DomainError> {
+                Self::parse(&raw)
+            }
+        }
+
+        impl ::std::convert::From<$name> for String {
+            fn from(n: $name) -> String {
+                n.0
+            }
+        }
+
+        // 与内部的值写法相同（报错文字里 `{name:?}` 不带类型名）
+        impl ::std::fmt::Debug for $name {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                ::std::fmt::Debug::fmt(&self.0, f)
+            }
+        }
+
+        impl ::std::fmt::Display for $name {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str(&self.0)
+            }
+        }
+
+        impl $crate::names::__rusqlite::types::ToSql for $name {
+            fn to_sql(&self) -> $crate::names::__rusqlite::Result<$crate::names::__rusqlite::types::ToSqlOutput<'_>> {
+                $crate::names::__rusqlite::types::ToSql::to_sql(&self.0)
+            }
+        }
+
+        impl $crate::names::__rusqlite::types::FromSql for $name {
+            fn column_result(
+                v: $crate::names::__rusqlite::types::ValueRef<'_>,
+            ) -> $crate::names::__rusqlite::types::FromSqlResult<Self> {
+                Self::parse(v.as_str()?).map_err(|e| $crate::names::__rusqlite::types::FromSqlError::Other(Box::new(e)))
+            }
+        }
+
+        // 工具参数里与普通字符串相同：就地展开、不带本类型的说明（说明由参数字段自己写）
+        impl ::schemars::JsonSchema for $name {
+            fn inline_schema() -> bool {
+                true
+            }
+
+            fn schema_name() -> ::std::borrow::Cow<'static, str> {
+                <String as ::schemars::JsonSchema>::schema_name()
+            }
+
+            fn json_schema(g: &mut ::schemars::SchemaGenerator) -> ::schemars::Schema {
+                <String as ::schemars::JsonSchema>::json_schema(g)
+            }
+        }
+    };
+}
+
 macro_rules! text_id {
     ($(#[$doc:meta])* $name:ident) => {
         $(#[$doc])*

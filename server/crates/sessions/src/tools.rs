@@ -19,8 +19,9 @@ use serde::{Deserialize, Serialize};
 use crate::activity::WorkState;
 use crate::actor::{Actors, Waker};
 use crate::answers::AskArgs;
-use crate::delegation::{Mode, send_in, threads_in, validate_thread};
+use crate::delegation::{Mode, send_in, threads_in};
 use crate::halt::Halted;
+use crate::origins::ThreadName;
 use crate::paused_calls::{self, Pause};
 use crate::thread_calls::Delegated;
 use crate::wakeups::{WAKE_ME, cancel_in, local_time, schedule_in};
@@ -118,7 +119,7 @@ pub struct DelegateArgs {
     /// Short name of the thread, e.g. "weekly-report". Reusing a thread name with the same agent continues that
     /// conversation with its full context, whether it was opened with `delegate_task` or `ask_agent`; use a new name
     /// for an unrelated task.
-    thread: String,
+    thread: ThreadName,
     /// Get the thread's answer back as an event in this conversation.
     #[serde(default)]
     report_back: bool,
@@ -167,7 +168,7 @@ impl Tool<RunScope> for DelegateTask {
             ));
         }
         let check = check_interval(a.heartbeat_seconds).map_err(ToolError::Retry)?;
-        let thread = validate_thread(&a.thread)?;
+        let thread = a.thread;
         let (parent, call, waker, awaited) =
             (ctx.deps.session_id.clone(), call_id(&ctx), self.waker.clone(), ctx.deps.user_waits());
         let (agent, task, report_back, name) = (a.agent, a.task, a.report_back, thread.clone());
@@ -196,7 +197,7 @@ pub struct AskAgentArgs {
     message: String,
     /// Short name of the thread, e.g. "code-review". Reuse it with the same agent to continue the same conversation
     /// (also one opened with `delegate_task`).
-    thread: String,
+    thread: ThreadName,
 }
 
 pub struct AskAgent {
@@ -228,7 +229,7 @@ impl Tool<RunScope> for AskAgent {
         if a.message.trim().is_empty() {
             return Err(ToolError::Retry("message must not be empty".into()));
         }
-        let thread = validate_thread(&a.thread)?;
+        let thread = a.thread;
         let (parent, call, waker, awaited) =
             (ctx.deps.session_id.clone(), call_id(&ctx), self.waker.clone(), ctx.deps.user_waits());
         let (agent, message) = (a.agent, a.message);
@@ -255,7 +256,7 @@ impl Tool<RunScope> for AskAgent {
 #[derive(Deserialize, JsonSchema)]
 pub struct StopThreadArgs {
     /// The thread name used with `delegate_task` or `ask_agent`.
-    thread: String,
+    thread: ThreadName,
     /// The thread's agent. Threads are told apart by agent and name: you may leave it out unless you opened threads
     /// with this name for several agents.
     #[serde(default)]
@@ -282,8 +283,7 @@ impl Tool<RunScope> for StopThread {
     }
 
     async fn call(&self, ctx: ToolCtx<'_, RunScope>, a: StopThreadArgs) -> std::result::Result<ToolOutput, ToolError> {
-        let name = validate_thread(&a.thread)?;
-        let (parent, wanted) = (ctx.deps.session_id.clone(), name.clone());
+        let (parent, wanted) = (ctx.deps.session_id.clone(), a.thread.clone());
         let (child, who) = self
             .db
             .read(move |c| {
@@ -322,7 +322,7 @@ pub struct NoArgs {}
 
 #[derive(Serialize)]
 struct ThreadInfo {
-    thread: String,
+    thread: ThreadName,
     agent: String,
     state: WorkState,
     failure: Option<String>,

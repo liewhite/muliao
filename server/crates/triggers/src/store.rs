@@ -14,14 +14,14 @@ use serde::de::DeserializeOwned;
 use crate::faults::TriggerFault;
 use crate::kinds::{Kind, Mode};
 use crate::precheck::Precheck;
-use crate::service::Prompt;
+use crate::service::{Prompt, TriggerName};
 use muliao_platform::errors::Result;
 
 /// 一个触发器（一行）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct Trigger {
     pub id: TriggerId,
-    pub name: String,
+    pub name: TriggerName,
     pub agent_id: AgentId,
     pub prompt: Prompt,
     /// 怎么触发：种类、配置与运行状态（kind、config、state 三列）
@@ -86,7 +86,7 @@ pub fn load_in(c: &Connection, trigger_id: TriggerId) -> Result<Option<Trigger>>
 }
 
 /// 同名的全部触发器（还会触发的至多一个，其余是已结束的历史）。
-pub fn named_in(c: &Connection, name: &str) -> Result<Vec<Trigger>> {
+pub fn named_in(c: &Connection, name: &TriggerName) -> Result<Vec<Trigger>> {
     let mut stmt = c.prepare(&format!("SELECT {COLUMNS} FROM triggers WHERE name = ?1"))?;
     Ok(stmt.query_map([name], trigger_of)?.collect::<rusqlite::Result<_>>()?)
 }
@@ -119,7 +119,7 @@ pub fn list_in(c: &Connection, listing: &Listing) -> Result<Vec<Trigger>> {
 
 /// 新建的一行（id、created_at 由库给出）。
 pub struct NewTrigger {
-    pub name: String,
+    pub name: TriggerName,
     pub agent_id: AgentId,
     pub prompt: Prompt,
     pub mode: Mode,

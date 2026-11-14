@@ -8,8 +8,24 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use muliao_platform::errors::{Result, broken};
+use muliao_platform::errors::{DomainError, Result, broken};
 use muliao_platform::ids::{IssueId, SessionId, TriggerId};
+
+const THREAD_MAX: usize = 100;
+
+fn thread_name(raw: &str) -> std::result::Result<String, DomainError> {
+    let name = raw.trim();
+    if name.is_empty() || name.chars().count() > THREAD_MAX {
+        return Err(DomainError::invalid(format!("thread name must be 1-{THREAD_MAX} characters")));
+    }
+    Ok(name.to_owned())
+}
+
+muliao_platform::checked_text!(
+    /// thread 的名字：去掉首尾空白，1 到 100 个字符。同一个父会话里由（agent, 名字）确定一个 thread。
+    ThreadName,
+    thread_name
+);
 
 /// 来源的种类：用户在界面发起、触发器、agent 之间委派、issue 看板。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
@@ -62,7 +78,7 @@ impl Sender {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SessionOrigin {
     User,
-    Delegation { thread: String, parent_session_id: Option<SessionId> },
+    Delegation { thread: ThreadName, parent_session_id: Option<SessionId> },
     Trigger { trigger_id: TriggerId },
     Issue { issue_id: IssueId },
 }
@@ -103,7 +119,10 @@ impl SessionOrigin {
                 return Err(broken(format!("a {} origin has no ref, got {reference:?}", origin)));
             }
             Origin::Delegation => match thread {
-                Some(thread) => SessionOrigin::Delegation { thread, parent_session_id: parent },
+                Some(thread) => SessionOrigin::Delegation {
+                    thread: ThreadName::parse(&thread).map_err(|e| broken(format!("stored thread name: {e}")))?,
+                    parent_session_id: parent,
+                },
                 None => return Err(broken("a delegation session has no thread name".to_owned())),
             },
             _ if thread.is_some() || parent.is_some() => {
@@ -119,10 +138,10 @@ impl SessionOrigin {
     }
 
     /// 委派开出的 thread 的名字；别的会话没有。
-    pub fn thread(&self) -> Option<&str> {
+    pub fn thread(&self) -> Option<&ThreadName> {
         match self {
             SessionOrigin::Delegation { thread, .. } => Some(thread),
-            _ => None,
+            SessionOrigin::User | SessionOrigin::Trigger { .. } | SessionOrigin::Issue { .. } => None,
         }
     }
 }
@@ -173,7 +192,8 @@ mod tests {
         assert_eq!(SessionOrigin::parse(Origin::Issue, Some("7"), None, None).unwrap(), issue);
         assert_eq!(SessionOrigin::parse(Origin::User, None, None, None).unwrap(), SessionOrigin::User);
         let parent = Some(SessionId::new("p"));
-        let thread = SessionOrigin::Delegation { thread: "t".into(), parent_session_id: parent.clone() };
+        let thread =
+            SessionOrigin::Delegation { thread: ThreadName::parse("t").unwrap(), parent_session_id: parent.clone() };
         assert_eq!(SessionOrigin::parse(Origin::Delegation, None, Some("t".into()), parent.clone()).unwrap(), thread);
         assert!(SessionOrigin::parse(Origin::User, None, None, parent).is_err());
         assert!(SessionOrigin::parse(Origin::User, Some("1"), None, None).is_err());
