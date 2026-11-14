@@ -88,7 +88,7 @@ impl DueRunner {
                 continue;
             }
             if !self.firing.lock().expect("firing lock").insert(trigger_id) {
-                tracing::info!(trigger_id = %trigger_id, "due fire skipped: its previous fire is still running");
+                tracing::info!(trigger_id = trigger_id.get(), "due fire skipped: its previous fire is still running");
                 continue;
             }
             let guard = Firing(self.firing.clone(), trigger_id);
@@ -97,7 +97,7 @@ impl DueRunner {
                 let _guard = guard;
                 // 契约之外的失败只记在它自己身上，不再重试（至多一次）
                 if let Err(e) = service.fire_activated(trigger_id, None).await {
-                    tracing::error!(trigger_id = %trigger_id, error = %e, "due fire failed");
+                    tracing::error!(trigger_id = trigger_id.get(), error = %e, "due fire failed");
                 }
             }));
         }
@@ -127,11 +127,11 @@ impl DueRunner {
         match consumed {
             Ok(None) => true,
             Ok(Some(why)) => {
-                tracing::info!(trigger_id = %trigger_id, why, "due fire skipped");
+                tracing::info!(trigger_id = trigger_id.get(), why, "due fire skipped");
                 false
             }
             Err(e) => {
-                tracing::error!(trigger_id = %trigger_id, error = %e, "due consume failed");
+                tracing::error!(trigger_id = trigger_id.get(), error = %e, "due consume failed");
                 false
             }
         }

@@ -54,8 +54,7 @@ fn trigger_of(row: &Row<'_>) -> rusqlite::Result<Trigger> {
     let (kind, config, state): (Kind, String, String) = (row.get(4)?, row.get(5)?, row.get(6)?);
     let mode = Mode::from_columns(kind, &config, &state)
         .map_err(|e| rusqlite::Error::FromSqlConversionFailure(4, Type::Text, Box::new(e)))?;
-    let prompt = Prompt::new(row.get::<_, String>(3)?)
-        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(3, Type::Text, e.into()))?;
+    let prompt: Prompt = row.get(3)?;
     Ok(Trigger {
         id: row.get(0)?,
         name: row.get(1)?,

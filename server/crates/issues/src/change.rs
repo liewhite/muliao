@@ -291,7 +291,7 @@ impl Changes {
                 })?;
             }
             if !downstream.is_empty() {
-                tracing::info!(issue_id = %issue.id, status = %issue.status, ?downstream, "issue unblocked downstream");
+                tracing::info!(issue_id = issue.id.get(), status = %issue.status, ?downstream, "issue unblocked downstream");
             }
         }
         Ok(())
@@ -331,7 +331,7 @@ impl Changes {
         let mail = conversation::mail(issue.id, &to, format!("#{} {}", issue.id, issue.title), letter);
         match self.inbox.receive_in(tx, mail)? {
             Ok(_) => {
-                tracing::info!(issue_id = %issue.id, agent = %to, actor = by.actor.as_str(), "issue activity delivered")
+                tracing::info!(issue_id = issue.id.get(), agent = %to, actor = by.actor.as_str(), "issue activity delivered")
             }
             Err(Refused { reason: Refusal::Archived, detail }) if by.actor == Actor::User => {
                 // 已有 issue 的指派人或 owner 后来被归档：动态照常记进时间线（不让用户在这类 issue 上的评论、改动报错），不投；
@@ -343,12 +343,12 @@ impl Changes {
                     link: Some(crate::route(issue.id)),
                 };
                 self.notifications.notify_in(tx, &notice)?;
-                tracing::info!(issue_id = %issue.id, %detail, "issue activity not delivered");
+                tracing::info!(issue_id = issue.id.get(), %detail, "issue activity not delivered");
             }
             // 别人的动态（agent 的）投不进归档的 agent 只记日志：in_progress 的由看板的「停滞」标出。Gone：agent 正在删除，
             // 删除流程会清理它在 issue 上的指派与 owner
             Err(Refused { reason: Refusal::Archived | Refusal::Gone, detail }) => {
-                tracing::info!(issue_id = %issue.id, %detail, "issue activity not delivered");
+                tracing::info!(issue_id = issue.id.get(), %detail, "issue activity not delivered");
             }
         }
         Ok(())

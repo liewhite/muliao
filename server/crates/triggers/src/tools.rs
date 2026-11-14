@@ -122,7 +122,6 @@ pub struct CreateArgs {
     /// Trigger kind from `trigger_kinds`.
     kind: Kind,
     /// What to do on each firing.
-    #[schemars(with = "String")]
     prompt: Prompt,
     /// Kind-specific settings, e.g. {"cron": "0 9 * * *"} for a schedule, {"at": "2026-10-22T10:30"} for a one-off
     /// `once` trigger (never a cron expression with a date: that fires again every year and stays in the list).
@@ -180,7 +179,6 @@ pub struct UpdateArgs {
     name: TriggerName,
     /// New instructions for each firing.
     #[serde(default)]
-    #[schemars(with = "Option<String>")]
     prompt: Option<Prompt>,
     /// New kind-specific settings (replaces the old config).
     #[serde(default)]

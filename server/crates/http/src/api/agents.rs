@@ -9,7 +9,7 @@ use muliao_assets::distribution::{RoleSpec, RoleView, UsedAsset};
 use muliao_assets::formats::agent_file::{AgentConfig, Grouping, Thinking};
 use muliao_assets::formats::mcp::McpTransport;
 use muliao_assets::kinds::Shown;
-use muliao_assets::roles::{AgentRules, RoleName};
+use muliao_assets::roles::{AgentRules, AssignedRole, RoleName};
 use muliao_assets::rules::{RuleList, Rules, ToolSpec, texts};
 use muliao_assets::service::{AgentPatch, AgentSpec, AgentView};
 use muliao_platform::config::ModelRef;
@@ -74,7 +74,7 @@ pub struct AgentOut {
     pub name: String,
     /// null：它的目录没加载（agent.toml 坏了等，见资源问题），不能运行，修好文件或删掉它
     pub config: Option<AgentConfigOut>,
-    pub roles: Vec<RoleName>,
+    pub roles: Vec<AssignedRole>,
     pub allow: Vec<String>,
     pub deny: Vec<String>,
     pub created_at: DateTime<Utc>,
@@ -118,7 +118,7 @@ pub struct AgentDefaults {
     pub name: String,
     pub description: String,
     pub model: ModelIo,
-    pub roles: Vec<RoleName>,
+    pub roles: Vec<AssignedRole>,
     pub allow: Vec<String>,
     pub deny: Vec<String>,
     pub thinking: Thinking,
@@ -190,7 +190,7 @@ impl ReachOut {
 pub struct AgentPreviewIn {
     /// 已有的 agent（它自己的资产总能用）；null 为还没建的
     pub agent_id: Option<AgentId>,
-    pub roles: Vec<RoleName>,
+    pub roles: Vec<AssignedRole>,
     pub allow: RuleList,
     pub deny: RuleList,
 }
@@ -339,7 +339,7 @@ pub struct AgentCreate {
     pub model: Option<ModelIo>,
     /// 角色，不含每个 agent 隐含的 base
     #[serde(default)]
-    pub roles: Vec<RoleName>,
+    pub roles: Vec<AssignedRole>,
     #[serde(default)]
     pub allow: RuleList,
     #[serde(default)]
@@ -388,7 +388,7 @@ pub struct AgentUpdate {
     #[serde(default)]
     pub model: Option<ModelIo>,
     #[serde(default)]
-    pub roles: Option<Vec<RoleName>>,
+    pub roles: Option<Vec<AssignedRole>>,
     #[serde(default)]
     pub allow: Option<RuleList>,
     #[serde(default)]

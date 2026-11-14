@@ -19,6 +19,27 @@ pub fn new_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
+/// 工具参数（JSON Schema）里写成内部的值 `$inner`：就地展开、不带本类型的说明（说明由参数字段自己写），模型看到的参数
+/// 与用裸类型时逐字相同。
+#[macro_export]
+macro_rules! json_schema_as {
+    ($name:ty, $inner:ty) => {
+        impl ::schemars::JsonSchema for $name {
+            fn inline_schema() -> bool {
+                true
+            }
+
+            fn schema_name() -> ::std::borrow::Cow<'static, str> {
+                <$inner as ::schemars::JsonSchema>::schema_name()
+            }
+
+            fn json_schema(g: &mut ::schemars::SchemaGenerator) -> ::schemars::Schema {
+                <$inner as ::schemars::JsonSchema>::json_schema(g)
+            }
+        }
+    };
+}
+
 /// 规整过的名字（各领域自己的规则）：`checked_text!(名字类型, 检查函数)`，检查函数是
 /// `fn(&str) -> Result<String, DomainError>`，返回规整后的写法。只经 `parse` 构造，反序列化（HTTP、工具参数）与读库也走它；
 /// 序列化、存库、接口描述与工具参数的 JSON Schema 里都是普通字符串。使用方要依赖 serde、utoipa、schemars。
@@ -82,20 +103,7 @@ macro_rules! checked_text {
             }
         }
 
-        // 工具参数里与普通字符串相同：就地展开、不带本类型的说明（说明由参数字段自己写）
-        impl ::schemars::JsonSchema for $name {
-            fn inline_schema() -> bool {
-                true
-            }
-
-            fn schema_name() -> ::std::borrow::Cow<'static, str> {
-                <String as ::schemars::JsonSchema>::schema_name()
-            }
-
-            fn json_schema(g: &mut ::schemars::SchemaGenerator) -> ::schemars::Schema {
-                <String as ::schemars::JsonSchema>::json_schema(g)
-            }
-        }
+        $crate::json_schema_as!($name, String);
     };
 }
 
@@ -143,20 +151,7 @@ macro_rules! text_id {
             }
         }
 
-        // 工具参数里与内部的值相同：就地展开、不带本类型的说明（说明由参数字段自己写）
-        impl schemars::JsonSchema for $name {
-            fn inline_schema() -> bool {
-                true
-            }
-
-            fn schema_name() -> std::borrow::Cow<'static, str> {
-                <String as schemars::JsonSchema>::schema_name()
-            }
-
-            fn json_schema(g: &mut schemars::SchemaGenerator) -> schemars::Schema {
-                <String as schemars::JsonSchema>::json_schema(g)
-            }
-        }
+        $crate::json_schema_as!($name, String);
     };
 }
 
@@ -204,20 +199,7 @@ macro_rules! row_id {
             }
         }
 
-        // 工具参数里与内部的值相同：就地展开、不带本类型的说明（说明由参数字段自己写）
-        impl schemars::JsonSchema for $name {
-            fn inline_schema() -> bool {
-                true
-            }
-
-            fn schema_name() -> std::borrow::Cow<'static, str> {
-                <i64 as schemars::JsonSchema>::schema_name()
-            }
-
-            fn json_schema(g: &mut schemars::SchemaGenerator) -> schemars::Schema {
-                <i64 as schemars::JsonSchema>::json_schema(g)
-            }
-        }
+        $crate::json_schema_as!($name, i64);
     };
 }
 
@@ -281,75 +263,29 @@ text_id!(
 /// 浏览器可以直接显示、模型也普遍能看的图片类型：只有这些按 inline 返回，并作为图片交给模型。SVG 不在其中：它能带脚本
 const INLINE_IMAGES: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/webp"];
 
-/// 媒体类型：只存 `type/subtype`（小写）。参数（如 charset）不影响怎么显示和交给模型，下载一律按原始字节。
-#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
-#[serde(into = "String", try_from = "String")]
-#[schema(value_type = String)]
-pub struct MediaType(String);
+/// 解析 Content-Type 一类的写法：去掉参数、转小写；不是 `type/subtype` 报 InvalidInput。
+fn media_type(raw: &str) -> Result<String, DomainError> {
+    let essence = raw.split(';').next().unwrap_or_default().trim();
+    let valid = match essence.split_once('/') {
+        Some((kind, subtype)) => !kind.is_empty() && !subtype.is_empty() && !essence.chars().any(char::is_whitespace),
+        None => false,
+    };
+    if !valid {
+        return Err(DomainError::invalid(format!("media type {raw:?} must be 'type/subtype'")));
+    }
+    Ok(essence.to_lowercase())
+}
+
+crate::checked_text!(
+    /// 媒体类型：只存 `type/subtype`（小写）。参数（如 charset）不影响怎么显示和交给模型，下载一律按原始字节。
+    MediaType,
+    media_type
+);
 
 impl MediaType {
-    /// 解析 Content-Type 一类的写法：去掉参数、转小写；不是 `type/subtype` 报 InvalidInput。
-    pub fn parse(raw: &str) -> Result<Self, DomainError> {
-        let essence = raw.split(';').next().unwrap_or_default().trim();
-        let valid = match essence.split_once('/') {
-            Some((kind, subtype)) => {
-                !kind.is_empty() && !subtype.is_empty() && !essence.chars().any(char::is_whitespace)
-            }
-            None => false,
-        };
-        if !valid {
-            return Err(DomainError::invalid(format!("media type {raw:?} must be 'type/subtype'")));
-        }
-        Ok(Self(essence.to_lowercase()))
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
     /// 浏览器与模型都能直接显示的图片。
     pub fn is_inline_image(&self) -> bool {
         INLINE_IMAGES.contains(&self.0.as_str())
-    }
-}
-
-impl TryFrom<String> for MediaType {
-    type Error = DomainError;
-
-    fn try_from(raw: String) -> Result<Self, DomainError> {
-        Self::parse(&raw)
-    }
-}
-
-impl From<MediaType> for String {
-    fn from(m: MediaType) -> String {
-        m.0
-    }
-}
-
-// 与内部的值写法相同（报错文字里 `{media_type:?}` 不带类型名）
-impl fmt::Debug for MediaType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(&self.0, f)
-    }
-}
-
-impl fmt::Display for MediaType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl ToSql for MediaType {
-    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-        self.0.to_sql()
-    }
-}
-
-impl FromSql for MediaType {
-    fn column_result(v: ValueRef<'_>) -> FromSqlResult<Self> {
-        let raw = String::column_result(v)?;
-        Self::parse(&raw).map_err(|e| FromSqlError::Other(Box::new(e)))
     }
 }
 

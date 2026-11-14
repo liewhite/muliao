@@ -109,7 +109,11 @@ pub(crate) fn transcript_in(
 
 /// 在 after 之后的消息（没有 after 为全部），按顺序。
 pub(crate) fn rows_after(c: &Connection, session_id: &SessionId, after: Option<MessageId>) -> Result<Vec<Stored>> {
-    stored(c, "session_id = ?1 AND (?2 IS NULL OR id > ?2) ORDER BY id", params![session_id, after])
+    // 有无游标写成两条 SQL：`?2 IS NULL OR id > ?2` 会让 SQLite 用不上 (session_id, id) 索引的范围查找
+    match after {
+        Some(after) => stored(c, "session_id = ?1 AND id > ?2 ORDER BY id", params![session_id, after]),
+        None => stored(c, "session_id = ?1 ORDER BY id", [session_id]),
+    }
 }
 
 /// 从最后一条模型回复起的消息（还没有回复时是全部）。之前每条回复的调用在下一条回复之前都已有结果，所以还没有结果的
@@ -119,11 +123,12 @@ pub(crate) fn since_last_response(c: &Connection, session_id: &SessionId) -> Res
     let mut before: Option<MessageId> = None;
     loop {
         // 分批往回读：通常一两条就到最后一条回复
-        let rows = stored(
-            c,
-            "session_id = ?1 AND (?2 IS NULL OR id < ?2) ORDER BY id DESC LIMIT 4",
-            params![session_id, before],
-        )?;
+        let rows = match before {
+            Some(before) => {
+                stored(c, "session_id = ?1 AND id < ?2 ORDER BY id DESC LIMIT 4", params![session_id, before])?
+            }
+            None => stored(c, "session_id = ?1 ORDER BY id DESC LIMIT 4", [session_id])?,
+        };
         let n = rows.len();
         for row in rows {
             let is_response = matches!(row.message, Message::Assistant(_));

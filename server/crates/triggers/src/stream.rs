@@ -409,7 +409,7 @@ impl StreamRunner {
             let keep = wanted.get(id).is_some_and(|s| s.generation == h.generation);
             if !keep {
                 h.task.abort();
-                tracing::info!(trigger_id = %id, "stream stopped");
+                tracing::info!(trigger_id = id.get(), "stream stopped");
             }
             keep
         });

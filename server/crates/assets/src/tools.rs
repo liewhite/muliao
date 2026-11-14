@@ -16,7 +16,7 @@ use crate::access::Actor;
 use crate::distribution::Distribution;
 use crate::formats::agent_file::{Grouping, Thinking};
 use crate::lifecycle::AgentLifecycle;
-use crate::roles::{AgentRules, Role, RoleName};
+use crate::roles::{AgentRules, AssignedRole, Role, RoleName};
 use crate::rules::{RuleList, texts};
 use crate::secrets::Secrets;
 use crate::service::{AgentService, AgentSpec, AgentView};
@@ -129,7 +129,7 @@ pub struct AgentDetail {
     model: String,
     thinking: Thinking,
     /// 角色（base 隐含，不列在这里）与它自己的 allow / deny
-    roles: Vec<RoleName>,
+    roles: Vec<AssignedRole>,
     allow: Vec<String>,
     deny: Vec<String>,
     /// 按规则最终能用的内置工具
@@ -211,7 +211,7 @@ pub struct CreateArgs {
     model: Option<String>,
     /// Its roles besides `base`, which every agent has (`get_agent` lists them all).
     #[serde(default)]
-    roles: Vec<RoleName>,
+    roles: Vec<AssignedRole>,
     /// Extra rules `action:kind:name` (action use or write; kind tool, skill, mcp, secret or memory; fnmatch
     /// wildcards), e.g. `use:skill:relay-host`, `use:secret:RELAY_*`, `*:memory:trading`.
     #[serde(default)]

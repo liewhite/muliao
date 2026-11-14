@@ -110,7 +110,12 @@ function brand(name, keyword) {
 export function brandedShapes(schemas) {
   const shapes = new Map()
   for (const [name, schema] of Object.entries(schemas)) {
-    if (brandedKeyword(name, schema) !== undefined) shapes.set(shapeKey(schema), name)
+    if (brandedKeyword(name, schema) === undefined) continue
+    // 没写说明或说明相同就认不出来，会给不相干的字段打错品牌：后端编号类型的文档注释要写、要各不相同
+    if (!schema.description) throw new Error(`id type ${name} has no description (doc comment) in openapi.json`)
+    const key = shapeKey(schema)
+    if (shapes.has(key)) throw new Error(`id types ${shapes.get(key)} and ${name} have the same description`)
+    shapes.set(key, name)
   }
   return shapes
 }

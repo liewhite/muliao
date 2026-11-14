@@ -92,12 +92,15 @@ impl Push {
             let endpoints = match push.db.read(endpoints_in).await {
                 Ok(endpoints) => endpoints,
                 Err(e) => {
-                    tracing::error!(notification_id = %notification_id, error = %e, "listing push subscriptions failed, notification not pushed");
+                    tracing::error!(notification_id = notification_id.get(), error = %e, "listing push subscriptions failed, notification not pushed");
                     return;
                 }
             };
             if endpoints.is_empty() {
-                tracing::info!(notification_id = %notification_id, "no push subscriptions, notification not pushed");
+                tracing::info!(
+                    notification_id = notification_id.get(),
+                    "no push subscriptions, notification not pushed"
+                );
             }
             for endpoint in endpoints {
                 let push = push.clone();
@@ -122,13 +125,13 @@ impl Push {
                 Ok(None) => {
                     // 通知随会话删了，或设备退订、已失效被删
                     tracing::info!(
-                        notification_id = %notification_id,
+                        notification_id = notification_id.get(),
                         "notification or push subscription gone before delivery, not pushing"
                     );
                     return None;
                 }
                 Err(e) => {
-                    tracing::error!(notification_id = %notification_id, error = %e, "reading the notification to push failed, not pushing");
+                    tracing::error!(notification_id = notification_id.get(), error = %e, "reading the notification to push failed, not pushing");
                     return None;
                 }
             };
@@ -136,7 +139,7 @@ impl Push {
                 Ok(device) => device,
                 Err(e) => {
                     // 订阅时解析过，到这里是库里的数据坏了：删不删交给人
-                    tracing::error!(notification_id = %notification_id, error = %e, "stored push subscription is invalid, not pushing");
+                    tracing::error!(notification_id = notification_id.get(), error = %e, "stored push subscription is invalid, not pushing");
                     return None;
                 }
             };
@@ -144,10 +147,10 @@ impl Push {
             let sent = webpush::send(&self.client, &self.keys, &self.subject, &device, &payload(&message)).await;
             match &sent {
                 Sent::Delivered => {
-                    tracing::info!(notification_id = %notification_id, push_host = %host, "web push sent")
+                    tracing::info!(notification_id = notification_id.get(), push_host = %host, "web push sent")
                 }
                 Sent::Gone(status) => {
-                    tracing::info!(notification_id = %notification_id, push_host = %host, status, "push subscription gone, removing it");
+                    tracing::info!(notification_id = notification_id.get(), push_host = %host, status, "push subscription gone, removing it");
                     let gone = device.endpoint.clone();
                     if let Err(e) = self
                         .db
@@ -158,15 +161,15 @@ impl Push {
                     }
                 }
                 Sent::Rejected(why) => {
-                    tracing::error!(notification_id = %notification_id, push_host = %host, reason = %why, "push service rejected the message")
+                    tracing::error!(notification_id = notification_id.get(), push_host = %host, reason = %why, "push service rejected the message")
                 }
                 Sent::Transient(why) => {
                     if let Some(delay) = backoff.next_delay() {
-                        tracing::warn!(notification_id = %notification_id, push_host = %host, reason = %why, retry_in = ?delay, "web push failed, will retry");
+                        tracing::warn!(notification_id = notification_id.get(), push_host = %host, reason = %why, retry_in = ?delay, "web push failed, will retry");
                         tokio::time::sleep(delay).await;
                         continue;
                     }
-                    tracing::error!(notification_id = %notification_id, push_host = %host, reason = %why, "web push kept failing, giving up");
+                    tracing::error!(notification_id = notification_id.get(), push_host = %host, reason = %why, "web push kept failing, giving up");
                 }
             }
             return Some(sent);

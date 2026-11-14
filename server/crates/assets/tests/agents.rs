@@ -247,6 +247,6 @@ fn access(root: &std::path::Path) -> std::path::PathBuf {
     root.join("platform/access.toml")
 }
 
-fn role(name: &str) -> muliao_assets::roles::RoleName {
-    muliao_assets::roles::RoleName::parse(name).unwrap()
+fn role(name: &str) -> muliao_assets::roles::AssignedRole {
+    muliao_assets::roles::AssignedRole::parse(name).unwrap()
 }

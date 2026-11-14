@@ -54,12 +54,17 @@ impl RoleName {
         }
     }
 
-    /// 能写进 agent 的 roles：base 每个 agent 隐含，不能写。
-    pub fn assignable(&self) -> bool {
+    /// 能写进 agent 的 roles 的形式；base 每个 agent 隐含，不能写，为 None。
+    pub fn assigned(&self) -> Option<AssignedRole> {
         match self {
-            RoleName::Base => false,
-            RoleName::Admin | RoleName::Custom(_) => true,
+            RoleName::Base => None,
+            RoleName::Admin => Some(AssignedRole::Admin),
+            RoleName::Custom(c) => Some(AssignedRole::Custom(c.clone())),
         }
+    }
+
+    pub fn assignable(&self) -> bool {
+        self.assigned().is_some()
     }
 
     /// 内置角色没写描述时的描述。
@@ -110,20 +115,67 @@ impl utoipa::PartialSchema for RoleName {
 
 impl utoipa::ToSchema for RoleName {}
 
-// 工具参数里与普通字符串相同
-impl schemars::JsonSchema for RoleName {
-    fn inline_schema() -> bool {
-        true
+muliao_platform::json_schema_as!(RoleName, String);
+
+/// agent 的 roles 里能写的角色：除了每个 agent 隐含的 base。在接口、工具参数与 access.toml 里都是名字字符串，写 base
+/// 在读入时就报错（access.toml 里只记一条问题、略过，见 [`crate::access_file`]）。
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(into = "String", try_from = "String")]
+pub enum AssignedRole {
+    Admin,
+    Custom(CustomRole),
+}
+
+impl AssignedRole {
+    pub fn parse(raw: &str) -> std::result::Result<Self, DomainError> {
+        RoleName::parse(raw)?.assigned().ok_or_else(|| {
+            DomainError::invalid(format!("role {raw:?} is implicit for every agent; do not list it in roles"))
+        })
     }
 
-    fn schema_name() -> std::borrow::Cow<'static, str> {
-        <String as schemars::JsonSchema>::schema_name()
-    }
-
-    fn json_schema(g: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        <String as schemars::JsonSchema>::json_schema(g)
+    pub fn name(&self) -> RoleName {
+        match self {
+            AssignedRole::Admin => RoleName::Admin,
+            AssignedRole::Custom(c) => RoleName::Custom(c.clone()),
+        }
     }
 }
+
+impl TryFrom<String> for AssignedRole {
+    type Error = DomainError;
+
+    fn try_from(raw: String) -> std::result::Result<Self, DomainError> {
+        Self::parse(&raw)
+    }
+}
+
+impl From<AssignedRole> for String {
+    fn from(r: AssignedRole) -> String {
+        r.name().as_str().to_owned()
+    }
+}
+
+impl fmt::Debug for AssignedRole {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.name(), f)
+    }
+}
+
+impl fmt::Display for AssignedRole {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.name(), f)
+    }
+}
+
+impl utoipa::PartialSchema for AssignedRole {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        <String as utoipa::PartialSchema>::schema()
+    }
+}
+
+impl utoipa::ToSchema for AssignedRole {}
+
+muliao_platform::json_schema_as!(AssignedRole, String);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Role {
@@ -193,33 +245,33 @@ impl Roles {
         slot.rules = rules;
     }
 
-    /// 写下的规则对上角色的定义。引用了没定义的角色 InvalidInput；写了隐含的 base、写重复的只是多余，略过。
+    /// 写下的规则对上角色的定义。引用了没定义的角色 InvalidInput；写重复的只是多余，略过。
     pub fn bind(&self, rules: &AgentRules) -> Result<BoundRules, DomainError> {
-        let mut roles = vec![self.base.clone()];
+        let mut assigned: Vec<(AssignedRole, Role)> = Vec::new();
         let mut unknown = Vec::new();
-        for name in rules.roles.iter().filter(|r| r.assignable()) {
-            match self.get(name) {
-                Some(role) if !roles.contains(role) => roles.push(role.clone()),
-                Some(_) => {}
+        for name in &rules.roles {
+            match self.get(&name.name()) {
+                Some(_) if assigned.iter().any(|(n, _)| n == name) => {}
+                Some(role) => assigned.push((name.clone(), role.clone())),
                 None => unknown.push(name),
             }
         }
         if !unknown.is_empty() {
             return Err(DomainError::invalid(format!("roles {unknown:?} are not defined")));
         }
-        Ok(BoundRules { roles, own: rules.own() })
+        Ok(BoundRules { base: self.base.clone(), assigned, own: rules.own() })
     }
 
     /// 只有 base 的规则（access.toml 里没写的 agent）。
     pub fn base_only(&self) -> BoundRules {
-        BoundRules { roles: vec![self.base.clone()], own: Rules::default() }
+        BoundRules { base: self.base.clone(), assigned: Vec::new(), own: Rules::default() }
     }
 }
 
 /// agent 写下的分发规则：角色（不含每个 agent 隐含的 base）与它自己的 allow / deny。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AgentRules {
-    pub roles: Vec<RoleName>,
+    pub roles: Vec<AssignedRole>,
     pub allow: Vec<crate::rules::Rule>,
     pub deny: Vec<crate::rules::Rule>,
 }
@@ -234,15 +286,16 @@ impl AgentRules {
 /// agent 的规则对上了角色的定义（[`Roles::bind`]）：base 在最前，再按它的角色，加上它自己的 allow / deny。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BoundRules {
-    roles: Vec<Role>,
+    base: Role,
+    assigned: Vec<(AssignedRole, Role)>,
     own: Rules,
 }
 
 impl BoundRules {
     /// 最终规则的各个来源：base 在前、再按它的角色，最后是它自己的 allow / deny。
     pub fn sources(&self) -> Vec<(RuleSource, Rules)> {
-        self.roles
-            .iter()
+        std::iter::once(&self.base)
+            .chain(self.assigned.iter().map(|(_, r)| r))
             .map(|r| (RuleSource::Role(r.name.clone()), r.effective()))
             .chain(std::iter::once((RuleSource::Own, self.own.clone())))
             .collect()
@@ -255,13 +308,16 @@ impl BoundRules {
 
     /// 带这个角色（base 人人都有）。
     pub fn holds(&self, name: &RoleName) -> bool {
-        self.roles.iter().any(|r| &r.name == name)
+        match name.assigned() {
+            None => true,
+            Some(a) => self.assigned.iter().any(|(n, _)| *n == a),
+        }
     }
 
     /// 写下的形态（不含隐含的 base）：改规则时从它出发。
     pub fn written(&self) -> AgentRules {
         AgentRules {
-            roles: self.roles.iter().filter(|r| r.name.assignable()).map(|r| r.name.clone()).collect(),
+            roles: self.assigned.iter().map(|(n, _)| n.clone()).collect(),
             allow: self.own.allow.clone(),
             deny: self.own.deny.clone(),
         }
@@ -294,20 +350,23 @@ mod tests {
         assert!(RoleName::parse("Bad Name").is_err());
         assert_eq!(serde_json::to_string(&custom).unwrap(), "\"trading\"");
         assert_eq!(format!("{custom:?}"), "\"trading\"");
+        let err = serde_json::from_str::<AssignedRole>("\"base\"").unwrap_err().to_string();
+        assert!(err.contains("implicit"), "{err}");
+        assert_eq!(serde_json::from_str::<AssignedRole>("\"admin\"").unwrap(), AssignedRole::Admin);
     }
 
     #[test]
     fn binding_refuses_undefined_roles_and_puts_base_first() {
         let mut roles = Roles::builtin(rules(&["use:tool:a"]), rules(&["use:tool:*"]));
         roles.define(RoleName::parse("r").unwrap(), "d".into(), rules(&["use:skill:s"]));
-        let r = RoleName::parse("r").unwrap();
-        let written = AgentRules { roles: vec![RoleName::Base, r.clone(), r.clone()], ..Default::default() };
+        let r = AssignedRole::parse("r").unwrap();
+        let written = AgentRules { roles: vec![r.clone(), r.clone()], ..Default::default() };
         let bound = roles.bind(&written).unwrap();
         let names: Vec<RuleSource> = bound.sources().into_iter().map(|(s, _)| s).collect();
-        assert_eq!(names, [RuleSource::Role(RoleName::Base), RuleSource::Role(r.clone()), RuleSource::Own]);
-        assert!(bound.holds(&RoleName::Base) && bound.holds(&r) && !bound.holds(&RoleName::Admin));
+        assert_eq!(names, [RuleSource::Role(RoleName::Base), RuleSource::Role(r.name()), RuleSource::Own]);
+        assert!(bound.holds(&RoleName::Base) && bound.holds(&r.name()) && !bound.holds(&RoleName::Admin));
         assert_eq!(bound.written().roles, [r]);
-        let missing = AgentRules { roles: vec![RoleName::parse("nope").unwrap()], ..Default::default() };
+        let missing = AgentRules { roles: vec![AssignedRole::parse("nope").unwrap()], ..Default::default() };
         assert!(roles.bind(&missing).is_err());
     }
 }

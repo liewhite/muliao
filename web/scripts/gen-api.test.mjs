@@ -63,6 +63,10 @@ it('brands id types by name, and recognizes them where a generic inlined them', 
     Change_Vec_IssueId: { type: 'object' },
   })
   expect([...shapes.values()].sort()).toEqual(['AgentId', 'IssueId'])
+  expect(() => brandedShapes({ AId: { type: 'string' } })).toThrow(/no description/)
+  expect(() => brandedShapes({ AId: { type: 'string', description: 'x' }, BId: { type: 'string', description: 'x' } })).toThrow(
+    /same description/,
+  )
   // 后端泛型 Change<Vec<IssueId>> 里的编号被就地展开，生成的类型照样带品牌
   const generated = await readFile(OUTPUT, 'utf8')
   expect(/Change_Vec_IssueId: \{\s*from: \(number & \{\s*readonly __brand: 'IssueId'/.test(generated)).toBe(true)

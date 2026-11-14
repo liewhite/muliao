@@ -3947,7 +3947,7 @@
           "roles": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/RoleName"
+              "$ref": "#/components/schemas/AssignedRole"
             },
             "description": "角色，不含每个 agent 隐含的 base"
           },
@@ -3996,7 +3996,7 @@
           "roles": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/RoleName"
+              "$ref": "#/components/schemas/AssignedRole"
             }
           },
           "allow": {
@@ -4061,7 +4061,7 @@
           "roles": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/RoleName"
+              "$ref": "#/components/schemas/AssignedRole"
             }
           },
           "allow": {
@@ -4116,7 +4116,7 @@
           "roles": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/RoleName"
+              "$ref": "#/components/schemas/AssignedRole"
             }
           },
           "allow": {
@@ -4159,7 +4159,7 @@
               "null"
             ],
             "items": {
-              "$ref": "#/components/schemas/RoleName"
+              "$ref": "#/components/schemas/AssignedRole"
             }
           },
           "allow": {
@@ -4444,6 +4444,9 @@
             "type": "boolean"
           }
         }
+      },
+      "AssignedRole": {
+        "type": "string"
       },
       "Assignee": {
         "oneOf": [
@@ -7245,7 +7248,7 @@
       },
       "Prompt": {
         "type": "string",
-        "description": "交给 agent 的说明：不能是空的。只经 [`Prompt::new`] 构造（反序列化也走它）。"
+        "description": "交给 agent 的说明：不能是空的。"
       },
       "PushKeys": {
         "type": "object",

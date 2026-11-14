@@ -74,39 +74,18 @@ pub fn event_prompt(instructions: &str, payload: Option<&str>) -> String {
     }
 }
 
-/// 交给 agent 的说明：不能是空的。只经 [`Prompt::new`] 构造（反序列化也走它）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
-#[serde(into = "String", try_from = "String")]
-#[schema(value_type = String)]
-pub struct Prompt(String);
-
-impl Prompt {
-    pub fn new(text: impl Into<String>) -> std::result::Result<Self, String> {
-        let text = text.into();
-        if text.trim().is_empty() {
-            return Err("trigger prompt must not be empty".into());
-        }
-        Ok(Self(text))
+fn prompt(text: &str) -> std::result::Result<String, DomainError> {
+    if text.trim().is_empty() {
+        return Err(DomainError::invalid("trigger prompt must not be empty"));
     }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
+    Ok(text.to_owned())
 }
 
-impl TryFrom<String> for Prompt {
-    type Error = String;
-
-    fn try_from(text: String) -> std::result::Result<Self, String> {
-        Self::new(text)
-    }
-}
-
-impl From<Prompt> for String {
-    fn from(p: Prompt) -> String {
-        p.0
-    }
-}
+muliao_platform::checked_text!(
+    /// 交给 agent 的说明：不能是空的。
+    Prompt,
+    prompt
+);
 
 /// 上一次触发开出的会话还没做完时它在干什么（不会是 idle）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
@@ -433,7 +412,7 @@ impl TriggerService {
             return Err(missing(trigger_id));
         }
         self.changed();
-        tracing::info!(trigger_id = %trigger_id, "trigger deleted");
+        tracing::info!(trigger_id = trigger_id.get(), "trigger deleted");
         Ok(())
     }
 
@@ -473,7 +452,7 @@ impl TriggerService {
         match self.fire(trigger_id, payload, By::Activation).await? {
             Outcome::Fired(_) | Outcome::Nothing | Outcome::CheckFailed(_) => {}
             Outcome::Skipped(why, detail) => {
-                tracing::info!(trigger_id = %trigger_id, detail, "activated fire skipped");
+                tracing::info!(trigger_id = trigger_id.get(), detail, "activated fire skipped");
                 if why == Skip::Archived {
                     self.finished_unrun(trigger_id).await?;
                 }
@@ -545,7 +524,10 @@ impl TriggerService {
                 let Some(mut t) =
                     load_in(tx, trigger_id)?.filter(|t| t.enabled && t.precheck.as_ref() == Some(&precheck))
                 else {
-                    tracing::info!(trigger_id = %trigger_id, "trigger changed during its precheck, result discarded");
+                    tracing::info!(
+                        trigger_id = trigger_id.get(),
+                        "trigger changed during its precheck, result discarded"
+                    );
                     return Ok(Outcome::Nothing);
                 };
                 let (output, decision) = match checked {

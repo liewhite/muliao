@@ -28,7 +28,7 @@ use toml_edit::{Array, DocumentMut, Item, Table, TableLike, Value};
 
 use crate::kinds::Kind;
 use crate::naming::{AgentName, is_agent_id};
-use crate::roles::{AgentRules, BoundRules, RoleName, Roles};
+use crate::roles::{AgentRules, AssignedRole, BoundRules, RoleName, Roles};
 use crate::rules::{Rule, RuleList, Rules, ToolTable, builtin_roles, texts};
 use crate::tree::{Expect, Snapshot};
 use muliao_platform::errors::{Result, conflict, invalid};
@@ -219,13 +219,16 @@ impl<'a> Parser<'a> {
         let allow = self.patterns(entry.allow, &what, agent_id.clone());
         let deny = self.patterns(entry.deny, &what, agent_id.clone());
         let mut roles = Vec::new();
+        let mut implicit = Vec::new();
         for raw in &entry.roles {
             match RoleName::parse(raw) {
-                Ok(name) => roles.push(name),
+                Ok(name) => match name.assigned() {
+                    Some(assigned) => roles.push(assigned),
+                    None => implicit.push(name),
+                },
                 Err(e) => self.invalid(format!("{what}: {}", e.message)),
             }
         }
-        let implicit: Vec<RoleName> = roles.iter().filter(|r| !r.assignable()).cloned().collect();
         // 角色定义与对它的引用在同一个文件里：引用了没定义的角色是文件自相矛盾（拼错、手删了定义），跳过它会丢掉那个
         // 角色的 deny，所以整份作废；写了隐含的 base、写重复的只是多余
         let bound = match self.roles.bind(&AgentRules { roles, allow, deny }) {
@@ -459,14 +462,11 @@ pub fn delete_role(doc: &mut DocumentMut, name: &RoleName) {
 /// agent（id，名字写进行尾注释）的规则；全空时去掉这一节（只有 base）。roles 不能写 base（每个 agent 隐含），角色有没有
 /// 定义由 vet 查。
 pub fn set_agent_rules(doc: &mut DocumentMut, agent_id: &AgentId, name: &AgentName, rules: &AgentRules) -> Result<()> {
-    if let Some(implicit) = rules.roles.iter().find(|r| !r.assignable()) {
-        return Err(invalid(format!("role {implicit:?} is implicit for every agent; do not list it in roles")));
-    }
     distinct("roles", &rules.roles)?;
     distinct("rules", &rules.allow)?;
     distinct("rules", &rules.deny)?;
     let fields: Vec<(&str, FieldValue<'_>)> = [
-        ("roles", rules.roles.iter().map(RoleName::to_string).collect()),
+        ("roles", rules.roles.iter().map(AssignedRole::to_string).collect()),
         ("allow", texts(&rules.allow)),
         ("deny", texts(&rules.deny)),
     ]
@@ -508,8 +508,8 @@ mod tests {
         Rule::parse(s).unwrap()
     }
 
-    fn role(s: &str) -> RoleName {
-        RoleName::parse(s).unwrap()
+    fn role(s: &str) -> AssignedRole {
+        AssignedRole::parse(s).unwrap()
     }
 
     #[test]
@@ -575,7 +575,7 @@ allow = []
         set_agent_rules(&mut doc, &AgentId::new(A1), &name("交易"), &rules).unwrap();
         set_role(
             &mut doc,
-            &role("s"),
+            &RoleName::parse("s").unwrap(),
             "desc",
             &Rules::new(vec![rule("use:skill:a"), rule("use:skill:b"), rule("use:skill:c")], vec![]),
         )
@@ -598,15 +598,6 @@ allow = []
         set_agent_rules(&mut doc, &AgentId::new(A1), &name("交易员"), &AgentRules::default()).unwrap();
         assert!(!doc.to_string().contains("交易员"));
         let x = name("x");
-        assert!(
-            set_agent_rules(
-                &mut doc,
-                &AgentId::new(A1),
-                &x,
-                &AgentRules { roles: vec![RoleName::Base], ..Default::default() }
-            )
-            .is_err()
-        );
         assert!(
             set_agent_rules(
                 &mut doc,

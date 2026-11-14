@@ -304,7 +304,7 @@ impl Board {
         // 投回」的规则
         let by = By::agent(&e.agent_id, &e.session_id);
         self.changes.open_in(tx, issue_id, &by, Routing::Direct(e.agent_id.clone()), |c| c.unsettled())?;
-        tracing::info!(issue_id = %issue_id, run_id = %e.run_id, "issue left unsettled, asked");
+        tracing::info!(issue_id = issue_id.get(), run_id = %e.run_id, "issue left unsettled, asked");
         Ok(())
     }
 
@@ -313,13 +313,13 @@ impl Board {
     fn on_run_failed(&self, tx: &mut Tx<'_>, e: &RunFailed) -> Result<()> {
         let SessionOrigin::Issue { issue_id } = e.origin else { return Ok(()) };
         if model::find_in(tx, issue_id)?.is_none() {
-            tracing::info!(issue_id = %issue_id, run_id = %e.run_id, "run failed on a deleted issue");
+            tracing::info!(issue_id = issue_id.get(), run_id = %e.run_id, "run failed on a deleted issue");
             return Ok(());
         }
         let by = By::agent(&e.agent_id, &e.session_id);
         let body = truncate(e.error.trim(), RUN_FAILED_BODY_MAX);
         self.changes.open_in(tx, issue_id, &by, Routing::RecordOnly, |c| c.run_failed(body))?;
-        tracing::info!(issue_id = %issue_id, run_id = %e.run_id, "issue run failure recorded");
+        tracing::info!(issue_id = issue_id.get(), run_id = %e.run_id, "issue run failure recorded");
         Ok(())
     }
 
@@ -466,7 +466,7 @@ impl Board {
                 let mut created = Vec::new();
                 for id in &ids {
                     let ((), issue) = changes.open_in(tx, *id, &by, Routing::ByRules, |c| c.created())?;
-                    tracing::info!(issue_id = %id, actor = by.actor.as_str(), "issue created");
+                    tracing::info!(issue_id = id.get(), actor = by.actor.as_str(), "issue created");
                     created.push(issue);
                 }
                 Ok::<_, Error>(created)
@@ -482,7 +482,7 @@ impl Board {
             .db
             .write(move |tx| {
                 let ((), issue) = changes.open_in(tx, issue_id, &by, Routing::ByRules, |c| c.apply(patch))?;
-                tracing::info!(issue_id = %issue_id, actor = by.actor.as_str(), status = %issue.status, "issue updated");
+                tracing::info!(issue_id = issue_id.get(), actor = by.actor.as_str(), status = %issue.status, "issue updated");
                 Ok::<_, Error>(issue)
             })
             .await?;
@@ -561,7 +561,7 @@ impl Board {
                 Ok::<_, Error>(issue)
             })
             .await?;
-        tracing::info!(issue_id = %issue_id, status = %issue.status, "issue changed by the user");
+        tracing::info!(issue_id = issue_id.get(), status = %issue.status, "issue changed by the user");
         Ok(issue)
     }
 
@@ -614,7 +614,7 @@ impl Board {
                     }
                     Ok(())
                 })?;
-                tracing::info!(issue_id = %issue_id, actor = by.actor.as_str(), agent = %who, stopped, status = %to.status(), "issue conversation stopped");
+                tracing::info!(issue_id = issue_id.get(), actor = by.actor.as_str(), agent = %who, stopped, status = %to.status(), "issue conversation stopped");
                 Ok::<_, Error>(issue)
             })
             .await?;
@@ -629,7 +629,7 @@ impl Board {
         self.db
             .write(move |tx| {
                 let (a, _) = changes.open_in(tx, issue_id, &by, Routing::ByRules, |c| c.comment(body))?;
-                tracing::info!(issue_id = %issue_id, actor = by.actor.as_str(), "issue commented");
+                tracing::info!(issue_id = issue_id.get(), actor = by.actor.as_str(), "issue commented");
                 Ok(a)
             })
             .await
@@ -648,7 +648,7 @@ impl Board {
                     let old: Vec<IssueId> = before[down].depends_on.iter().map(|d| d.id).collect();
                     changes.open_in(tx, *down, &By::user(), Routing::ByRules, |c| c.upstream_deleted(old, issue_id))?;
                 }
-                tracing::info!(issue_id = %issue_id, ?downstream, "issue deleted");
+                tracing::info!(issue_id = issue_id.get(), ?downstream, "issue deleted");
                 Ok(())
             })
             .await

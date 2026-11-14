@@ -17,7 +17,7 @@ use crate::access_file::{self, AccessEdit};
 use crate::agents::{self, AgentInfo, AgentNames};
 use crate::formats::agent_file::{self, AGENT_FILE, AgentConfig, AgentFile, Grouping, Thinking};
 use crate::naming::{AgentName, new_agent_id};
-use crate::roles::{AgentRules, RoleName};
+use crate::roles::{AgentRules, AssignedRole};
 use crate::rules::Rule;
 use crate::run_assets::RunAssets;
 use crate::source::AssetSource;
@@ -41,7 +41,7 @@ pub struct AgentSpec {
 pub struct AgentPatch {
     pub name: Option<String>,
     pub config: AgentConfig,
-    pub roles: Option<Vec<RoleName>>,
+    pub roles: Option<Vec<AssignedRole>>,
     pub allow: Option<Vec<Rule>>,
     pub deny: Option<Vec<Rule>>,
 }

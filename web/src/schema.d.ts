@@ -1171,7 +1171,7 @@ export interface components {
             description: string;
             model?: components["schemas"]["ModelIo"] | null;
             /** @description 角色，不含每个 agent 隐含的 base */
-            roles?: components["schemas"]["RoleName"][];
+            roles?: components["schemas"]["AssignedRole"][];
             allow?: components["schemas"]["RuleList"];
             deny?: components["schemas"]["RuleList"];
             /** @description 思考档位："default" 不指定，按模型与服务端的默认 */
@@ -1184,7 +1184,7 @@ export interface components {
             name: string;
             description: string;
             model: components["schemas"]["ModelIo"];
-            roles: components["schemas"]["RoleName"][];
+            roles: components["schemas"]["AssignedRole"][];
             allow: string[];
             deny: string[];
             thinking: components["schemas"]["Thinking"];
@@ -1199,7 +1199,7 @@ export interface components {
             id: components["schemas"]["AgentId"];
             name: string;
             config: components["schemas"]["AgentConfigOut"] | null;
-            roles: components["schemas"]["RoleName"][];
+            roles: components["schemas"]["AssignedRole"][];
             allow: string[];
             deny: string[];
             /** Format: date-time */
@@ -1214,7 +1214,7 @@ export interface components {
         };
         AgentPreviewIn: {
             agent_id?: components["schemas"]["AgentId"] | null;
-            roles: components["schemas"]["RoleName"][];
+            roles: components["schemas"]["AssignedRole"][];
             allow: components["schemas"]["RuleList"];
             deny: components["schemas"]["RuleList"];
         };
@@ -1223,7 +1223,7 @@ export interface components {
             name?: string | null;
             description?: string | null;
             model?: components["schemas"]["ModelIo"] | null;
-            roles?: components["schemas"]["RoleName"][] | null;
+            roles?: components["schemas"]["AssignedRole"][] | null;
             allow?: components["schemas"]["RuleList"] | null;
             deny?: components["schemas"]["RuleList"] | null;
             thinking?: components["schemas"]["Thinking"] | null;
@@ -1289,6 +1289,7 @@ export interface components {
             roles: components["schemas"]["RoleName"][];
             allow: boolean;
         };
+        AssignedRole: string;
         /**
          * @description 指派人：用户（只有一个），或一个 agent。库里存成 `user` 或 agent id（12 位十六进制，不会与 `user` 相同；agent 名称也
          *     不能取 `user`，工具里按名称指派时不会混淆），读写库只经 [`Self::as_str`] / [`Self::from_stored`]；JSON（接口与时间线的
@@ -2070,7 +2071,7 @@ export interface components {
         };
         /** @enum {string} */
         Priority: "none" | "urgent" | "high" | "medium" | "low";
-        /** @description 交给 agent 的说明：不能是空的。只经 [`Prompt::new`] 构造（反序列化也走它）。 */
+        /** @description 交给 agent 的说明：不能是空的。 */
         Prompt: string;
         PushKeys: {
             p256dh: string;

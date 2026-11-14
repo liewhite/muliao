@@ -155,7 +155,7 @@ impl World {
             .create(NewSpec {
                 name: TriggerName::parse(name)?,
                 agent_id: self.me.clone(),
-                prompt: Prompt::new(format!("do {name}")).unwrap(),
+                prompt: Prompt::parse(&format!("do {name}")).unwrap(),
                 config: NewConfig::parse(kind, config)?,
                 precheck,
             })
@@ -356,7 +356,7 @@ async fn bad_configs_and_names_are_refused() {
     });
     assert!(matches!(w.try_create("u", "schedule", json!({"cron": "0 9 * * *"}), p).await, Err(Error::Domain(_))));
     // 空说明、空命令、超长命令构造不出来
-    assert!(Prompt::new(" \n").is_err());
+    assert!(Prompt::parse(" \n").is_err());
     assert!(Script::new(" ").is_err() && Script::new("x".repeat(4001)).is_err());
     assert!(serde_json::from_value::<Precheck>(json!({"command": ""})).is_err());
 }
@@ -389,7 +389,7 @@ async fn once_fires_once_then_finishes_and_leaves_the_list() {
     assert_eq!(kind_of(w.svc().run(t.id).await.unwrap_err()), ErrorKind::Conflict);
     let e = w
         .svc()
-        .update(t.id, Update { prompt: Some(Prompt::new("x").unwrap()), ..Update::default() })
+        .update(t.id, Update { prompt: Some(Prompt::parse("x").unwrap()), ..Update::default() })
         .await
         .unwrap_err();
     assert_eq!(kind_of(e), ErrorKind::Conflict);
@@ -506,7 +506,7 @@ async fn update_rederives_only_on_real_changes_and_reenabling() {
     // 同样的配置（规范化后）：不重新推导，出错留着
     let same = Update {
         config: Some(json!({"cron": " 0 9 * * * "})),
-        prompt: Some(Prompt::new("new").unwrap()),
+        prompt: Some(Prompt::parse("new").unwrap()),
         ..Update::default()
     };
     let u = w.svc().update(t.id, same).await.unwrap();

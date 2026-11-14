@@ -29,6 +29,8 @@ impl Waiting {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PendingCall {
+    /// 挂起记录、回答信件里认它用的编号（就是 call 的 id）
+    pub id: CallId,
     pub call: ToolCall,
     pub kind: Waiting,
 }
@@ -46,16 +48,9 @@ pub struct Paused {
     pub ready: bool,
 }
 
-impl PendingCall {
-    /// 挂起记录、回答信件里认它用的编号
-    pub(crate) fn id(&self) -> CallId {
-        CallId::new(self.call.id.clone())
-    }
-}
-
 impl Paused {
     pub(crate) fn get(&self, call_id: &CallId) -> Option<&PendingCall> {
-        self.pending.iter().find(|p| p.call.id == call_id.as_str())
+        self.pending.iter().find(|p| &p.id == call_id)
     }
 }
 
@@ -119,15 +114,16 @@ pub(crate) fn position(history: &[Message], paused: &PausedKinds, queued: &[Mail
     let mut pending: Vec<PendingCall> = Vec::new();
     let mut interrupted: Vec<ToolCall> = Vec::new();
     for c in unanswered_calls(history)? {
-        match paused.get(&CallId::new(c.id.clone())) {
-            Some(&kind) => pending.push(PendingCall { call: c, kind }),
+        let id = CallId::new(c.id.clone());
+        match paused.get(&id) {
+            Some(&kind) => pending.push(PendingCall { id, call: c, kind }),
             None => interrupted.push(c),
         }
     }
     let waiting = if pending.is_empty() {
         None
     } else {
-        let ids: HashSet<CallId> = pending.iter().map(PendingCall::id).collect();
+        let ids: HashSet<CallId> = pending.iter().map(|p| p.id.clone()).collect();
         let on_time: Vec<(MailId, &CallId, &CallResult)> =
             queued.iter().filter_map(|m| on_time_answer(m, &ids).map(|(c, r)| (m.id, c, r))).collect();
         let answers: HashMap<CallId, CallResult> =
@@ -167,13 +163,13 @@ pub(crate) fn deferred_results(
     let given: Vec<&CallResult> = paused.answers.values().collect();
     let mut results = HashMap::new();
     for p in &paused.pending {
-        let id = p.id();
-        let r = match (p.kind, paused.answers.get(&id)) {
+        let id = &p.id;
+        let r = match (p.kind, paused.answers.get(id)) {
             (_, None) => skipped(p.kind, &given),
             (Waiting::AskUser, Some(CallResult::AskUser(r))) => r.resolution(),
             (Waiting::AskAgent, Some(CallResult::AskAgent(a))) => a.resolution(),
             (Waiting::Approval, Some(CallResult::Approval(_))) => {
-                decided.remove(&id).expect("take_in resolves every decision among the answers")
+                decided.remove(id).expect("take_in resolves every decision among the answers")
             }
             (_, Some(a)) => {
                 return Err(broken(format!("call {id} of {} got an answer for {}", p.call.name, a.kind())));
@@ -219,7 +215,7 @@ fn closing_paused(p: &Paused) -> StopClosing {
             closing.stopped.push(pc.call.clone());
             continue;
         }
-        let Some(CallResult::AskUser(answer)) = p.answers.get(&pc.id()) else { continue };
+        let Some(CallResult::AskUser(answer)) = p.answers.get(&pc.id) else { continue };
         closing.answered.push(ToolResult {
             call_id: pc.call.id.clone(),
             tool_name: pc.call.name.clone(),
@@ -286,7 +282,7 @@ pub(crate) fn open_asks_of(at: &Position, queued: &[Mail]) -> OpenAsks {
     let mut open = Vec::new();
     if let Some(p) = at.paused() {
         for pc in &p.pending {
-            let id = pc.id();
+            let id = pc.id.clone();
             match pc.kind {
                 Waiting::AskUser if !is_submitted(&id) => {
                     open.push((id, OpenAsk::Question(questions_of(&pc.call.args))));

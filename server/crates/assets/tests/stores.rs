@@ -166,9 +166,15 @@ async fn catalog_transfer_and_roles() {
     assert!(memories.iter().any(|m| m.name == "global") && memories.iter().all(|m| !m.deletable));
     assert!(roles.delete(&role("base")).await.is_err());
     let w2 = w.service.clone();
-    w2.update(&a, muliao_assets::service::AgentPatch { roles: Some(vec![role("team")]), ..Default::default() })
-        .await
-        .unwrap();
+    w2.update(
+        &a,
+        muliao_assets::service::AgentPatch {
+            roles: Some(vec![role("team").assigned().unwrap()]),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     assert!(roles.delete(&role("team")).await.unwrap_err().to_string().contains("used by agents"));
     let view = roles.view(&role("team")).await.unwrap();
     assert_eq!(view.holders, vec![a.clone()]);
@@ -176,8 +182,10 @@ async fn catalog_transfer_and_roles() {
     let used = roles.assets(&a).await.unwrap();
     let s_used = used.iter().find(|u| u.name == "s").unwrap();
     assert!(s_used.source.own && s_used.source.roles == vec![role("team")]);
-    let preview =
-        roles.preview_agent(None, &AgentRules { roles: vec![role("admin")], ..Default::default() }).await.unwrap();
+    let preview = roles
+        .preview_agent(None, &AgentRules { roles: vec![role("admin").assigned().unwrap()], ..Default::default() })
+        .await
+        .unwrap();
     assert!(preview.tool_names().contains(&"create_agent"));
     assert!(roles.preview_role(None, &Rules::new(vec!["use:skill:typo".parse().unwrap()], vec![])).await.is_err());
 
