@@ -3,7 +3,7 @@
 
 use chrono_tz::Tz;
 use muliao_assets::agents::AgentNames;
-use muliao_platform::ids::AgentId;
+use muliao_platform::ids::{AgentId, IssueId};
 
 use crate::activity::{Activity, Happening};
 use crate::graph::{Dependency, Links};
@@ -30,7 +30,7 @@ fn owner_name(owner: Option<&AgentId>, names: &AgentNames) -> String {
     owner.map_or_else(|| "none".into(), |id| names.name(id))
 }
 
-fn issues(found: &[i64]) -> String {
+fn issues(found: &[IssueId]) -> String {
     if found.is_empty() { "none".into() } else { found.iter().map(|i| format!("#{i}")).collect::<Vec<_>>().join(", ") }
 }
 

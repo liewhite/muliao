@@ -2,7 +2,7 @@
 //! 顺序交回排好的回复）。覆盖：运行结束时 issue 没表态就请它表态、它在自己的 issue 会话里交给用户；issue_stop 停掉正在跑
 //! 的会话并把收尾消息投进去。
 
-use muliao_platform::ids::{AgentId, SessionId};
+use muliao_platform::ids::{AgentId, IssueId, SessionId};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -220,7 +220,7 @@ async fn world() -> World {
 }
 
 impl World {
-    async fn session(&self, issue_id: i64) -> SessionId {
+    async fn session(&self, issue_id: IssueId) -> SessionId {
         for _ in 0..200 {
             if let Some(s) = self.board.get(issue_id).await.unwrap().work.sessions.get(&self.me) {
                 return s.clone();
@@ -246,7 +246,7 @@ impl World {
         panic!("session {id} did not settle; {} replies left", self.script.left());
     }
 
-    async fn kinds(&self, issue_id: i64) -> Vec<String> {
+    async fn kinds(&self, issue_id: IssueId) -> Vec<String> {
         self.board.detail(issue_id).await.unwrap().activities.iter().map(|a| a.what.kind()).collect()
     }
 }
@@ -271,7 +271,7 @@ async fn an_agent_that_stops_without_settling_is_asked_until_it_hands_the_issue_
     w.script.call("u1", "issue_update", json!({"issue_id": 1, "status": "in_review", "assignee": "user"}));
     w.script.text("交给用户了");
     let i = w.board.create_many(By::user(), vec![work_for_me(&w, "要表态")]).await.unwrap().remove(0);
-    assert_eq!(i.id, 1);
+    assert_eq!(i.id, IssueId::new(1));
     let s = w.session(i.id).await;
     w.settled(&s).await;
     assert_eq!(w.kinds(i.id).await, ["created", "unsettled", "status", "assignee"]);

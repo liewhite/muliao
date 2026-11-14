@@ -5,7 +5,7 @@ use axum::http::StatusCode;
 use muliao_issues::activity::Activity;
 use muliao_issues::graph::Upstream;
 use muliao_issues::{Assignee, BoardIssue, By, Filter, IssueDetail, ListedIssue, NewIssue, Patch, Priority, Status};
-use muliao_platform::ids::AgentId;
+use muliao_platform::ids::{AgentId, IssueId};
 use serde::Deserialize;
 use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::router::OpenApiRouter;
@@ -79,7 +79,7 @@ pub struct IssueCreate {
     pub assignee: Option<Assignee>,
     /// 依赖的上游 issue id；不能成环
     #[serde(default)]
-    pub depends_on: Vec<i64>,
+    pub depends_on: Vec<IssueId>,
 }
 
 #[utoipa::path(post, path = "/api/issues", tag = "issues", request_body = IssueCreate,
@@ -105,8 +105,9 @@ async fn create_issue(
 }
 
 #[utoipa::path(get, path = "/api/issues/{issue_id}", tag = "issues",
+    params(("issue_id" = IssueId, Path, description = "issue 的编号")),
     responses((status = 200, body = IssueDetail), (status = 404, body = ErrorOut)))]
-async fn get_issue(State(s): State<AppState>, Path(issue_id): Path<i64>) -> ApiResult<axum::Json<IssueDetail>> {
+async fn get_issue(State(s): State<AppState>, Path(issue_id): Path<IssueId>) -> ApiResult<axum::Json<IssueDetail>> {
     Ok(axum::Json(s.services.board.detail(issue_id).await?))
 }
 
@@ -129,15 +130,16 @@ pub struct IssuePatch {
     pub assignee: Option<Option<Assignee>>,
     /// 依赖的上游 issue id，整体替换（[] 去掉全部）；不出现表示不变
     #[serde(default)]
-    pub depends_on: Option<Vec<i64>>,
+    pub depends_on: Option<Vec<IssueId>>,
 }
 
-#[utoipa::path(patch, path = "/api/issues/{issue_id}", tag = "issues", request_body = IssuePatch,
+#[utoipa::path(patch, path = "/api/issues/{issue_id}", tag = "issues",
+    params(("issue_id" = IssueId, Path, description = "issue 的编号")), request_body = IssuePatch,
     responses((status = 200, body = BoardIssue), (status = 404, body = ErrorOut), (status = 409, body = ErrorOut),
         (status = 422, body = ErrorOut)))]
 async fn update_issue(
     State(s): State<AppState>,
-    Path(issue_id): Path<i64>,
+    Path(issue_id): Path<IssueId>,
     Json(body): Json<IssuePatch>,
 ) -> ApiResult<axum::Json<BoardIssue>> {
     let patch = Patch {
@@ -159,11 +161,12 @@ pub struct CommentIn {
     pub body: String,
 }
 
-#[utoipa::path(post, path = "/api/issues/{issue_id}/comments", tag = "issues", request_body = CommentIn,
+#[utoipa::path(post, path = "/api/issues/{issue_id}/comments", tag = "issues",
+    params(("issue_id" = IssueId, Path, description = "issue 的编号")), request_body = CommentIn,
     responses((status = 201, body = Activity), (status = 404, body = ErrorOut), (status = 422, body = ErrorOut)))]
 async fn comment_issue(
     State(s): State<AppState>,
-    Path(issue_id): Path<i64>,
+    Path(issue_id): Path<IssueId>,
     Json(body): Json<CommentIn>,
 ) -> ApiResult<(StatusCode, axum::Json<Activity>)> {
     Ok((StatusCode::CREATED, axum::Json(s.services.board.comment(By::user(), issue_id, body.body).await?)))
@@ -171,8 +174,9 @@ async fn comment_issue(
 
 /// 审核通过指派给用户的 issue：设为 done。没有指派给用户时 409。
 #[utoipa::path(post, path = "/api/issues/{issue_id}/approve", tag = "issues",
+    params(("issue_id" = IssueId, Path, description = "issue 的编号")),
     responses((status = 200, body = BoardIssue), (status = 404, body = ErrorOut), (status = 409, body = ErrorOut)))]
-async fn approve_issue(State(s): State<AppState>, Path(issue_id): Path<i64>) -> ApiResult<axum::Json<BoardIssue>> {
+async fn approve_issue(State(s): State<AppState>, Path(issue_id): Path<IssueId>) -> ApiResult<axum::Json<BoardIssue>> {
     let board = &s.services.board;
     let issue = board.approve(issue_id).await?;
     Ok(axum::Json(board.get(issue.id).await?))
@@ -180,8 +184,9 @@ async fn approve_issue(State(s): State<AppState>, Path(issue_id): Path<i64>) -> 
 
 /// 开工 backlog 里的 issue：指派给 owner 并进入 in_progress。不在 backlog 或没有 owner 时 409。
 #[utoipa::path(post, path = "/api/issues/{issue_id}/start", tag = "issues",
+    params(("issue_id" = IssueId, Path, description = "issue 的编号")),
     responses((status = 200, body = BoardIssue), (status = 404, body = ErrorOut), (status = 409, body = ErrorOut)))]
-async fn start_issue(State(s): State<AppState>, Path(issue_id): Path<i64>) -> ApiResult<axum::Json<BoardIssue>> {
+async fn start_issue(State(s): State<AppState>, Path(issue_id): Path<IssueId>) -> ApiResult<axum::Json<BoardIssue>> {
     let board = &s.services.board;
     let issue = board.start(issue_id).await?;
     Ok(axum::Json(board.get(issue.id).await?))
@@ -195,11 +200,12 @@ pub struct RejectIn {
 
 /// 打回指派给用户的 issue：理由记成评论，回到 in_progress，指派给把它交给用户的 agent。没有指派给用户、或不是 agent 交来的
 /// 时 409。
-#[utoipa::path(post, path = "/api/issues/{issue_id}/reject", tag = "issues", request_body = RejectIn,
+#[utoipa::path(post, path = "/api/issues/{issue_id}/reject", tag = "issues",
+    params(("issue_id" = IssueId, Path, description = "issue 的编号")), request_body = RejectIn,
     responses((status = 200, body = BoardIssue), (status = 404, body = ErrorOut), (status = 409, body = ErrorOut)))]
 async fn reject_issue(
     State(s): State<AppState>,
-    Path(issue_id): Path<i64>,
+    Path(issue_id): Path<IssueId>,
     Json(body): Json<RejectIn>,
 ) -> ApiResult<axum::Json<BoardIssue>> {
     let board = &s.services.board;
@@ -208,8 +214,9 @@ async fn reject_issue(
 }
 
 #[utoipa::path(delete, path = "/api/issues/{issue_id}", tag = "issues",
+    params(("issue_id" = IssueId, Path, description = "issue 的编号")),
     responses((status = 204), (status = 404, body = ErrorOut)))]
-async fn delete_issue(State(s): State<AppState>, Path(issue_id): Path<i64>) -> ApiResult<StatusCode> {
+async fn delete_issue(State(s): State<AppState>, Path(issue_id): Path<IssueId>) -> ApiResult<StatusCode> {
     s.services.board.delete(issue_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

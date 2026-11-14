@@ -16,6 +16,8 @@ futures = { workspace = true }
 libc = { workspace = true }
 reqwest = { workspace = true }
 rusqlite = { workspace = true }
+# 编号出现在工具参数里（ids.rs）
+schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }

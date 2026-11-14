@@ -18,7 +18,7 @@
 //! - 排队的事件只在内存里：服务重启、改配置、停用时丢失；一批开始触发后不再重试（至多一次）；命令退出时管道里没读的输出只
 //!   限时读。命令自己做断线重连、去重与游标，重要的来源另加轮询兜底（skill triggers）。
 
-use muliao_platform::ids::{AgentId, SessionId};
+use muliao_platform::ids::{AgentId, SessionId, TriggerId};
 use std::collections::{BTreeMap, HashMap};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
@@ -175,7 +175,7 @@ pub fn stderr_log(name: &str) -> String {
 
 /// 正在托管的流式触发器（只在内存）：对账按 generation 起停，运行状况给界面看。克隆共享同一份。
 #[derive(Clone, Default)]
-pub struct Hosting(Arc<Mutex<HashMap<i64, Hosted>>>);
+pub struct Hosting(Arc<Mutex<HashMap<TriggerId, Hosted>>>);
 
 struct Hosted {
     generation: String,
@@ -186,7 +186,7 @@ struct Hosted {
 
 impl Hosting {
     /// 这个触发器的托管进程的运行状况。
-    pub fn process(&self, trigger_id: i64) -> Process {
+    pub fn process(&self, trigger_id: TriggerId) -> Process {
         let hosted = self.0.lock().expect("hosting lock");
         hosted.get(&trigger_id).map(|h| *h.process.lock().expect("process lock")).unwrap_or_default()
     }
@@ -237,7 +237,7 @@ fn stream_alert(t: &Trigger, config: &StreamConfig, fault: &str) -> String {
 /// 一个托管进程要的东西。名称、agent 不会改，配置一改 generation 就换：对账只比 generation。
 #[derive(Debug, Clone)]
 struct Spec {
-    trigger_id: i64,
+    trigger_id: TriggerId,
     name: String,
     agent_id: AgentId,
     config: StreamConfig,
@@ -395,7 +395,7 @@ impl StreamRunner {
     /// 对账一次；列不出触发器时返回 false。
     async fn reconcile(self: &Arc<Self>) -> bool {
         let listing = Listing { kind: Some(Kind::Stream), enabled_only: true, ..Listing::default() };
-        let wanted: HashMap<i64, Spec> = match self.service.list(listing).await {
+        let wanted: HashMap<TriggerId, Spec> = match self.service.list(listing).await {
             Ok(ts) => ts.iter().filter_map(Spec::of).map(|s| (s.trigger_id, s)).collect(),
             Err(e) => {
                 tracing::error!(error = %e, "listing stream triggers failed; retrying");
@@ -407,7 +407,7 @@ impl StreamRunner {
             let keep = wanted.get(id).is_some_and(|s| s.generation == h.generation);
             if !keep {
                 h.task.abort();
-                tracing::info!(trigger_id = id, "stream stopped");
+                tracing::info!(trigger_id = %id, "stream stopped");
             }
             keep
         });

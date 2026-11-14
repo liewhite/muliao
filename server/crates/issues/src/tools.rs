@@ -4,7 +4,7 @@ use agenter::{Tool, ToolCtx, ToolError, ToolOutput};
 use chrono::{DateTime, Utc};
 use muliao_assets::agents::{AgentNames, agent_names_in, named_in};
 use muliao_assets::naming::USER;
-use muliao_platform::ids::AgentId;
+use muliao_platform::ids::{AgentId, IssueId};
 use muliao_platform::tool_views::{ToolRender, View, ViewBlock, fields};
 use muliao_platform::tooling::{BuiltinTool, RunScope, ToolTraits, builtin};
 use muliao_sessions::activity::WorkState;
@@ -53,7 +53,7 @@ fn markdown(text: &str) -> Option<ViewBlock> {
     (!text.is_empty()).then(|| ViewBlock::Markdown { title: None, text: text.to_owned() })
 }
 
-fn issue_field(id: i64) -> (&'static str, muliao_platform::tool_views::FieldValue) {
+fn issue_field(id: IssueId) -> (&'static str, muliao_platform::tool_views::FieldValue) {
     ("issue", format!("#{id}").into())
 }
 
@@ -62,7 +62,7 @@ fn issue_field(id: i64) -> (&'static str, muliao_platform::tool_views::FieldValu
 /// issue_list 的一项（给模型看：agent 用名称）。
 #[derive(Debug, Serialize)]
 pub struct IssueSummary {
-    pub id: i64,
+    pub id: IssueId,
     pub title: String,
     /// 负责的项目（agent 名）；负责的 agent 被删除后为 null
     pub owner: Option<String>,
@@ -72,8 +72,8 @@ pub struct IssueSummary {
     pub assignee: Option<String>,
     pub assignee_state: Option<WorkState>,
     pub stalled: bool,
-    pub depends_on: Vec<i64>,
-    pub waiting_on: Vec<i64>,
+    pub depends_on: Vec<IssueId>,
+    pub waiting_on: Vec<IssueId>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -149,7 +149,7 @@ impl Tool<RunScope> for IssueList {
 /// 界面上 issue_list 的结果表只用到的列（从 [`IssueSummary`] 的 JSON 还原）。
 #[derive(Deserialize)]
 struct ListedRow {
-    id: i64,
+    id: IssueId,
     title: String,
     status: String,
     assignee: Option<String>,
@@ -190,7 +190,7 @@ fn list_render() -> ToolRender {
 #[derive(Deserialize, JsonSchema)]
 pub struct ShowArgs {
     /// Issue number.
-    issue_id: i64,
+    issue_id: IssueId,
 }
 
 pub struct IssueShow(Board);
@@ -265,7 +265,7 @@ pub struct CreateArgs {
     assignee: Option<String>,
     /// Issue numbers this one waits for; dependencies must not form a cycle.
     #[serde(default)]
-    depends_on: Vec<i64>,
+    depends_on: Vec<IssueId>,
     /// Several issues to create at once, each with the fields above plus an optional `key`; in their `depends_on`, a
     /// string is the key of another item of this batch, a number an existing issue.
     #[serde(default)]
@@ -417,7 +417,7 @@ fn create_render() -> ToolRender {
 #[derive(Deserialize, JsonSchema)]
 pub struct UpdateArgs {
     /// Issue number.
-    issue_id: i64,
+    issue_id: IssueId,
     /// New owner agent (by name): the project this issue belongs to.
     #[serde(default)]
     owner: Option<String>,
@@ -442,7 +442,7 @@ pub struct UpdateArgs {
     /// The full new list of issue numbers this one waits for (replaces the old list; `[]` removes all); dependencies
     /// must not form a cycle.
     #[serde(default)]
-    depends_on: Option<Vec<i64>>,
+    depends_on: Option<Vec<IssueId>>,
 }
 
 pub struct IssueUpdate(Board);
@@ -515,7 +515,7 @@ fn update_render() -> ToolRender {
 #[derive(Deserialize, JsonSchema)]
 pub struct StopArgs {
     /// Issue number.
-    issue_id: i64,
+    issue_id: IssueId,
     /// New status: `backlog`, `blocked`, `cancelled`, or `in_progress` to redirect the work (then `message` is
     /// required); not `in_review` or `done`.
     status: StopStatus,
@@ -575,7 +575,7 @@ fn stop_render() -> ToolRender {
 #[derive(Deserialize, JsonSchema)]
 pub struct CommentArgs {
     /// Issue number.
-    issue_id: i64,
+    issue_id: IssueId,
     /// Comment text.
     body: String,
 }

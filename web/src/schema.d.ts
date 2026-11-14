@@ -1119,8 +1119,7 @@ export interface components {
         Activity: components["schemas"]["Happening"] & {
             /** Format: int64 */
             id: number;
-            /** Format: int64 */
-            issue_id: number;
+            issue_id: components["schemas"]["IssueId"];
             /** Format: date-time */
             created_at: string;
             /** @description 做这件事的人：用户、agent，或系统自己的清理 */
@@ -1446,7 +1445,7 @@ export interface components {
             to: string;
         };
         /** @description 属性从什么改成什么（存为 `{"from": ..., "to": ...}`）。 */
-        Change_Vec_i64: {
+        Change_Vec_IssueId: {
             from: number[];
             to: number[];
         };
@@ -1515,11 +1514,8 @@ export interface components {
         DeltaType: "assistant" | "thinking";
         /** @description 一个上游完成（done / cancelled）：它的状态变化，状态的取值同 [`Happening::Status`]。 */
         DependencyChange: {
-            /**
-             * Format: int64
-             * @description 完成的那个上游
-             */
-            issue: number;
+            /** @description 完成的那个上游 */
+            issue: components["schemas"]["IssueId"];
             from: components["schemas"]["Recorded"];
             to: components["schemas"]["Recorded"];
         };
@@ -1645,7 +1641,7 @@ export interface components {
             /** @enum {string} */
             kind: "owner";
         } | {
-            change: components["schemas"]["Change_Vec_i64"];
+            change: components["schemas"]["Change_Vec_IssueId"];
             /** @enum {string} */
             kind: "depends_on";
         } | {
@@ -1681,8 +1677,7 @@ export interface components {
         Importance: number;
         /** @description 人与 agent 协作的一件事（读模型，也是 HTTP 返回的形状）。 */
         Issue: {
-            /** Format: int64 */
-            id: number;
+            id: components["schemas"]["IssueId"];
             title: string;
             description: string;
             status: components["schemas"]["Status"];
@@ -1705,12 +1700,17 @@ export interface components {
             priority?: components["schemas"]["Priority"];
             assignee?: components["schemas"]["Assignee"] | null;
             /** @description 依赖的上游 issue id；不能成环 */
-            depends_on?: number[];
+            depends_on?: components["schemas"]["IssueId"][];
         };
         IssueDetail: {
             issue: components["schemas"]["BoardIssue"];
             activities: components["schemas"]["Activity"][];
         };
+        /**
+         * Format: int64
+         * @description issue 的编号（issues 表的行号，看板上的 #N）
+         */
+        IssueId: number;
         /** @description 只修改给出的字段。assignee 给出 null 表示取消指派，不出现表示不变。 */
         IssuePatch: {
             owner?: components["schemas"]["AgentId"] | null;
@@ -1720,7 +1720,7 @@ export interface components {
             priority?: components["schemas"]["Priority"] | null;
             assignee?: components["schemas"]["Assignee"] | null;
             /** @description 依赖的上游 issue id，整体替换（[] 去掉全部）；不出现表示不变 */
-            depends_on?: number[] | null;
+            depends_on?: components["schemas"]["IssueId"][] | null;
         };
         /** @description 谁在这个 issue 上做事、它在等谁（从会话领域与依赖图派生，不存）。 */
         IssueWork: {
@@ -1732,9 +1732,9 @@ export interface components {
             /** @description in_progress、指派给 agent，它的 issue 会话却空闲或不存在：该有人做却没人在做 */
             stalled: boolean;
             /** @description 它依赖的上游、依赖它的下游、还没完成（不是 done / cancelled）的上游：非空时还轮不到它 */
-            depends_on: number[];
-            blocks: number[];
-            waiting_on: number[];
+            depends_on: components["schemas"]["IssueId"][];
+            blocks: components["schemas"]["IssueId"][];
+            waiting_on: components["schemas"]["IssueId"][];
             /** @description 已结束（done / cancelled）：不再挡着依赖它的 issue */
             finished: boolean;
             /** @description 用户能审核（通过或打回）：指派给用户、还没结束 */
@@ -1827,8 +1827,7 @@ export interface components {
         };
         /** @description 列表形状的 issue：[`BoardIssue`] 去掉描述（整份列表里它占七成，#843），描述只在单个 issue 里给。字段含义同 [`Issue`]。 */
         ListedIssue: components["schemas"]["IssueWork"] & {
-            /** Format: int64 */
-            id: number;
+            id: components["schemas"]["IssueId"];
             title: string;
             status: components["schemas"]["Status"];
             priority: components["schemas"]["Priority"];
@@ -2349,13 +2348,11 @@ export interface components {
             /** @enum {string} */
             kind: "delegation";
         } | {
-            /** Format: int64 */
-            trigger_id: number;
+            trigger_id: components["schemas"]["TriggerId"];
             /** @enum {string} */
             kind: "trigger";
         } | {
-            /** Format: int64 */
-            issue_id: number;
+            issue_id: components["schemas"]["IssueId"];
             /** @enum {string} */
             kind: "issue";
         };
@@ -2504,6 +2501,11 @@ export interface components {
             source: components["schemas"]["FaultSource"];
             error: string;
         };
+        /**
+         * Format: int64
+         * @description 触发器的编号（triggers 表的行号）
+         */
+        TriggerId: number;
         TriggerKindOut: {
             name: components["schemas"]["Kind"];
             /** @description 什么时候触发、config 的格式 */
@@ -2511,8 +2513,7 @@ export interface components {
         };
         /** @description 一个触发器：各方式共有的字段，加上按 kind 区分的 config 与 status。 */
         TriggerOut: components["schemas"]["KindView"] & {
-            /** Format: int64 */
-            id: number;
+            id: components["schemas"]["TriggerId"];
             name: string;
             agent_id: components["schemas"]["AgentId"];
             prompt: string;
@@ -4118,7 +4119,7 @@ export interface operations {
                 /** @description 只列这些来源的会话（可以重复给） */
                 origin?: string[];
                 /** @description 只列这个触发器发起的会话（不能再给 origin） */
-                trigger_id?: number;
+                trigger_id?: components["schemas"]["TriggerId"];
                 /** @description 关键字：只列标题或消息含有它的会话（不区分 ASCII 大小写；空串不过滤） */
                 q?: string;
                 /** @description 一页的条数，不给取默认 */
@@ -4747,7 +4748,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                issue_id: number;
+                /** @description issue 的编号 */
+                issue_id: components["schemas"]["IssueId"];
             };
             cookie?: never;
         };
@@ -4776,7 +4778,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                issue_id: number;
+                /** @description issue 的编号 */
+                issue_id: components["schemas"]["IssueId"];
             };
             cookie?: never;
         };
@@ -4803,7 +4806,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                issue_id: number;
+                /** @description issue 的编号 */
+                issue_id: components["schemas"]["IssueId"];
             };
             cookie?: never;
         };
@@ -4852,7 +4856,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                issue_id: number;
+                /** @description issue 的编号 */
+                issue_id: components["schemas"]["IssueId"];
             };
             cookie?: never;
         };
@@ -4893,7 +4898,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                issue_id: number;
+                /** @description issue 的编号 */
+                issue_id: components["schemas"]["IssueId"];
             };
             cookie?: never;
         };
@@ -4930,7 +4936,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                issue_id: number;
+                /** @description issue 的编号 */
+                issue_id: components["schemas"]["IssueId"];
             };
             cookie?: never;
         };
@@ -4967,7 +4974,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                issue_id: number;
+                /** @description issue 的编号 */
+                issue_id: components["schemas"]["IssueId"];
             };
             cookie?: never;
         };
@@ -5096,7 +5104,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                trigger_id: number;
+                /** @description 触发器的编号 */
+                trigger_id: components["schemas"]["TriggerId"];
             };
             cookie?: never;
         };
@@ -5123,7 +5132,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                trigger_id: number;
+                /** @description 触发器的编号 */
+                trigger_id: components["schemas"]["TriggerId"];
             };
             cookie?: never;
         };
@@ -5172,7 +5182,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                trigger_id: number;
+                /** @description 触发器的编号 */
+                trigger_id: components["schemas"]["TriggerId"];
             };
             cookie?: never;
         };

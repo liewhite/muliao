@@ -234,7 +234,8 @@ fn indented(text: &str) -> String {
 fn place(session: &Session) -> String {
     let origin = session.origin.origin().to_string();
     match &session.origin {
-        SessionOrigin::Trigger { trigger_id: n } | SessionOrigin::Issue { issue_id: n } => format!("{origin} #{n}"),
+        SessionOrigin::Trigger { trigger_id: n } => format!("{origin} #{n}"),
+        SessionOrigin::Issue { issue_id: n } => format!("{origin} #{n}"),
         SessionOrigin::User => origin,
         SessionOrigin::Delegation { thread, parent_session_id } => {
             let parent = parent_session_id.as_ref().map_or("(deleted)", SessionId::as_str);

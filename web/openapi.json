@@ -1860,8 +1860,7 @@
             "description": "只列这个触发器发起的会话（不能再给 origin）",
             "required": false,
             "schema": {
-              "type": "integer",
-              "format": "int64"
+              "$ref": "#/components/schemas/TriggerId"
             }
           },
           {
@@ -2693,10 +2692,10 @@
           {
             "name": "issue_id",
             "in": "path",
+            "description": "issue 的编号",
             "required": true,
             "schema": {
-              "type": "integer",
-              "format": "int64"
+              "$ref": "#/components/schemas/IssueId"
             }
           }
         ],
@@ -2730,10 +2729,10 @@
           {
             "name": "issue_id",
             "in": "path",
+            "description": "issue 的编号",
             "required": true,
             "schema": {
-              "type": "integer",
-              "format": "int64"
+              "$ref": "#/components/schemas/IssueId"
             }
           }
         ],
@@ -2759,10 +2758,10 @@
           {
             "name": "issue_id",
             "in": "path",
+            "description": "issue 的编号",
             "required": true,
             "schema": {
-              "type": "integer",
-              "format": "int64"
+              "$ref": "#/components/schemas/IssueId"
             }
           }
         ],
@@ -2826,10 +2825,10 @@
           {
             "name": "issue_id",
             "in": "path",
+            "description": "issue 的编号",
             "required": true,
             "schema": {
-              "type": "integer",
-              "format": "int64"
+              "$ref": "#/components/schemas/IssueId"
             }
           }
         ],
@@ -2885,10 +2884,10 @@
           {
             "name": "issue_id",
             "in": "path",
+            "description": "issue 的编号",
             "required": true,
             "schema": {
-              "type": "integer",
-              "format": "int64"
+              "$ref": "#/components/schemas/IssueId"
             }
           }
         ],
@@ -2934,10 +2933,10 @@
           {
             "name": "issue_id",
             "in": "path",
+            "description": "issue 的编号",
             "required": true,
             "schema": {
-              "type": "integer",
-              "format": "int64"
+              "$ref": "#/components/schemas/IssueId"
             }
           }
         ],
@@ -2983,10 +2982,10 @@
           {
             "name": "issue_id",
             "in": "path",
+            "description": "issue 的编号",
             "required": true,
             "schema": {
-              "type": "integer",
-              "format": "int64"
+              "$ref": "#/components/schemas/IssueId"
             }
           }
         ],
@@ -3151,10 +3150,10 @@
           {
             "name": "trigger_id",
             "in": "path",
+            "description": "触发器的编号",
             "required": true,
             "schema": {
-              "type": "integer",
-              "format": "int64"
+              "$ref": "#/components/schemas/TriggerId"
             }
           }
         ],
@@ -3180,10 +3179,10 @@
           {
             "name": "trigger_id",
             "in": "path",
+            "description": "触发器的编号",
             "required": true,
             "schema": {
-              "type": "integer",
-              "format": "int64"
+              "$ref": "#/components/schemas/TriggerId"
             }
           }
         ],
@@ -3248,10 +3247,10 @@
           {
             "name": "trigger_id",
             "in": "path",
+            "description": "触发器的编号",
             "required": true,
             "schema": {
-              "type": "integer",
-              "format": "int64"
+              "$ref": "#/components/schemas/TriggerId"
             }
           }
         ],
@@ -3753,8 +3752,7 @@
                 "format": "int64"
               },
               "issue_id": {
-                "type": "integer",
-                "format": "int64"
+                "$ref": "#/components/schemas/IssueId"
               },
               "created_at": {
                 "type": "string",
@@ -5071,7 +5069,7 @@
         },
         "additionalProperties": false
       },
-      "Change_Vec_i64": {
+      "Change_Vec_IssueId": {
         "type": "object",
         "description": "属性从什么改成什么（存为 `{\"from\": ..., \"to\": ...}`）。",
         "required": [
@@ -5083,14 +5081,16 @@
             "type": "array",
             "items": {
               "type": "integer",
-              "format": "int64"
+              "format": "int64",
+              "description": "issue 的编号（issues 表的行号，看板上的 #N）"
             }
           },
           "to": {
             "type": "array",
             "items": {
               "type": "integer",
-              "format": "int64"
+              "format": "int64",
+              "description": "issue 的编号（issues 表的行号，看板上的 #N）"
             }
           }
         },
@@ -5245,8 +5245,7 @@
         ],
         "properties": {
           "issue": {
-            "type": "integer",
-            "format": "int64",
+            "$ref": "#/components/schemas/IssueId",
             "description": "完成的那个上游"
           },
           "from": {
@@ -5713,7 +5712,7 @@
             ],
             "properties": {
               "change": {
-                "$ref": "#/components/schemas/Change_Vec_i64"
+                "$ref": "#/components/schemas/Change_Vec_IssueId"
               },
               "kind": {
                 "type": "string",
@@ -5843,8 +5842,7 @@
         ],
         "properties": {
           "id": {
-            "type": "integer",
-            "format": "int64"
+            "$ref": "#/components/schemas/IssueId"
           },
           "title": {
             "type": "string"
@@ -5931,8 +5929,7 @@
           "depends_on": {
             "type": "array",
             "items": {
-              "type": "integer",
-              "format": "int64"
+              "$ref": "#/components/schemas/IssueId"
             },
             "description": "依赖的上游 issue id；不能成环"
           }
@@ -5955,6 +5952,11 @@
             }
           }
         }
+      },
+      "IssueId": {
+        "type": "integer",
+        "format": "int64",
+        "description": "issue 的编号（issues 表的行号，看板上的 #N）"
       },
       "IssuePatch": {
         "type": "object",
@@ -6019,8 +6021,7 @@
               "null"
             ],
             "items": {
-              "type": "integer",
-              "format": "int64"
+              "$ref": "#/components/schemas/IssueId"
             },
             "description": "依赖的上游 issue id，整体替换（[] 去掉全部）；不出现表示不变"
           }
@@ -6070,23 +6071,20 @@
           "depends_on": {
             "type": "array",
             "items": {
-              "type": "integer",
-              "format": "int64"
+              "$ref": "#/components/schemas/IssueId"
             },
             "description": "它依赖的上游、依赖它的下游、还没完成（不是 done / cancelled）的上游：非空时还轮不到它"
           },
           "blocks": {
             "type": "array",
             "items": {
-              "type": "integer",
-              "format": "int64"
+              "$ref": "#/components/schemas/IssueId"
             }
           },
           "waiting_on": {
             "type": "array",
             "items": {
-              "type": "integer",
-              "format": "int64"
+              "$ref": "#/components/schemas/IssueId"
             }
           },
           "finished": {
@@ -6448,8 +6446,7 @@
             ],
             "properties": {
               "id": {
-                "type": "integer",
-                "format": "int64"
+                "$ref": "#/components/schemas/IssueId"
               },
               "title": {
                 "type": "string"
@@ -8393,8 +8390,7 @@
             ],
             "properties": {
               "trigger_id": {
-                "type": "integer",
-                "format": "int64"
+                "$ref": "#/components/schemas/TriggerId"
               },
               "kind": {
                 "type": "string",
@@ -8412,8 +8408,7 @@
             ],
             "properties": {
               "issue_id": {
-                "type": "integer",
-                "format": "int64"
+                "$ref": "#/components/schemas/IssueId"
               },
               "kind": {
                 "type": "string",
@@ -8892,6 +8887,11 @@
         },
         "additionalProperties": false
       },
+      "TriggerId": {
+        "type": "integer",
+        "format": "int64",
+        "description": "触发器的编号（triggers 表的行号）"
+      },
       "TriggerKindOut": {
         "type": "object",
         "required": [
@@ -8931,8 +8931,7 @@
             ],
             "properties": {
               "id": {
-                "type": "integer",
-                "format": "int64"
+                "$ref": "#/components/schemas/TriggerId"
               },
               "name": {
                 "type": "string"

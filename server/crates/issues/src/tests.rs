@@ -1,7 +1,7 @@
 //! 看板的测试：真库（agents、sessions、issues 的表），来信经会话领域真的收信入口（信进信箱，不跑 actor）；会话事件像会话
 //! 领域那样在一个事务里发布给订阅者。
 
-use muliao_platform::ids::{AgentId, RunId, SessionId};
+use muliao_platform::ids::{AgentId, IssueId, RunId, SessionId};
 use std::sync::Arc;
 
 use muliao_notifications::{Notification, Notifications, Push, VapidKeys};
@@ -106,13 +106,13 @@ impl World {
     }
 
     /// agent 在这个 issue 上的会话
-    async fn session(&self, issue_id: i64, agent_id: &str) -> Option<SessionId> {
+    async fn session(&self, issue_id: IssueId, agent_id: &str) -> Option<SessionId> {
         let a = AgentId::new(agent_id);
         self.db.read(move |c| crate::conversation::session_in(c, issue_id, &a)).await.unwrap().map(|s| s.id)
     }
 
     /// agent 在这个 issue 会话里排着的信
-    async fn letters(&self, issue_id: i64, agent_id: &str) -> Vec<String> {
+    async fn letters(&self, issue_id: IssueId, agent_id: &str) -> Vec<String> {
         let Some(s) = self.session(issue_id, agent_id).await else { return vec![] };
         self.db
             .read(move |c| queued_in(c, &s))
@@ -128,7 +128,7 @@ impl World {
         self.db.write(|tx| tx.execute("UPDATE mail SET state = 'consumed'", []).map(drop)).await.unwrap();
     }
 
-    async fn timeline(&self, issue_id: i64) -> Vec<activity::Activity> {
+    async fn timeline(&self, issue_id: IssueId) -> Vec<activity::Activity> {
         self.board.detail(issue_id).await.unwrap().activities
     }
 
@@ -278,7 +278,10 @@ async fn dependencies_hold_back_delivery_until_the_last_upstream_finishes() {
         .board
         .create_many(
             By::user(),
-            vec![NewIssue { depends_on: vec![Upstream::Issue(999)], ..new(A, "x", Status::Backlog, None) }],
+            vec![NewIssue {
+                depends_on: vec![Upstream::Issue(IssueId::new(999))],
+                ..new(A, "x", Status::Backlog, None)
+            }],
         )
         .await
         .unwrap_err();

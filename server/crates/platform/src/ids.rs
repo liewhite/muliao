@@ -1,7 +1,7 @@
 //! 记录的编号与几种规整过的值。
 //!
 //! 各领域的编号各是一个类型（[`AgentId`]、[`SessionId`]、[`RunId`]、[`MailId`]、[`HoldId`]、[`JobId`]、
-//! [`DelegationId`]）：只是名字，不带领域规则，
+//! [`DelegationId`]、[`IssueId`]、[`TriggerId`]）：只是名字，不带领域规则，
 //! 放在这里因为各层都要传它们（共享内核，docs/architecture.md 第 3 节）。不同编号不能互传，传错位置编译不过。
 //! 只在读入边界构造：读库（`FromSql`）、HTTP 路径与请求体（`Deserialize`）、新建记录（`new`）；序列化、存库、
 //! 接口描述里都与内部的字符串或整数相同（旧数据、前端无感）。
@@ -61,6 +61,21 @@ macro_rules! text_id {
                 String::column_result(v).map(Self)
             }
         }
+
+        // 工具参数里与内部的值相同：就地展开、不带本类型的说明（说明由参数字段自己写）
+        impl schemars::JsonSchema for $name {
+            fn inline_schema() -> bool {
+                true
+            }
+
+            fn schema_name() -> std::borrow::Cow<'static, str> {
+                <String as schemars::JsonSchema>::schema_name()
+            }
+
+            fn json_schema(g: &mut schemars::SchemaGenerator) -> schemars::Schema {
+                <String as schemars::JsonSchema>::json_schema(g)
+            }
+        }
     };
 }
 
@@ -107,6 +122,21 @@ macro_rules! row_id {
                 i64::column_result(v).map(Self)
             }
         }
+
+        // 工具参数里与内部的值相同：就地展开、不带本类型的说明（说明由参数字段自己写）
+        impl schemars::JsonSchema for $name {
+            fn inline_schema() -> bool {
+                true
+            }
+
+            fn schema_name() -> std::borrow::Cow<'static, str> {
+                <i64 as schemars::JsonSchema>::schema_name()
+            }
+
+            fn json_schema(g: &mut schemars::SchemaGenerator) -> schemars::Schema {
+                <i64 as schemars::JsonSchema>::json_schema(g)
+            }
+        }
     };
 }
 
@@ -137,6 +167,14 @@ row_id!(
 row_id!(
     /// 一次委派的编号（thread_calls 表的行号）
     DelegationId
+);
+row_id!(
+    /// issue 的编号（issues 表的行号，看板上的 #N）
+    IssueId
+);
+row_id!(
+    /// 触发器的编号（triggers 表的行号）
+    TriggerId
 );
 
 /// 浏览器可以直接显示、模型也普遍能看的图片类型：只有这些按 inline 返回，并作为图片交给模型。SVG 不在其中：它能带脚本

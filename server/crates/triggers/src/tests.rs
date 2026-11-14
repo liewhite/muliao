@@ -1,6 +1,6 @@
 //! 触发器的测试：真库、真的会话来信入口与通知、真起命令（写沙箱 enforce）；时间由测试给（`fire_due(now)`）。
 
-use muliao_platform::ids::{AgentId, JobId, SessionId};
+use muliao_platform::ids::{AgentId, JobId, SessionId, TriggerId};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -162,16 +162,16 @@ impl World {
             .await
     }
 
-    async fn get(&self, id: i64) -> Trigger {
+    async fn get(&self, id: TriggerId) -> Trigger {
         self.svc().get(id).await.unwrap()
     }
 
-    async fn status(&self, id: i64) -> Value {
+    async fn status(&self, id: TriggerId) -> Value {
         serde_json::from_str(&self.svc().view(self.get(id).await).await.unwrap().kind.status_json()).unwrap()
     }
 
     /// 这个触发器开出的会话：(id, 标题)，按建立顺序
-    async fn sessions(&self, trigger_id: i64) -> Vec<(SessionId, String)> {
+    async fn sessions(&self, trigger_id: TriggerId) -> Vec<(SessionId, String)> {
         self.db
             .read(move |c| {
                 let mut stmt = c.prepare(

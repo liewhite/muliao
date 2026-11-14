@@ -3,7 +3,7 @@
 use axum::extract::State;
 use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
-use muliao_platform::ids::{AgentId, SessionId};
+use muliao_platform::ids::{AgentId, SessionId, TriggerId};
 use muliao_triggers::faults::TriggerFault;
 use muliao_triggers::kinds::{Kind, KindView, NewConfig};
 use muliao_triggers::precheck::{Precheck, PrecheckOut};
@@ -43,7 +43,7 @@ async fn trigger_kinds() -> axum::Json<Vec<TriggerKindOut>> {
 /// 一个触发器：各方式共有的字段，加上按 kind 区分的 config 与 status。
 #[derive(Serialize, ToSchema)]
 pub struct TriggerOut {
-    id: i64,
+    id: TriggerId,
     name: String,
     agent_id: AgentId,
     prompt: String,
@@ -150,12 +150,13 @@ pub struct TriggerPatch {
     pub precheck: Option<Option<Precheck>>,
 }
 
-#[utoipa::path(patch, path = "/api/triggers/{trigger_id}", tag = "triggers", request_body = TriggerPatch,
+#[utoipa::path(patch, path = "/api/triggers/{trigger_id}", tag = "triggers",
+    params(("trigger_id" = TriggerId, Path, description = "触发器的编号")), request_body = TriggerPatch,
     responses((status = 200, body = TriggerOut), (status = 404, body = ErrorOut), (status = 409, body = ErrorOut),
         (status = 422, body = ErrorOut)))]
 async fn update_trigger(
     State(s): State<AppState>,
-    Path(trigger_id): Path<i64>,
+    Path(trigger_id): Path<TriggerId>,
     Json(body): Json<TriggerPatch>,
 ) -> ApiResult<axum::Json<TriggerOut>> {
     let t = &s.services.triggers;
@@ -170,8 +171,9 @@ async fn update_trigger(
 }
 
 #[utoipa::path(delete, path = "/api/triggers/{trigger_id}", tag = "triggers",
+    params(("trigger_id" = TriggerId, Path, description = "触发器的编号")),
     responses((status = 204), (status = 404, body = ErrorOut)))]
-async fn delete_trigger(State(s): State<AppState>, Path(trigger_id): Path<i64>) -> ApiResult<StatusCode> {
+async fn delete_trigger(State(s): State<AppState>, Path(trigger_id): Path<TriggerId>) -> ApiResult<StatusCode> {
     s.services.triggers.delete(trigger_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -187,11 +189,12 @@ pub struct FiredOut {
 /// 立即触发一次（不带事件内容）。有前置检查时同样先跑检查，可以用来测试整条链路（检查失败 422 带原因）。不消耗一次性
 /// 触发器预定的那一次；已结束的触发器不能再运行。
 #[utoipa::path(post, path = "/api/triggers/{trigger_id}/run", tag = "triggers",
+    params(("trigger_id" = TriggerId, Path, description = "触发器的编号")),
     responses((status = 202, body = FiredOut), (status = 404, body = ErrorOut), (status = 409, body = ErrorOut),
         (status = 422, body = ErrorOut)))]
 async fn run_trigger(
     State(s): State<AppState>,
-    Path(trigger_id): Path<i64>,
+    Path(trigger_id): Path<TriggerId>,
 ) -> ApiResult<(StatusCode, axum::Json<FiredOut>)> {
     let fired = s.services.triggers.run(trigger_id).await?;
     let out = FiredOut { fired: fired.is_some(), session_id: fired.map(|f| f.session_id) };

@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use muliao_platform::errors::{Result, broken};
-use muliao_platform::ids::SessionId;
+use muliao_platform::ids::{IssueId, SessionId, TriggerId};
 
 /// 来源的种类：用户在界面发起、触发器、agent 之间委派、issue 看板。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
@@ -36,8 +36,8 @@ impl Origin {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Sender {
-    Trigger { trigger_id: i64 },
-    Issue { issue_id: i64 },
+    Trigger { trigger_id: TriggerId },
+    Issue { issue_id: IssueId },
 }
 
 impl Sender {
@@ -51,7 +51,8 @@ impl Sender {
     /// 在库里的编号（`origin_ref`）
     pub(crate) fn reference(self) -> String {
         match self {
-            Sender::Trigger { trigger_id: id } | Sender::Issue { issue_id: id } => id.to_string(),
+            Sender::Trigger { trigger_id } => trigger_id.to_string(),
+            Sender::Issue { issue_id } => issue_id.to_string(),
         }
     }
 }
@@ -62,8 +63,8 @@ impl Sender {
 pub enum SessionOrigin {
     User,
     Delegation { thread: String, parent_session_id: Option<SessionId> },
-    Trigger { trigger_id: i64 },
-    Issue { issue_id: i64 },
+    Trigger { trigger_id: TriggerId },
+    Issue { issue_id: IssueId },
 }
 
 impl SessionOrigin {
@@ -112,8 +113,8 @@ impl SessionOrigin {
                 )));
             }
             Origin::User => SessionOrigin::User,
-            Origin::Trigger => SessionOrigin::Trigger { trigger_id: number()? },
-            Origin::Issue => SessionOrigin::Issue { issue_id: number()? },
+            Origin::Trigger => SessionOrigin::Trigger { trigger_id: TriggerId::new(number()?) },
+            Origin::Issue => SessionOrigin::Issue { issue_id: IssueId::new(number()?) },
         })
     }
 
@@ -168,7 +169,7 @@ mod tests {
 
     #[test]
     fn stored_origins_round_trip_and_bad_ones_are_reported() {
-        let issue = SessionOrigin::Issue { issue_id: 7 };
+        let issue = SessionOrigin::Issue { issue_id: IssueId::new(7) };
         assert_eq!(SessionOrigin::parse(Origin::Issue, Some("7"), None, None).unwrap(), issue);
         assert_eq!(SessionOrigin::parse(Origin::User, None, None, None).unwrap(), SessionOrigin::User);
         let parent = Some(SessionId::new("p"));

@@ -14,6 +14,7 @@ use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
 use muliao_notifications::Notifications;
 use muliao_platform::db::Tx;
+use muliao_platform::ids::TriggerId;
 use tokio::task::JoinHandle;
 
 use crate::kinds::Due;
@@ -33,11 +34,11 @@ pub struct DueRunner {
     notifications: Notifications,
     /// 触发还没做完的（前置检查在跑时还没有会话，定时的「上一次会话不空闲就跳过」看不到它）：它再到期时只消耗不触发，同一个
     /// 触发器不重叠。只在内存：服务重启时在跑的触发随进程结束
-    firing: Arc<Mutex<HashSet<i64>>>,
+    firing: Arc<Mutex<HashSet<TriggerId>>>,
 }
 
 /// 从 firing 里移走（触发做完、出错或被取消都会走到）
-struct Firing(Arc<Mutex<HashSet<i64>>>, i64);
+struct Firing(Arc<Mutex<HashSet<TriggerId>>>, TriggerId);
 
 impl Drop for Firing {
     fn drop(&mut self) {
@@ -67,7 +68,7 @@ impl DueRunner {
     }
 
     /// 还会到期的触发器与它们的到期时间。列不出来（数据库出错）记 error，这一轮当作没有。
-    async fn pending(&self) -> Vec<(i64, DateTime<Utc>)> {
+    async fn pending(&self) -> Vec<(TriggerId, DateTime<Utc>)> {
         let listing = Listing { enabled_only: true, ..Listing::default() };
         match self.service.list(listing).await {
             Ok(triggers) => triggers.into_iter().filter_map(|mut t| Some((t.id, t.mode.due()?.at()))).collect(),
@@ -87,7 +88,7 @@ impl DueRunner {
                 continue;
             }
             if !self.firing.lock().expect("firing lock").insert(trigger_id) {
-                tracing::info!(trigger_id, "due fire skipped: its previous fire is still running");
+                tracing::info!(trigger_id = %trigger_id, "due fire skipped: its previous fire is still running");
                 continue;
             }
             let guard = Firing(self.firing.clone(), trigger_id);
@@ -96,7 +97,7 @@ impl DueRunner {
                 let _guard = guard;
                 // 契约之外的失败只记在它自己身上，不再重试（至多一次）
                 if let Err(e) = service.fire_activated(trigger_id, None).await {
-                    tracing::error!(trigger_id, error = %e, "due fire failed");
+                    tracing::error!(trigger_id = %trigger_id, error = %e, "due fire failed");
                 }
             }));
         }
@@ -104,7 +105,7 @@ impl DueRunner {
     }
 
     /// 按最新的行消耗这次到期，返回是否应当触发。失败（数据库出错）只记日志，没提交的下一轮重来。
-    async fn consume(&self, trigger_id: i64, now: DateTime<Utc>) -> bool {
+    async fn consume(&self, trigger_id: TriggerId, now: DateTime<Utc>) -> bool {
         let (tz, notifications) = (self.tz, self.notifications.clone());
         let consumed = self
             .service
@@ -126,11 +127,11 @@ impl DueRunner {
         match consumed {
             Ok(None) => true,
             Ok(Some(why)) => {
-                tracing::info!(trigger_id, why, "due fire skipped");
+                tracing::info!(trigger_id = %trigger_id, why, "due fire skipped");
                 false
             }
             Err(e) => {
-                tracing::error!(trigger_id, error = %e, "due consume failed");
+                tracing::error!(trigger_id = %trigger_id, error = %e, "due consume failed");
                 false
             }
         }

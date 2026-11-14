@@ -1,6 +1,6 @@
 //! issue 本身（`issues` 表的唯一读写处）与它的取值：状态、优先级、指派人、做事的人。
 
-use muliao_platform::ids::{AgentId, SessionId};
+use muliao_platform::ids::{AgentId, IssueId, SessionId};
 
 use chrono::{DateTime, Utc};
 use muliao_assets::naming::USER;
@@ -188,7 +188,7 @@ impl By {
 /// 人与 agent 协作的一件事（读模型，也是 HTTP 返回的形状）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct Issue {
-    pub id: i64,
+    pub id: IssueId,
     pub title: String,
     pub description: String,
     pub status: Status,
@@ -227,33 +227,44 @@ pub(crate) fn query(c: &Connection, filter: &str, params: impl rusqlite::Params)
     Ok(stmt.query_map(params, issue)?.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-pub(crate) fn find_in(c: &Connection, issue_id: i64) -> Result<Option<Issue>> {
+pub(crate) fn find_in(c: &Connection, issue_id: IssueId) -> Result<Option<Issue>> {
     Ok(c.query_row(&format!("SELECT {COLUMNS} FROM issues WHERE id = ?1"), [issue_id], issue).optional()?)
 }
 
 /// 存在的 issue；不存在 NotFound。
-pub fn issue_in(c: &Connection, issue_id: i64) -> Result<Issue> {
+pub fn issue_in(c: &Connection, issue_id: IssueId) -> Result<Issue> {
     find_in(c, issue_id)?.ok_or_else(|| not_found(format!("issue #{issue_id} not found")))
 }
 
-/// 新建一行（校验在调用方），返回它的编号。
-pub(crate) fn insert_in(c: &Connection, new: &Issue) -> Result<i64> {
+/// 新建的一行：编号由库给出，创建时间即更新时间（校验在调用方）。
+pub(crate) struct NewRow<'a> {
+    pub title: String,
+    pub description: &'a str,
+    pub status: Status,
+    pub priority: Priority,
+    pub owner: &'a AgentId,
+    pub assignee: Option<&'a Assignee>,
+    pub creator: &'a Actor,
+    pub at: DateTime<Utc>,
+}
+
+/// 新建一行，返回它的编号。
+pub(crate) fn insert_in(c: &Connection, new: &NewRow<'_>) -> Result<IssueId> {
     c.execute(
         "INSERT INTO issues (title, description, status, priority, owner_agent_id, assignee, creator, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
         params![
             new.title,
             new.description,
             new.status,
             new.priority,
             new.owner,
-            new.assignee.as_ref().map(Assignee::as_str),
+            new.assignee.map(Assignee::as_str),
             new.creator.as_str(),
-            new.created_at,
-            new.updated_at
+            new.at
         ],
     )?;
-    Ok(c.last_insert_rowid())
+    Ok(IssueId::new(c.last_insert_rowid()))
 }
 
 /// 把改过的字段写回（只由变更单元调用）。
@@ -275,7 +286,7 @@ pub(crate) fn save_in(c: &Connection, i: &Issue) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn delete_in(c: &Connection, issue_id: i64) -> Result<()> {
+pub(crate) fn delete_in(c: &Connection, issue_id: IssueId) -> Result<()> {
     c.execute("DELETE FROM issues WHERE id = ?1", [issue_id])?;
     Ok(())
 }

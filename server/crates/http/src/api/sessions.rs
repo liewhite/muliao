@@ -1,6 +1,6 @@
 //! 会话：列表、新建、会话页、发消息（含回答提问与批准调用）、停止、手动压缩、重试最终失败的运行、标记已读、删除。
 
-use muliao_platform::ids::{AgentId, JobId, MailId, SessionId};
+use muliao_platform::ids::{AgentId, JobId, MailId, SessionId, TriggerId};
 use std::collections::{BTreeMap, BTreeSet};
 
 use axum::extract::State;
@@ -94,7 +94,7 @@ pub struct ListQuery {
     #[param(value_type = Option<Vec<String>>)]
     pub origin: Option<Vec<Origin>>,
     /// 只列这个触发器发起的会话（不能再给 origin）
-    pub trigger_id: Option<i64>,
+    pub trigger_id: Option<TriggerId>,
     /// 关键字：只列标题或消息含有它的会话（不区分 ASCII 大小写；空串不过滤）
     pub q: Option<String>,
     /// 一页的条数，不给取默认

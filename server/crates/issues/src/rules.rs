@@ -1,7 +1,7 @@
 //! issue 的纯规则（docs/architecture.md 第 21 节）：动态投给谁、一次改动带出什么（通知用户、放行下游）、什么算停滞、哪些
 //! 操作此刻做不了（返回拒绝原因）。依赖图在 [`crate::graph`]，给模型看的文本在 [`crate::render`]。
 
-use muliao_platform::ids::AgentId;
+use muliao_platform::ids::{AgentId, IssueId};
 use muliao_sessions::activity::WorkState;
 
 use crate::activity::{Activity, Happening};
@@ -104,7 +104,7 @@ pub struct Snapshot {
     /// 负责项目的 agent id；负责的 agent 被删除后为 None
     pub owner: Option<AgentId>,
     /// 还没完成的上游；非空时这个 issue 在等上游，还轮不到它
-    pub waiting_on: Vec<i64>,
+    pub waiting_on: Vec<IssueId>,
 }
 
 /// 用户此刻不能审核（通过或打回）这个 issue 的原因（接在「issue #N」之后）；能审核为 None。只审当前指派给用户、还没结束
@@ -204,7 +204,7 @@ mod tests {
     use crate::activity::Change;
     use chrono::Utc;
 
-    fn snap(status: Status, assignee: Option<Assignee>, waiting_on: Vec<i64>) -> Snapshot {
+    fn snap(status: Status, assignee: Option<Assignee>, waiting_on: Vec<IssueId>) -> Snapshot {
         Snapshot { status, assignee, owner: Some(AgentId::new("own")), waiting_on }
     }
 
@@ -213,7 +213,7 @@ mod tests {
     }
 
     fn act(actor: Actor, what: Happening) -> Activity {
-        Activity { id: 0, issue_id: 1, created_at: Utc::now(), actor, session_id: None, what }
+        Activity { id: 0, issue_id: IssueId::new(1), created_at: Utc::now(), actor, session_id: None, what }
     }
 
     #[test]
@@ -226,7 +226,7 @@ mod tests {
         // 有接手的 agent 时，用户评论也只投给它
         assert_eq!(recipient(&work, true, None).as_ref().map(AgentId::as_str), Some("a"));
         // 在等上游：不投；用户的评论唤起 owner
-        let waiting = snap(Status::InProgress, agent("a"), vec![3]);
+        let waiting = snap(Status::InProgress, agent("a"), vec![IssueId::new(3)]);
         assert_eq!(recipient(&waiting, false, None), None);
         assert_eq!(recipient(&waiting, true, None).as_ref().map(AgentId::as_str), Some("own"));
         for status in [Status::Backlog, Status::InReview, Status::Blocked, Status::Done, Status::Cancelled] {
@@ -246,7 +246,7 @@ mod tests {
         assert!(stalled(&work, Some(WorkState::Idle)));
         assert!(!stalled(&work, Some(WorkState::Waiting)));
         assert!(!stalled(&work, Some(WorkState::Running)));
-        assert!(!stalled(&snap(Status::InProgress, agent("a"), vec![2]), None));
+        assert!(!stalled(&snap(Status::InProgress, agent("a"), vec![IssueId::new(2)]), None));
         assert!(!stalled(&snap(Status::Blocked, agent("a"), vec![]), None));
         assert!(ask_to_settle(&work, &AgentId::new("a"), Some(WorkState::Idle)));
         assert!(!ask_to_settle(&work, &AgentId::new("b"), Some(WorkState::Idle)));

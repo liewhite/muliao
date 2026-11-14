@@ -8,11 +8,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::Status;
 use muliao_platform::errors::{Result, invalid};
+use muliao_platform::ids::IssueId;
 
 /// 依赖关系里的另一个 issue（上游或下游）与它现在的状态。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Dependency {
-    pub id: i64,
+    pub id: IssueId,
     pub status: Status,
 }
 
@@ -25,7 +26,7 @@ pub struct Links {
 
 impl Links {
     /// 还没完成的上游：它们都完成之前，这个 issue 还轮不到。
-    pub fn waiting_on(&self) -> Vec<i64> {
+    pub fn waiting_on(&self) -> Vec<IssueId> {
         self.depends_on.iter().filter(|d| !d.status.finished()).map(|d| d.id).collect()
     }
 }
@@ -61,7 +62,7 @@ pub(crate) fn cycle_through<K: Ord + Copy>(issue_id: K, depends_on: &[K], edges:
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum Upstream {
-    Issue(i64),
+    Issue(IssueId),
     Key(String),
 }
 
@@ -118,8 +119,8 @@ fn marks(n: usize) -> String {
 }
 
 /// 一批 issue 的上游与下游（带对方的当前状态）：两次查询，与 issue 数无关。
-pub fn links_in(c: &Connection, issue_ids: &[i64]) -> Result<BTreeMap<i64, Links>> {
-    let mut links: BTreeMap<i64, Links> = issue_ids.iter().map(|&i| (i, Links::default())).collect();
+pub fn links_in(c: &Connection, issue_ids: &[IssueId]) -> Result<BTreeMap<IssueId, Links>> {
+    let mut links: BTreeMap<IssueId, Links> = issue_ids.iter().map(|&i| (i, Links::default())).collect();
     if issue_ids.is_empty() {
         return Ok(links);
     }
@@ -142,7 +143,7 @@ pub fn links_in(c: &Connection, issue_ids: &[i64]) -> Result<BTreeMap<i64, Links
         let mut stmt = c.prepare(&sql)?;
         let rows = stmt
             .query_map(params_from_iter(issue_ids), |r| {
-                Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, Status>(2)?))
+                Ok((r.get::<_, IssueId>(0)?, r.get::<_, IssueId>(1)?, r.get::<_, Status>(2)?))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         for (at, other, status) in rows {
@@ -154,26 +155,26 @@ pub fn links_in(c: &Connection, issue_ids: &[i64]) -> Result<BTreeMap<i64, Links
     Ok(links)
 }
 
-pub fn links_of_in(c: &Connection, issue_id: i64) -> Result<Links> {
+pub fn links_of_in(c: &Connection, issue_id: IssueId) -> Result<Links> {
     Ok(links_in(c, &[issue_id])?.remove(&issue_id).unwrap_or_default())
 }
 
 /// 依赖这个 issue 的下游（按编号排序）。
-pub(crate) fn downstream_in(c: &Connection, issue_id: i64) -> Result<Vec<i64>> {
+pub(crate) fn downstream_in(c: &Connection, issue_id: IssueId) -> Result<Vec<IssueId>> {
     Ok(links_of_in(c, issue_id)?.blocks.into_iter().map(|d| d.id).collect())
 }
 
 /// 把 issue 的上游整体换成 depends_on：上游必须存在、不能重复、不能成环。返回（原来的, 现在的），没变为 None。
 pub(crate) fn set_depends_on_in(
     c: &Connection,
-    issue_id: i64,
-    depends_on: &[i64],
-) -> Result<Option<(Vec<i64>, Vec<i64>)>> {
-    let wanted: Vec<i64> = depends_on.iter().copied().collect::<BTreeSet<_>>().into_iter().collect();
+    issue_id: IssueId,
+    depends_on: &[IssueId],
+) -> Result<Option<(Vec<IssueId>, Vec<IssueId>)>> {
+    let wanted: Vec<IssueId> = depends_on.iter().copied().collect::<BTreeSet<_>>().into_iter().collect();
     if wanted.len() != depends_on.len() {
         return Err(invalid(format!("depends_on lists an issue more than once: {depends_on:?}")));
     }
-    let existing: BTreeSet<i64> = if wanted.is_empty() {
+    let existing: BTreeSet<IssueId> = if wanted.is_empty() {
         BTreeSet::new()
     } else {
         let mut stmt = c.prepare(&format!("SELECT id FROM issues WHERE id IN ({})", marks(wanted.len())))?;
@@ -183,11 +184,11 @@ pub(crate) fn set_depends_on_in(
     if !missing.is_empty() {
         return Err(invalid(format!("issue #{issue_id} cannot depend on {}: not found", missing.join(", "))));
     }
-    let edges: Vec<(i64, i64)> = {
+    let edges: Vec<(IssueId, IssueId)> = {
         let mut stmt = c.prepare("SELECT issue_id, depends_on_id FROM issue_dependencies")?;
         stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?
     };
-    let mut current: Vec<i64> = edges.iter().filter(|(d, _)| *d == issue_id).map(|(_, u)| *u).collect();
+    let mut current: Vec<IssueId> = edges.iter().filter(|(d, _)| *d == issue_id).map(|(_, u)| *u).collect();
     current.sort();
     if current == wanted {
         return Ok(None);

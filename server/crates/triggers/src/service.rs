@@ -10,7 +10,7 @@
 //!
 //! 任何改动提交后通知激活机制（[`TriggerService::watch`]），它们按最新的行重新对账。
 
-use muliao_platform::ids::{AgentId, SessionId};
+use muliao_platform::ids::{AgentId, SessionId, TriggerId};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -285,7 +285,7 @@ impl TriggerService {
         self.0.db.read(move |c| list_in(c, &listing)).await
     }
 
-    pub async fn get(&self, trigger_id: i64) -> Result<Trigger> {
+    pub async fn get(&self, trigger_id: TriggerId) -> Result<Trigger> {
         self.0.db.read(move |c| load_in(c, trigger_id)?.ok_or_else(|| missing(trigger_id))).await
     }
 
@@ -368,7 +368,7 @@ impl TriggerService {
     }
 
     /// 在一个事务里只改给出的字段。换检查、改配置或重新启用清掉脚本的出错。
-    pub async fn update(&self, trigger_id: i64, update: Update) -> Result<Trigger> {
+    pub async fn update(&self, trigger_id: TriggerId, update: Update) -> Result<Trigger> {
         let tz = self.0.tz;
         // 核对 secret 要读 vault，不能放进下面的事务：先按此刻的行算出会生效的配置。中间有并发修改时核对按的是旧行，
         // 后果只是走回运行时的失败路径（与建好后 secret 才被删一样），有意不加锁
@@ -419,17 +419,17 @@ impl TriggerService {
         Ok(updated)
     }
 
-    async fn manageable(&self, trigger_id: i64) -> Result<Trigger> {
+    async fn manageable(&self, trigger_id: TriggerId) -> Result<Trigger> {
         self.0.db.read(move |c| manageable_in(c, trigger_id)).await
     }
 
-    pub async fn delete(&self, trigger_id: i64) -> Result<()> {
+    pub async fn delete(&self, trigger_id: TriggerId) -> Result<()> {
         let deleted = self.0.db.write(move |tx| delete_in(tx, trigger_id)).await?;
         if !deleted {
             return Err(missing(trigger_id));
         }
         self.changed();
-        tracing::info!(trigger_id, "trigger deleted");
+        tracing::info!(trigger_id = %trigger_id, "trigger deleted");
         Ok(())
     }
 
@@ -449,7 +449,7 @@ impl TriggerService {
     /// 用户或 agent 的「立即运行一次」（不带事件内容）：管理操作，不消耗一次性触发器预定的那一次。有前置检查时同样先跑，
     /// 可以用来测试整条链路；检查判定没事时返回 None。检查失败按输入不对报给调用方（改了脚本再试），不记在触发器上、不告警：agent
     /// 修脚本时用它验证，告警会另开会话重复处理；记下了又会压住之后自动触发时的告警（只在新出现时告警）。
-    pub async fn run(&self, trigger_id: i64) -> Result<Option<Fired>> {
+    pub async fn run(&self, trigger_id: TriggerId) -> Result<Option<Fired>> {
         self.manageable(trigger_id).await?;
         match self.fire(trigger_id, None, By::Run).await? {
             Outcome::Fired(f) => Ok(Some(f)),
@@ -465,11 +465,11 @@ impl TriggerService {
     /// - 前置检查失败：已记成出错并告警；脚本的故障往往是暂时的，保持启用。
     /// - 它的 agent 已归档：跳过，保持启用；触发器若已结束（这是它最后一次），告警说任务没做（agent 收不到，退给用户）。
     /// - 停用或删除：只记日志。
-    pub async fn fire_activated(&self, trigger_id: i64, payload: Option<String>) -> Result<()> {
+    pub async fn fire_activated(&self, trigger_id: TriggerId, payload: Option<String>) -> Result<()> {
         match self.fire(trigger_id, payload, By::Activation).await? {
             Outcome::Fired(_) | Outcome::Nothing | Outcome::CheckFailed(_) => {}
             Outcome::Skipped(why, detail) => {
-                tracing::info!(trigger_id, detail, "activated fire skipped");
+                tracing::info!(trigger_id = %trigger_id, detail, "activated fire skipped");
                 if why == Skip::Archived {
                     self.finished_unrun(trigger_id).await?;
                 }
@@ -479,7 +479,7 @@ impl TriggerService {
     }
 
     /// 已结束的触发器最后一次没跑成（agent 已归档）：任务再也不会做了，告警。没结束的只是跳过这一次，不告警。
-    async fn finished_unrun(&self, trigger_id: i64) -> Result<()> {
+    async fn finished_unrun(&self, trigger_id: TriggerId) -> Result<()> {
         let faults = self.0.faults.clone();
         self.0
             .db
@@ -496,7 +496,7 @@ impl TriggerService {
             .await
     }
 
-    async fn fire(&self, trigger_id: i64, payload: Option<String>, by: By) -> Result<Outcome> {
+    async fn fire(&self, trigger_id: TriggerId, payload: Option<String>, by: By) -> Result<Outcome> {
         let this = self.clone();
         let event = payload.clone();
         let first = self
@@ -541,7 +541,7 @@ impl TriggerService {
                 let Some(mut t) =
                     load_in(tx, trigger_id)?.filter(|t| t.enabled && t.precheck.as_ref() == Some(&precheck))
                 else {
-                    tracing::info!(trigger_id, "trigger changed during its precheck, result discarded");
+                    tracing::info!(trigger_id = %trigger_id, "trigger changed during its precheck, result discarded");
                     return Ok(Outcome::Nothing);
                 };
                 let (output, decision) = match checked {
@@ -605,12 +605,12 @@ impl TriggerService {
     }
 }
 
-fn missing(trigger_id: i64) -> Error {
+fn missing(trigger_id: TriggerId) -> Error {
     not_found(format!("trigger {trigger_id} not found"))
 }
 
 /// 管理操作（改、启用、立即运行）的前提：这个触发器还会触发。已结束的只能查看和删除。
-fn manageable_in(c: &Connection, trigger_id: i64) -> Result<Trigger> {
+fn manageable_in(c: &Connection, trigger_id: TriggerId) -> Result<Trigger> {
     let t = load_in(c, trigger_id)?.ok_or_else(|| missing(trigger_id))?;
     if t.finished_at.is_some() {
         return Err(conflict(format!(

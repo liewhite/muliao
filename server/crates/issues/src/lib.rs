@@ -25,6 +25,7 @@ pub mod tools;
 mod tests;
 
 use muliao_platform::db::Migration;
+use muliao_platform::ids::IssueId;
 
 pub use board::{
     Board, BoardIssue, Filter, IssueDetail, IssueWork, ListedIssue, NewIssue, Stopping, UserActions, user_actions_in,
@@ -34,7 +35,7 @@ pub use model::{Actor, Assignee, By, Issue, Priority, Status};
 
 /// issue 页（前端路由，与 web/src/issues.ts 的 issueRoute 一致，由 crates/muliao/tests/frontend_contract.rs 核对）：交给
 /// 用户的通知点开打开它。
-pub fn route(issue_id: i64) -> String {
+pub fn route(issue_id: IssueId) -> String {
     format!("/issues/{issue_id}")
 }
 

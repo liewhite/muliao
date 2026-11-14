@@ -14,7 +14,7 @@ use chrono_tz::Tz;
 use muliao_assets::agents::{agent_names_in, runnable_agent_in};
 use muliao_notifications::{Notifications, Notify};
 use muliao_platform::db::Tx;
-use muliao_platform::ids::AgentId;
+use muliao_platform::ids::{AgentId, IssueId};
 use muliao_sessions::inbound::{Refusal, Refused, SenderInbox};
 use rusqlite::Connection;
 
@@ -49,7 +49,7 @@ pub struct Patch {
     pub status: Option<Status>,
     pub priority: Option<Priority>,
     pub assignee: Option<Option<Assignee>>,
-    pub depends_on: Option<Vec<i64>>,
+    pub depends_on: Option<Vec<IssueId>>,
 }
 
 pub(crate) fn checked_title(title: &str) -> Result<String> {
@@ -133,7 +133,7 @@ impl IssueChange<'_> {
     }
 
     /// 一个上游被删除：它已从依赖表里随之删掉，这里只记下前后的上游列表。
-    pub fn upstream_deleted(&mut self, before: Vec<i64>, deleted: i64) -> Result<()> {
+    pub fn upstream_deleted(&mut self, before: Vec<IssueId>, deleted: IssueId) -> Result<()> {
         let to = before.iter().copied().filter(|&i| i != deleted).collect();
         self.record(Happening::DependsOn { change: Change::new(before, to) }).map(drop)
     }
@@ -157,7 +157,7 @@ impl IssueChange<'_> {
         Ok(())
     }
 
-    pub fn set_depends_on(&mut self, depends_on: &[i64]) -> Result<()> {
+    pub fn set_depends_on(&mut self, depends_on: &[IssueId]) -> Result<()> {
         if let Some((before, to)) = set_depends_on_in(self.c, self.issue.id, depends_on)? {
             self.record(Happening::DependsOn { change: Change::new(before, to) })?;
         }
@@ -251,7 +251,7 @@ impl Changes {
     pub fn open_in<T>(
         &self,
         tx: &mut Tx<'_>,
-        issue_id: i64,
+        issue_id: IssueId,
         by: &By,
         routing: Routing,
         f: impl FnOnce(&mut IssueChange<'_>) -> Result<T>,
@@ -291,7 +291,7 @@ impl Changes {
                 })?;
             }
             if !downstream.is_empty() {
-                tracing::info!(issue_id = issue.id, status = %issue.status, ?downstream, "issue unblocked downstream");
+                tracing::info!(issue_id = %issue.id, status = %issue.status, ?downstream, "issue unblocked downstream");
             }
         }
         Ok(())
@@ -331,7 +331,7 @@ impl Changes {
         let mail = conversation::mail(issue.id, &to, format!("#{} {}", issue.id, issue.title), letter);
         match self.inbox.receive_in(tx, mail)? {
             Ok(_) => {
-                tracing::info!(issue_id = issue.id, agent = %to, actor = by.actor.as_str(), "issue activity delivered")
+                tracing::info!(issue_id = %issue.id, agent = %to, actor = by.actor.as_str(), "issue activity delivered")
             }
             Err(Refused { reason: Refusal::Archived, detail }) if by.actor == Actor::User => {
                 // 已有 issue 的指派人或 owner 后来被归档：动态照常记进时间线（不让用户在这类 issue 上的评论、改动报错），不投；
@@ -343,12 +343,12 @@ impl Changes {
                     link: Some(crate::route(issue.id)),
                 };
                 self.notifications.notify_in(tx, &notice)?;
-                tracing::info!(issue_id = issue.id, %detail, "issue activity not delivered");
+                tracing::info!(issue_id = %issue.id, %detail, "issue activity not delivered");
             }
             // 别人的动态（agent 的）投不进归档的 agent 只记日志：in_progress 的由看板的「停滞」标出。Gone：agent 正在删除，
             // 删除流程会清理它在 issue 上的指派与 owner
             Err(Refused { reason: Refusal::Archived | Refusal::Gone, detail }) => {
-                tracing::info!(issue_id = issue.id, %detail, "issue activity not delivered");
+                tracing::info!(issue_id = %issue.id, %detail, "issue activity not delivered");
             }
         }
         Ok(())
@@ -356,7 +356,7 @@ impl Changes {
 }
 
 /// 动作是不是 agent 在它自己这个 issue 会话里做的：是则返回它（这次动态不投回那里）。
-fn from_its_session_in<'b>(c: &Connection, issue_id: i64, by: &'b By) -> Result<Option<&'b AgentId>> {
+fn from_its_session_in<'b>(c: &Connection, issue_id: IssueId, by: &'b By) -> Result<Option<&'b AgentId>> {
     let (Some(agent), Some(session_id)) = (by.actor.agent(), by.session_id.as_ref()) else { return Ok(None) };
     let its = conversation::session_in(c, issue_id, agent)?;
     Ok(its.is_some_and(|s| &s.id == session_id).then_some(agent))

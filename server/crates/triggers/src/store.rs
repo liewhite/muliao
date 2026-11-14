@@ -5,7 +5,7 @@
 
 use chrono::{DateTime, Utc};
 use muliao_platform::db::Tx;
-use muliao_platform::ids::{AgentId, SessionId};
+use muliao_platform::ids::{AgentId, SessionId, TriggerId};
 use rusqlite::types::Type;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::Serialize;
@@ -20,7 +20,7 @@ use muliao_platform::errors::Result;
 /// 一个触发器（一行）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct Trigger {
-    pub id: i64,
+    pub id: TriggerId,
     pub name: String,
     pub agent_id: AgentId,
     pub prompt: Prompt,
@@ -81,7 +81,7 @@ fn to_text<T: Serialize>(value: &T) -> String {
     serde_json::to_string(value).expect("trigger columns serialize")
 }
 
-pub fn load_in(c: &Connection, trigger_id: i64) -> Result<Option<Trigger>> {
+pub fn load_in(c: &Connection, trigger_id: TriggerId) -> Result<Option<Trigger>> {
     Ok(c.query_row(&format!("SELECT {COLUMNS} FROM triggers WHERE id = ?1"), [trigger_id], trigger_of).optional()?)
 }
 
@@ -144,7 +144,7 @@ pub fn insert_in(tx: &mut Tx<'_>, t: &NewTrigger) -> Result<Option<Trigger>> {
         ],
     );
     match inserted {
-        Ok(_) => load_in(tx, tx.last_insert_rowid()),
+        Ok(_) => load_in(tx, TriggerId::new(tx.last_insert_rowid())),
         Err(rusqlite::Error::SqliteFailure(e, _)) if e.code == rusqlite::ErrorCode::ConstraintViolation => Ok(None),
         Err(e) => Err(e.into()),
     }
@@ -178,18 +178,18 @@ pub fn save_in(tx: &mut Tx<'_>, t: &Trigger) -> Result<()> {
     Ok(())
 }
 
-pub fn delete_in(tx: &mut Tx<'_>, trigger_id: i64) -> Result<bool> {
+pub fn delete_in(tx: &mut Tx<'_>, trigger_id: TriggerId) -> Result<bool> {
     Ok(tx.execute("DELETE FROM triggers WHERE id = ?1", [trigger_id])? > 0)
 }
 
 /// changed 检查的比较基线（上一次成功检查的输出）。
-pub fn baseline_in(c: &Connection, trigger_id: i64) -> Result<Option<String>> {
+pub fn baseline_in(c: &Connection, trigger_id: TriggerId) -> Result<Option<String>> {
     Ok(c.query_row("SELECT precheck_output FROM triggers WHERE id = ?1", [trigger_id], |r| r.get(0))
         .optional()?
         .flatten())
 }
 
-pub fn set_baseline_in(tx: &mut Tx<'_>, trigger_id: i64, output: Option<&str>) -> Result<()> {
+pub fn set_baseline_in(tx: &mut Tx<'_>, trigger_id: TriggerId, output: Option<&str>) -> Result<()> {
     tx.execute("UPDATE triggers SET precheck_output = ?1 WHERE id = ?2", params![output, trigger_id])?;
     Ok(())
 }

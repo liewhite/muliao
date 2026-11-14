@@ -5,7 +5,7 @@
 //! 另带 `"issue"`。HTTP 返回的一条动态是 [`Activity`]，kind、body、change 与共同字段平铺在一起。
 
 use chrono::{DateTime, Utc};
-use muliao_platform::ids::{AgentId, SessionId};
+use muliao_platform::ids::{AgentId, IssueId, SessionId};
 use rusqlite::{Connection, Row, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -33,7 +33,7 @@ impl<T> Change<T> {
 #[serde(deny_unknown_fields)]
 pub struct DependencyChange {
     /// 完成的那个上游
-    pub issue: i64,
+    pub issue: IssueId,
     #[serde(rename = "from")]
     pub before: Recorded,
     pub to: Recorded,
@@ -79,7 +79,7 @@ pub enum Happening {
     },
     /// 上游 issue 编号列表的前后
     DependsOn {
-        change: Change<Vec<i64>>,
+        change: Change<Vec<IssueId>>,
     },
     /// 一个上游完成（done / cancelled）
     Dependency {
@@ -137,7 +137,7 @@ impl Happening {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct Activity {
     pub id: i64,
-    pub issue_id: i64,
+    pub issue_id: IssueId,
     pub created_at: DateTime<Utc>,
     /// 做这件事的人：用户、agent，或系统自己的清理
     pub actor: Actor,
@@ -168,7 +168,7 @@ fn activity(r: &Row<'_>) -> rusqlite::Result<std::result::Result<Activity, Strin
 }
 
 /// 记一条动态，返回记下的那一条。
-pub(crate) fn record_in(c: &Connection, issue_id: i64, by: &By, what: Happening) -> Result<Activity> {
+pub(crate) fn record_in(c: &Connection, issue_id: IssueId, by: &By, what: Happening) -> Result<Activity> {
     let (kind, body, change) = what.stored();
     let now = Utc::now();
     c.execute(
@@ -193,7 +193,7 @@ pub(crate) fn query(c: &Connection, filter: &str, params: impl rusqlite::Params)
 }
 
 /// 一个 issue 的整条时间线，按先后。
-pub fn timeline_in(c: &Connection, issue_id: i64) -> Result<Vec<Activity>> {
+pub fn timeline_in(c: &Connection, issue_id: IssueId) -> Result<Vec<Activity>> {
     query(c, "issue_id = ?1 ORDER BY id", [issue_id])
 }
 
@@ -217,9 +217,13 @@ mod tests {
             Happening::Status { change: Change::new(Recorded::Retired(Retired::Todo), Status::Done.into()) },
             Happening::Assignee { change: Change::new(None, Some(Assignee::User)) },
             Happening::Owner { change: Change::new(Some(AgentId::new("abc")), None) },
-            Happening::DependsOn { change: Change::new(vec![1], vec![]) },
+            Happening::DependsOn { change: Change::new(vec![IssueId::new(1)], vec![]) },
             Happening::Dependency {
-                change: DependencyChange { issue: 3, before: Status::InProgress.into(), to: Status::Done.into() },
+                change: DependencyChange {
+                    issue: IssueId::new(3),
+                    before: Status::InProgress.into(),
+                    to: Status::Done.into(),
+                },
             },
             Happening::Stopped { change: Arrival { before: (), to: AgentId::new("abc") } },
             Happening::Unsettled,
@@ -247,7 +251,7 @@ mod tests {
     fn an_activity_is_flat_in_json() {
         let a = Activity {
             id: 1,
-            issue_id: 2,
+            issue_id: IssueId::new(2),
             created_at: DateTime::from_timestamp(0, 0).unwrap(),
             actor: Actor::User,
             session_id: None,
