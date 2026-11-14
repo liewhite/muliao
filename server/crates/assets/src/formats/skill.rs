@@ -156,7 +156,7 @@ pub fn approval_scripts(directory: &Path, approval: &[String]) -> Result<Vec<Rea
 }
 
 /// 读树：path 是 skill 目录，修改时间取 SKILL.md 的。
-pub fn load(path: &Path, name: &str, _memory_max_chars: usize) -> Result<Loaded, String> {
+pub fn load(path: &Path, name: &str) -> Result<Loaded, String> {
     let md = path.join(SKILL_FILE);
     if !md.is_file() {
         return Err(format!("skill directory has no {SKILL_FILE}"));
@@ -171,8 +171,8 @@ pub fn load(path: &Path, name: &str, _memory_max_chars: usize) -> Result<Loaded,
 }
 
 /// 写入口：SKILL.md 按读树的规则校验；附件要 skill 已有 SKILL.md，否则写出来的是一个读树时加载不了的目录。
-pub fn vet(draft: &Draft<'_>) -> Result<String, String> {
-    if draft.inner == [SKILL_FILE] {
+pub fn vet(draft: &Draft<'_>, inner: &[String]) -> Result<String, String> {
+    if inner == [SKILL_FILE] {
         let fm = parse_frontmatter(draft.text, draft.name)?;
         approval_scripts(&draft.item, &fm.approval)?;
         return Ok(draft.text.to_owned());

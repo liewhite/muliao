@@ -152,9 +152,9 @@ async fn remove_files(
 
 /// 删掉 agent 的资源目录与 access.toml 里它的那一节；它名下分发出去的资源（base 收录，或别的 agent 的规则收录）先挪到
 /// 平台目录，私有记忆不分发、随目录删掉。目录没加载成功（agent.toml 坏了等）时它名下没有加载出的资源可挪，照样按数据库
-/// 里的名字删目录、按 id 删那一节，不留下占着这个名字的残留。
+/// 里的名字删目录、按 id 删那一节，不留下占着这个名字的残留。agent 已不在快照里（别处先删完了）时没有要做的。
 fn retire_assets(snapshot: &Snapshot, agent_id: &AgentId) -> Result<()> {
-    let directory = snapshot.own_dir(agent_id).expect("an agent being deleted is still in the database");
+    let Some(directory) = snapshot.own_dir(agent_id) else { return Ok(()) };
     if !snapshot.agents.contains_key(agent_id) && directory.exists() {
         // 没加载出的资源无从判断别人用不用，随目录删掉：记下路径，事后好从备份里找
         tracing::warn!(path = %directory.display(), "directory of a deleted agent removed without being loaded");

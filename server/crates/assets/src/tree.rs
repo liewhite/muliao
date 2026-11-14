@@ -9,16 +9,15 @@
 //!     mcp/<名>.json               MCP server
 //!     secrets/<KEY>.toml          secret
 //!   <agent 名>/                   归这个 agent
-//!     agent.toml                  id、description、model、thinking、group
+//!     agent.toml                  description、model、thinking、group（名字就是目录名，id 不在文件里）
 //!     memory.md                   私有记忆：按所属的 agent 认，不占记忆的名字（显示的名字是 agent 名）
 //!     skills/<名>/  mcp/<名>.json  secrets/<KEY>.toml
 //! ```
 //!
 //! 这里只管文件：布局（路径 ↔ 资源的双向函数 [`place_of`] / [`rel_of`]），把整棵树读成一份不可变的快照（[`load_tree`]，
-//! 同步 IO；每种资源怎么读按它的 [`crate::kinds::KindSpec`]），以及平台自己的删除、挪动。读坏的文件不加载、记成
+//! 同步 IO；每种资源怎么读按 [`crate::kinds::StoredKind::load`]），以及平台自己的删除、挪动。读坏的文件不加载、记成
 //! [`Problem`]。名字冲突的：其中一处在平台目录时只加载平台那份，其余各记一条（#502）；否则全部不加载、每处各记一条。
-//! agent 目录按 agent.toml 里的 id 对应数据库里的 agent，目录名必须就是数据库里它的名字（名字只认数据库，改名只走平台）；
-//! 对不上（id 不认识、重复、目录名不同）的整个目录不加载。隐藏文件与目录（`.` 开头）不读。
+//! agent 目录按目录名对上数据库里的 agent（名字只认数据库，改名只走平台）；对不上的目录不加载、记成问题。隐藏文件与目录（`.` 开头）不读。
 
 use muliao_platform::ids::AgentId;
 use std::collections::{BTreeMap, BTreeSet};
@@ -32,7 +31,7 @@ use sha2::{Digest, Sha256};
 
 use crate::access_file::{self, ACCESS_FILE, Access, AccessText};
 use crate::formats::agent_file::{self, AGENT_FILE, AgentFile};
-use crate::kinds::{Content, Kind, KindContent, Section, StoredKind};
+use crate::kinds::{Content, Form, Kind, KindContent, Section, StoredKind};
 use crate::naming::{AgentName, PLATFORM};
 use crate::roles::{BoundRules, Roles};
 use crate::rules::{Action, Target, ToolTable};
@@ -103,12 +102,18 @@ pub fn place_of(rel: &[String], owner: &Owner) -> Result<Place, Misplaced> {
     };
     let spec = kind.spec();
     let Some((entry, inner)) = rest.split_first() else { return Ok(Place::Shelf(kind)) };
-    if !entry.ends_with(spec.suffix) || (!inner.is_empty() && !spec.is_directory) {
-        let what =
-            if spec.is_directory { format!("{} directories", spec.label) } else { format!("*{} files", spec.suffix) };
+    let name = match spec.form {
+        Form::Dir => Some(entry.as_str()),
+        Form::File(suffix) if inner.is_empty() => entry.strip_suffix(suffix),
+        Form::File(_) => None,
+    };
+    let Some(name) = name else {
+        let what = match spec.form {
+            Form::Dir => format!("{} directories", spec.label),
+            Form::File(suffix) => format!("*{suffix} files"),
+        };
         return Err(Misplaced { reason: format!("{joined}: expected only {what} in {head}/"), kind: None });
-    }
-    let name = &entry[..entry.len() - spec.suffix.len()];
+    };
     spec.check_name(name).map_err(|reason| Misplaced { reason, kind: Some(kind) })?;
     Ok(Place::Entry { kind, name: name.to_owned(), inner: inner.to_vec() })
 }
@@ -117,7 +122,7 @@ pub fn place_of(rel: &[String], owner: &Owner) -> Result<Place, Misplaced> {
 pub fn rel_of(kind: StoredKind, name: &str) -> Result<PathBuf> {
     let spec = kind.spec();
     spec.check_name(name).map_err(muliao_platform::errors::invalid)?;
-    Ok(Path::new(spec.shelf).join(format!("{name}{}", spec.suffix)))
+    Ok(Path::new(spec.shelf).join(spec.form.entry(name)))
 }
 
 // ---- 快照 ----
@@ -577,7 +582,7 @@ impl Reader<'_> {
                 }
             }
             Place::Entry { kind, name, .. } => {
-                let directory = kind.spec().is_directory;
+                let directory = kind.spec().form == Form::Dir;
                 if path.is_dir() != directory {
                     let what = if directory { "directory" } else { "file" };
                     return self.problem(path, format!("expected a {what}"), owner.agent());
@@ -599,7 +604,7 @@ impl Reader<'_> {
     /// 按这种资源登记的读法读一项；读坏了记成问题、返回 None。
     fn loaded(&mut self, kind: StoredKind, key: AssetKey, path: PathBuf) -> Option<Asset> {
         let owner = key.agent().cloned();
-        match (kind.spec().load)(&path, key.name(), self.memory_max_chars) {
+        match kind.load(&path, key.name(), self.memory_max_chars) {
             Err(reason) => {
                 self.problem(path, reason, owner.as_ref());
                 None

@@ -125,32 +125,34 @@ pub fn active_agent_in(c: &Connection, agent_id: &AgentId) -> Result<AgentInfo> 
 }
 
 /// agent 现在能不能接新工作（不报错的查询，给要按情况分别处理的投递方）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Availability {
-    Runnable,
+    Runnable(AgentInfo),
     /// 已归档：取消归档后恢复
-    Archived,
+    Archived(AgentInfo),
     /// 不存在或正在删除
     Gone,
 }
 
-/// 与 [`runnable_agent_in`] 同一条规则，按结果返回而不报错。
+/// 能不能接新工作只在这里判断：还可用（正在删除的按不存在处理）且没有归档。
 pub fn availability_in(c: &Connection, agent_id: &AgentId) -> Result<Availability> {
     Ok(match one(c, &format!("id = ?1 AND {LIVE}"), agent_id)? {
         None => Availability::Gone,
-        Some(a) if a.archived() => Availability::Archived,
-        Some(_) => Availability::Runnable,
+        Some(a) if a.archived() => Availability::Archived(a),
+        Some(a) => Availability::Runnable(a),
     })
 }
 
-/// 能运行的 agent：还可用且没有归档，归档的报 Conflict。给它派新工作的入口用它（来信与新会话、指派与 owner、触发器的
-/// 创建与触发）。
+/// 能运行的 agent（[`availability_in`]），归档的报 Conflict、不在的报 NotFound。给它派新工作的入口用它（来信与新
+/// 会话、指派与 owner、触发器的创建与触发）。
 pub fn runnable_agent_in(c: &Connection, agent_id: &AgentId) -> Result<AgentInfo> {
-    let agent = active_agent_in(c, agent_id)?;
-    if agent.archived() {
-        return Err(conflict(format!("agent {:?} is archived; unarchive it first", agent.name)));
+    match availability_in(c, agent_id)? {
+        Availability::Runnable(agent) => Ok(agent),
+        Availability::Archived(agent) => {
+            Err(conflict(format!("agent {:?} is archived; unarchive it first", agent.name)))
+        }
+        Availability::Gone => Err(not_found(format!("agent {agent_id:?} not found"))),
     }
-    Ok(agent)
 }
 
 /// 按名称找还可用的 agent（名称唯一），没有时 None。

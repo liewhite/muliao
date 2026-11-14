@@ -1,6 +1,7 @@
 //! 种类的唯一定义：AI 资源的种类（[`Kind`]）、存成文件的种类（[`StoredKind`]），以及每种存成文件的资源的固定属性
-//! （[`KindSpec`]：名字、放在哪、名字规则、说明在公共 skill 哪一节、文件怎么读、写之前怎么校验）。读树与写入口只按登记
-//! 分派，不列举种类；加一种资源 = 在 [`StoredKind`] 加一项、写它的格式模块、在 [`StoredKind::spec`] 登记一行。
+//! （[`KindSpec`]：名字、放在哪、是文件还是目录、名字规则、说明在公共 skill 哪一节），以及文件怎么读、写之前怎么校验
+//! （[`StoredKind::load`]、[`StoredKind::vet`]：各种类的格式模块只收自己要的输入）。读树与写入口只经这些分派，不列举
+//! 种类；加一种资源 = 在 [`StoredKind`] 加一项、写它的格式模块，编译器会指出这里每处要补的分支。
 
 use std::path::Path;
 
@@ -40,21 +41,20 @@ impl Kind {
 }
 
 /// 存成文件的四种：可以新建、改、删、转移 owner（记忆不转移）。
+// 按名字的字母顺序声明：派生的排序与 ALL 就是列出资源时的顺序。
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize, utoipa::ToSchema,
 )]
 #[serde(rename_all = "snake_case")]
 pub enum StoredKind {
-    Skill,
     Mcp,
-    Secret,
     Memory,
+    Secret,
+    Skill,
 }
 
 impl StoredKind {
-    pub const ALL: [StoredKind; 4] = [StoredKind::Skill, StoredKind::Mcp, StoredKind::Secret, StoredKind::Memory];
-    /// 按名字排（mcp、memory、secret、skill）：列出资源时的顺序
-    pub const BY_NAME: [StoredKind; 4] = [StoredKind::Mcp, StoredKind::Memory, StoredKind::Secret, StoredKind::Skill];
+    pub const ALL: [StoredKind; 4] = [StoredKind::Mcp, StoredKind::Memory, StoredKind::Secret, StoredKind::Skill];
 
     pub fn kind(self) -> Kind {
         match self {
@@ -75,6 +75,28 @@ impl StoredKind {
             StoredKind::Mcp => &MCP,
             StoredKind::Secret => &SECRET,
             StoredKind::Memory => &MEMORY,
+        }
+    }
+
+    /// 读一项（文件，skill 是目录）：内容，或读坏的原因（读树记成问题）。memory_max_chars 只有记忆用（超长照常加载、
+    /// 报出问题）。
+    pub(crate) fn load(self, path: &Path, name: &str, memory_max_chars: usize) -> Result<Loaded, String> {
+        match self {
+            StoredKind::Skill => skill::load(path, name),
+            StoredKind::Mcp => mcp::load(path),
+            StoredKind::Secret => secret::load(path, name),
+            StoredKind::Memory => memory::load(path, memory_max_chars),
+        }
+    }
+
+    /// 写之前：要写成的全文 → 实际存下的全文，或拒绝的原因（写入口拒绝）。inner 是 skill 目录里的哪个文件（只有 skill
+    /// 用），memory_max_chars 只有记忆用。
+    pub(crate) fn vet(self, draft: &Draft<'_>, inner: &[String], memory_max_chars: usize) -> Result<String, String> {
+        match self {
+            StoredKind::Skill => skill::vet(draft, inner),
+            StoredKind::Mcp => mcp::vet(draft.text),
+            StoredKind::Secret => secret::vet(draft),
+            StoredKind::Memory => memory::vet(draft, memory_max_chars),
         }
     }
 }
@@ -204,22 +226,35 @@ impl KindContent for SecretFile {
     }
 }
 
+/// 一项资源在它的子目录里是什么样子。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Form {
+    /// `<名><后缀>` 的文件
+    File(&'static str),
+    /// `<名>/` 目录（skill），里面可以有任意文件
+    Dir,
+}
+
+impl Form {
+    /// 一项资源在子目录里的文件名或目录名。
+    pub fn entry(self, name: &str) -> String {
+        match self {
+            Form::File(suffix) => format!("{name}{suffix}"),
+            Form::Dir => name.to_owned(),
+        }
+    }
+}
+
 /// 一种存成文件的资源的固定属性。
 pub struct KindSpec {
     /// 错误信息里的名字
     pub label: &'static str,
     /// 放在 owner 目录下哪个子目录（私有记忆不在这里：agent 目录里的 memory.md）
     pub shelf: &'static str,
-    /// 一项是 `<名><suffix>` 的文件；skill 是 `<名>/` 目录（suffix 为空）
-    pub suffix: &'static str,
-    pub is_directory: bool,
+    pub form: Form,
     pub section: Section,
     /// 名字的规则：(label, 名字) → 不合时的原因
     name_rule: fn(&str, &str) -> Result<(), String>,
-    /// 读一项：(文件或目录, 名字, 记忆的长度上限) → 内容，或读坏的原因（读树记成问题）
-    pub load: fn(&Path, &str, usize) -> Result<Loaded, String>,
-    /// 写之前：要写成的全文 → 实际存下的全文，或拒绝的原因（写入口拒绝）
-    pub vet: fn(&Draft<'_>) -> Result<String, String>,
 }
 
 impl KindSpec {
@@ -236,44 +271,22 @@ fn key(_label: &str, name: &str) -> Result<(), String> {
     secret::validate_key(name)
 }
 
-static SKILL: KindSpec = KindSpec {
-    label: "skill",
-    shelf: "skills",
-    suffix: "",
-    is_directory: true,
-    section: Section::Skills,
-    name_rule: slug,
-    load: skill::load,
-    vet: skill::vet,
-};
+static SKILL: KindSpec =
+    KindSpec { label: "skill", shelf: "skills", form: Form::Dir, section: Section::Skills, name_rule: slug };
 static MCP: KindSpec = KindSpec {
     label: "MCP server",
     shelf: "mcp",
-    suffix: ".json",
-    is_directory: false,
+    form: Form::File(".json"),
     section: Section::McpServers,
     name_rule: slug,
-    load: mcp::load,
-    vet: mcp::vet,
 };
 static SECRET: KindSpec = KindSpec {
     label: "secret",
     shelf: "secrets",
-    suffix: ".toml",
-    is_directory: false,
+    form: Form::File(".toml"),
     section: Section::Secrets,
     name_rule: key,
-    load: secret::load,
-    vet: secret::vet,
 };
 /// 平台的记忆（全局与共享）；私有记忆按所属 agent 认、没有名字规则
-static MEMORY: KindSpec = KindSpec {
-    label: "memory",
-    shelf: "memory",
-    suffix: ".md",
-    is_directory: false,
-    section: Section::Memory,
-    name_rule: slug,
-    load: memory::load,
-    vet: memory::vet,
-};
+static MEMORY: KindSpec =
+    KindSpec { label: "memory", shelf: "memory", form: Form::File(".md"), section: Section::Memory, name_rule: slug };

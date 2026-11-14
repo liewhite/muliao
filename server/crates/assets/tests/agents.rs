@@ -153,7 +153,7 @@ async fn default_and_archive() {
     busy.store(false, std::sync::atomic::Ordering::SeqCst);
     assert!(life.set_archived(&a, true).await.unwrap().archived());
     let availability = w.db.read(move |c| agents::availability_in(c, &a)).await.unwrap();
-    assert_eq!(availability, agents::Availability::Archived);
+    assert!(matches!(availability, agents::Availability::Archived(_)), "{availability:?}");
     let id = w.service.list().await.unwrap()[0].id.clone();
     assert!(w.service.set_default(&id, true).await.unwrap_err().to_string().contains("archived"));
     assert!(!life.set_archived(&id, false).await.unwrap().archived());

@@ -12,7 +12,7 @@ pub struct MemoryText {
 }
 
 /// 读树：超过上限的照常加载（截断更糟），但报出来让它缩短。
-pub fn load(path: &Path, _name: &str, memory_max_chars: usize) -> Result<Loaded, String> {
+pub fn load(path: &Path, memory_max_chars: usize) -> Result<Loaded, String> {
     let text = text_of(path)?;
     let warning = over_limit(&text, memory_max_chars);
     Ok(Loaded {
@@ -23,9 +23,9 @@ pub fn load(path: &Path, _name: &str, memory_max_chars: usize) -> Result<Loaded,
 }
 
 /// 写入口：实际存下的全文。
-pub fn vet(draft: &Draft<'_>) -> Result<String, String> {
+pub fn vet(draft: &Draft<'_>, memory_max_chars: usize) -> Result<String, String> {
     let old = if draft.item.is_file() { super::read_lossy(&draft.item) } else { None };
-    stored(draft.text, old.as_deref(), draft.memory_max_chars)
+    stored(draft.text, old.as_deref(), memory_max_chars)
 }
 
 /// 文件里的正文（指令里显示的、界面编辑的都是它）。

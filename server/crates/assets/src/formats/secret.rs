@@ -120,7 +120,7 @@ pub fn parse(key: &str, text: &str) -> Result<SecretFile, String> {
     Ok(SecretFile { description: s.description, ciphertext: s.ciphertext, allow_shell: s.allow_shell })
 }
 
-pub fn load(path: &Path, name: &str, _memory_max_chars: usize) -> Result<Loaded, String> {
+pub fn load(path: &Path, name: &str) -> Result<Loaded, String> {
     let file = parse(name, &read(path)?)?;
     Ok(Loaded { content: Content::Secret(file), updated_at: modified(path).map_err(|e| e.to_string())?, warning: None })
 }

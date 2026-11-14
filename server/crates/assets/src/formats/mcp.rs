@@ -10,7 +10,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use super::{Draft, Loaded, modified, read};
+use super::{Loaded, modified, read};
 use crate::kinds::Content;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
@@ -140,14 +140,14 @@ pub fn render(config: &McpConfig, enabled: bool) -> String {
     serde_json::to_string_pretty(&value).expect("JSON value serializes") + "\n"
 }
 
-pub fn load(path: &Path, _name: &str, _memory_max_chars: usize) -> Result<Loaded, String> {
+pub fn load(path: &Path) -> Result<Loaded, String> {
     let file = parse(&read(path)?)?;
     Ok(Loaded { content: Content::Mcp(file), updated_at: modified(path).map_err(|e| e.to_string())?, warning: None })
 }
 
-pub fn vet(draft: &Draft<'_>) -> Result<String, String> {
-    parse(draft.text)?;
-    Ok(draft.text.to_owned())
+pub fn vet(text: &str) -> Result<String, String> {
+    parse(text)?;
+    Ok(text.to_owned())
 }
 
 #[cfg(test)]

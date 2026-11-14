@@ -102,7 +102,7 @@ impl AssetCatalog {
             transferable: untransferable(Kind::Tool).is_none(),
             detail: Detail::Tool(t.clone()),
         });
-        let files = StoredKind::BY_NAME.into_iter().flat_map(|k| snapshot.of_kind(k)).map(|a| CatalogAsset {
+        let files = StoredKind::ALL.into_iter().flat_map(|k| snapshot.of_kind(k)).map(|a| CatalogAsset {
             name: a.name().to_owned(),
             owner: a.owner(),
             roles: sharing.including(a.target()),
@@ -138,7 +138,7 @@ impl AssetCatalog {
     pub async fn rule_candidates(&self) -> Result<Vec<String>> {
         let snapshot = self.source.snapshot().await?;
         let tools = snapshot.tools.specs().iter().map(|t| (Kind::Tool, t.name.as_str()));
-        let files = StoredKind::BY_NAME.into_iter().flat_map(|k| snapshot.named(k).map(move |a| (k.kind(), a.name())));
+        let files = StoredKind::ALL.into_iter().flat_map(|k| snapshot.named(k).map(move |a| (k.kind(), a.name())));
         Ok(rule_candidates(tools.chain(files)))
     }
 

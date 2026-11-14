@@ -325,7 +325,7 @@ impl Reach {
 
 /// grants 能用的：工具在快照的工具表里取，资产在快照里取。界面预览、角色的覆盖范围、get_agent 共用。
 pub fn reach_of(snapshot: &Snapshot, grants: &Grants) -> Reach {
-    let assets = StoredKind::BY_NAME
+    let assets = StoredKind::ALL
         .into_iter()
         .flat_map(|k| snapshot.of_kind(k))
         .filter(|a| grants.uses(a))

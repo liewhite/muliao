@@ -1,5 +1,5 @@
-//! 各种资源文件的格式：每种一个模块，读树按它的 `load` 读一项，写入口按它的 `vet` 校验要写成的全文（[`crate::kinds`]
-//! 的 [`crate::kinds::KindSpec`] 登记）。这里是两个槽位的输入与输出，不依赖任何种类。
+//! 各种资源文件的格式：每种一个模块，读树按它的 `load` 读一项，写入口按它的 `vet` 校验要写成的全文（经
+//! [`crate::kinds::StoredKind::load`]、[`crate::kinds::StoredKind::vet`] 分派）。这里是两者共用的输入与输出，不依赖任何种类。
 
 pub mod agent_file;
 pub mod mcp;
@@ -27,10 +27,7 @@ pub struct Draft<'a> {
     /// 这一项资源的文件（skill 是它的目录）
     pub item: PathBuf,
     pub name: &'a str,
-    /// skill 目录里的哪个文件（相对路径各段）；别的种类为空
-    pub inner: &'a [String],
     pub text: &'a str,
-    pub memory_max_chars: usize,
 }
 
 /// 文件的修改时间（UTC）。

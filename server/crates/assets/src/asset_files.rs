@@ -1,6 +1,6 @@
 //! AI 资源文件的写前校验（#500、#578）：写入口（[`crate::source::AssetSource::write`]，界面编辑与文件工具都经它）把要
 //! 写成的全文交来，这里按读树的同一套规则校验——布局与名字问 [`place_of`]，各种资源文件的格式按它的
-//! [`crate::kinds::KindSpec::vet`]，agent.toml 问 [`agent_file`]，access.toml 问 [`access_file::vet`]——返回实际存下的
+//! [`crate::kinds::StoredKind::vet`]，agent.toml 问 [`agent_file`]，access.toml 问 [`access_file::vet`]——返回实际存下的
 //! 全文；不合格就拒绝（InvalidInput），说明原因、这是谁的资源、正确的写法在公共 skill 的哪一节。用 shell 写的不经过
 //! 这里，下次读树时照样报出。只校验格式与名字，不管谁能写（那是写沙箱的事）。隐藏文件不加载，不校验。
 
@@ -12,7 +12,7 @@ use crate::access_file;
 use crate::formats::agent_file::{self, AgentFile};
 use crate::formats::{Draft, read_lossy};
 use crate::kinds::ASSETS_SKILL;
-use crate::kinds::{Section, StoredKind};
+use crate::kinds::{Form, Section, StoredKind};
 use crate::tree::{Owner, Place, Snapshot, dir_owner, place_of};
 use muliao_platform::errors::{Result, invalid};
 
@@ -105,7 +105,7 @@ fn check(
                 // 新建一项：名字每种资源全局唯一，别处已有的不让建（读树时两处都会被跳过）
                 snapshot.check_free(kind, name).map_err(|e| (e.to_string(), spec.section))?;
             }
-            (spec.vet)(&Draft { item, name, inner, text, memory_max_chars }).map_err(|e| (e, spec.section))
+            kind.vet(&Draft { item, name, text }, inner, memory_max_chars).map_err(|e| (e, spec.section))
         };
 
     match place {
@@ -136,7 +136,7 @@ fn check(
         },
         // 放资源的子目录本身总是目录；skill 这类目录资源的条目本身也是目录
         Place::Shelf(kind) => Err((format!("{} is a directory, not a file", rest.join("/")), kind.spec().section)),
-        Place::Entry { kind, inner, .. } if kind.spec().is_directory && inner.is_empty() => {
+        Place::Entry { kind, inner, .. } if kind.spec().form == Form::Dir && inner.is_empty() => {
             Err((format!("{} is a directory, not a file", rest.join("/")), kind.spec().section))
         }
         Place::PrivateMemory(id) => draft(StoredKind::Memory, snapshot.names[&id].as_str(), &[], false),
