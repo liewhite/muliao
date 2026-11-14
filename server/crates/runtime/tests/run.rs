@@ -312,7 +312,7 @@ async fn a_run_from_start_to_finish() {
     let described = serde_json::to_string(&described).unwrap();
     assert!(body.contains(described.trim_matches('"')), "{body}");
     assert!(body.contains("\"type\":\"image\""), "the image content is sent: {body}");
-    assert!(!body.contains("/api/files/"), "file references never reach the model");
+    assert!(!body.contains("muliao-file:"), "file references never reach the model");
     assert_eq!(sent["tools"].as_array().unwrap().len(), 1);
     assert_eq!(
         w.usage.session_totals(&SessionId::new("s1")).await.unwrap().requests,
@@ -333,7 +333,7 @@ async fn a_run_from_start_to_finish() {
     let t = &results[0];
     let Content::File(f) = &t.content[1] else { panic!("{t:?}") };
     let FileSource::Url(url) = &f.source else { panic!("the image is stored, not kept inline") };
-    assert!(url.starts_with("/api/files/") && url.ends_with("/snap.png"), "{url}");
+    assert!(url.starts_with("muliao-file:") && url.ends_with("/snap.png"), "{url}");
     let meta: ResultFiles = serde_json::from_value(t.metadata.clone().unwrap()).unwrap();
     assert_eq!(meta.attachments[0].name, "report.pdf");
     history.push(Message::User(Request {
@@ -356,7 +356,7 @@ async fn a_run_from_start_to_finish() {
     let r = run.respond(&history, &mut |_| {}).await.unwrap();
     assert_eq!(r.text(), "好了");
     let second = server.received_requests().await.unwrap()[1].body_json::<serde_json::Value>().unwrap().to_string();
-    assert!(!second.contains("/api/files/"), "{second}");
+    assert!(!second.contains("muliao-file:"), "{second}");
     assert_eq!(second.matches("\"type\":\"image\"").count(), 2, "the attachment and the tool's picture");
     history.push(Message::Assistant(r));
 

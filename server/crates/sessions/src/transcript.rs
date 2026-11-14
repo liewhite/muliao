@@ -587,7 +587,7 @@ mod tests {
         let mut r = request(vec![
             RequestPart::ToolResult(result("c1", "t", vec![Content::text("ok")], false)),
             RequestPart::Text { text: "hi".into() },
-            RequestPart::File(file("/api/files/abc/pic.png")),
+            RequestPart::File(file("muliao-file:abc/pic.png")),
             RequestPart::Text { text: format_event(&job7(), "done") },
             RequestPart::Text { text: format_event(&thread_s1(), "still going") },
             RequestPart::Text { text: "tail".into() },
@@ -677,7 +677,7 @@ mod tests {
         set_finished_at(&mut err, ended);
         let made = made_up_result(&call("c3", "t", "{}"), MadeUp::Stopped);
         let with_image =
-            result("c4", "t", vec![Content::text("shot"), Content::File(file("/api/files/i/s.png"))], false);
+            result("c4", "t", vec![Content::text("shot"), Content::File(file("muliao-file:i/s.png"))], false);
         let r = renders();
 
         let Item::ToolResult(ok) = result_item(&ok, &r).unwrap() else { panic!() };
@@ -800,7 +800,7 @@ mod tests {
     fn text_of_items() {
         let r = request(vec![
             RequestPart::Text { text: "look".into() },
-            RequestPart::File(file("/api/files/abc/pic.png")),
+            RequestPart::File(file("muliao-file:abc/pic.png")),
             RequestPart::Text { text: format_event(&job7(), "done") },
         ]);
         let mut r = r;

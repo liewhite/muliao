@@ -10,7 +10,7 @@
 //! 再往同一个对象里加自己的键（都带 `muliao_` 前缀）。
 
 use agenter::{Content, File, FileSource, ToolOutput, ToolResult};
-use muliao_files::{FileMeta, file_url, parse_file_url};
+use muliao_files::{FileMeta, FileRef, file_url};
 use muliao_platform::ids::MediaType;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -61,10 +61,10 @@ impl From<&SharedFile> for Attachment {
 
 /// 消息里一个文件引用（存储形态）的展示形式；不是文件存储的引用时为 None（库里只该有这种引用，调用方按数据损坏报）。
 pub fn attachment_of_ref(file: &File) -> Option<Attachment> {
-    let FileSource::Url(url) = &file.source else { return None };
-    let (_, name) = parse_file_url(url)?;
+    let FileSource::Url(uri) = &file.source else { return None };
+    let r = FileRef::parse(uri)?;
     let media_type = MediaType::parse(&file.media_type).ok()?;
-    Some(Attachment { url: url.clone(), name, inline: media_type.is_inline_image(), media_type })
+    Some(Attachment { url: r.url(), name: r.name, inline: media_type.is_inline_image(), media_type })
 }
 
 /// 挂给用户的文件作为工具结果的 metadata（[`ResultFiles`]）；没有文件时为 None。

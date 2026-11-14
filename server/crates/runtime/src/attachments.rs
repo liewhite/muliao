@@ -1,7 +1,7 @@
 //! 消息里的附件有两种形态，只在发给模型的那一刻转换：
 //!
 //! - 存储形态（数据库、界面、重放）：用户消息里的 `RequestPart::File` 与工具结果里的 `Content::File`，来源是
-//!   `files::file_url` 的引用。界面直接用它显示图片和下载链接。
+//!   `files::FileRef` 的引用（与接口路径无关）。界面显示用的地址读时由它派生。
 //! - 模型形态：每次模型请求前由 [`for_model`] 展开。用户的附件换成一段说明（名称、类型、大小、在工作目录里的路径），
 //!   能内联的图片再附上内容；工具结果里的图片换回内容（不加说明：它没有复制进工作目录）。图片内容先按 provider 的上限
 //!   整理（[`crate::images::fit`]：超限的缩小或切段，原件不动）。展开只改这一次请求，不改历史，库里不会出现附件和图片内容的副本（工具交回的别的文件，如 MCP 的 PDF，原样留在
@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use agenter::{Content, File, FileSource, Message, Request, RequestPart, ToolResult};
-use muliao_files::{FileMeta, FileStore, parse_file_url};
+use muliao_files::{FileMeta, FileRef, FileStore};
 use muliao_platform::errors::Error;
 
 use crate::images;
@@ -29,7 +29,12 @@ pub const UPLOADS_DIR: &str = "uploads";
 pub fn references(files: &[FileMeta]) -> Vec<RequestPart> {
     files
         .iter()
-        .map(|f| RequestPart::File(File { media_type: f.media_type.to_string(), source: FileSource::Url(f.url()) }))
+        .map(|f| {
+            RequestPart::File(File {
+                media_type: f.media_type.to_string(),
+                source: FileSource::Url(f.reference().uri()),
+            })
+        })
         .collect()
 }
 
@@ -61,7 +66,7 @@ pub fn describe(meta: &FileMeta) -> String {
 /// 消息里一个文件引用的 id；不是文件存储的引用（存储形态以外的文件）为 None，原样发出。
 fn ref_id(file: &File) -> Option<String> {
     match &file.source {
-        FileSource::Url(url) => parse_file_url(url).map(|(id, _)| id),
+        FileSource::Url(uri) => FileRef::parse(uri).map(|r| r.id),
         FileSource::Data(_) => None,
     }
 }
@@ -185,7 +190,10 @@ pub async fn store_tool_images(store: &FileStore, result: &mut ToolResult) -> Re
         let Some(parsed) = MediaType::parse(media_type).ok().filter(MediaType::is_inline_image) else { continue };
         let name = format!("{}{}", result.tool_name, extension(&parsed));
         let meta = store.put(&name, parsed, data.as_slice()).await?;
-        *c = Content::File(File { media_type: meta.media_type.to_string(), source: FileSource::Url(meta.url()) });
+        *c = Content::File(File {
+            media_type: meta.media_type.to_string(),
+            source: FileSource::Url(meta.reference().uri()),
+        });
     }
     Ok(())
 }

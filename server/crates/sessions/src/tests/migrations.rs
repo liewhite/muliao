@@ -1,4 +1,4 @@
-//! 会话领域库结构升级里换算旧数据的几步（002、003、004、006、007、008、009）：在那一步之前的版本插入旧形状的行，升级到那一步，用
+//! 会话领域库结构升级里换算旧数据的几步（002、003、004、006、007、008、009、010、011）：在那一步之前的版本插入旧形状的行，升级到那一步，用
 //! 领域代码读出断言；再升级到最新，断言后面的步骤没有破坏换算结果。
 //!
 //! 只用程序内置的 SQLite（rusqlite bundled）：命令行 sqlite3 版本不同，对 JSON 子类型的处理也不同，拿它手验看不出 004
@@ -542,5 +542,43 @@ fn delegation_mode_is_recorded_on_the_call() {
     );
     assert!(bad.is_err());
     drop(c);
+    db.upgrade_to_latest();
+}
+
+#[test]
+fn file_references_stop_storing_the_api_path() {
+    let db = OldDb::at(10);
+    let run = db.run();
+    let image = |url: &str| File { media_type: "image/png".into(), source: FileSource::Url(url.into()) };
+    // 回答正文里写着同样的片段：是文字，不动
+    let prose = r#"见 "url":"/api/files/x/y.png" 与 ![图](/api/files/x/y.png)"#;
+    db.request(
+        run,
+        vec![
+            text(prose),
+            RequestPart::File(image("/api/files/f1/%E5%9B%BE%201.png")),
+            RequestPart::ToolResult(ToolResult {
+                call_id: "c1".into(),
+                tool_name: "snap".into(),
+                content: vec![Content::text("shot"), Content::File(image("/api/files/f2/snap.png"))],
+                is_error: false,
+                metadata: None,
+            }),
+        ],
+        None,
+    );
+    db.upgrade_to(11);
+    let payload: String = db.conn().query_row("SELECT payload FROM messages", [], |r| r.get(0)).unwrap();
+    let Message::User(r) = serde_json::from_str(&payload).unwrap() else { panic!("{payload}") };
+    assert_eq!(r.parts[0], text(prose));
+    assert_eq!(r.parts[1], RequestPart::File(image("muliao-file:f1/%E5%9B%BE%201.png")));
+    let RequestPart::ToolResult(t) = &r.parts[2] else { panic!("{:?}", r.parts[2]) };
+    assert_eq!(t.content[1], Content::File(image("muliao-file:f2/snap.png")));
+    // 换算后读得出来：附件的名字与界面地址
+    let first = history::transcript_in(&db.conn(), &SessionId::new(SESSION), None).unwrap().remove(0).message;
+    let Message::User(r) = first else { panic!() };
+    let RequestPart::File(f) = &r.parts[1] else { panic!() };
+    let shown = muliao_runtime::conventions::attachment_of_ref(f).unwrap();
+    assert_eq!((shown.name.as_str(), shown.url.as_str()), ("图 1.png", "/api/files/f1/%E5%9B%BE%201.png"));
     db.upgrade_to_latest();
 }

@@ -5,7 +5,8 @@
 //!
 //! - 元数据（名称、类型、大小、哈希）在 `files` 表，是唯一的索引；内容按 sha256 存在 `<root>/<前两位>/<sha256>`，
 //!   相同内容只存一份。
-//! - 引用的唯一形式是 [`file_url`]：`/api/files/<id>/<名称>`，界面直接用它显示与下载，消息里的附件也存它。
+//! - 消息里存的引用是 [`FileRef`]（`muliao-file:<id>/<名称>`），与接口路径无关：改接口路由不影响已存的消息。界面显示
+//!   与下载用的地址 [`file_url`]（`/api/files/<id>/<名称>`）由它派生，不存。
 //!
 //! 用最终正确性换简化：内容与元数据不在一个事务里。先把内容写进临时文件、改名到最终位置，再插入元数据行。
 //! - 失败可见：任何一步失败都向上报错，调用方看到的是上传失败；没有返回 id 就没有任何引用。
@@ -55,20 +56,46 @@ impl FileMeta {
     pub fn url(&self) -> String {
         file_url(&self.id, &self.name)
     }
+
+    pub fn reference(&self) -> FileRef {
+        FileRef { id: self.id.clone(), name: self.name.clone() }
+    }
 }
 
+/// 界面显示与下载文件的地址（接口路径）。
 pub fn file_url(file_id: &str, name: &str) -> String {
     format!("{FILES_PATH}/{file_id}/{}", utf8_percent_encode(name, NAME_SEGMENT))
 }
 
-/// [`file_url`] 的逆：取出 (id, 名称)。不是 file_url 生成的地址时返回 None（存下的引用对不上，由调用方按数据损坏报）。
-pub fn parse_file_url(url: &str) -> Option<(String, String)> {
-    let (file_id, quoted) = url.strip_prefix(FILES_PATH)?.strip_prefix('/')?.split_once('/')?;
-    if file_id.is_empty() || quoted.is_empty() {
-        return None;
+/// 消息里对文件存储中一个文件的引用：编号与名字（名字随文件不变，存下来显示时不用再查库）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileRef {
+    pub id: String,
+    pub name: String,
+}
+
+impl FileRef {
+    const SCHEME: &str = "muliao-file:";
+
+    /// 存进消息的写法 `muliao-file:<id>/<名称>`（名称按 URL 的一段转义）。
+    pub fn uri(&self) -> String {
+        format!("{}{}/{}", Self::SCHEME, self.id, utf8_percent_encode(&self.name, NAME_SEGMENT))
     }
-    let name = percent_decode_str(quoted).decode_utf8().ok()?;
-    Some((file_id.to_string(), name.into_owned()))
+
+    /// [`FileRef::uri`] 的逆。不是这种写法时返回 None（存下的引用对不上，由调用方按数据损坏报）。
+    pub fn parse(uri: &str) -> Option<Self> {
+        let (id, quoted) = uri.strip_prefix(Self::SCHEME)?.split_once('/')?;
+        if id.is_empty() || quoted.is_empty() {
+            return None;
+        }
+        let name = percent_decode_str(quoted).decode_utf8().ok()?;
+        Some(FileRef { id: id.to_owned(), name: name.into_owned() })
+    }
+
+    /// 界面显示与下载用的地址。
+    pub fn url(&self) -> String {
+        file_url(&self.id, &self.name)
+    }
 }
 
 /// 文件名会成为 URL 的一段和 agent 工作目录里的文件名：只接受单个路径段，不做修正。

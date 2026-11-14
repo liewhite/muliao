@@ -99,12 +99,14 @@ async fn cancelled_upload_leaves_no_temp_file() {
 }
 
 #[test]
-fn file_url_round_trips() {
-    let url = file_url("abc", "报告 v1/2?.pdf");
-    assert_eq!(url, "/api/files/abc/%E6%8A%A5%E5%91%8A%20v1%2F2%3F.pdf");
-    assert_eq!(parse_file_url(&url), Some(("abc".into(), "报告 v1/2?.pdf".into())));
+fn references_round_trip_and_derive_the_url() {
+    let r = FileRef { id: "abc".into(), name: "报告 v1/2?.pdf".into() };
+    assert_eq!(r.uri(), "muliao-file:abc/%E6%8A%A5%E5%91%8A%20v1%2F2%3F.pdf");
+    assert_eq!(FileRef::parse(&r.uri()), Some(r.clone()));
+    assert_eq!(r.url(), "/api/files/abc/%E6%8A%A5%E5%91%8A%20v1%2F2%3F.pdf");
     assert_eq!(file_url("i", "a-b_c.~d"), "/api/files/i/a-b_c.~d");
-    for bad in ["/api/files/abc", "/api/files//x", "/api/filesx/a/b", "/other/a/b", "/api/files/a/"] {
-        assert_eq!(parse_file_url(bad), None, "{bad}");
+    // 接口路径不是存储写法
+    for bad in ["/api/files/abc/x", "muliao-file:abc", "muliao-file:/x", "muliao-filex:a/b", "muliao-file:a/"] {
+        assert_eq!(FileRef::parse(bad), None, "{bad}");
     }
 }
