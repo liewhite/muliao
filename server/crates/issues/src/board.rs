@@ -67,19 +67,15 @@ pub struct BoardIssue {
     pub work: IssueWork,
 }
 
-/// 列表里的一个 issue：[`BoardIssue`] 去掉描述。看板、列表、依赖图、issue_list 都不显示描述，整份列表里它占七成（#843），
-/// 所以描述只在单个 issue 里给（[`IssueDetail`]、命令返回的 [`BoardIssue`]）。
+/// 列表形状的 issue：[`BoardIssue`] 去掉描述（整份列表里它占七成，#843），描述只在单个 issue 里给。字段含义同 [`Issue`]。
 #[derive(Debug, Clone, PartialEq, Serialize, utoipa::ToSchema)]
 pub struct ListedIssue {
     pub id: i64,
     pub title: String,
     pub status: Status,
     pub priority: Priority,
-    /// 负责的项目（agent id）；只在负责的 agent 被删除后为空
     pub owner: Option<AgentId>,
-    /// agent id、`user`，或 null（未指派）
     pub assignee: Option<Assignee>,
-    /// 创建者：agent id；用户创建的为 `user`
     pub creator: Actor,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,

@@ -1791,10 +1791,7 @@ export interface components {
             url: string;
             summary: string | null;
         };
-        /**
-         * @description 列表里的一个 issue：[`BoardIssue`] 去掉描述。看板、列表、依赖图、issue_list 都不显示描述，整份列表里它占七成（#843），
-         *     所以描述只在单个 issue 里给（[`IssueDetail`]、命令返回的 [`BoardIssue`]）。
-         */
+        /** @description 列表形状的 issue：[`BoardIssue`] 去掉描述（整份列表里它占七成，#843），描述只在单个 issue 里给。字段含义同 [`Issue`]。 */
         ListedIssue: components["schemas"]["IssueWork"] & {
             /** Format: int64 */
             id: number;
@@ -1803,7 +1800,6 @@ export interface components {
             priority: components["schemas"]["Priority"];
             owner: components["schemas"]["AgentId"] | null;
             assignee: components["schemas"]["Assignee"] | null;
-            /** @description 创建者：agent id；用户创建的为 `user` */
             creator: components["schemas"]["Actor"];
             /** Format: date-time */
             created_at: string;

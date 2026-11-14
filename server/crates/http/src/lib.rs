@@ -66,7 +66,8 @@ pub fn router(state: AppState) -> Router {
         .merge(api::sites::public_routes())
         .fallback(web::spa)
         // 按浏览器的 Accept-Encoding 压缩：用户经代理从外网访问，JSON 和前端代码压缩后小一个数量级（#843）。
-        // 默认规则不压事件流（text/event-stream，压了会被缓冲、事件延迟）、图片和很小的响应
+        // 默认规则不压事件流（text/event-stream，压了会被缓冲、事件延迟）、图片和很小的响应。文件下载也被压：
+        // 已压缩的大文件白花 CPU、没有 Content-Length 就没有下载进度，很少见，接受
         .layer(CompressionLayer::new())
         .with_state(state)
 }
