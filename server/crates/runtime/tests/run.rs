@@ -323,6 +323,9 @@ async fn a_run_from_start_to_finish() {
 
     // 执行工具：图片存成引用，附件并进结果
     let earlier = &history[..history.len() - 1];
+    // 已经停止：一个调用也不启动
+    let stopped = run.run_tools(earlier, &r, &resolved, std::future::ready(()), &mut |_| {}).await.unwrap();
+    assert!(matches!(&stopped, ToolsRun::Stopped(done) if done.is_empty()), "no tool runs once stopped");
     let ToolsRun::Done(ToolsDone::Results(results)) =
         run.run_tools(earlier, &r, &resolved, std::future::pending(), &mut |_| {}).await.unwrap()
     else {

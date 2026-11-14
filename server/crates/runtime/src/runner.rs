@@ -270,7 +270,8 @@ impl Run {
     /// 调用的结局与挂起前已有的结果（按调用 id，它们不再执行），不是从挂起处继续时为空。交回的结果是存储形态：能内联的
     /// 图片存进文件存储换成引用，工具挂上的附加数据并进结果。
     ///
-    /// stop 完成时不再等还在跑的调用（丢掉它们），交回已经做完的那些（[`ToolsRun::Stopped`]）。只有执行可以被它打断：
+    /// stop 完成时不再等还在跑的调用（丢掉它们；一开始就已完成则一个也不启动），交回已经做完的那些
+    /// （[`ToolsRun::Stopped`]）。只有执行可以被它打断：
     /// 做完之后把结果变成存储形态（取走工具挂上的附加数据、存图片）不看 stop，所以交回的结果总是完整的。
     ///
     /// on_event 里工具调用的参数已经脱敏（[`Redaction::preview`]）；`ToolFinished` 的结果还是工具交回的原样（图片是内容、
@@ -294,8 +295,8 @@ impl Run {
             };
             tokio::select! {
                 biased;
-                done = self.agent.call_tools(&self.scope, earlier, response, resolved, &mut collect) => Some(done?),
                 () = stop => None,
+                done = self.agent.call_tools(&self.scope, earlier, response, resolved, &mut collect) => Some(done?),
             }
         };
         let Some(mut done) = done else {

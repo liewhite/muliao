@@ -7,8 +7,9 @@
 //! - 每一步保存：请求模型前，这条请求与它带上的信件（记为已处理）同一个事务提交；模型回复后提交回复；工具做完，结果与新到
 //!   的信并成下一条请求再提交。失败或重启后从上一步续跑。停在挂起的调用上时，已经做完的工具结果先存成一条请求，继续时把
 //!   它们连同回答交回 agenter，只把新出的结果接在后面存（库里的消息不改写）。
-//! - 被用户停止：actor 发出停止信号，运行在等模型、等工具、压缩、组装运行处看到它就不再往下走，把这一步已产生、
-//!   还没保存的部分（生成到一半的回复、做完的工具结果）交回（[`Ran::Stopped`]），由停止事务保存。保存一步的事务不被打断。
+//! - 被用户停止：actor 发出停止信号，运行在等模型、等工具、压缩、组装运行处看到它就不再往下走（已经停止时不再开始新的
+//!   请求或工具），把这一步已产生、还没保存的部分（生成到一半的回复、做完的工具结果）交回（[`Ran::Stopped`]），由停止事务
+//!   保存。保存一步的事务不被打断。
 //! - 收尾（[`finish_in`]）：记下运行的结局、结清做完的委派、发布 RunEnded。
 
 use muliao_platform::ids::{MailId, RunId, SessionId};
@@ -74,18 +75,12 @@ pub struct Core {
     pub bus: Arc<Bus>,
 }
 
-/// 被停止时这次运行已产生、还没保存的部分（存储形态）：记在哪次运行名下、哪些消息。
-pub(crate) struct Unsaved {
-    pub run_id: RunId,
-    pub messages: Vec<Message>,
-}
-
 /// 一次运行怎么结束的（失败不在这里，是 [`Failure`]）。
 pub(crate) enum Ran {
     /// 走到了结局，已经收尾
     Finished,
-    /// 看到停止信号停下：没有收尾，已产生、没保存的部分交给停止事务
-    Stopped(Unsaved),
+    /// 看到停止信号停下：没有收尾（运行还没结束），已产生、没保存的消息（存储形态）交给停止事务
+    Stopped(Vec<Message>),
 }
 
 /// 驱动没走到结局就停下了：失败，或被停止（带着这一步已产生、还没保存的消息）。用 `?` 一路传回 [`execute`]。
@@ -235,7 +230,7 @@ pub(crate) async fn execute(
             finish(core, &begun, Ending::Ended(end)).await?;
             Ok(Ran::Finished)
         }
-        Err(Cut::Stopped(messages)) => Ok(Ran::Stopped(Unsaved { run_id: begun.run_id, messages })),
+        Err(Cut::Stopped(messages)) => Ok(Ran::Stopped(messages)),
         Err(Cut::Failed(f)) => Err(f),
     }
 }
@@ -466,12 +461,12 @@ impl Driver<'_> {
         &self.begun.session.id
     }
 
-    /// fut 做完之前被停止就丢掉它（None）。
+    /// fut 做完之前被停止就丢掉它（None）。先看信号：已经停止就不再开始（一次也不轮询 fut）。
     async fn unless_stopped<T>(&self, fut: impl Future<Output = T>) -> Option<T> {
         tokio::select! {
             biased;
-            r = fut => Some(r),
             () = self.stop.cancelled() => None,
+            r = fut => Some(r),
         }
     }
 

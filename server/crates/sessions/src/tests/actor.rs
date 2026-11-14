@@ -535,7 +535,6 @@ async fn stopping_while_waiting_for_the_model_takes_effect_at_once() {
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    tokio::time::sleep(Duration::from_millis(100)).await;
     tokio::time::timeout(Duration::from_secs(5), w.service.stop(&s)).await.expect("stop is not held up").unwrap();
     assert_eq!(w.state(&s).await, WorkState::Idle);
     let h = w.history(&s).await;

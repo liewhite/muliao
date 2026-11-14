@@ -10,7 +10,7 @@
 //!    跑完的结局因占用已清掉而不投（罕见、只多花一段 token，不为它持久化停止任务）。
 //! 6. 发布 SessionStopped：工作区领域在提交后结束被清掉的后台任务。
 
-use muliao_platform::ids::{DelegationId, RunId, SessionId};
+use muliao_platform::ids::{DelegationId, SessionId};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -24,7 +24,7 @@ use crate::history::{self, since_last_response};
 use crate::holds::{HoldOf, clear_in};
 use crate::mailbox::consume_in;
 use crate::pending::closing_on_stop;
-use crate::run::{Core, Unsaved};
+use crate::run::Core;
 use crate::runs;
 use crate::settlement::settle_stopped_in;
 use crate::thread_calls::delegations_among;
@@ -42,17 +42,14 @@ pub enum Halted {
 /// 停下一个 thread（提交后调用；由 actor 系统给）。
 pub(crate) type StopThread = Arc<dyn Fn(SessionId) + Send + Sync>;
 
-/// 停止事务。unsaved：运行中被停止时这次运行已产生、还没保存的部分（运行编号与消息），存在最前面。
+/// 停止事务。unsaved：运行中被停止时这次运行已产生、还没保存的消息，记在还没结束的那次运行名下、存在最前面。
 pub(crate) async fn halt(
     core: &Core,
     session_id: &SessionId,
-    unsaved: Option<Unsaved>,
+    mut unsaved: Vec<Message>,
     stop_thread: StopThread,
 ) -> Result<Halted> {
-    let mut unsaved = unsaved;
-    if let Some(u) = &mut unsaved {
-        core.redaction.messages(&mut u.messages);
-    }
+    core.redaction.messages(&mut unsaved);
     let (session_id, waker, events, live) =
         (session_id.to_owned(), core.waker.clone(), core.events.clone(), core.live.clone());
     core.db
@@ -61,10 +58,12 @@ pub(crate) async fn halt(
                 tracing::info!(%session_id, "stopping a deleted session: nothing to do");
                 return Ok(Halted::Gone);
             };
-            if let Some(u) = unsaved.as_ref().filter(|u| !u.messages.is_empty()) {
-                history::append_in(tx, &session_id, u.run_id, &u.messages)?;
+            if !unsaved.is_empty() {
+                let run = runs::unfinished_in(tx, &session_id)?
+                    .ok_or_else(|| broken(format!("session {session_id} has unsaved messages but no running run")))?;
+                history::append_in(tx, &session_id, run.id, &unsaved)?;
             }
-            close_history_in(tx, &session_id, unsaved.as_ref().map(|u| u.run_id))?;
+            close_history_in(tx, &session_id)?;
             let stopped_runs = runs::stop_unfinished_in(tx, &live, &session_id)?;
             // 没在跑的会话（在等后台任务、委派、唤醒）没有运行记录可改，可停止照样改了它看得见的内容（补上的结果、清掉的
             // 等待项、丢弃的信）：看着它的页面也要重拉
@@ -97,18 +96,16 @@ pub(crate) async fn halt(
 }
 
 /// 让会话历史停在不会被续跑的地方：哪些调用补「已停止」、哪些写上已提交的回答按会话停在哪定，用上的回答信件随之记为已处理。
-fn close_history_in(tx: &mut Tx<'_>, session_id: &SessionId, run_id: Option<RunId>) -> Result<()> {
+/// 补的结果记在最近一次运行名下（被停的运行，或调用挂起时的那次）。
+fn close_history_in(tx: &mut Tx<'_>, session_id: &SessionId) -> Result<()> {
     let tail = since_last_response(tx, session_id)?;
     let closing = closing_on_stop(&position_in(tx, session_id)?);
     let mut results: Vec<_> = closing.stopped.iter().map(|c| made_up_result(c, MadeUp::Stopped)).collect();
     results.extend(closing.answered);
     if let Some(request) = results_request(results) {
-        let run_id = match run_id {
-            Some(id) => id,
-            None => runs::latest_in(tx, session_id)?
-                .map(|r| r.id)
-                .ok_or_else(|| broken(format!("session {session_id} has tool calls but no run")))?,
-        };
+        let run_id = runs::latest_in(tx, session_id)?
+            .map(|r| r.id)
+            .ok_or_else(|| broken(format!("session {session_id} has tool calls but no run")))?;
         let mut message = Message::User(request);
         mark_stopped(&mut message);
         history::append_in(tx, session_id, run_id, &[message])?;

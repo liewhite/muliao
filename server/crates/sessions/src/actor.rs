@@ -228,7 +228,7 @@ async fn idle_command(inner: &Arc<Inner>, id: &SessionId, cmd: Command, rx: &mut
     match cmd {
         Command::Wake => {}
         Command::Stop(reply) => {
-            let halted = halt(&inner.core, id, None, Actors::stop_thread(Arc::downgrade(inner))).await;
+            let halted = halt(&inner.core, id, Vec::new(), Actors::stop_thread(Arc::downgrade(inner))).await;
             let _ = reply.send(halted);
         }
         Command::Compact(reply) => compact_until_stopped(inner, id, rx, reply).await,
@@ -304,7 +304,7 @@ async fn run_with_retries(inner: &Arc<Inner>, id: &SessionId, rx: &mut mpsc::Unb
         });
         let failure = match (outcome, stopping) {
             (Ok(Ran::Stopped(unsaved)), reply) => {
-                let halted = halt(core, id, Some(unsaved), Actors::stop_thread(Arc::downgrade(inner))).await;
+                let halted = halt(core, id, unsaved, Actors::stop_thread(Arc::downgrade(inner))).await;
                 if let Some(reply) = reply {
                     let _ = reply.send(halted);
                 }
@@ -315,7 +315,7 @@ async fn run_with_retries(inner: &Arc<Inner>, id: &SessionId, rx: &mut mpsc::Unb
                 if let Err(f) = &outcome {
                     tracing::warn!(session_id = %id, error = %f.message(), "the run failed while being stopped");
                 }
-                let halted = halt(core, id, None, Actors::stop_thread(Arc::downgrade(inner))).await;
+                let halted = halt(core, id, Vec::new(), Actors::stop_thread(Arc::downgrade(inner))).await;
                 let _ = reply.send(halted);
                 return true;
             }
@@ -338,7 +338,7 @@ async fn run_with_retries(inner: &Arc<Inner>, id: &SessionId, rx: &mut mpsc::Unb
                     _ = &mut sleep => break,
                     cmd = rx.recv() => match cmd {
                         Some(Command::Stop(reply)) => {
-                            let halted = halt(core, id, None, Actors::stop_thread(Arc::downgrade(inner))).await;
+                            let halted = halt(core, id, Vec::new(), Actors::stop_thread(Arc::downgrade(inner))).await;
                             let _ = reply.send(halted);
                             return true;
                         }
@@ -458,7 +458,7 @@ async fn compact_until_stopped(
     };
     tracing::info!(session_id = %id, "manual compaction stopped");
     let _ = reply.send(Err(conflict("compaction stopped")));
-    let halted = halt(&inner.core, id, None, Actors::stop_thread(Arc::downgrade(inner))).await;
+    let halted = halt(&inner.core, id, Vec::new(), Actors::stop_thread(Arc::downgrade(inner))).await;
     let _ = stop.send(halted);
 }
 
