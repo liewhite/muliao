@@ -344,7 +344,7 @@ fn event_indexes_and_mail_senders_become_part_marks() {
     db.request(
         run,
         vec![text("context"), event_text("job:12", "ok"), event_text("thread:s2", "x")],
-        Some(json!({ "muliao_events": [1, 2], "muliao_check_ins": [2], "other": "keep" })),
+        Some(json!({ "muliao_events": [1, 2], "muliao_check_ins": [2] })),
     );
     // 事件与消息都有：消息的文字与紧跟的附件段记发送方，和事件合在一起按段排
     db.request(
@@ -380,7 +380,6 @@ fn event_indexes_and_mail_senders_become_part_marks() {
     let first = history::transcript_in(&db.conn(), &SessionId::new(SESSION), None).unwrap().remove(0).message;
     let Message::User(first) = first else { unreachable!() };
     let meta = first.metadata.unwrap();
-    assert_eq!(meta["other"], "keep");
     assert!(meta.get("muliao_events").is_none() && meta.get("muliao_check_ins").is_none());
     db.upgrade_to_latest();
     assert_eq!(db.marks(), expected);
@@ -473,7 +472,7 @@ fn part_marks_stored_as_strings_are_parsed_back() {
         ),
     );
     // 本来就对的不动
-    let right = json!({ "muliao_parts": [{ "part": 1, "sender": "user" }], "other": "keep" });
+    let right = json!({ "muliao_parts": [{ "part": 1, "sender": "user" }] });
     db.request(run, parts(), Some(right.clone()));
 
     let expected = vec![

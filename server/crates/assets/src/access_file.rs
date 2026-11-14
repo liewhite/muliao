@@ -143,7 +143,8 @@ struct StoredAgent {
 
 /// 文件内容读成 [`Stored`]；不合格式时是原因。
 fn stored(text: &str) -> std::result::Result<Stored, String> {
-    toml::from_str(text).map_err(|e: toml::de::Error| format!("cannot parse: {}", e.message().trim()))
+    // 带位置与那一行原文的报错（哪一节写错了）；这个文件里没有密钥
+    toml::from_str(text).map_err(|e: toml::de::Error| format!("cannot parse: {}", e.to_string().trim()))
 }
 
 impl<'a> Parser<'a> {

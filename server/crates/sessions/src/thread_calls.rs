@@ -33,21 +33,34 @@ pub enum Delegated {
     Ask,
 }
 
+/// 库里 mode 列：调用方式的种类。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ModeKind {
+    Plain,
+    ReportBack,
+    Ask,
+}
+
+muliao_platform::serde_names!(ModeKind);
+
 impl CallMode {
     /// 存下的形状：(mode 列, check_seconds 列)，表上的 CHECK 约束只允许这几种组合。
-    fn columns(self) -> (&'static str, Option<f64>) {
+    fn columns(self) -> (ModeKind, Option<f64>) {
         match self {
-            CallMode::Plain => ("plain", None),
-            CallMode::Delegated(Delegated::ReportBack { check_seconds }) => ("report_back", Some(check_seconds)),
-            CallMode::Delegated(Delegated::Ask) => ("ask", None),
+            CallMode::Plain => (ModeKind::Plain, None),
+            CallMode::Delegated(Delegated::ReportBack { check_seconds }) => (ModeKind::ReportBack, Some(check_seconds)),
+            CallMode::Delegated(Delegated::Ask) => (ModeKind::Ask, None),
         }
     }
 
-    fn parse(mode: &str, check_seconds: Option<f64>) -> Option<CallMode> {
+    fn parse(mode: ModeKind, check_seconds: Option<f64>) -> Option<CallMode> {
         match (mode, check_seconds) {
-            ("plain", None) => Some(CallMode::Plain),
-            ("report_back", Some(check_seconds)) => Some(CallMode::Delegated(Delegated::ReportBack { check_seconds })),
-            ("ask", None) => Some(CallMode::Delegated(Delegated::Ask)),
+            (ModeKind::Plain, None) => Some(CallMode::Plain),
+            (ModeKind::ReportBack, Some(check_seconds)) => {
+                Some(CallMode::Delegated(Delegated::ReportBack { check_seconds }))
+            }
+            (ModeKind::Ask, None) => Some(CallMode::Delegated(Delegated::Ask)),
             _ => None,
         }
     }
@@ -84,7 +97,7 @@ pub struct Owed {
 
 const COLUMNS: &str = "id, parent_session_id, call_id, thread_session_id, mode, check_seconds";
 
-type RawRecord = (DelegationId, SessionId, String, SessionId, String, Option<f64>);
+type RawRecord = (DelegationId, SessionId, String, SessionId, ModeKind, Option<f64>);
 
 fn raw(r: &Row<'_>) -> rusqlite::Result<RawRecord> {
     Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
@@ -96,7 +109,7 @@ fn query(c: &Connection, filter: &str, params: impl rusqlite::Params) -> Result<
     rows.into_iter()
         .map(|(id, parent_id, call_id, thread_id, mode, check_seconds)| {
             // 列上的 CHECK 约束只允许 parse 认得的组合
-            let mode = CallMode::parse(&mode, check_seconds).ok_or_else(|| {
+            let mode = CallMode::parse(mode, check_seconds).ok_or_else(|| {
                 broken(format!("thread call {id} has mode {mode} with check_seconds {check_seconds:?}"))
             })?;
             Ok(CallRecord { id, parent_id, call_id, thread_id, mode })

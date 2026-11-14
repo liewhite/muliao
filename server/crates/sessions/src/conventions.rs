@@ -64,6 +64,7 @@ fn is_false(b: &bool) -> bool {
 
 /// 请求（用户一方的消息）上的 metadata。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RequestMeta {
     #[serde(rename = "muliao_stopped", default, skip_serializing_if = "is_false")]
     stopped: bool,
@@ -71,23 +72,20 @@ struct RequestMeta {
     parts: Vec<PartMark>,
     #[serde(rename = "muliao_run_context", default, skip_serializing_if = "Option::is_none")]
     run_context: Option<usize>,
-    /// 旧版写下、现在不读的键：原样保留
-    #[serde(flatten)]
-    legacy: Map<String, Value>,
 }
 
 /// 回复上的 metadata。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ResponseMeta {
     #[serde(rename = "muliao_stopped", default, skip_serializing_if = "is_false")]
     stopped: bool,
     #[serde(rename = "muliao_interrupted", default, skip_serializing_if = "is_false")]
     interrupted: bool,
-    #[serde(flatten)]
-    legacy: Map<String, Value>,
 }
 
-/// 工具结果上的 metadata：会话领域的，加上运行端口写下的（[`ResultFiles`]）。
+/// 工具结果上的 metadata：会话领域的，加上运行端口写下的（[`ResultFiles`]）。平铺了别人的结构，不能拒绝不认识的键：
+/// 旧版写下、现在不读的键（`mcp_app`、`muliao_threads`）读时忽略；库里已有的工具结果不再改写，不会丢掉它们。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 struct ResultMeta {
     #[serde(rename = "muliao_made_up", default, skip_serializing_if = "Option::is_none")]
@@ -96,8 +94,6 @@ struct ResultMeta {
     finished_at: Option<DateTime<Utc>>,
     #[serde(flatten)]
     files: ResultFiles,
-    #[serde(flatten)]
-    legacy: Map<String, Value>,
 }
 
 fn try_read<T: DeserializeOwned + Default>(metadata: &Option<Value>) -> std::result::Result<T, String> {
@@ -557,14 +553,13 @@ mod tests {
     }
 
     #[test]
-    fn metadata_is_checked_when_read_and_old_keys_are_kept() {
+    fn metadata_is_checked_when_read() {
         let mut m = response(vec![]);
-        let Message::Assistant(r) = &mut m else { unreachable!() };
-        r.metadata = Some(serde_json::json!({ "mcp_app": { "x": 1 } }));
-        assert!(check_metadata(&m).is_ok());
         mark_stopped(&mut m);
-        let Message::Assistant(r) = &m else { unreachable!() };
-        assert_eq!(r.metadata, Some(serde_json::json!({ "mcp_app": { "x": 1 }, "muliao_stopped": true })));
+        let Message::Assistant(r) = &mut m else { unreachable!() };
+        assert_eq!(r.metadata, Some(serde_json::json!({ "muliao_stopped": true })));
+        r.metadata = Some(serde_json::json!({ "muliao_stoped": true }));
+        assert!(check_metadata(&m).is_err());
 
         let bad = |metadata: Value| {
             check_metadata(&Message::User(Request {
@@ -580,6 +575,8 @@ mod tests {
         assert!(bad(serde_json::json!({ "muliao_run_context": "0" })).is_err());
         let mut t =
             ToolResult { call_id: "a".into(), tool_name: "t".into(), content: vec![], is_error: false, metadata: None };
+        t.metadata = Some(serde_json::json!({ "mcp_app": {}, "muliao_made_up": "stopped" }));
+        assert_eq!(made_up(&t), Some(MadeUp::Stopped));
         t.metadata = Some(serde_json::json!({ "muliao_made_up": "later" }));
         let r = Request { parts: vec![RequestPart::ToolResult(t)], timestamp: chrono::Utc::now(), metadata: None };
         assert!(check_metadata(&Message::User(r)).unwrap_err().contains("result of t"));

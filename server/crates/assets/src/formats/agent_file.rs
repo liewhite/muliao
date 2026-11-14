@@ -160,7 +160,7 @@ impl AgentFile {
 
 /// 不合格式时报错（原因）。
 pub fn parse(text: &str) -> Result<AgentFile, String> {
-    let s: Stored = toml::from_str(text).map_err(|e: toml::de::Error| invalid(e.message().trim()))?;
+    let s: Stored = toml::from_str(text).map_err(|e: toml::de::Error| invalid(e.to_string().trim()))?;
     AgentFile::checked(s.description, s.model, s.thinking, s.group)
 }
 

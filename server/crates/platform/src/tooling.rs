@@ -60,7 +60,8 @@ impl RunScope {
         self.audience == Audience::User
     }
 
-    /// 给调用 `call_id` 的结果挂上附加数据（再写就覆盖）。
+    /// 给调用 `call_id` 的结果挂上附加数据（再写就覆盖）。只经运行端口的 `conventions::attach` 调用：形状由它定，形状
+    /// 不对的会原样入库、读历史时报错。
     pub fn set_result_metadata(&self, call_id: &str, value: Value) {
         self.result_metadata.lock().expect("result metadata lock").insert(call_id.to_owned(), value);
     }
