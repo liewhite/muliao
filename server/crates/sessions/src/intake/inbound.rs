@@ -15,13 +15,13 @@ use muliao_files::load_metas;
 use muliao_platform::db::Tx;
 use rusqlite::Connection;
 
-use crate::actor::Waker;
-use crate::answers::{CallResult, Choice, Decision, QuestionAnswer, answer_result};
-use crate::directory::{self, NewSession, Session, keyed_in};
+use crate::execution::actor::Waker;
+use crate::intake::directory::{self, NewSession, Session, keyed_in};
+use crate::intake::origins::{Origin, Sender, SessionOrigin, ThreadName};
 use crate::mailbox::{MailBody, NewMail, post_in, queued_in};
-use crate::origins::{Origin, Sender, SessionOrigin, ThreadName};
-use crate::pending::open_asks_of;
-use crate::pending::position_in;
+use crate::waiting::answers::{CallResult, Choice, Decision, QuestionAnswer, answer_result};
+use crate::waiting::pending::open_asks_of;
+use crate::waiting::pending::position_in;
 use muliao_platform::errors::{Error, Result, conflict, forbidden, invalid, not_found};
 
 const TITLE_MAX: usize = 60;
@@ -30,7 +30,7 @@ const TITLE_LENGTH: usize = 200;
 
 /// 一封来信的具体发送方。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Party {
+pub(super) enum Party {
     User,
     /// 委派来的信：发送方是父会话
     Parent(SessionId),
@@ -184,7 +184,7 @@ fn shorten(text: &str, limit: usize) -> String {
 }
 
 /// 没给标题的新会话的标题：内容的第一行，过长时截断。
-pub(crate) fn default_title(text: &str) -> String {
+pub(super) fn default_title(text: &str) -> String {
     shorten(text.trim().lines().next().unwrap_or(""), TITLE_MAX)
 }
 

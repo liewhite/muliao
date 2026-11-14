@@ -14,12 +14,12 @@ use agenter::Resolution;
 use chrono::Utc;
 use rusqlite::{Connection, params};
 
-use crate::answers::{CallResult, Waiting};
+use crate::waiting::answers::{CallResult, Waiting};
 use muliao_platform::db::{Tx, placeholders};
 use muliao_platform::errors::Result;
 
 /// 一个会话里挂起过的调用（调用 id → 种类）；行永久保留，没结果的才在等。
-pub(crate) type PausedKinds = HashMap<CallId, Waiting>;
+pub(super) type PausedKinds = HashMap<CallId, Waiting>;
 
 /// 一次调用挂起成哪一种。等批准独有被批准对象的指纹 pin。
 #[derive(Debug, Clone, PartialEq, Eq)]

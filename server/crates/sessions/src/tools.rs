@@ -1,6 +1,6 @@
 //! 会话领域的工具：ask_user（向用户提问）、委派（delegate_task、ask_agent、stop_thread、list_threads）、wake_me（到点唤醒）。
 //! 都只经会话领域的接口做事；挂起的调用（ask_user、ask_agent）交回 `ToolError::Defer`，运行停在这里，回答作为结果交回
-//! （[`crate::pending`]）。
+//! （[`crate::waiting::pending`]）。
 
 use muliao_platform::ids::CallId;
 use std::sync::Arc;
@@ -17,18 +17,18 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::activity::WorkState;
-use crate::actor::Waker;
-use crate::answers::AskArgs;
-use crate::delegation::{Mode, send_in, threads_in};
-use crate::halt::Halted;
-use crate::origins::ThreadName;
-use crate::paused_calls::{self, Pause};
+use crate::execution::actor::Waker;
+use crate::execution::halt::Halted;
+use crate::intake::origins::ThreadName;
+use crate::outside::delegation::{Mode, send_in, threads_in};
+use crate::outside::wakeups::{WAKE_ME, cancel_in, local_time, schedule_in};
+use crate::outside::work::no_progress_hint;
 use crate::thread_calls::Delegated;
-use crate::wakeups::{WAKE_ME, cancel_in, local_time, schedule_in};
-use crate::work::no_progress_hint;
+use crate::waiting::answers::AskArgs;
+use crate::waiting::paused_calls::{self, Pause};
 use muliao_platform::errors::{Error, invalid, not_found};
 
-pub use crate::actor::Stopper;
+pub use crate::execution::actor::Stopper;
 
 pub(crate) const ASK_USER: &str = "ask_user";
 const ASK_AGENT: &str = "ask_agent";
@@ -275,7 +275,7 @@ impl Tool<RunScope> for StopThread {
         let (child, who) = self
             .db
             .read(move |c| {
-                let mut named = crate::directory::threads_named_in(c, &parent, &wanted)?;
+                let mut named = crate::intake::directory::threads_named_in(c, &parent, &wanted)?;
                 if let Some(agent) = &a.agent {
                     let id = named_in(c, agent)?.id;
                     named.retain(|s| s.agent_id == id);

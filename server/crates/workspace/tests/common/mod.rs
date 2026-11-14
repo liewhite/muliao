@@ -22,10 +22,10 @@ use muliao_platform::sandbox::sandbox_for;
 use muliao_platform::tooling::{Audience, BuiltinTool, RunScope};
 use muliao_platform::vault::Vault;
 use muliao_runtime::toolbox::Toolbox;
-use muliao_sessions::actor::Waker;
 use muliao_sessions::events::{Events, Subscribers};
+use muliao_sessions::execution::actor::Waker;
 use muliao_sessions::mailbox::{Mail, queued_in};
-use muliao_sessions::work::SessionWork;
+use muliao_sessions::outside::work::SessionWork;
 use muliao_workspace::{Workspace, WorkspaceDeps};
 
 pub struct World {

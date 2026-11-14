@@ -2,7 +2,7 @@
 //! 批准。运行停在这里正常结束；回信是一封回答信件，作为那次调用的结果交回，模型看到的就是「我问了，对方这样答」。
 //! 设计见 docs/architecture.md「挂起的调用」。
 //!
-//! - 一次调用在不在等、等的是哪一种，只看挂起时记下的那一行（[`crate::paused_calls`]，#823），不按工具名认；三种的差别
+//! - 一次调用在不在等、等的是哪一种，只看挂起时记下的那一行（[`crate::waiting::paused_calls`]，#823），不按工具名认；三种的差别
 //!   只写在 [`Waiting`] 的方法里，各处查它。
 //! - 会话停在哪（[`position`]，纯函数，唯一的判断）：空闲、新开、从历史续跑、被打断、等回答。由历史、挂起记录与信箱
 //!   推导；actor、唤醒、停止、等用户的调用、交回结局都 match 它。
@@ -15,11 +15,11 @@ use std::collections::{HashMap, HashSet};
 use agenter::{Message, Resolution, ToolCall, ToolResult};
 use rusqlite::Connection;
 
-use crate::answers::{CallResult, Question, Waiting, questions_of, skipped};
-use crate::conventions::{is_stopped, unanswered_calls};
-use crate::history::since_last_response;
 use crate::mailbox::{Mail, MailBody, queued_in};
-use crate::paused_calls::{PausedKinds, kinds_in};
+use crate::record::conventions::{is_stopped, unanswered_calls};
+use crate::record::history::since_last_response;
+use crate::waiting::answers::{CallResult, Question, Waiting, questions_of, skipped};
+use crate::waiting::paused_calls::{PausedKinds, kinds_in};
 use muliao_platform::errors::{Result, broken};
 
 impl Waiting {
@@ -30,7 +30,7 @@ impl Waiting {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct PendingCall {
+pub(crate) struct PendingCall {
     /// 挂起记录、回答信件里认它用的编号（就是 call 的 id）
     pub id: CallId,
     pub call: ToolCall,
@@ -39,7 +39,7 @@ pub struct PendingCall {
 
 /// 等回答：停在挂起的调用上。
 #[derive(Debug, Clone, PartialEq)]
-pub struct Paused {
+pub(crate) struct Paused {
     /// 挂起的调用，按出现顺序
     pub pending: Vec<PendingCall>,
     /// 信箱里对它们的回答
@@ -58,7 +58,7 @@ impl Paused {
 
 /// 会话现在停在哪。
 #[derive(Debug, Clone, PartialEq)]
-pub enum Position {
+pub(crate) enum Position {
     /// 没有挂起的调用、没有要续跑的，信箱也空了
     Idle,
     /// 没有挂起的调用、没有要续跑的，信箱里有信：作为下一次运行的开头交给模型
@@ -76,7 +76,7 @@ pub enum Position {
 
 /// 被打断的那一步补完「被中断」的结果之后停在哪。
 #[derive(Debug, Clone, PartialEq)]
-pub enum AfterInterrupted {
+pub(crate) enum AfterInterrupted {
     /// 没有挂起的调用：把补上的结果发给模型
     Resend,
     /// 同一条回复里还有挂起的调用
@@ -152,11 +152,11 @@ pub(crate) fn position(history: &[Message], paused: &PausedKinds, queued: &[Mail
 }
 
 /// 这封回答信件针对的调用还挂着：它的回答作为那次调用的结果交回（返回调用 id 与回答）。否则它是迟到的，作为文字交给模型。
-pub(crate) fn on_time_answer<'a>(mail: &'a Mail, pending: &HashSet<CallId>) -> Option<(&'a CallId, &'a CallResult)> {
+pub(super) fn on_time_answer<'a>(mail: &'a Mail, pending: &HashSet<CallId>) -> Option<(&'a CallId, &'a CallResult)> {
     mail.body.answer().filter(|(c, _)| pending.contains(c))
 }
 
-/// 交给运行的挂起调用结果。有回答的用回答，等批准的调用的结果由 [`crate::paused_calls::take_in`] 对着挂起记录给出
+/// 交给运行的挂起调用结果。有回答的用回答，等批准的调用的结果由 [`crate::waiting::paused_calls::take_in`] 对着挂起记录给出
 /// （decided，每个批准决定都在里面）；其余（来了新消息，或这次只回答了一部分）用那一种自己的「跳过」结果。
 pub(crate) fn deferred_results(
     paused: &Paused,
@@ -188,7 +188,7 @@ pub(crate) fn deferred_results(
 /// - answered：停止后本该仍挂着、但回答已提交还排着的调用及其结果：回答是停止前用户已经给出的部分，照常写进历史；
 /// - used：这些回答所在的信件，随之记为已处理。其余仍挂着、没有回答的调用照旧挂着，用户仍可回答。
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct StopClosing {
+pub(crate) struct StopClosing {
     pub stopped: Vec<ToolCall>,
     pub answered: Vec<ToolResult>,
     pub used: Vec<MailId>,
@@ -308,10 +308,10 @@ mod tests {
     use chrono::Utc;
 
     use super::*;
-    use crate::answers::{AgentAnswer, AskResult};
+    use crate::intake::origins::Origin;
     use crate::mailbox::MailState;
-    use crate::origins::Origin;
     use crate::tools::ASK_USER;
+    use crate::waiting::answers::{AgentAnswer, AskResult};
 
     const ASK_AGENT: &str = "ask_agent";
 
@@ -374,7 +374,7 @@ mod tests {
         assert_eq!(position(&[response(vec![])], &none, &q).unwrap(), Position::Fresh);
         assert_eq!(position(&[user()], &none, &[]).unwrap(), Position::Resend);
         let mut stopped = user();
-        crate::conventions::mark_stopped(&mut stopped);
+        crate::record::conventions::mark_stopped(&mut stopped);
         assert_eq!(position(&[stopped], &none, &[]).unwrap(), Position::Idle);
     }
 

@@ -7,7 +7,7 @@
 //!   丢掉它：没写完的这一批作废，已提交的批次保留。
 //! - 运行失败：暂时性的（模型或外部服务一时不可用）退避重试，从同一个运行接着跑，约 30 分钟后算最终失败；其余当场最终失败：
 //!   记在运行记录上（会话页显示错误与「重试」），结清交给它的委派，发布 RunFailed。
-//! - 停止：在跑就给这次运行发停止信号，等它自己停下、交出已产生而没保存的部分（[`crate::run::Ran::Stopped`]），再在同一个
+//! - 停止：在跑就给这次运行发停止信号，等它自己停下、交出已产生而没保存的部分（[`crate::execution::run::Ran::Stopped`]），再在同一个
 //!   actor 里执行停止事务把它们存在最前面；不在跑就直接执行。返回时停止事务已提交。
 //! - 到点唤醒与委派的运行中检查：一个节拍循环（[`Actors::start`]）。
 
@@ -23,16 +23,17 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::activity::{WorkState, work_state_in};
-use crate::delegation::check_threads;
 use crate::events::RunFailed;
-use crate::halt::{Halted, StopThread, halt};
+use crate::execution::halt::{Halted, StopThread, halt};
+use crate::execution::run::{Core, Ran, execute};
+use crate::execution::runs::{self, Outcome, RunRecord};
+use crate::intake::directory;
 use crate::mailbox::{self, Mail};
-use crate::pending::Position;
-use crate::run::{Core, Ran, execute};
-use crate::runs::{self, Outcome, RunRecord};
-use crate::settlement::settle_failure_in;
-use crate::work::{CheckBeats, TICK};
-use crate::{directory, wakeups};
+use crate::outside::delegation::check_threads;
+use crate::outside::settlement::settle_failure_in;
+use crate::outside::wakeups;
+use crate::outside::work::{CheckBeats, TICK};
+use crate::waiting::pending::Position;
 use muliao_platform::errors::{Error, Result, broken, conflict, not_found};
 
 /// 叫醒会话 actor 的句柄：只说「这个会话可能有事了」，要不要跑由 actor 自己按 [`should_run`] 判断。可以先于 actor 系统
@@ -292,7 +293,7 @@ async fn has_work(core: &Core, id: &SessionId) -> Result<bool> {
 /// 会话最后一条消息（判断一次尝试有没有往前推进）。读不出来时记下错误、当作没有：只影响退避要不要从头算。
 async fn last_message(core: &Core, id: &SessionId) -> Option<MessageId> {
     let session_id = id.to_owned();
-    match core.d.db.read(move |c| crate::history::last_message_id_in(c, &session_id)).await {
+    match core.d.db.read(move |c| crate::record::history::last_message_id_in(c, &session_id)).await {
         Ok(last) => last,
         Err(e) => {
             tracing::error!(session_id = %id, error = %e, "reading the last message of the session failed");
@@ -338,7 +339,7 @@ async fn run_with_retries(inner: &Arc<Inner>, id: &SessionId, rx: &mut mpsc::Unb
                 .cloned()
                 .or_else(|| panic.downcast_ref::<&str>().map(|s| (*s).to_owned()))
                 .unwrap_or_else(|| "the run panicked".to_owned());
-            Err(crate::run::Failure::Final(format!("panicked: {message}")))
+            Err(crate::execution::run::Failure::Final(format!("panicked: {message}")))
         });
         let failure = match (outcome, stopping) {
             (Ok(Ran::Stopped(unsaved)), reply) => {
@@ -363,7 +364,7 @@ async fn run_with_retries(inner: &Arc<Inner>, id: &SessionId, rx: &mut mpsc::Unb
         if last_message(core, id).await != before {
             backoff.reset();
         }
-        if let crate::run::Failure::Transient(message) = &failure
+        if let crate::execution::run::Failure::Transient(message) = &failure
             && let Some(delay) = backoff.next_delay()
         {
             tracing::warn!(session_id = %id, error = %message, retry_in = ?delay, "run failed transiently; retrying");
@@ -519,7 +520,7 @@ async fn compact(core: &Core, id: &SessionId) -> Result<usize> {
         .await?;
     let result = async {
         let assets = core.d.agents.run_assets(&agent_id).await?;
-        crate::compaction::compact(core, id, &assets).await
+        crate::record::compaction::compact(core, id, &assets).await
     }
     .await;
     match &result {

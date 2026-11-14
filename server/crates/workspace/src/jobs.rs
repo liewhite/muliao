@@ -26,7 +26,7 @@ use muliao_platform::db::{Database, Tx};
 use muliao_platform::shell::{DRAIN, LEFT_RUNNING_NOTE, Spawned, kill_group};
 use muliao_platform::tooling::RunScope;
 use muliao_sessions::events::SessionStopped;
-use muliao_sessions::work::{CheckBeats, SessionWork, TICK, no_progress_hint};
+use muliao_sessions::outside::work::{CheckBeats, SessionWork, TICK, no_progress_hint};
 use rusqlite::{Connection, Row, params};
 use tokio::sync::watch;
 

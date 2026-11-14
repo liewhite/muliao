@@ -23,11 +23,11 @@ use muliao_platform::retry::Retry;
 use muliao_platform::sandbox::sandbox_for;
 use muliao_platform::tooling::{Audience, RunScope};
 use muliao_platform::vault::Vault;
-use muliao_sessions::actor::Waker;
-use muliao_sessions::inbound::SenderInbox;
+use muliao_sessions::execution::actor::Waker;
+use muliao_sessions::intake::inbound::SenderInbox;
 use muliao_sessions::mailbox::queued_in;
+use muliao_sessions::outside::work::SessionWork;
 use muliao_sessions::testing::discard_queued_in;
-use muliao_sessions::work::SessionWork;
 use muliao_workspace::{Workspace, WorkspaceDeps};
 use serde_json::{Value, json};
 

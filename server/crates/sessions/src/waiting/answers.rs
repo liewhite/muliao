@@ -1,6 +1,6 @@
 //! 挂起调用的三种回答（回答信件 `mail.answers` 的值）：用户对提问（ask_user）的回答、被问的 agent 交回的结局（ask_agent）、
 //! 用户对等批准的调用的决定。每种自己给出：交给模型的结果、没等到回答就继续时的结果、调用结束后才到的回答怎么写。
-//! 挂起、唤醒与交回的规则在 [`crate::pending`]。存下的形状是 `{"tool": ..., "result": ...}`。
+//! 挂起、唤醒与交回的规则在 [`crate::waiting::pending`]。存下的形状是 `{"tool": ..., "result": ...}`。
 
 use agenter::{Approval, Content, Resolution};
 use muliao_runtime::conventions::{SharedFile, files_metadata};
@@ -183,7 +183,7 @@ impl AskResult {
     }
 
     /// 交给模型的结果。
-    pub(crate) fn resolution(&self) -> Resolution {
+    pub(super) fn resolution(&self) -> Resolution {
         text(self.text())
     }
 }
@@ -246,7 +246,7 @@ pub struct AgentAnswer {
 
 impl AgentAnswer {
     /// 交给发问方模型的结果。
-    pub(crate) fn resolution(&self) -> Resolution {
+    pub(super) fn resolution(&self) -> Resolution {
         let mut t = self.text.clone();
         if !self.attachments.is_empty() {
             let names: Vec<String> = self.attachments.iter().map(|x| format!("{:?}", x.name)).collect();
@@ -283,7 +283,7 @@ pub enum Choice {
     Always,
 }
 
-/// 用户对一次等批准的调用的决定。批准的是哪一份（pin）只记在挂起记录里（[`crate::paused_calls`]），交给运行时从那里取；
+/// 用户对一次等批准的调用的决定。批准的是哪一份（pin）只记在挂起记录里（[`crate::waiting::paused_calls`]），交给运行时从那里取；
 /// 旧信件里多存的 pin 读入时忽略。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Decision {
@@ -296,7 +296,7 @@ impl Decision {
     }
 
     /// 交给模型的结果。pin 是挂起记录里的指纹；taken 为真表示这份批准之前已交给过运行（可能执行到一半），不再执行。
-    pub(crate) fn resolution(&self, pin: String, taken: bool) -> Resolution {
+    pub(super) fn resolution(&self, pin: String, taken: bool) -> Resolution {
         match self.choice {
             Choice::Deny => Resolution::Denied(DENIED.to_owned()),
             Choice::Approve | Choice::Always if taken => Resolution::Denied(APPROVAL_INTERRUPTED.to_owned()),

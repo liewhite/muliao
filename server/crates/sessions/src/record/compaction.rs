@@ -7,7 +7,7 @@
 //!   之前的消息里没有悬空调用的地方，工具调用与其结果、挂起的调用与之后的回答不会被拆开；一次运行中途也有切点（每一批
 //!   工具结果之后），长任务在运行中也能压缩。单次只取总长不超过上限的最早若干步，剩下的接着压缩，直到保留窗口之外没有
 //!   可压缩的。
-//! - 使用：发给模型的上下文 = 最新摘要（放进 instructions）+ 切点之后的原始消息（[`crate::history::load_context`]）。
+//! - 使用：发给模型的上下文 = 最新摘要（放进 instructions）+ 切点之后的原始消息（[`crate::record::history::load_context`]）。
 //!   原始消息不删除。
 
 use muliao_platform::ids::SessionId;
@@ -15,10 +15,10 @@ use muliao_platform::ids::SessionId;
 use agenter::Message;
 use muliao_assets::run_assets::RunAssets;
 
-use crate::conventions::{OpenCalls, measured_responses};
-use crate::history::{Stored, add_compaction_in, latest_compaction, rows_after};
-use crate::run::Core;
-use crate::transcript::{Renders, to_items, to_text};
+use crate::execution::run::Core;
+use crate::record::conventions::{OpenCalls, measured_responses};
+use crate::record::history::{Stored, add_compaction_in, latest_compaction, rows_after};
+use crate::record::transcript::{Renders, to_items, to_text};
 use muliao_platform::errors::Result;
 
 /// 文字记录里每条的字符上限。
@@ -35,7 +35,7 @@ Output only the summary.";
 
 /// 上一次模型请求的输入 token 数，即发给模型的上下文的实际大小；还没有报告了用量的回复时为 None。
 ///
-/// stale_responses（[`crate::history::SessionContext::stale_responses`]）：最近一次压缩写入之前就有的回复条数（没压缩过为
+/// stale_responses（[`crate::record::history::SessionContext::stale_responses`]）：最近一次压缩写入之前就有的回复条数（没压缩过为
 /// None），它们报告的是压缩前的大小，不算；压缩之后还没有新回复时结果也是 None。压缩判断与会话页显示的上下文大小都按这一条。
 pub(crate) fn context_tokens(history: &[Message], stale_responses: Option<usize>) -> Option<u64> {
     let measured = measured_responses(history);
@@ -44,8 +44,8 @@ pub(crate) fn context_tokens(history: &[Message], stale_responses: Option<usize>
 
 /// 按步分组，保持时间顺序。之前的消息里没有悬空调用的地方开始新的一步：工具调用与其结果、挂起的调用与之后的回答总在
 /// 同一组里，切点落在组与组之间，留下的结果一定找得到它的调用。留下的部分可能从一条模型回复开始，发给模型时补一条接续的
-/// 用户消息（[`crate::history::context_of`]）。
-pub(crate) fn steps_of(rows: &[Stored]) -> Vec<Vec<&Stored>> {
+/// 用户消息（[`crate::record::history::context_of`]）。
+pub(super) fn steps_of(rows: &[Stored]) -> Vec<Vec<&Stored>> {
     let mut steps: Vec<Vec<&Stored>> = Vec::new();
     let mut open = OpenCalls::default();
     for row in rows {
@@ -65,7 +65,7 @@ fn step_text(step: &[&Stored]) -> Result<String> {
 
 /// 从最早的可压缩步（最近 keep_steps 步之前的）开始，取文字记录总长不超过 max_chars 的若干步（至少一步）。不截断内容：
 /// 超出的下一次再压缩。返回 (这次压缩的步, 是否还有可压缩的留给下一次)。
-pub(crate) fn select_steps<'a, 'r>(
+pub(super) fn select_steps<'a, 'r>(
     steps: &'a [Vec<&'r Stored>],
     keep_steps: usize,
     max_chars: usize,
@@ -86,7 +86,7 @@ pub(crate) fn select_steps<'a, 'r>(
 }
 
 /// 交给模型总结的内容：上一份摘要（有的话）与这些步的文字记录。
-pub(crate) fn compaction_prompt(previous_summary: Option<&str>, steps: &[Vec<&Stored>]) -> Result<String> {
+pub(super) fn compaction_prompt(previous_summary: Option<&str>, steps: &[Vec<&Stored>]) -> Result<String> {
     let transcript = steps.iter().map(|s| step_text(s)).collect::<Result<Vec<_>>>()?.join("\n");
     let previous = previous_summary
         .filter(|s| !s.is_empty())

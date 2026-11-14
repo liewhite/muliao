@@ -42,7 +42,7 @@ pub fn tools(deps: Arc<ShellTools>) -> Vec<BuiltinTool> {
         "{}{BACKGROUND_DESCRIPTION}",
         SHELL_DESCRIPTION.replace("{max_output}", &deps.max_output_chars.to_string()),
     )
-    .replace("{no_progress}", &muliao_sessions::work::no_progress_hint());
+    .replace("{no_progress}", &muliao_sessions::outside::work::no_progress_hint());
     vec![
         builtin(RunShell { deps: deps.clone(), description }, ToolTraits::write().render(shell_render())),
         builtin(SkillRun(deps.clone()), ToolTraits::write().render(skill_run_render())),

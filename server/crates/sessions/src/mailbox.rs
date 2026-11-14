@@ -2,7 +2,7 @@
 //! 交给模型。设计见 docs/architecture.md「会话信箱」。
 //!
 //! - 投信（[`post_in`]）：用户消息、对挂起调用的回答、触发器与委派来的任务、后台任务与 thread 的事件、运行中检查。提交后
-//!   叫醒会话 actor，要不要跑由它按唤醒规则（[`crate::actor`]）判断。
+//!   叫醒会话 actor，要不要跑由它按唤醒规则（[`crate::execution::actor`]）判断。
 //! - 一封信交给了哪次运行记在信上（`taken_by`，写处只有 [`give_in`] 与 [`consume_in`]）：运行开头取走的、交给模型的那一步
 //!   保存时（这时同时记为已处理）。
 //! - 用户停止会话、运行最终失败时没交给模型的信件记为被丢弃（[`discard_in`]），留着记录。
@@ -13,10 +13,10 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, Row, params};
 
-use crate::actor::Waker;
-use crate::answers::CallResult;
-use crate::directory;
-use crate::origins::Origin;
+use crate::execution::actor::Waker;
+use crate::intake::directory;
+use crate::intake::origins::Origin;
+use crate::waiting::answers::CallResult;
 use muliao_platform::db::{Tx, placeholders};
 use muliao_platform::errors::{Result, broken, not_found};
 

@@ -41,12 +41,12 @@ impl Origin {
     pub const ALL: [Origin; 4] = [Origin::User, Origin::Trigger, Origin::Delegation, Origin::Issue];
 
     /// 续写规则只在这里：用户能在任何会话里续写；其余来源只续写自己发起的。
-    pub(crate) fn writes_anywhere(self) -> bool {
+    pub(super) fn writes_anywhere(self) -> bool {
         matches!(self, Origin::User)
     }
 }
 
-/// 有自己身份的发送方（别的领域）：经 [`crate::inbound::SenderMail`] 投信、能按身份定位会话。
+/// 有自己身份的发送方（别的领域）：经 [`crate::intake::inbound::SenderMail`] 投信、能按身份定位会话。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Sender {

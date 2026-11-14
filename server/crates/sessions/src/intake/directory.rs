@@ -1,5 +1,5 @@
 //! 会话目录（`sessions` 表的唯一读写处）：新建一行、按属性查会话（按发送方定位、按 agent、thread、列表）。会话的规则
-//! （来源、续写）在 [`crate::origins`] 与 [`crate::inbound`]，这里只是查询与写入。
+//! （来源、续写）在 [`crate::intake::origins`] 与 [`crate::intake::inbound`]，这里只是查询与写入。
 
 use muliao_platform::ids::{AgentId, SessionId};
 use std::collections::BTreeMap;
@@ -7,8 +7,8 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, Row, params};
 
-use crate::history::SESSIONS_MENTIONING;
-use crate::origins::{Origin, Sender, SessionOrigin, ThreadName};
+use crate::intake::origins::{Origin, Sender, SessionOrigin, ThreadName};
+use crate::record::history::SESSIONS_MENTIONING;
 use muliao_platform::db::{Tx, placeholders};
 use muliao_platform::db::{like_contains, like_prefix};
 use muliao_platform::errors::Result;
@@ -59,7 +59,7 @@ pub(crate) fn query(c: &Connection, filter: &str, params: impl rusqlite::Params)
     rows.into_iter().map(session).collect()
 }
 
-/// 新会话的描述（规则由唯一的入口 [`crate::inbound`] 检查）。
+/// 新会话的描述（规则由唯一的入口 [`crate::intake::inbound`] 检查）。
 pub(crate) struct NewSession<'a> {
     pub id: &'a SessionId,
     pub agent_id: &'a AgentId,

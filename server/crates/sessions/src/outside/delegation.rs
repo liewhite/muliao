@@ -21,22 +21,22 @@ use muliao_platform::text::truncate;
 use rusqlite::Connection;
 
 use crate::activity::{WorkState, work_states_in};
-use crate::actor::Waker;
-use crate::answers::{AgentAnswer, CallResult};
-use crate::directory::{self, Session};
-use crate::history::latest_answers_among;
-use crate::holds::hold_delegation_in;
-use crate::inbound::{Handback, Inbound, Opener, create_session_in, receive_in};
+use crate::execution::actor::Waker;
+use crate::execution::runs::{RunRecord, latest_among};
+use crate::intake::directory::{self, Session};
+use crate::intake::inbound::{Handback, Inbound, Opener, create_session_in, receive_in};
+use crate::intake::origins::ThreadName;
 use crate::mailbox::EventSource;
-use crate::origins::ThreadName;
-use crate::paused_calls::{self, Pause};
-use crate::runs::{RunRecord, latest_among};
+use crate::outside::holds::hold_delegation_in;
+use crate::outside::work::{CheckBeats, deliver_in, no_progress_hint, post_check_in};
+use crate::record::history::latest_answers_among;
 use crate::thread_calls::{CallMode, Delegated, Owed, owed_in, record_call_in};
-use crate::work::{CheckBeats, deliver_in, no_progress_hint, post_check_in};
+use crate::waiting::answers::{AgentAnswer, CallResult};
+use crate::waiting::paused_calls::{self, Pause};
 use muliao_platform::errors::Result;
 
 /// 取已有 thread 或新建。
-pub(crate) fn open_in(c: &Tx<'_>, parent_id: &SessionId, agent_id: &AgentId, thread: &ThreadName) -> Result<Session> {
+pub(super) fn open_in(c: &Tx<'_>, parent_id: &SessionId, agent_id: &AgentId, thread: &ThreadName) -> Result<Session> {
     if let Some(existing) = directory::thread_in(c, parent_id, agent_id, thread)? {
         return Ok(existing);
     }
@@ -102,7 +102,7 @@ pub(crate) fn send_in(
 
 /// 委派来的工作的结局。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Ending {
+pub(crate) enum Ending {
     Finished,
     Stopped,
     Failed,
@@ -123,7 +123,7 @@ pub(crate) fn event_text(thread: &str, agent: &str, ending: Ending, text: &str) 
 }
 
 /// thread 结清了这些还没结清的委派：在同一个事务里把结局经发起方引用它们的占用交回（交回即释放、即结清）。
-pub(crate) fn hand_back_in(
+pub(super) fn hand_back_in(
     tx: &mut Tx<'_>,
     waker: &Waker,
     child: &Session,
@@ -161,7 +161,7 @@ pub(crate) fn hand_back_in(
 
 /// 父会话开出的一个 thread（list_threads 看到的）。
 #[derive(Debug, Clone, PartialEq)]
-pub struct ThreadView {
+pub(crate) struct ThreadView {
     pub session_id: SessionId,
     pub thread: ThreadName,
     pub agent_id: AgentId,
@@ -240,7 +240,7 @@ pub(crate) async fn check_threads(
 }
 
 /// 还没结清的委派的检查信件，按 thread 的工作状态说；run 是它最近一次运行，只用来补充细节。
-pub(crate) fn check_text(
+pub(super) fn check_text(
     child: &Session,
     agent: &AgentInfo,
     state: WorkState,

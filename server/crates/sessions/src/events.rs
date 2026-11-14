@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use muliao_platform::db::Tx;
 
-use crate::answers::Waiting;
-use crate::origins::SessionOrigin;
+use crate::intake::origins::SessionOrigin;
+use crate::waiting::answers::Waiting;
 
 /// 一次运行结束了（模型给出了回答，或停在挂起的调用上）；没有可交给模型的空闲收尾、被用户停止的不发。只带事实。
 #[derive(Debug, Clone, PartialEq)]

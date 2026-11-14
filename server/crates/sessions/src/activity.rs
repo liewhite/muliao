@@ -1,7 +1,7 @@
 //! 会话忙不忙：别的领域与删除规则问的两个不同问题（docs/architecture.md 第 7 节）。
 //!
 //! - 工作状态（[`work_states_in`]：running / waiting / idle，唯一规则）：会话列表、issue 看板、触发器防重叠、list_threads。
-//!   running = 有没结束的运行，或信箱里有按唤醒规则（[`crate::actor::should_run`]）要处理的信；waiting = 运行停了但在等
+//!   running = 有没结束的运行，或信箱里有按唤醒规则（[`crate::execution::actor::should_run`]）要处理的信；waiting = 运行停了但在等
 //!   外面的结果（active 占用，或还能回答的提问、还能批准的调用）；否则 idle。
 //! - 删除会不会打断工作（[`blocking_deletion_in`]）：挂起的提问没有人在外面做事，不挡删除。
 //! - 等待项（[`waits_of_in`]）：waiting 的原因逐项展开，会话页列出。
@@ -13,19 +13,19 @@ use chrono::{DateTime, Utc};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
-use crate::actor::should_run;
-use crate::answers::Question;
-use crate::directory::{self, keyed_among};
-use crate::history::since_last_response_among;
-use crate::holds::{Hold, HoldOf, active_among};
+use crate::execution::actor::should_run;
+use crate::execution::runs::{latest_among, unfinished_among};
+use crate::intake::directory::{self, keyed_among};
+use crate::intake::origins::Sender;
 use crate::mailbox::queued_among;
-use crate::origins::Sender;
-use crate::paused_calls::kinds_among;
-use crate::pending::{OpenAsk, OpenAsks, open_asks_of, position};
-use crate::runs::{latest_among, unfinished_among};
+use crate::outside::holds::{Hold, HoldOf, active_among};
+use crate::outside::wakeups::pending_of_in;
+use crate::record::history::since_last_response_among;
 pub use crate::thread_calls::Delegated;
 use crate::thread_calls::owed_in;
-use crate::wakeups::pending_of_in;
+use crate::waiting::answers::Question;
+use crate::waiting::paused_calls::kinds_among;
+use crate::waiting::pending::{OpenAsk, OpenAsks, open_asks_of, position};
 use muliao_platform::errors::Result;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]

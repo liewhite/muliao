@@ -15,7 +15,7 @@ use muliao_platform::db::Tx;
 use serde::Serialize;
 use utoipa::ToSchema;
 
-use crate::transcript::Item;
+use crate::record::transcript::Item;
 
 const PREVIEW_CHARS: usize = 2000;
 
@@ -92,7 +92,7 @@ fn new_segment(after: Option<MessageId>) -> LiveSegment {
 }
 
 /// 一次运行的实时展示：拿着它期间这个会话有正在展示的一段，丢掉（运行返回、被停止时丢掉、panic）就结束。
-pub(crate) struct LiveRun {
+pub(super) struct LiveRun {
     live: Live,
     session_id: SessionId,
 }
@@ -105,7 +105,7 @@ impl Drop for LiveRun {
 
 /// 一次运行连同它的重试：拿着它期间显示的重试状态，丢掉（结束了：成功、最终失败或停止）就清掉。两次尝试之间不清：下一次
 /// 尝试进行中仍显示上次的错误。
-pub(crate) struct Attempts {
+pub(super) struct Attempts {
     live: Live,
     session_id: SessionId,
 }
@@ -145,7 +145,7 @@ impl Live {
     }
 
     /// 一次运行（连同重试）开始。
-    pub(crate) fn attempts(&self, session_id: &SessionId) -> Attempts {
+    pub(super) fn attempts(&self, session_id: &SessionId) -> Attempts {
         Attempts { live: self.clone(), session_id: session_id.to_owned() }
     }
 
@@ -154,7 +154,7 @@ impl Live {
     }
 
     /// 一次运行开始实时展示。同一会话同时只有一次运行（actor 保证）。
-    pub(crate) fn begin(&self, session_id: &SessionId, after_message_id: Option<MessageId>) -> LiveRun {
+    pub(super) fn begin(&self, session_id: &SessionId, after_message_id: Option<MessageId>) -> LiveRun {
         self.update(session_id, |s| s.segment = Some(new_segment(after_message_id)));
         LiveRun { live: self.clone(), session_id: session_id.to_owned() }
     }
@@ -166,7 +166,7 @@ impl Live {
     }
 
     /// 这个事务改了会话的运行记录：提交后发 `saved`。
-    pub(crate) fn saved_on_commit(&self, tx: &mut Tx<'_>, session_id: &SessionId) {
+    pub(super) fn saved_on_commit(&self, tx: &mut Tx<'_>, session_id: &SessionId) {
         let (bus, session_id) = (self.bus.clone(), session_id.to_owned());
         tx.on_commit(move || publish_saved(&bus, &session_id));
     }

@@ -1,4 +1,4 @@
-//! 结清：会话自己判断委派来的工作（带委派的信件）什么时候结束，结局在同一个事务里交回发起方（[`crate::delegation`]）。
+//! 结清：会话自己判断委派来的工作（带委派的信件）什么时候结束，结局在同一个事务里交回发起方（[`crate::outside::delegation`]）。
 //! 时机只有这几个：运行正常结束且工作做完（[`settle_finished_in`]）、运行最终失败、停止、删除。一项委派结清没有只看发起方
 //! 引用它的占用是否还 active：交回结局就释放占用，所以每项委派只交回一次。
 
@@ -9,10 +9,10 @@ use muliao_platform::db::Tx;
 use muliao_runtime::conventions::SharedFile;
 use rusqlite::Connection;
 
-use crate::actor::Waker;
-use crate::delegation::{Ending, hand_back_in};
-use crate::directory::Session;
+use crate::execution::actor::Waker;
+use crate::intake::directory::Session;
 use crate::mailbox::{Mail, MailBody, MailState, delegated_mail_in, discard_in, queued_in};
+use crate::outside::delegation::{Ending, hand_back_in};
 use crate::thread_calls::{Owed, owed_in};
 use muliao_platform::errors::Result;
 

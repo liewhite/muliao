@@ -6,13 +6,13 @@ use std::sync::Arc;
 use chrono::{Duration, Utc};
 use muliao_platform::db::{Database, migrate};
 
-use crate::actor::Waker;
-use crate::directory::{NewSession, add_in, delete_in};
-use crate::holds::{HoldOf, HoldStatus, active_wakes_in, hold_delegation_in};
+use crate::execution::actor::Waker;
+use crate::intake::directory::{NewSession, add_in, delete_in};
+use crate::intake::origins::SessionOrigin;
 use crate::mailbox::{MailBody, queued_in};
-use crate::origins::SessionOrigin;
+use crate::outside::holds::{HoldOf, HoldStatus, active_wakes_in, hold_delegation_in};
+use crate::outside::wakeups::{deliver_due, pending_of_in, schedule_in};
 use crate::thread_calls::{CallMode, Delegated, owed_in, record_call_in};
-use crate::wakeups::{deliver_due, pending_of_in, schedule_in};
 
 fn db() -> (tempfile::TempDir, Arc<Database>) {
     let dir = tempfile::tempdir().unwrap();
@@ -94,7 +94,7 @@ async fn a_deleted_thread_is_no_longer_owed() {
             add_in(tx, session(&p, &agent, SessionOrigin::User))?;
             for t in ["t1", "t2"] {
                 let origin = SessionOrigin::Delegation {
-                    thread: crate::origins::ThreadName::parse(t).unwrap(),
+                    thread: crate::intake::origins::ThreadName::parse(t).unwrap(),
                     parent_session_id: Some(p.clone()),
                 };
                 add_in(tx, session(&sid(t), &agent, origin))?;

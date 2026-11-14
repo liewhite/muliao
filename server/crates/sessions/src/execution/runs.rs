@@ -10,7 +10,7 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use muliao_platform::db::Tx;
 
-use crate::live::Live;
+use crate::execution::live::Live;
 use muliao_platform::db::placeholders;
 use muliao_platform::errors::{Result, broken};
 
@@ -145,19 +145,19 @@ pub(crate) fn end_in(tx: &mut Tx<'_>, live: &Live, run_id: RunId, outcome: Outco
 }
 
 /// 手动重试一次最终失败的运行：它重新算作没结束（同一个编号，交给它的信与它保存的消息都还指向它）。
-pub(crate) fn reopen_in(tx: &mut Tx<'_>, live: &Live, run: &RunRecord) -> Result<()> {
+pub(super) fn reopen_in(tx: &mut Tx<'_>, live: &Live, run: &RunRecord) -> Result<()> {
     tx.execute("UPDATE runs SET ended_at = NULL, outcome = NULL, error = NULL WHERE id = ?1", [run.id])?;
     live.saved_on_commit(tx, &run.session_id);
     Ok(())
 }
 
 /// 会话没结束的那次运行（至多一个）。
-pub(crate) fn unfinished_in(c: &Connection, session_id: &SessionId) -> Result<Option<RunRecord>> {
+pub(super) fn unfinished_in(c: &Connection, session_id: &SessionId) -> Result<Option<RunRecord>> {
     Ok(query(c, "session_id = ?1 AND ended_at IS NULL", [session_id])?.into_iter().next())
 }
 
 /// 停止：没结束的运行记为停止（actor 已经放下它，或它停在两次重试之间）。
-pub(crate) fn stop_unfinished_in(tx: &mut Tx<'_>, live: &Live, session_id: &SessionId) -> Result<Vec<RunId>> {
+pub(super) fn stop_unfinished_in(tx: &mut Tx<'_>, live: &Live, session_id: &SessionId) -> Result<Vec<RunId>> {
     let ids: Vec<RunId> =
         query(tx, "session_id = ?1 AND ended_at IS NULL", [session_id])?.iter().map(|r| r.id).collect();
     for id in &ids {
@@ -167,7 +167,7 @@ pub(crate) fn stop_unfinished_in(tx: &mut Tx<'_>, live: &Live, session_id: &Sess
 }
 
 /// 有没结束的运行的会话（重启后接着跑）。
-pub(crate) fn sessions_unfinished_in(c: &Connection) -> Result<Vec<SessionId>> {
+pub(super) fn sessions_unfinished_in(c: &Connection) -> Result<Vec<SessionId>> {
     let mut stmt = c.prepare("SELECT DISTINCT session_id FROM runs WHERE ended_at IS NULL")?;
     Ok(stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)
 }

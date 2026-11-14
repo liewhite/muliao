@@ -7,13 +7,13 @@ use muliao_platform::db::Tx;
 use muliao_platform::errors::Result;
 use muliao_platform::ids::{MailId, SessionId};
 
-use crate::actor::Waker;
-use crate::conventions::{PartKind, PartMark, attach_run_context, mark_parts};
-use crate::history::append_in;
-use crate::live::Live;
+use crate::execution::actor::Waker;
+use crate::execution::live::Live;
+use crate::execution::runs::{Outcome, current_or_start_in, end_in};
+use crate::intake::origins::Origin;
 use crate::mailbox::{MailBody, NewMail, consume_in, discard_in, give_in, post_in, queued_in};
-use crate::origins::Origin;
-use crate::runs::{Outcome, current_or_start_in, end_in};
+use crate::record::conventions::{PartKind, PartMark, attach_run_context, mark_parts};
+use crate::record::history::append_in;
 
 /// 一条请求：每段文字记下它所在信件的发送方（交出信件时就这样记），末尾带运行上下文。
 pub fn user_request(texts: &[(Origin, &str)], run_context: &str) -> Message {

@@ -1,7 +1,7 @@
 //! 一次运行：把信箱里的信交给模型，一步一步走到模型不再调用工具（或停在挂起的调用上），每一步保存。设计见
-//! docs/architecture.md「会话信箱」「每一步保存」「从哪里开始」。由会话 actor（[`crate::actor`]）调用，一次一个。
+//! docs/architecture.md「会话信箱」「每一步保存」「从哪里开始」。由会话 actor（[`crate::execution::actor`]）调用，一次一个。
 //!
-//! - 起点由会话停在哪定（[`crate::pending::position`]）：从历史续跑（Resend）就重发末尾那条请求；被打断（Interrupted）就
+//! - 起点由会话停在哪定（[`crate::waiting::pending::position`]）：从历史续跑（Resend）就重发末尾那条请求；被打断（Interrupted）就
 //!   先补上「被中断、没有重新执行」的结果再看补完之后停在哪；等回答（Paused）且能继续时把回答作为挂起调用的结果交回；
 //!   新开（Fresh）时把信箱里的信作为开头交给模型。
 //! - 每一步保存：请求模型前，这条请求与它带上的信件（记为已处理）同一个事务提交；模型回复后提交回复；工具做完，结果与新到
@@ -34,26 +34,26 @@ use muliao_runtime::{Run, RunSpec, Runtime, ToolsRun};
 use rusqlite::Connection;
 use tokio_util::sync::CancellationToken;
 
-use crate::actor::Waker;
-use crate::answers::{Waiting, approvals_waiting_text, questions_of, questions_waiting_text};
-use crate::compaction::{CompactionPolicy, Verdict, compact};
-use crate::content::{Content, append_content, content_of, request_of};
-use crate::conventions::{
+use crate::events::{Events, RunEnd, RunEnded};
+use crate::execution::actor::Waker;
+use crate::execution::live::{DeltaType, Live};
+use crate::execution::runs::{self, Outcome};
+use crate::intake::directory::{self, Session};
+use crate::intake::origins::OriginNotes;
+use crate::mailbox::{Mail, consume_in, consumed_by_in, give_in, queued_in};
+use crate::outside::settlement::{delegated_in, settle_finished_in};
+use crate::record::compaction::{CompactionPolicy, Verdict, compact};
+use crate::record::content::{Content, append_content, content_of, request_of};
+use crate::record::conventions::{
     MadeUp, answer_text, attach_run_context, interrupted_response, is_stopped, made_up_result, results_request,
     set_finished_at, shared_attachments, unanswered_calls,
 };
-use crate::directory::{self, Session};
-use crate::events::{Events, RunEnd, RunEnded};
-use crate::history::{self, SessionContext, Stored};
-use crate::live::{DeltaType, Live};
-use crate::mailbox::{Mail, consume_in, consumed_by_in, give_in, queued_in};
-use crate::origins::OriginNotes;
-use crate::paused_calls::{Pause, record_in};
-use crate::pending::position_in;
-use crate::pending::{Paused, PendingCall, Position, deferred_results};
-use crate::runs::{self, Outcome};
-use crate::settlement::{delegated_in, settle_finished_in};
-use crate::transcript::{Renders, call_item, result_item};
+use crate::record::history::{self, SessionContext, Stored};
+use crate::record::transcript::{Renders, call_item, result_item};
+use crate::waiting::answers::{Waiting, approvals_waiting_text, questions_of, questions_waiting_text};
+use crate::waiting::paused_calls::{Pause, record_in};
+use crate::waiting::pending::position_in;
+use crate::waiting::pending::{Paused, PendingCall, Position, deferred_results};
 use muliao_platform::errors::{Error, Result, broken};
 
 /// 会话领域要别的领域给的部件，组合根交一次（[`crate::start`]）。
@@ -128,7 +128,7 @@ impl Failure {
         if transient { Failure::Transient(message) } else { Failure::Final(message) }
     }
 
-    pub fn message(&self) -> &str {
+    pub(crate) fn message(&self) -> &str {
         match self {
             Failure::Transient(m) | Failure::Final(m) => m,
         }
@@ -149,7 +149,7 @@ impl From<muliao_runtime::StepError> for Failure {
 
 /// 回答交给谁（唯一规则）：处理的信件有用户在等的就是用户；否则会话有委派来、还没结清的工作就是发起委派的 agent；都没有
 /// 就是没人在等。
-pub(crate) fn audience_of(mail: &[&Mail], delegated: bool) -> Audience {
+pub(super) fn audience_of(mail: &[&Mail], delegated: bool) -> Audience {
     if mail.iter().any(|m| m.awaited) {
         Audience::User
     } else if delegated {
@@ -415,7 +415,7 @@ fn finish_in(
     handled.extend(adopted.iter().cloned());
     // 工作做完了：没有人替它在外面做事，信箱里也没有还要交给模型的信（比如最后一次请求期间才到的结局，它会唤醒下一次运行，
     // 结清由那次运行做）
-    let done = !crate::holds::has_active_in(tx, session_id)? && queued_in(tx, session_id)?.is_empty();
+    let done = !crate::outside::holds::has_active_in(tx, session_id)? && queued_in(tx, session_id)?.is_empty();
     if let RunEnd::Answered { answer } = &end
         && done
     {
@@ -560,7 +560,8 @@ impl Driver<'_> {
     /// 不执行——偏保守，不会重复执行，窗口只有交出回答到工具开始执行之间。
     async fn hand_over(&self, p: &Paused) -> Result<HashMap<String, Resolution>> {
         let (session_id, answers) = (self.session_id().to_owned(), p.answers.clone());
-        let decided = self.core.d.db.write(move |tx| crate::paused_calls::take_in(tx, &session_id, &answers)).await?;
+        let decided =
+            self.core.d.db.write(move |tx| crate::waiting::paused_calls::take_in(tx, &session_id, &answers)).await?;
         deferred_results(p, decided)
     }
 

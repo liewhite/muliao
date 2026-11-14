@@ -27,26 +27,26 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::intake::origins::Origin;
 use crate::mailbox::EventSource;
-use crate::origins::Origin;
 use muliao_platform::errors::{Result, broken};
 
 /// 停止时还没出结果的工具调用的结果：副作用可能已经发生，告诉模型它没有完成。
 pub(crate) const STOPPED_TOOL_RESULT: &str =
     "Stopped by the user before this tool call finished; it may have partly run.";
 /// 一步在执行工具时被打断（进程退出，或这一步失败）：续跑不重新执行这些调用——副作用可能已经发生，而我们无从知道。
-pub(crate) const INTERRUPTED_TOOL_RESULT: &str = "Interrupted: this run was interrupted while the call was running (the \
+pub(super) const INTERRUPTED_TOOL_RESULT: &str = "Interrupted: this run was interrupted while the call was running (the \
      service restarted, or the step failed), and the call was NOT re-run automatically. It may or may not have taken \
      effect; check its effects before deciding whether to run it again.";
 
 /// 压缩切点落在一条回复之前时补在留下部分前面的一条用户消息（由切点推导，不存库）。
-pub(crate) const CONTINUATION: &str =
+pub(super) const CONTINUATION: &str =
     "The earlier part of this conversation is summarized in your instructions. Continue from there.";
 
 /// 事后补的结果是哪一种。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum MadeUp {
+pub(crate) enum MadeUp {
     Stopped,
     Interrupted,
 }
@@ -123,7 +123,7 @@ fn edit<T: Serialize + DeserializeOwned + Default>(metadata: &mut Option<Value>,
 }
 
 /// 读库边界：这条消息上各处 metadata 的形状对不对（不对是数据与代码不一致，说明是哪一处）。
-pub(crate) fn check_metadata(message: &Message) -> std::result::Result<(), String> {
+pub(super) fn check_metadata(message: &Message) -> std::result::Result<(), String> {
     match message {
         Message::User(r) => {
             try_read::<RequestMeta>(&r.metadata).map_err(|e| format!("request metadata: {e}"))?;
@@ -191,7 +191,7 @@ pub(crate) fn made_up_result(call: &ToolCall, kind: MadeUp) -> ToolResult {
 }
 
 /// 这个结果是事后补的（不是工具交回的）：它产生的时刻不是调用结束的时刻。
-pub(crate) fn made_up(result: &ToolResult) -> Option<MadeUp> {
+pub(super) fn made_up(result: &ToolResult) -> Option<MadeUp> {
     read::<ResultMeta>(&result.metadata).made_up
 }
 
@@ -238,7 +238,7 @@ pub(crate) fn results_request(results: Vec<ToolResult>) -> Option<Request> {
 
 /// 请求里一段信件内容是什么：第几段（`parts` 的下标）、哪一种。这些事实只存在这里，读时不从文字反推。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PartMark {
+pub(crate) struct PartMark {
     pub part: usize,
     #[serde(flatten)]
     pub kind: PartKind,
@@ -247,7 +247,7 @@ pub struct PartMark {
 /// 存成 `{"event": "job:7", "check_in": false}` 或 `{"sender": "user"}`（与 part 平铺在一起）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
-pub enum PartKind {
+pub(crate) enum PartKind {
     /// 会话事件：交给模型的文字（[`format_event`]）是由来源派生的写法
     Event {
         #[serde(rename = "event", with = "raw_source")]
@@ -267,11 +267,11 @@ mod raw_source {
 
     use crate::mailbox::EventSource;
 
-    pub fn serialize<S: Serializer>(source: &EventSource, s: S) -> Result<S::Ok, S::Error> {
+    pub(super) fn serialize<S: Serializer>(source: &EventSource, s: S) -> Result<S::Ok, S::Error> {
         s.serialize_str(&source.raw())
     }
 
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<EventSource, D::Error> {
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<EventSource, D::Error> {
         let raw = String::deserialize(d)?;
         EventSource::parse(&raw).ok_or_else(|| serde::de::Error::custom(format!("unknown event source {raw:?}")))
     }
@@ -279,7 +279,7 @@ mod raw_source {
 
 impl PartMark {
     /// 同一段在前面多了 n 段的请求里。
-    pub(crate) fn shifted(self, n: usize) -> Self {
+    pub(super) fn shifted(self, n: usize) -> Self {
         PartMark { part: self.part + n, ..self }
     }
 }
@@ -291,12 +291,12 @@ fn event_head(source: &EventSource) -> String {
 }
 
 /// 交给模型的一条事件。
-pub(crate) fn format_event(source: &EventSource, content: &str) -> String {
+pub(super) fn format_event(source: &EventSource, content: &str) -> String {
     format!("{}{content}{EVENT_END}", event_head(source))
 }
 
 /// 事件段里的事件内容（去掉 [`format_event`] 套的外壳）；只用于展示，外壳对不上时整段原样展示。
-pub(crate) fn event_content<'a>(text: &'a str, source: &EventSource) -> &'a str {
+pub(super) fn event_content<'a>(text: &'a str, source: &EventSource) -> &'a str {
     text.strip_prefix(event_head(source).as_str()).and_then(|t| t.strip_suffix(EVENT_END)).unwrap_or(text)
 }
 
@@ -306,7 +306,7 @@ pub(crate) fn part_marks(request: &Request) -> Vec<PartMark> {
 }
 
 /// 整条请求记下的各段换成这些（新建请求时）。
-pub(crate) fn set_part_marks(request: &mut Request, marks: &[PartMark]) {
+pub(super) fn set_part_marks(request: &mut Request, marks: &[PartMark]) {
     edit(&mut request.metadata, |m: &mut RequestMeta| m.parts = marks.to_vec());
 }
 
@@ -332,13 +332,13 @@ pub(crate) fn attach_run_context(request: &mut Request, text: &str) {
 }
 
 /// 这条请求里哪一段是运行上下文。
-pub(crate) fn run_context_index(request: &Request) -> Option<usize> {
+pub(super) fn run_context_index(request: &Request) -> Option<usize> {
     read::<RequestMeta>(&request.metadata).run_context
 }
 
 /// 报告了上下文大小的回复，按时间顺序：完整的回复（报 0 也算一次测量，由压缩判断告警），生成到一半被停的只在收到了
 /// 输入用量时算。压缩判断只认这些。
-pub(crate) fn measured_responses(history: &[Message]) -> Vec<&Response> {
+pub(super) fn measured_responses(history: &[Message]) -> Vec<&Response> {
     history
         .iter()
         .filter_map(|m| match m {
@@ -354,7 +354,7 @@ pub(crate) fn answer_text(response: &Response) -> String {
 }
 
 /// 这条消息给出结果的调用 id。
-pub(crate) fn results_in(message: &Message) -> impl Iterator<Item = &str> {
+pub(super) fn results_in(message: &Message) -> impl Iterator<Item = &str> {
     let parts: &[RequestPart] = match message {
         Message::User(r) => &r.parts,
         Message::Assistant(_) => &[],
@@ -366,7 +366,7 @@ pub(crate) fn results_in(message: &Message) -> impl Iterator<Item = &str> {
 }
 
 /// 这条消息发出的工具调用。
-pub(crate) fn calls_in(message: &Message) -> Vec<&ToolCall> {
+pub(super) fn calls_in(message: &Message) -> Vec<&ToolCall> {
     match message {
         Message::Assistant(r) => r.tool_calls().collect(),
         Message::User(_) => Vec::new(),
@@ -376,7 +376,7 @@ pub(crate) fn calls_in(message: &Message) -> Vec<&ToolCall> {
 /// 逐条读消息，到目前为止还没有结果的工具调用（按出现顺序，带所在消息的序号）。「调用是否已有结果」只在这里定义：
 /// 同 id 的工具结果出现了就有了。[`unanswered_calls`] 与压缩的分步都用它。
 #[derive(Default)]
-pub(crate) struct OpenCalls<'a> {
+pub(super) struct OpenCalls<'a> {
     open: Vec<(usize, &'a ToolCall)>,
     read: usize,
 }
@@ -415,7 +415,7 @@ pub(crate) fn unanswered_calls(messages: &[Message]) -> Result<Vec<ToolCall>> {
 
 /// 消息里可按关键字搜到的文字：用户一方的文字（不含运行上下文）、模型的文字回复、工具调用（工具名与参数的各个字符串值）。
 /// 不含工具结果（文件内容、命令输出，搜什么都会命中很多）和思考。各段用换行连接；没有文字时为空串。
-pub(crate) fn searchable_text(message: &Message) -> String {
+pub(super) fn searchable_text(message: &Message) -> String {
     let mut chunks: Vec<String> = Vec::new();
     match message {
         Message::User(r) => {

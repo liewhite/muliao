@@ -9,16 +9,16 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::MIGRATION;
-use crate::answers::{AgentAnswer, CallResult, Choice, Decision, Waiting};
-use crate::conventions::tool_attachments;
-use crate::conventions::{PartKind, PartMark, part_marks};
-use crate::history;
-use crate::holds::{self, HoldOf};
+use crate::intake::origins::Origin;
 use crate::mailbox;
 use crate::mailbox::EventSource;
-use crate::origins::Origin;
-use crate::pending::position_in;
-use crate::pending::{AfterInterrupted, Position};
+use crate::outside::holds::{self, HoldOf};
+use crate::record::conventions::tool_attachments;
+use crate::record::conventions::{PartKind, PartMark, part_marks};
+use crate::record::history;
+use crate::waiting::answers::{AgentAnswer, CallResult, Choice, Decision, Waiting};
+use crate::waiting::pending::position_in;
+use crate::waiting::pending::{AfterInterrupted, Position};
 use agenter::{Content, File, FileSource, Message, Request, RequestPart, Response, ResponsePart, ToolCall, ToolResult};
 use chrono::Utc;
 use muliao_platform::db::{Migration, migrate, write_on};
@@ -228,7 +228,7 @@ fn holders_become_a_job_column_and_wakeups_point_at_their_hold() {
     let c = db.conn();
     let job = holds::job_in(&c, JobId::new(12)).unwrap().expect("the job's hold");
     assert!(job.awaited && job.status == holds::HoldStatus::Active && job.of == HoldOf::Job { job_id: JobId::new(12) });
-    let waiting = crate::wakeups::pending_of_in(&c, &SessionId::new(SESSION)).unwrap();
+    let waiting = crate::outside::wakeups::pending_of_in(&c, &SessionId::new(SESSION)).unwrap();
     let notes: Vec<&str> = waiting
         .iter()
         .map(|(h, _, note)| {
@@ -292,14 +292,14 @@ fn pending_calls_move_into_one_table() {
     }
     db.upgrade_to(9);
     let c = db.conn();
-    let kinds = crate::paused_calls::kinds_in(&c, &sid).unwrap();
+    let kinds = crate::waiting::paused_calls::kinds_in(&c, &sid).unwrap();
     let expected =
         [("q1", Waiting::AskUser), ("a1", Waiting::AskAgent), ("g1", Waiting::Approval), ("g2", Waiting::Approval)];
     assert_eq!(kinds, expected.iter().map(|(k, w)| (CallId::new(*k), *w)).collect());
     // 老行没有 pin 的读成空指纹；第二次交给运行的批准不再执行：取走的时间一起搬过来了
     let approve = || CallResult::Approval(Decision { choice: Choice::Approve });
     let answers = std::collections::HashMap::from([(CallId::new("g1"), approve()), (CallId::new("g2"), approve())]);
-    let decided = write_on(&mut db.conn(), |tx| crate::paused_calls::take_in(tx, &sid, &answers)).unwrap();
+    let decided = write_on(&mut db.conn(), |tx| crate::waiting::paused_calls::take_in(tx, &sid, &answers)).unwrap();
     assert_eq!(
         decided[&CallId::new("g1")],
         agenter::Resolution::Approved(agenter::Approval { always: false, pin: String::new() }),
@@ -307,7 +307,7 @@ fn pending_calls_move_into_one_table() {
     );
     assert_eq!(
         decided[&CallId::new("g2")],
-        agenter::Resolution::Denied(crate::answers::APPROVAL_INTERRUPTED.to_owned())
+        agenter::Resolution::Denied(crate::waiting::answers::APPROVAL_INTERRUPTED.to_owned())
     );
     // 会话停在哪：参数不合法的提问与普通调用补「被中断」，其余照旧挂着
     let Position::Interrupted { calls, after: AfterInterrupted::Paused(p) } = position_in(&c, &sid).unwrap() else {

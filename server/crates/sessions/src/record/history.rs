@@ -8,7 +8,7 @@ use agenter::{Message, Request, RequestPart};
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::conventions::{
+use crate::record::conventions::{
     CONTINUATION, answer_text, check_metadata, mark_stopped, measured_responses, searchable_text,
 };
 use muliao_platform::db::{Tx, placeholders};
@@ -16,7 +16,7 @@ use muliao_platform::errors::{Result, broken};
 
 /// 一条存下的消息。
 #[derive(Debug, Clone, PartialEq)]
-pub struct Stored {
+pub(crate) struct Stored {
     pub id: MessageId,
     pub message: Message,
     pub created_at: DateTime<Utc>,
@@ -108,7 +108,7 @@ pub(crate) fn transcript_in(
 }
 
 /// 在 after 之后的消息（没有 after 为全部），按顺序。
-pub(crate) fn rows_after(c: &Connection, session_id: &SessionId, after: Option<MessageId>) -> Result<Vec<Stored>> {
+pub(super) fn rows_after(c: &Connection, session_id: &SessionId, after: Option<MessageId>) -> Result<Vec<Stored>> {
     // 有无游标写成两条 SQL：`?2 IS NULL OR id > ?2` 会让 SQLite 用不上 (session_id, id) 索引的范围查找
     match after {
         Some(after) => stored(c, "session_id = ?1 AND id > ?2 ORDER BY id", params![session_id, after]),
@@ -257,7 +257,7 @@ pub(crate) fn latest_compaction(c: &Connection, session_id: &SessionId) -> Resul
 }
 
 /// 记下一次压缩：through_message_id 及之前的消息由摘要代替发给模型。
-pub(crate) fn add_compaction_in(
+pub(super) fn add_compaction_in(
     c: &Tx<'_>,
     session_id: &SessionId,
     through_message_id: MessageId,
@@ -275,7 +275,7 @@ pub(crate) fn add_compaction_in(
 
 /// 发给模型的会话上下文。
 #[derive(Debug, Clone, PartialEq)]
-pub struct SessionContext {
+pub(crate) struct SessionContext {
     pub summary: Option<String>,
     pub messages: Vec<Message>,
     /// 最近一次压缩写入之前就有的、报告了用量的回复条数：它们报告的是压缩前的大小；没压缩过为 None

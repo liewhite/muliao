@@ -1,24 +1,24 @@
 //! 界面用的会话门面（HTTP 层只经这里）：会话页、会话列表、发消息、停止、删除、手动压缩、重试最终失败的运行。别的领域
-//! 用各模块的 `*_in` 查询（在自己的事务里）与 [`crate::inbound::SenderInbox`]、[`crate::work::SessionWork`]。
+//! 用各模块的 `*_in` 查询（在自己的事务里）与 [`crate::intake::inbound::SenderInbox`]、[`crate::outside::work::SessionWork`]。
 
 use muliao_platform::ids::{CallId, SessionId};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::activity::{Wait, WorkState, statuses_in, waits_of_in};
-use crate::actor::Actors;
-use crate::compaction::context_tokens;
 use crate::deletion::delete_sessions_in;
-use crate::directory::{self, Listing, Session, Thread};
-use crate::halt::Halted;
-use crate::history::{self, Compaction, context_of};
-use crate::inbound::{CallReply, Inbound, UserMessage, receive_in, reply_in};
-use crate::live::{LiveSegment, Retrying, RunEvent};
+use crate::execution::actor::Actors;
+use crate::execution::halt::Halted;
+use crate::execution::live::{LiveSegment, Retrying, RunEvent};
+use crate::execution::run::Core;
+use crate::execution::runs::{self, RunRecord};
+use crate::intake::directory::{self, Listing, Session, Thread};
+use crate::intake::inbound::{CallReply, Inbound, UserMessage, receive_in, reply_in};
 use crate::mailbox::{Mail, visible_in};
-use crate::run::Core;
-use crate::runs::{self, RunRecord};
+use crate::record::compaction::context_tokens;
+use crate::record::history::{self, Compaction, context_of};
+use crate::record::transcript::{SavedItem, annotate_approvals, annotate_asks, annotate_threads, to_items};
 use crate::thread_calls::call_threads_in;
-use crate::transcript::{SavedItem, annotate_approvals, annotate_asks, annotate_threads, to_items};
 use muliao_platform::errors::{Error, Result, not_found};
 
 /// 会话列表不给条数时一页多少条

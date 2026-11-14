@@ -10,13 +10,13 @@ use std::collections::BTreeMap;
 
 use rusqlite::{Connection, Row, params};
 
-use crate::holds::{Hold, HoldOf, active_delegations_in};
+use crate::outside::holds::{Hold, HoldOf, active_delegations_in};
 use muliao_platform::db::{Tx, placeholders};
 use muliao_platform::errors::{Result, broken};
 
 /// 一次往 thread 投信的调用用的哪种方式。
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum CallMode {
+pub(crate) enum CallMode {
     /// 普通 delegate_task：不交回结局
     Plain,
     /// 要交回结局：这一行就是一项委派
@@ -68,7 +68,7 @@ impl CallMode {
 
 /// 一次开出或续写 thread 的调用。
 #[derive(Debug, Clone, PartialEq)]
-pub struct CallRecord {
+pub(crate) struct CallRecord {
     pub id: DelegationId,
     /// 发起会话
     pub parent_id: SessionId,
@@ -80,7 +80,7 @@ pub struct CallRecord {
 
 /// 一项委派：方式是 [`CallMode::Delegated`] 的调用。
 #[derive(Debug, Clone, PartialEq)]
-pub struct Delegation {
+pub(crate) struct Delegation {
     pub id: DelegationId,
     pub parent_id: SessionId,
     pub call_id: CallId,
@@ -90,7 +90,7 @@ pub struct Delegation {
 
 /// 还没结清的委派与发起方引用它的 active 占用（结局经这个占用交回）。
 #[derive(Debug, Clone, PartialEq)]
-pub struct Owed {
+pub(crate) struct Owed {
     pub delegation: Delegation,
     pub hold: Hold,
 }

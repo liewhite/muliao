@@ -1,7 +1,7 @@
 //! 把 agenter 消息投影成展示条目（[`Item`]）：会话页的历史、运行中的实时条目、压缩的文字记录共用这一份投影，前端只渲染
 //! 与合并，不自己投影。
 //!
-//! 消息上的约定（metadata 键、标记、事后补的结果）登记在 [`crate::conventions`] 与 `muliao_runtime::conventions`（工具交回的
+//! 消息上的约定（metadata 键、标记、事后补的结果）登记在 [`crate::record::conventions`] 与 `muliao_runtime::conventions`（工具交回的
 //! 文件与图片），这里只读它们来展示。
 
 use muliao_platform::ids::{CallId, MessageId, SessionId};
@@ -15,16 +15,16 @@ use muliao_platform::tool_views::{ToolRender, View, truncated};
 use muliao_runtime::conventions::{Attachment, attachment_of_ref, result_images};
 use serde::Serialize;
 
-use crate::answers::Waiting;
-use crate::answers::{AnsweredQuestion, AskResult, Question, questions_of};
-use crate::conventions::{
+use crate::intake::origins::Origin;
+use crate::mailbox::EventSource;
+use crate::outside::work::is_no_progress;
+use crate::record::conventions::{
     PartKind, event_content, finished_at, is_stopped, made_up, part_marks, run_context_index, tool_attachments,
 };
-use crate::mailbox::EventSource;
-use crate::origins::Origin;
-use crate::pending::{OpenAsk, OpenAsks};
 use crate::tools::ASK_USER;
-use crate::work::is_no_progress;
+use crate::waiting::answers::Waiting;
+use crate::waiting::answers::{AnsweredQuestion, AskResult, Question, questions_of};
+use crate::waiting::pending::{OpenAsk, OpenAsks};
 use muliao_platform::errors::{Result, broken};
 
 /// 各工具的展示规则（`Toolbox::renders`）；只要文字的投影给空的。
@@ -141,7 +141,7 @@ pub enum Item<U = UserItem> {
     Event(EventItem),
     Assistant {
         text: String,
-        /// 只是没有新进展时的占位答复（[`crate::work::NO_PROGRESS_REPLY`]）：界面合并运行中检查时一起收起
+        /// 只是没有新进展时的占位答复（[`crate::outside::work::NO_PROGRESS_REPLY`]）：界面合并运行中检查时一起收起
         no_progress: bool,
     },
     Thinking {
@@ -448,7 +448,7 @@ pub(crate) fn annotate_asks(items: &mut [Item], open: &OpenAsks) -> Result<()> {
 }
 
 /// 给等批准的工具调用填上状态：现在能批准是 pending，决定已提交、还排着是 submitted。两者都只含还没有结果的调用
-/// （[`crate::pending::open_asks_of`]），所以不看结果条目。
+/// （[`crate::waiting::pending::open_asks_of`]），所以不看结果条目。
 pub(crate) fn annotate_approvals(items: &mut [Item], open: &OpenAsks) {
     for item in items.iter_mut() {
         let Item::ToolCall(call) = item else { continue };
@@ -475,7 +475,7 @@ pub(crate) fn annotate_threads(items: &mut [Item], call_threads: &BTreeMap<CallI
 }
 
 /// 条目的文字记录（压缩交给模型总结的原文）：思考不进，每条截到 max_item_chars 个字符。
-pub(crate) fn to_text(items: &[Item], max_item_chars: usize) -> String {
+pub(super) fn to_text(items: &[Item], max_item_chars: usize) -> String {
     let mut lines = Vec::new();
     for item in items {
         let (label, name) = match item {
@@ -504,10 +504,10 @@ mod tests {
     use serde::Deserialize;
 
     use super::*;
-    use crate::answers::QuestionOption;
-    use crate::conventions::{
+    use crate::record::conventions::{
         MadeUp, PartMark, attach_run_context, format_event, made_up_result, mark_parts, mark_stopped, set_finished_at,
     };
+    use crate::waiting::answers::QuestionOption;
 
     fn event(part: usize, source: EventSource, check_in: bool) -> PartMark {
         PartMark { part, kind: PartKind::Event { source, check_in } }

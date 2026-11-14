@@ -8,19 +8,19 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::activity::{WorkState, work_state_in};
-use crate::actor::{Actors, Waker};
-use crate::answers::QuestionAnswer;
-use crate::compaction::CompactionPolicy;
-use crate::conventions::{STOPPED_TOOL_RESULT, is_stopped};
 use crate::events::{Events, RunEnd, RunEnded, RunFailed, Subscribers};
-use crate::history;
-use crate::inbound::{UserMessage, UserTarget};
-use crate::origins::OriginNotes;
-use crate::run::SessionDeps;
-use crate::runs::{self, RunState};
+use crate::execution::actor::{Actors, Waker};
+use crate::execution::run::SessionDeps;
+use crate::execution::runs::{self, RunState};
+use crate::intake::inbound::{UserMessage, UserTarget};
+use crate::intake::origins::OriginNotes;
+use crate::record::compaction::CompactionPolicy;
+use crate::record::conventions::{STOPPED_TOOL_RESULT, is_stopped};
+use crate::record::history;
+use crate::record::transcript::Item;
 use crate::service::SessionService;
 use crate::tools::Stopper;
-use crate::transcript::Item;
+use crate::waiting::answers::QuestionAnswer;
 use agenter::{Message, RequestPart, Tool, ToolCtx, ToolError, ToolOutput};
 use muliao_assets::access::Actor;
 use muliao_assets::rules::ToolTable;
@@ -389,7 +389,7 @@ async fn a_chat_with_a_tool_call_is_saved_step_by_step() {
     assert!(texts(&h[2])[0].contains("echo: hi"));
     let Message::User(r) = &h[2] else { panic!() };
     let RequestPart::ToolResult(t) = &r.parts[0] else { panic!() };
-    assert!(crate::conventions::finished_at(t).is_some(), "tool results carry their end time");
+    assert!(crate::record::conventions::finished_at(t).is_some(), "tool results carry their end time");
     assert_eq!(h[3], h[3].clone());
     let ended = w.ended.lock().unwrap().clone();
     assert_eq!(ended.len(), 1);
@@ -501,7 +501,7 @@ async fn stopping_midway_keeps_the_attachments_of_finished_calls() {
     tokio::time::timeout(Duration::from_secs(5), shown).await.expect("share finishes");
     w.service.stop(&s).await.unwrap();
     let h = w.history(&s).await;
-    let shared = crate::conventions::shared_attachments(&h);
+    let shared = crate::record::conventions::shared_attachments(&h);
     assert_eq!(shared.len(), 1, "{h:#?}");
     assert_eq!(shared[0].name, "report.txt");
     let all: Vec<String> = h.iter().flat_map(texts).collect();
@@ -782,7 +782,11 @@ async fn an_answer_arriving_before_the_asking_step_is_saved_still_answers_the_ca
     let threads = || {
         let s = s.clone();
         w.db.read(move |c| {
-            crate::directory::threads_named_in(c, &s, &crate::origins::ThreadName::parse("calc").unwrap())
+            crate::intake::directory::threads_named_in(
+                c,
+                &s,
+                &crate::intake::origins::ThreadName::parse("calc").unwrap(),
+            )
         })
     };
     let thread = loop {

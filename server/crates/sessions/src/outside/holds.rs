@@ -98,12 +98,12 @@ fn query(c: &Connection, filter: &str, params: impl rusqlite::Params) -> Result<
 }
 
 /// 登记一项后台任务的占用（任务编号每次新生成，不会重复登记）。
-pub(crate) fn hold_job_in(c: &Tx<'_>, session_id: &SessionId, job_id: JobId, awaited: bool) -> Result<Hold> {
+pub(super) fn hold_job_in(c: &Tx<'_>, session_id: &SessionId, job_id: JobId, awaited: bool) -> Result<Hold> {
     insert(c, session_id, HoldOf::Job { job_id }, awaited)
 }
 
 /// 登记一次到点唤醒的占用；约的时刻与说明由 `wakeups` 记在引用它的行里。
-pub(crate) fn hold_wake_in(c: &Tx<'_>, session_id: &SessionId, awaited: bool) -> Result<Hold> {
+pub(super) fn hold_wake_in(c: &Tx<'_>, session_id: &SessionId, awaited: bool) -> Result<Hold> {
     insert(c, session_id, HoldOf::Wake, awaited)
 }
 
@@ -165,12 +165,12 @@ fn end_active(c: &Tx<'_>, hold_id: HoldId, status: HoldStatus) -> Result<HoldSta
 }
 
 /// 记为已释放，返回释放前的状态。已经被清掉或释放的不变：调用方按返回值决定。
-pub(crate) fn release_in(c: &Tx<'_>, hold: &Hold) -> Result<HoldStatus> {
+pub(super) fn release_in(c: &Tx<'_>, hold: &Hold) -> Result<HoldStatus> {
     end_active(c, hold.id, HoldStatus::Released)
 }
 
 /// 会话自己放弃一项还在进行的工作（改期、取消到点唤醒、后台任务没起来）：记为 cleared，之后的结局不再投。
-pub(crate) fn abandon_in(c: &Tx<'_>, hold: &Hold) -> Result<()> {
+pub(super) fn abandon_in(c: &Tx<'_>, hold: &Hold) -> Result<()> {
     match end_active(c, hold.id, HoldStatus::Cleared)? {
         HoldStatus::Active => Ok(()),
         _ => Err(broken(format!("hold {} of session {} is not active", hold.id, hold.session_id))),

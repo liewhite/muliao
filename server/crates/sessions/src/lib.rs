@@ -2,34 +2,18 @@
 //! 委派、占用与结清、到点唤醒、压缩、停止、删除。
 
 pub mod activity;
-pub mod actor;
-pub mod answers;
-pub mod compaction;
-mod content;
-pub mod conventions;
-mod delegation;
 pub mod deletion;
-pub mod directory;
 pub mod events;
-pub mod halt;
-pub mod history;
-mod holds;
-pub mod inbound;
-pub mod live;
+pub mod execution;
+pub mod intake;
 pub mod mailbox;
-pub mod origins;
-mod paused_calls;
-mod pending;
+pub mod outside;
 pub mod recall;
-pub mod run;
-pub mod runs;
+pub mod record;
 pub mod service;
-mod settlement;
 mod thread_calls;
 pub mod tools;
-pub mod transcript;
-mod wakeups;
-pub mod work;
+pub mod waiting;
 
 #[cfg(feature = "testing")]
 pub mod testing;
@@ -40,12 +24,12 @@ use muliao_platform::db::Migration;
 use muliao_platform::ids::SessionId;
 use tokio::sync::mpsc;
 
-use crate::actor::{Actors, StopRequest};
-use crate::run::{Core, SessionDeps};
+use crate::execution::actor::{Actors, StopRequest};
+use crate::execution::run::{Core, SessionDeps};
 use crate::service::SessionService;
 
 /// 建会话领域：起会话 actor 的分发，返回它们与界面门面（共用一份 [`Core`]）。之后调 [`Actors::resume`] 接着跑重启前
-/// 没做完的。wakes、stops：[`crate::actor::Waker::channel`] 与 [`crate::actor::Stopper::channel`] 的接收端。
+/// 没做完的。wakes、stops：[`crate::execution::actor::Waker::channel`] 与 [`crate::execution::actor::Stopper::channel`] 的接收端。
 pub fn start(
     deps: SessionDeps,
     wakes: mpsc::UnboundedReceiver<SessionId>,

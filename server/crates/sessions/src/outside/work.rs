@@ -10,13 +10,13 @@ use std::collections::BTreeMap;
 use muliao_platform::db::Tx;
 use rusqlite::Connection;
 
-use crate::actor::Waker;
-use crate::answers::CallResult;
-use crate::directory;
-use crate::holds::{self, Hold, HoldStatus};
+use crate::execution::actor::Waker;
+use crate::intake::directory;
 use crate::mailbox::EventSource;
 use crate::mailbox::{NewMail, has_queued_from, post_in};
-use crate::pending::position_in;
+use crate::outside::holds::{self, Hold, HoldStatus};
+use crate::waiting::answers::CallResult;
+use crate::waiting::pending::position_in;
 use muliao_platform::errors::{Result, broken};
 
 /// 交回结局的结果。
@@ -32,7 +32,7 @@ pub enum Delivered {
 
 /// 交回这项占用的结局并释放它，唯一出口。answer 是（调用 id, 结果）：会话还停在这次调用上时作为那次调用的结果；否则作为
 /// 事件信件（「迟到的回答改为事件」只在这里）。已经释放过的再交回是 bug，当场报错。
-pub(crate) fn deliver_in(
+pub(super) fn deliver_in(
     tx: &mut Tx<'_>,
     waker: &Waker,
     hold: &Hold,
@@ -68,7 +68,7 @@ pub(crate) fn deliver_in(
 
 /// 运行中检查：给这项工作的会话投一封检查信件（不推送）。这个来源已有信件排着时不投（不堆积）；占用已不是 active 时也
 /// 不投。返回是否投了。
-pub(crate) fn post_check_in(
+pub(super) fn post_check_in(
     tx: &mut Tx<'_>,
     waker: &Waker,
     hold: &Hold,
