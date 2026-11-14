@@ -270,12 +270,17 @@ fn pending_calls_move_into_one_table() {
     let expected =
         [("q1", Waiting::AskUser), ("a1", Waiting::AskAgent), ("g1", Waiting::Approval), ("g2", Waiting::Approval)];
     assert_eq!(kinds, expected.iter().map(|(k, w)| ((*k).to_owned(), *w)).collect());
-    assert_eq!(crate::paused_calls::pin_in(&c, &sid, "g1").unwrap(), "", "old rows without a pin read as empty");
-    assert_eq!(crate::paused_calls::pin_in(&c, &sid, "g2").unwrap(), "p");
-    // 第二次交给运行的批准不再执行：取走的时间一起搬过来了
-    let approve = CallResult::Approval(Decision { choice: Choice::Approve, pin: "p".into() });
-    let answers = std::collections::HashMap::from([("g2".to_owned(), approve)]);
-    assert!(crate::paused_calls::take_in(&c, &sid, &answers).unwrap().contains_key("g2"));
+    // 老行没有 pin 的读成空指纹；第二次交给运行的批准不再执行：取走的时间一起搬过来了
+    let approve = || CallResult::Approval(Decision { choice: Choice::Approve });
+    let answers =
+        std::collections::HashMap::from([("g1".to_owned(), approve()), ("g2".to_owned(), approve())]);
+    let decided = crate::paused_calls::take_in(&c, &sid, &answers).unwrap();
+    assert_eq!(
+        decided["g1"],
+        agenter::Resolution::Approved(agenter::Approval { always: false, pin: String::new() }),
+        "old rows without a pin read as empty"
+    );
+    assert_eq!(decided["g2"], agenter::Resolution::Denied(crate::answers::APPROVAL_INTERRUPTED.to_owned()));
     // 会话停在哪：参数不合法的提问与普通调用补「被中断」，其余照旧挂着
     let Position::Interrupted { calls, after: AfterInterrupted::Paused(p) } = position_in(&c, &sid).unwrap() else {
         panic!("expected interrupted calls before the paused ones")
@@ -299,12 +304,12 @@ fn approval_booleans_become_a_choice() {
         "c5": { "tool": "ask_agent", "result": { "text": "done" } },
     });
     db.mail(run, "answer", Some("user"), "", "[]", &answers.to_string());
-    let decision = |choice, pin: &str| CallResult::Approval(Decision { choice, pin: pin.into() });
+    let decision = |choice| CallResult::Approval(Decision { choice });
     let expected = BTreeMap::from([
-        ("c1".to_owned(), decision(Choice::Always, "p1")),
-        ("c2".to_owned(), decision(Choice::Approve, "")),
-        ("c3".to_owned(), decision(Choice::Deny, "")),
-        ("c4".to_owned(), decision(Choice::Deny, "")),
+        ("c1".to_owned(), decision(Choice::Always)),
+        ("c2".to_owned(), decision(Choice::Approve)),
+        ("c3".to_owned(), decision(Choice::Deny)),
+        ("c4".to_owned(), decision(Choice::Deny)),
         ("c5".to_owned(), CallResult::AskAgent(AgentAnswer { text: "done".into(), attachments: vec![] })),
     ]);
     db.upgrade_to(3);
@@ -423,7 +428,7 @@ fn shared_files_keep_only_ids() {
                         attachments: vec![shared("f3", "x.txt", "text/plain")]
                     })
                 ),
-                ("c2".to_owned(), CallResult::Approval(Decision { choice: Choice::Approve, pin: String::new() })),
+                ("c2".to_owned(), CallResult::Approval(Decision { choice: Choice::Approve })),
             ])
         );
     };

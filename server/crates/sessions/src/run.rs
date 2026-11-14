@@ -502,7 +502,7 @@ impl Driver<'_> {
     /// 不执行——偏保守，不会重复执行，窗口只有交出回答到工具开始执行之间。
     async fn hand_over(&self, run: &Run, p: &Paused) -> Result<HashMap<String, Resolution>> {
         let (session_id, answers) = (self.session_id().to_owned(), p.answers.clone());
-        let replaced = self.core.db.write(move |tx| crate::paused_calls::take_in(tx, &session_id, &answers)).await?;
+        let decided = self.core.db.write(move |tx| crate::paused_calls::take_in(tx, &session_id, &answers)).await?;
         for (call_id, answer) in &p.answers {
             if let CallResult::AskAgent(a) = answer
                 && !a.attachments.is_empty()
@@ -510,7 +510,7 @@ impl Driver<'_> {
                 attach(run.scope(), call_id, &a.attachments);
             }
         }
-        deferred_results(p, &replaced)
+        deferred_results(p, decided)
     }
 
     /// 历史末尾是用户一方的消息：请求模型，保存回复。

@@ -181,6 +181,11 @@ impl AskResult {
     pub(crate) fn content(&self) -> Vec<Content> {
         vec![Content::text(self.text())]
     }
+
+    /// 交给模型的结果。
+    pub(crate) fn resolution(&self) -> Resolution {
+        Resolution::Result { content: self.content(), is_error: false }
+    }
 }
 
 const NOT_ANSWERED: &str = "The user did not answer these questions and sent a new message instead.";
@@ -239,6 +244,21 @@ pub struct AgentAnswer {
     pub attachments: Vec<SharedFile>,
 }
 
+impl AgentAnswer {
+    /// 交给发问方模型的结果。
+    pub(crate) fn resolution(&self) -> Resolution {
+        let mut t = self.text.clone();
+        if !self.attachments.is_empty() {
+            let names: Vec<String> = self.attachments.iter().map(|x| format!("{:?}", x.name)).collect();
+            t.push_str(&format!(
+                "\n\n[Shared {} with the user; they are shown with your reply automatically.]",
+                names.join(", ")
+            ));
+        }
+        text(t)
+    }
+}
+
 // ---- 等批准的调用 ----
 
 pub const DENIED: &str = "The user denied this call; it was not run.";
@@ -259,24 +279,25 @@ pub enum Choice {
     Always,
 }
 
-/// 用户对一次等批准的调用的决定。pin：用户批准的是哪一份（请求批准时工具定下、记在挂起记录里的指纹），批准时
-/// 交回工具比对。迁移来的旧信件没有它或为 null（都已处理，不会再交给运行），读入时当作空指纹：工具给的指纹不会是空的，
-/// 比对对不上。
+/// 用户对一次等批准的调用的决定。批准的是哪一份（pin）只记在挂起记录里（[`crate::paused_calls`]），交给运行时从那里取；
+/// 旧信件里多存的 pin 读入时忽略。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Decision {
     pub choice: Choice,
-    #[serde(default, deserialize_with = "old_pin")]
-    pub pin: String,
-}
-
-/// 旧信件的 pin（缺省或 null）读成空指纹，见 [`Decision`]。
-fn old_pin<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<String, D::Error> {
-    Ok(Option::<String>::deserialize(d)?.unwrap_or_default())
 }
 
 impl Decision {
     pub(crate) fn approved(&self) -> bool {
         self.choice != Choice::Deny
+    }
+
+    /// 交给模型的结果。pin 是挂起记录里的指纹；taken 为真表示这份批准之前已交给过运行（可能执行到一半），不再执行。
+    pub(crate) fn resolution(&self, pin: String, taken: bool) -> Resolution {
+        match self.choice {
+            Choice::Deny => Resolution::Denied(DENIED.to_owned()),
+            Choice::Approve | Choice::Always if taken => Resolution::Denied(APPROVAL_INTERRUPTED.to_owned()),
+            Choice::Approve | Choice::Always => Resolution::Approved(Approval { always: self.choice == Choice::Always, pin }),
+        }
     }
 }
 
@@ -345,28 +366,6 @@ impl CallResult {
             CallResult::AskUser(_) => Waiting::AskUser,
             CallResult::AskAgent(_) => Waiting::AskAgent,
             CallResult::Approval(_) => Waiting::Approval,
-        }
-    }
-
-    /// 交给模型的结果。
-    pub(crate) fn resolution(&self) -> Resolution {
-        match self {
-            CallResult::AskUser(r) => Resolution::Result { content: r.content(), is_error: false },
-            CallResult::AskAgent(a) => {
-                let mut t = a.text.clone();
-                if !a.attachments.is_empty() {
-                    let names: Vec<String> = a.attachments.iter().map(|x| format!("{:?}", x.name)).collect();
-                    t.push_str(&format!(
-                        "\n\n[Shared {} with the user; they are shown with your reply automatically.]",
-                        names.join(", ")
-                    ));
-                }
-                text(t)
-            }
-            CallResult::Approval(d) if d.approved() => {
-                Resolution::Approved(Approval { always: d.choice == Choice::Always, pin: d.pin.clone() })
-            }
-            CallResult::Approval(_) => Resolution::Denied(DENIED.to_owned()),
         }
     }
 
@@ -450,9 +449,9 @@ mod tests {
 
     #[test]
     fn stored_shape() {
-        let r = CallResult::Approval(Decision { choice: Choice::Always, pin: "p".into() });
+        let r = CallResult::Approval(Decision { choice: Choice::Always });
         let v = serde_json::to_value(&r).unwrap();
-        assert_eq!(v, serde_json::json!({"tool": "approval", "result": {"choice": "always", "pin": "p"}}));
+        assert_eq!(v, serde_json::json!({"tool": "approval", "result": {"choice": "always"}}));
         let back: CallResult =
             serde_json::from_value(serde_json::json!({"tool": "ask_agent", "result": {"text": "x"}})).unwrap();
         assert_eq!(back, CallResult::AskAgent(AgentAnswer { text: "x".into(), attachments: vec![] }));
@@ -463,11 +462,9 @@ mod tests {
         assert_eq!(serde_json::from_value::<AskResult>(flat).unwrap(), skipped);
         let answered = serde_json::json!({"answered": true, "answers": [], "note": null});
         assert_eq!(serde_json::from_value::<AskResult>(answered).unwrap(), AskResult::Answered(vec![]));
-        // 旧信件里的决定没有 pin
-        let old: Decision = serde_json::from_value(serde_json::json!({"choice": "approve"})).unwrap();
-        assert_eq!(old.pin, "");
-        let old: Decision = serde_json::from_value(serde_json::json!({"choice": "approve", "pin": null})).unwrap();
-        assert_eq!(old.pin, "");
+        // 旧信件里的决定多存了 pin，读入时忽略
+        let old: Decision = serde_json::from_value(serde_json::json!({"choice": "approve", "pin": "p"})).unwrap();
+        assert_eq!(old, Decision { choice: Choice::Approve });
     }
 
     #[test]

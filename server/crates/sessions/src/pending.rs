@@ -151,27 +151,28 @@ pub(crate) fn on_time_answers<'a>(mail: &'a Mail, pending: &HashSet<&str>) -> Op
     mail.body.answers().filter(|a| a.keys().all(|k| pending.contains(k.as_str())))
 }
 
-/// 交给运行的挂起调用结果。有回答的用回答（replaced 里另有结果的用那个，如批准之前已交过运行、不再执行的「被中断」）；
-/// 其余（来了新消息，或这次只回答了一部分）用那一种自己的「跳过」结果。
+/// 交给运行的挂起调用结果。有回答的用回答，等批准的调用的结果由 [`crate::paused_calls::take_in`] 对着挂起记录给出
+/// （decided，每个批准决定都在里面）；其余（来了新消息，或这次只回答了一部分）用那一种自己的「跳过」结果。
 pub(crate) fn deferred_results(
     paused: &Paused,
-    replaced: &HashMap<String, Resolution>,
+    mut decided: HashMap<String, Resolution>,
 ) -> Result<HashMap<String, Resolution>> {
     let given: Vec<&CallResult> = paused.answers.values().collect();
     let mut results = HashMap::new();
     for p in &paused.pending {
         let id = &p.call.id;
-        let r = match paused.answers.get(id) {
-            None => skipped(p.kind, &given),
-            Some(a) if a.kind() != p.kind => {
+        let r = match (p.kind, paused.answers.get(id)) {
+            (_, None) => skipped(p.kind, &given),
+            (Waiting::AskUser, Some(CallResult::AskUser(r))) => r.resolution(),
+            (Waiting::AskAgent, Some(CallResult::AskAgent(a))) => a.resolution(),
+            (Waiting::Approval, Some(CallResult::Approval(_))) => {
+                decided.remove(id).expect("take_in resolves every decision among the answers")
+            }
+            (_, Some(a)) => {
                 return Err(broken(format!("call {id} of {} got an answer for {}", p.call.name, a.kind().as_str())));
             }
-            Some(a) => replaced.get(id).cloned().unwrap_or_else(|| a.resolution()),
         };
         results.insert(id.clone(), r);
-    }
-    if let Some(stray) = replaced.keys().find(|k| !paused.answers.contains_key(*k) || paused.get(k).is_none()) {
-        panic!("replaced result for {stray}, which is not an answered pending call");
     }
     Ok(results)
 }

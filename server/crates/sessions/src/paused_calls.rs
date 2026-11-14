@@ -4,7 +4,8 @@
 //!
 //! 谁在什么时候记：ask_user 由工具自己在挂起前记；ask_agent 在往 thread 投信的同一事务里记（thread 可能在发问方这一步
 //! 保存完之前就答完，交回时要认得出这是挂起调用的回答）；等批准的调用工具还没执行，在运行停下保存的事务里记，连同工具
-//! 请求批准时定下的 pin。批准第一次交给运行去执行时记下时间，再交就是可能执行过一半，改给「被中断」。
+//! 请求批准时定下的 pin（批准的是哪一份只存在这里，#847）。批准第一次交给运行去执行时记下时间，再交就是可能执行过一半，
+//! 改给「被中断」。
 
 use muliao_platform::ids::SessionId;
 use std::collections::{BTreeMap, HashMap};
@@ -13,7 +14,7 @@ use agenter::Resolution;
 use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::answers::{APPROVAL_INTERRUPTED, CallResult, Waiting};
+use crate::answers::{CallResult, Waiting};
 use muliao_platform::db::placeholders;
 use muliao_platform::errors::{Result, broken};
 
@@ -83,48 +84,32 @@ pub(crate) fn kinds_in(c: &Connection, session_id: &SessionId) -> Result<PausedK
     Ok(kinds_among(c, std::slice::from_ref(session_id))?.remove(session_id).unwrap_or_default())
 }
 
-/// 交给运行的回答里被批准的调用要去执行了（运行开头取走信件的事务里）：没交过的记下时间。之前已经交过的，那次运行可能在
-/// 执行中被打断，不能再执行一遍：返回它们的结果「被中断」，代替批准交给模型。
+/// 交给运行的回答里对等批准的调用的决定变成结果（运行开头取走信件的事务里），每个决定都在结果里：批准的带上请求批准时记下的
+/// pin，没交过的记下时间。之前已经交过的，那次运行可能在执行中被打断，不能再执行一遍：结果是「被中断」。
 pub(crate) fn take_in(
     c: &Connection,
     session_id: &SessionId,
     answers: &HashMap<String, CallResult>,
 ) -> Result<HashMap<String, Resolution>> {
-    let mut interrupted = HashMap::new();
+    let mut results = HashMap::new();
     for (call_id, r) in answers {
         let CallResult::Approval(d) = r else { continue };
-        if !d.approved() {
-            continue;
-        }
-        let taken: Option<Option<String>> = c
+        let (pin, taken): (String, Option<String>) = c
             .query_row(
-                "SELECT taken_at FROM paused_calls WHERE session_id = ?1 AND call_id = ?2 AND kind = 'approval'",
+                "SELECT pin, taken_at FROM paused_calls WHERE session_id = ?1 AND call_id = ?2 AND kind = 'approval'",
                 params![session_id, call_id],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
-            .optional()?;
-        match taken {
-            Some(Some(_)) => {
-                interrupted.insert(call_id.clone(), Resolution::Denied(APPROVAL_INTERRUPTED.to_owned()));
-            }
-            Some(None) => {
-                c.execute(
-                    "UPDATE paused_calls SET taken_at = ?1 WHERE session_id = ?2 AND call_id = ?3",
-                    params![Utc::now(), session_id, call_id],
-                )?;
-            }
-            // 回答按挂起记录的种类配对（deferred_results），走到这里是记录被删了或数据对不上
-            None => return Err(broken(format!("approved call {call_id} has no approval recorded"))),
+            .optional()?
+            // 回答只对着挂起记录提交（resolve_reply），走到这里是记录被删了或数据对不上
+            .ok_or_else(|| broken(format!("decided call {call_id} has no approval recorded")))?;
+        if d.approved() && taken.is_none() {
+            c.execute(
+                "UPDATE paused_calls SET taken_at = ?1 WHERE session_id = ?2 AND call_id = ?3",
+                params![Utc::now(), session_id, call_id],
+            )?;
         }
+        results.insert(call_id.clone(), d.resolution(pin, taken.is_some()));
     }
-    Ok(interrupted)
-}
-
-/// 这个等批准的调用请求批准时记下的 pin（用户提交决定时记进决定）。
-pub(crate) fn pin_in(c: &Connection, session_id: &SessionId, call_id: &str) -> Result<String> {
-    Ok(c.query_row(
-        "SELECT pin FROM paused_calls WHERE session_id = ?1 AND call_id = ?2 AND kind = 'approval'",
-        params![session_id, call_id],
-        |r| r.get(0),
-    )?)
+    Ok(results)
 }
