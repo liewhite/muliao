@@ -12,7 +12,7 @@
 //! | [`PARTS`]：这条请求里哪些段是信件内容、各是什么（[`PartMark`]：事件的来源与是否运行中检查，消息的发送方） | 请求的 metadata | 交出信件时 | 会话条目、热历史（哪句是用户说的） |
 //! | [`RUN_CONTEXT`]：这次运行的运行上下文（当前时间等） | 单独一段文字，请求的 metadata 记下标 | 每步保存 | 模型；会话条目不展示 |
 //! | [`FINISHED_AT`]：工具调用结束的时刻 | 工具结果的 metadata（RFC3339） | 每步保存 | 会话条目（结果的时间） |
-//! | 「调用是否已有结果」 | 工具结果；没结果的只可能在最后一条回复里 | — | [`unanswered_calls`] |
+//! | 「调用是否已有结果」 | 工具结果；没结果的只可能在最后一条回复里 | — | [`OpenCalls`] |
 
 use std::collections::HashSet;
 
@@ -315,29 +315,44 @@ pub(crate) fn calls_in(message: &Message) -> Vec<&ToolCall> {
     }
 }
 
-/// 还没有结果的工具调用，按出现顺序。「调用是否已有结果」只在这里定义。
+/// 逐条读消息，到目前为止还没有结果的工具调用（按出现顺序，带所在消息的序号）。「调用是否已有结果」只在这里定义：
+/// 同 id 的工具结果出现了就有了。[`unanswered_calls`] 与压缩的分步都用它。
+#[derive(Default)]
+pub(crate) struct OpenCalls<'a> {
+    open: Vec<(usize, &'a ToolCall)>,
+    read: usize,
+}
+
+impl<'a> OpenCalls<'a> {
+    pub(crate) fn read(&mut self, message: &'a Message) {
+        let at = self.read;
+        self.read += 1;
+        self.open.extend(calls_in(message).into_iter().map(|c| (at, c)));
+        let done: HashSet<&str> = results_in(message).collect();
+        if !done.is_empty() {
+            self.open.retain(|(_, c)| !done.contains(c.id.as_str()));
+        }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.open.is_empty()
+    }
+}
+
+/// 还没有结果的工具调用，按出现顺序（定义见 [`OpenCalls`]）。
 ///
 /// 库里的历史守着一条不变式（提供方的要求）：每条回复的调用在下一条回复之前都有结果，所以没结果的调用只可能在最后一条
 /// 回复里。破了说明有一处写错了，当场报错，不往末尾补结果（补在末尾的结果离开了它的调用，提供方会拒绝之后的每一次请求）。
 pub(crate) fn unanswered_calls(messages: &[Message]) -> Result<Vec<ToolCall>> {
-    let done: HashSet<&str> = messages.iter().flat_map(results_in).collect();
-    let last = messages.iter().rposition(|m| matches!(m, Message::Assistant(_)));
-    let mut unanswered = Vec::new();
-    for (i, m) in messages.iter().enumerate() {
-        for c in calls_in(m) {
-            if done.contains(c.id.as_str()) {
-                continue;
-            }
-            if Some(i) != last {
-                return Err(broken(format!(
-                    "history has a tool call without a result before its last response: {}",
-                    c.id
-                )));
-            }
-            unanswered.push(c.clone());
-        }
+    let mut open = OpenCalls::default();
+    for m in messages {
+        open.read(m);
     }
-    Ok(unanswered)
+    let last = messages.iter().rposition(|m| matches!(m, Message::Assistant(_)));
+    if let Some((_, c)) = open.open.iter().find(|(at, _)| Some(*at) != last) {
+        return Err(broken(format!("history has a tool call without a result before its last response: {}", c.id)));
+    }
+    Ok(open.open.into_iter().map(|(_, c)| c.clone()).collect())
 }
 
 /// 消息里可按关键字搜到的文字：用户一方的文字（不含运行上下文）、模型的文字回复、工具调用（工具名与参数的各个字符串值）。

@@ -11,7 +11,6 @@
 //!   原始消息不删除。
 
 use muliao_platform::ids::SessionId;
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use agenter::Message;
@@ -19,7 +18,7 @@ use muliao_assets::run_assets::RunAssets;
 use muliao_platform::db::Database;
 use muliao_runtime::Runtime;
 
-use crate::conventions::{calls_in, measured_responses, results_in};
+use crate::conventions::{OpenCalls, measured_responses};
 use crate::history::{Stored, add_compaction_in, latest_compaction, rows_after};
 use crate::transcript::{Renders, to_items, to_text};
 use muliao_platform::errors::Result;
@@ -50,17 +49,13 @@ pub(crate) fn context_tokens(history: &[Message], stale_responses: Option<usize>
 /// 用户消息（[`crate::history::context_of`]）。
 pub(crate) fn steps_of(rows: &[Stored]) -> Vec<Vec<&Stored>> {
     let mut steps: Vec<Vec<&Stored>> = Vec::new();
-    // 到目前为止还没有结果的调用 id（与 conventions::unanswered_calls 同一个定义，逐条维护）
-    let mut open: HashSet<&str> = HashSet::new();
+    let mut open = OpenCalls::default();
     for row in rows {
         match steps.last_mut() {
             Some(step) if !open.is_empty() => step.push(row),
             _ => steps.push(vec![row]),
         }
-        open.extend(calls_in(&row.message).into_iter().map(|c| c.id.as_str()));
-        for id in results_in(&row.message) {
-            open.remove(id);
-        }
+        open.read(&row.message);
     }
     steps
 }
