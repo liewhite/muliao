@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import type { Issue } from './api'
+import { asIssueId, type Issue } from './api'
 import { NODE_WIDTH, dependencyGroups, edgePath, graphIssues, layoutIssueGraph } from './issueGraph'
 
+const ids = (...xs: number[]) => xs.map(asIssueId)
 const issue = (id: number, over: Partial<Issue> = {}): Issue => ({
-  id,
+  id: asIssueId(id),
   title: `t${id}`,
   status: 'in_progress',
   priority: 'none',
@@ -13,9 +14,9 @@ const issue = (id: number, over: Partial<Issue> = {}): Issue => ({
   sessions: {},
   assignee_state: null,
   stalled: false,
-  depends_on: [],
-  blocks: [],
-  waiting_on: [],
+  depends_on: ids(),
+  blocks: ids(),
+  waiting_on: ids(),
   finished: false,
   reviewable: false,
   startable: false,
@@ -28,12 +29,12 @@ describe('issue graph', () => {
   // 1 ← 2 ← 3（3 依赖 2，2 依赖 1）；4 ← 5 全部完成；6 孤立；7 依赖未加载的 99
   const issues = [
     issue(1, { status: 'done', finished: true }),
-    issue(2, { depends_on: [1] }),
-    issue(3, { depends_on: [2, 1], waiting_on: [2] }),
+    issue(2, { depends_on: ids(1) }),
+    issue(3, { depends_on: ids(2, 1), waiting_on: ids(2) }),
     issue(4, { status: 'done', finished: true }),
-    issue(5, { status: 'cancelled', finished: true, depends_on: [4] }),
+    issue(5, { status: 'cancelled', finished: true, depends_on: ids(4) }),
     issue(6),
-    issue(7, { depends_on: [99] }),
+    issue(7, { depends_on: ids(99) }),
   ]
 
   it('groups issues connected by dependencies, leaving out unrelated ones', () => {
@@ -52,8 +53,8 @@ describe('issue graph', () => {
   it('lays dependencies out left of the issues that depend on them', () => {
     const g = layoutIssueGraph(graphIssues(issues, 'open'))
     const x = new Map(g.nodes.map((n) => [n.issue.id, n.x]))
-    expect(x.get(1)!).toBeLessThan(x.get(2)!)
-    expect(x.get(2)!).toBeLessThan(x.get(3)!)
+    expect(x.get(asIssueId(1))!).toBeLessThan(x.get(asIssueId(2))!)
+    expect(x.get(asIssueId(2))!).toBeLessThan(x.get(asIssueId(3))!)
     expect(g.width).toBeGreaterThanOrEqual(3 * NODE_WIDTH)
     expect(g.edges.map((e) => [e.from, e.to, e.settled])).toEqual([
       [1, 2, true],

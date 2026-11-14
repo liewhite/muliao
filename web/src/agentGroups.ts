@@ -47,12 +47,12 @@ export function selectableAgents(agents: Agent[] | undefined, keep?: string | nu
 }
 
 /** 按 id 找 agent（agent id 到 agent 的唯一查找）；列表还没加载完或没有这个 agent（已删除）时为 undefined */
-export function findAgent(agents: Agent[] | undefined, id: string): Agent | undefined {
+export function findAgent(agents: Agent[] | undefined, id: AgentId): Agent | undefined {
   return agents?.find((a) => a.id === id)
 }
 
 /** 按 id 显示 agent 名称；agent 列表尚未加载完（或 agent 已删除）时先显示 id。组件里用 ui.useAgentName */
-export function agentLabel(agents: Agent[] | undefined, id: string): string {
+export function agentLabel(agents: Agent[] | undefined, id: AgentId): string {
   return findAgent(agents, id)?.name ?? id
 }
 

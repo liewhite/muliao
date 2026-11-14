@@ -1,7 +1,19 @@
 // issue 看板的纯逻辑：状态与优先级的展示顺序、按状态分列、时间线文字
 
 import { agentLabel, selectableAgents } from './agentGroups'
-import { asAgentId, type Agent, type Assignee, type Issue, type IssueActivity, type IssuePriority, type IssueStatus, type Schemas } from './api'
+import type { Option } from './ui'
+import {
+  asIssueId,
+  type Agent,
+  type AgentId,
+  type Assignee,
+  type Issue,
+  type IssueActivity,
+  type IssueId,
+  type IssuePriority,
+  type IssueStatus,
+  type Schemas,
+} from './api'
 
 /** 状态的标签；键的顺序就是看板的列顺序（也是列表视图的分组顺序）：受阻排在进行中和待审核之间 */
 export const STATUS_LABEL: Record<IssueStatus, string> = {
@@ -39,34 +51,36 @@ export const PRIORITY_LABEL: Record<IssuePriority, string> = {
 export const PRIORITIES = Object.keys(PRIORITY_LABEL) as readonly IssuePriority[]
 
 /** issue 页；与后端 muliao_issues::route 一致（交给用户审核的通知点开它，server/crates/muliao/tests/frontend_contract.rs 核对）。Service Worker（public/sw.js）按这个形状认出待审核 issue 的通知 */
-export const issueRoute = (id: number) => `/issues/${id}`
+export const issueRoute = (id: IssueId) => `/issues/${id}`
 
 /** 指派人下拉框里「未指派」「我」的选项 id（选项 id 必须非空；agent id 是 12 位十六进制，不会与它们相同） */
 export const UNASSIGNED = '@none'
 const ME = '@me'
+/** 指派人下拉框的选项 id：未指派、我，或 agent id */
+export type AssigneeChoice = typeof UNASSIGNED | typeof ME | AgentId
 
 /** 指派人选项：未指派、我、各个 agent（id 为 agent id）。归档的 agent 不能被指派，只在它就是当前指派人（current）时留着以便显示 */
-export function assigneeOptions(agents: Agent[] | undefined, current?: Assignee | null) {
+export function assigneeOptions(agents: Agent[] | undefined, current?: Assignee | null): Option<AssigneeChoice>[] {
   const keep = current?.kind === 'agent' ? current.agent_id : null
   return [
     { id: UNASSIGNED, label: '未指派' },
     { id: ME, label: '我' },
-    ...selectableAgents(agents, keep).map((a) => ({ id: a.id as string, label: a.name })),
+    ...selectableAgents(agents, keep).map((a) => ({ id: a.id, label: a.name })),
   ]
 }
 
 /** 指派人与下拉框选项 id 互换 */
-export function assigneeValue(assignee: Assignee | null): string {
+export function assigneeValue(assignee: Assignee | null): AssigneeChoice {
   if (assignee === null) return UNASSIGNED
   return assignee.kind === 'user' ? ME : assignee.agent_id
 }
-export function assigneeOf(value: string): Assignee | null {
+export function assigneeOf(value: AssigneeChoice): Assignee | null {
   if (value === UNASSIGNED) return null
-  return value === ME ? { kind: 'user' } : { kind: 'agent', agent_id: asAgentId(value) }
+  return value === ME ? { kind: 'user' } : { kind: 'agent', agent_id: value }
 }
 
 /** 负责项目的显示名；负责的 agent 被删除后为 null */
-export function ownerLabel(agents: Agent[] | undefined, owner: string | null): string {
+export function ownerLabel(agents: Agent[] | undefined, owner: AgentId | null): string {
   if (owner === null) return '无负责项目'
   return agentLabel(agents, owner)
 }
@@ -79,7 +93,7 @@ const GOLDEN_ANGLE = 137.508
  * 新建的 agent 排在最后，已有的颜色不变；不用名字/id 的哈希，是因为十来个 agent 时哈希必然有几个撞成几乎同色。
  * 负责的 agent 已被删除、或 agent 列表还没加载完时为 null（不着色）。
  */
-export function ownerHue(agents: Agent[] | undefined, owner: string | null): number | null {
+export function ownerHue(agents: Agent[] | undefined, owner: AgentId | null): number | null {
   if (owner === null || agents === undefined) return null
   const order = [...agents].sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at) || a.id.localeCompare(b.id))
   const rank = order.findIndex((a) => a.id === owner)
@@ -118,7 +132,7 @@ export interface PendingMove {
 }
 
 /** 拖拽、本地乐观更新：把每个还在提交的 issue 移到新状态，并按服务端的做法刷新更新时间 */
-export function moveIssues(issues: Issue[], moves: ReadonlyMap<number, PendingMove>): Issue[] {
+export function moveIssues(issues: Issue[], moves: ReadonlyMap<IssueId, PendingMove>): Issue[] {
   return issues.map((i) => {
     const m = moves.get(i.id)
     return m ? { ...i, status: m.status, updated_at: m.at } : i
@@ -130,15 +144,15 @@ const RECORDED_LABEL: Record<Schemas['Recorded'], string> = { ...STATUS_LABEL, t
 const statusLabel = (v: Schemas['Recorded']) => RECORDED_LABEL[v]
 
 /** issue 编号列表的文字：「#1, #2」，空为「无」 */
-export function issueRefs(ids: readonly number[]): string {
+export function issueRefs(ids: readonly IssueId[]): string {
   return ids.map((i) => `#${i}`).join(', ') || '无'
 }
 
 /** 解析用户输入的依赖列表（「#1, 2 #3」）；有不是编号的内容返回 null */
-export function parseIssueRefs(text: string): number[] | null {
+export function parseIssueRefs(text: string): IssueId[] | null {
   const parts = text.split(/[\s,，]+/).filter(Boolean)
   const ids = parts.map((p) => (/^#?\d+$/.test(p) ? Number(p.replace('#', '')) : NaN))
-  return ids.some(Number.isNaN) ? null : ids
+  return ids.some(Number.isNaN) ? null : ids.map(asIssueId)
 }
 
 /** 时间线上一条属性变化的文字（评论另行渲染） */

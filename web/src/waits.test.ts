@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { asSessionId, type Wait } from './api'
+import { asSessionId, type CallId, type JobId, type Wait } from './api'
 import { waitDetail } from './waits'
 
 const now = Date.parse('2026-10-29T12:00:00Z')
@@ -8,7 +8,7 @@ const later = (s: number) => new Date(now + s * 1000).toISOString()
 
 describe('waitDetail', () => {
   it('shows how long a job has been running', () => {
-    const w: Wait = { kind: 'job', job_id: 3, since: ago(75), job: { command: 'sleep 99', status: 'running', log_path: 'jobs/3.log', tail: '' } }
+    const w: Wait = { kind: 'job', job_id: 3 as JobId, since: ago(75), job: { command: 'sleep 99', status: 'running', log_path: 'jobs/3.log', tail: '' } }
     expect(waitDetail(w, now)).toBe('已运行 1m15s')
   })
 
@@ -29,6 +29,6 @@ describe('waitDetail', () => {
   })
 
   it('lists the headers of a pending question', () => {
-    expect(waitDetail({ kind: 'ask', call_id: 'c', headers: ['Scope', 'When'] }, now)).toBe('Scope、When')
+    expect(waitDetail({ kind: 'ask', call_id: 'c' as CallId, headers: ['Scope', 'When'] }, now)).toBe('Scope、When')
   })
 })

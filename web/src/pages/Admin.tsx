@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Button, Card, Chip, Form, toast } from '@heroui/react'
 import { BellRing, LogOut, ShieldCheck, Trash2 } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
-import { api, unauthorizedEvent, sessionRoute } from '../api'
+import { api, unauthorizedEvent, sessionRoute, type GrantId } from '../api'
 import { useReturnState } from '../nav'
 import { enablePush, pushState, unsubscribePush, type PushState } from '../push'
 import {
@@ -107,7 +107,7 @@ function ScriptGrants() {
   const agents = useAgents()
   const confirm = useConfirm()
   const action = useAction()
-  async function revoke(id: number) {
+  async function revoke(id: GrantId) {
     if (!(await confirm({ title: '撤销这条始终允许？', confirmLabel: '撤销' }))) return
     await action.run(() => api.revokeScriptGrant(id))
   }

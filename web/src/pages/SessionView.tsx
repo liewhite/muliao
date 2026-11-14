@@ -37,6 +37,8 @@ import {
   type Thread,
   type SessionDetail,
   type Wait,
+  type IssueId,
+  type CallId,
   sessionRoute,
 } from '../api'
 import { approvalAnchor, askAnchor, waitDetail, waitKey } from '../waits'
@@ -75,7 +77,7 @@ import { useLoad } from '../load'
  * issue 会话的页头标题：指回它的 issue，显示编号、标题、当前状态（随 issue 变化刷新）；在 issue 页返回回到这个会话。
  * 取不到 issue（如已删除，会话保留）时显示会话自己的标题和原因
  */
-function IssueTitle({ issueId, fallback }: { issueId: number; fallback: string }) {
+function IssueTitle({ issueId, fallback }: { issueId: IssueId; fallback: string }) {
   const from = useReturnState()
   const detail = useLoad(() => api.issue(issueId), [issueId])
   const issue = detail.data?.issue
@@ -238,10 +240,10 @@ function StepsGroup({ steps, ctx }: { steps: Step[]; ctx: SessionContext }) {
 
 /** 渲染会话条目要用到的会话信息：回答提问的方式、这个会话开出的 thread、agent 名称 */
 interface SessionContext {
-  answer: (callId: string, answers: QuestionAnswer[]) => Promise<unknown>
+  answer: (callId: CallId, answers: QuestionAnswer[]) => Promise<unknown>
   /** 批准、拒绝或始终允许一次等批准的工具调用 */
-  approve: (callId: string, choice: ApprovalChoice) => Promise<unknown>
-  threads: Map<string, Thread>
+  approve: (callId: CallId, choice: ApprovalChoice) => Promise<unknown>
+  threads: Map<SessionId, Thread>
   /**
    * 条目来自哪里：
    * - history：数据库里的历史，与会话的 thread 列表来自同一个响应，引用的 thread 缺失就是已被删除；
@@ -532,7 +534,7 @@ function ThreadRow({ thread }: { thread: Thread }) {
 }
 
 /** 一组步骤里委派开出或续写的 thread */
-function ThreadLinks({ ids, ctx }: { ids: string[]; ctx: SessionContext }) {
+function ThreadLinks({ ids, ctx }: { ids: SessionId[]; ctx: SessionContext }) {
   if (ids.length === 0) return null
   return (
     <div className="flex w-full max-w-[88%] flex-col self-start rounded-xl border border-separator px-1.5 py-1 text-sm">

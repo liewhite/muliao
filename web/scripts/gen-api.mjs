@@ -82,11 +82,19 @@ export function optionalResponseFields(spec) {
   return found
 }
 
-/** 后端各种编号的类型（platform::ids）：生成成带品牌的字符串，传错位置（把会话编号当 agent 编号）编译不过 */
-export const BRANDED = ['AgentId', 'SessionId']
+/**
+ * 后端各种编号的类型（platform::ids，名字以 Id 结尾、本身是字符串或整数）：生成成带品牌的字符串或数字，传错位置（把会话编号
+ * 当 agent 编号、把 issue 号当触发器号）编译不过。新加的编号类型按名字自动带上，不用在这里登记。
+ */
+export function brandedKeyword(name, schema) {
+  if (!name?.endsWith('Id')) return undefined
+  if (schema?.type === 'string') return ts.SyntaxKind.StringKeyword
+  if (schema?.type === 'integer') return ts.SyntaxKind.NumberKeyword
+  return undefined
+}
 
-/** `string & { readonly __brand: '<name>' }` */
-function brand(name) {
+/** `string & { readonly __brand: '<name>' }`（整数编号是 number） */
+function brand(name, keyword) {
   const f = ts.factory
   const tag = f.createPropertySignature(
     [f.createModifier(ts.SyntaxKind.ReadonlyKeyword)],
@@ -94,14 +102,29 @@ function brand(name) {
     undefined,
     f.createLiteralTypeNode(f.createStringLiteral(name, true)),
   )
-  return f.createIntersectionTypeNode([f.createKeywordTypeNode(ts.SyntaxKind.StringKeyword), f.createTypeLiteralNode([tag])])
+  return f.createIntersectionTypeNode([f.createKeywordTypeNode(keyword), f.createTypeLiteralNode([tag])])
 }
+
+/** 编号类型的写法（类型、格式、说明）→ 名字。后端泛型里的编号（如 `Change<Vec<IssueId>>`）被 utoipa 就地展开、没有引用，
+ * 按与编号类型完全相同的写法认回来（说明就是那个类型的文档，各编号不同） */
+export function brandedShapes(schemas) {
+  const shapes = new Map()
+  for (const [name, schema] of Object.entries(schemas)) {
+    if (brandedKeyword(name, schema) !== undefined) shapes.set(shapeKey(schema), name)
+  }
+  return shapes
+}
+
+const shapeKey = (s) => JSON.stringify([s.type, s.format, s.description])
 
 export async function generate() {
   const spec = JSON.parse(await readFile(SPEC, 'utf8'))
-  const transform = (_schema, { path }) => {
-    const name = path?.startsWith(PREFIX) ? path.slice(PREFIX.length) : undefined
-    return BRANDED.includes(name) ? brand(name) : undefined
+  const shapes = brandedShapes(spec.components.schemas)
+  const transform = (schema, { path }) => {
+    const own = path?.startsWith(PREFIX) ? path.slice(PREFIX.length) : ''
+    const name = own !== '' && !own.includes('/') ? own : shapes.get(shapeKey(schema))
+    const keyword = brandedKeyword(name, schema)
+    return keyword === undefined ? undefined : brand(name, keyword)
   }
   // 没有字段的对象（如 ChangedEvent）默认生成 Record<string, never>，与 SSE 联合里加上的 type 字段相交就成了 never
   return HEADER + astToString(await openapiTS(relaxRequestDefaults(spec), { emptyObjectsUnknown: true, transform }))

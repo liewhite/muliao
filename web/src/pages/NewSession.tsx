@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Card } from '@heroui/react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { AgentPicker } from '../AgentPicker'
-import { api, asAgentId, sessionRoute } from '../api'
+import { api, asAgentId, sessionRoute, type AgentId } from '../api'
 import { AttachButton, PendingUploads, useUploads } from '../attachments'
 import { appendTranscript, useVoiceInput } from '../voice'
 import { VoiceButton } from '../VoiceButton'
@@ -24,7 +24,8 @@ export default function NewSession() {
   const navigate = useNavigate()
   const agents = useAgents()
   // 显式选的（URL ?agent= 或用户选择）优先，否则是系统默认 agent；都没有就留空让用户选
-  const [chosen, setAgent] = useState<string | null>(params.get('agent'))
+  const ask = params.get('agent')
+  const [chosen, setAgent] = useState<AgentId | null>(ask === null ? null : asAgentId(ask))
   const agent = chosen ?? agents.data?.find((a) => a.is_default)?.id ?? null
   const [prompt, setPrompt] = useState('')
   const uploads = useUploads()
@@ -38,7 +39,7 @@ export default function NewSession() {
     if (action.busy || !canStart) return
     await action.run(async () => {
       if (agent === null) throw new Error('请选择 agent')
-      const session = await api.startSession(asAgentId(agent), prompt.trim(), uploads.ids)
+      const session = await api.startSession(agent, prompt.trim(), uploads.ids)
       navigate(sessionRoute(session.id), { replace: true })
     })
   }

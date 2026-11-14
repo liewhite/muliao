@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { expect, it } from 'vitest'
-import { generate, OUTPUT, optionalResponseFields, relaxRequestDefaults } from './gen-api.mjs'
+import { brandedShapes, generate, OUTPUT, optionalResponseFields, relaxRequestDefaults } from './gen-api.mjs'
 
 it('the committed frontend types match openapi.json', async () => {
   // 不一致时运行 npm run gen:api
@@ -53,4 +53,17 @@ it('finds optional fields only in response types', () => {
     },
   }
   expect(optionalResponseFields(spec)).toEqual(['Out.b', 'Out.inner', 'Out.inner.c'])
+})
+
+it('brands id types by name, and recognizes them where a generic inlined them', async () => {
+  const shapes = brandedShapes({
+    IssueId: { type: 'integer', format: 'int64', description: 'issue' },
+    AgentId: { type: 'string', description: 'agent' },
+    Note: { type: 'string', description: 'note' },
+    Change_Vec_IssueId: { type: 'object' },
+  })
+  expect([...shapes.values()].sort()).toEqual(['AgentId', 'IssueId'])
+  // 后端泛型 Change<Vec<IssueId>> 里的编号被就地展开，生成的类型照样带品牌
+  const generated = await readFile(OUTPUT, 'utf8')
+  expect(/Change_Vec_IssueId: \{\s*from: \(number & \{\s*readonly __brand: 'IssueId'/.test(generated)).toBe(true)
 })

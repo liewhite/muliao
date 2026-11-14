@@ -5,10 +5,12 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   api,
   asAgentId,
+  asIssueId,
   sessionRoute,
   type Actor,
   type Agent,
   type IssueDetail,
+  type IssueId,
   type SessionId,
 } from '../api'
 import { useReturnState, useRouteParam } from '../nav'
@@ -104,7 +106,7 @@ function Timeline({ detail }: { detail: IssueDetail }) {
   )
 }
 
-function IssueLinks({ ids }: { ids: number[] }) {
+function IssueLinks({ ids }: { ids: IssueId[] }) {
   const from = useReturnState()
   return ids.map((i) => (
     <Link key={i} to={issueRoute(i)} state={from} className="text-accent">
@@ -172,7 +174,7 @@ function Editor({ detail, onDone }: { detail: IssueDetail; onDone: () => void })
 }
 
 // 指派给用户的 issue 在这里审核（推送通知点开就是这一页；Chromium 通知上的「打回」带 ?review=reject 打开，聚焦理由）
-function Review({ issueId }: { issueId: number }) {
+function Review({ issueId }: { issueId: IssueId }) {
   const [params] = useSearchParams()
   const [reason, setReason] = useState('')
   const review = useAction()
@@ -274,7 +276,7 @@ function Issue({ detail }: { detail: IssueDetail }) {
           label="负责项目（owner）"
           value={issue.owner}
           placeholder="无负责项目"
-          onChange={(v) => patch({ owner: v === null ? null : asAgentId(v) })}
+          onChange={(owner) => patch({ owner })}
           isDisabled={change.busy}
         />
         <SelectInput
@@ -347,6 +349,7 @@ function Issue({ detail }: { detail: IssueDetail }) {
               className="flex items-center gap-1 text-accent"
             >
               <MessageSquare className="size-4" />
+              {/* JSON 对象的键只能是字符串：会话表按 agent id 为键 */}
               {agentLabel(agents.data, asAgentId(agentId))} 的会话
             </Link>
           ))}
@@ -379,7 +382,7 @@ function Issue({ detail }: { detail: IssueDetail }) {
 
 export default function IssueView() {
   const id = useRouteParam('id')
-  const issueId = Number(id)
+  const issueId = asIssueId(Number(id))
   const detail = useLoad(() => api.issue(issueId), [issueId])
   // 看到了 issue 就看到了请你审核它的通知（与打开会话一样）
   useEffect(() => {

@@ -5,12 +5,13 @@ import { Link } from 'react-router-dom'
 import { useReturnState } from '../nav'
 import {
   api,
-  asAgentId,
+  type AgentId,
   type Precheck,
   type Schemas,
   type Trigger,
   type TriggerKind,
   type TriggerCreate,
+  type TriggerId,
   type TriggerKindName,
   sessionRoute,
 } from '../api'
@@ -317,7 +318,7 @@ function TriggerSessions({ trigger }: { trigger: Trigger }) {
   )
 }
 
-function SessionList({ triggerId }: { triggerId: number }) {
+function SessionList({ triggerId }: { triggerId: TriggerId }) {
   const from = useReturnState()
   const sessions = useLoad(() => api.sessions({ trigger_id: triggerId }), [triggerId])
   return (
@@ -665,7 +666,7 @@ function TriggerFields({ kinds, onCreated }: { kinds: TriggerKind[]; onCreated: 
   const [initial, setInitial] = useState<KindConfig | null>(kinds[0] ? emptyConfig(kinds[0].name) : null)
   const kind = initial?.kind ?? null
   const [name, setName] = useState('')
-  const [agentId, setAgentId] = useState<string | null>(null)
+  const [agentId, setAgentId] = useState<AgentId | null>(null)
   const [prompt, setPrompt] = useState('')
   const [draft, setDraft] = useState<KindConfig | null>(initial)
   const [precheck, setPrecheck] = useState<Precheck | null>(null)
@@ -678,7 +679,7 @@ function TriggerFields({ kinds, onCreated }: { kinds: TriggerKind[]; onCreated: 
       await api.createTrigger({
         ...draft,
         name,
-        agent_id: asAgentId(agentId),
+        agent_id: agentId,
         prompt,
         precheck,
       })

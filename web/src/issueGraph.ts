@@ -1,7 +1,7 @@
 // issue 看板的依赖图视图：把 depends_on 排成有向无环图（依赖在左、依赖它的在右）的纯布局逻辑
 
 import { Graph, layout, type Point } from '@dagrejs/dagre'
-import type { Issue } from './api'
+import type { Issue, IssueId } from './api'
 
 /** 节点（卡片）的尺寸，渲染与布局共用 */
 export const NODE_WIDTH = 224
@@ -19,9 +19,9 @@ export interface GraphNode {
 
 export interface GraphEdge {
   /** 被依赖的 issue（先做的） */
-  from: number
+  from: IssueId
   /** 依赖它的 issue */
-  to: number
+  to: IssueId
   /** 依赖已完成或取消（不在下游的 waiting_on 里）：不再挡着下游 */
   settled: boolean
   points: Point[]
@@ -35,15 +35,15 @@ export interface GraphLayout {
 }
 
 /** 已加载的 issue 之间的依赖边（依赖指向未加载的 issue，如按项目筛选掉了的，不画） */
-function dependencyEdges(issues: Issue[]): [number, number][] {
+function dependencyEdges(issues: Issue[]): [IssueId, IssueId][] {
   const ids = new Set(issues.map((i) => i.id))
-  return issues.flatMap((i) => i.depends_on.filter((d) => ids.has(d)).map((d): [number, number] => [d, i.id]))
+  return issues.flatMap((i) => i.depends_on.filter((d) => ids.has(d)).map((d): [IssueId, IssueId] => [d, i.id]))
 }
 
 /** 按依赖关系连通的分组（无向），每组是 issue id 的列表；没有任何依赖关系的 issue 不在其中 */
-export function dependencyGroups(issues: Issue[]): number[][] {
-  const parent = new Map<number, number>()
-  const find = (x: number): number => {
+export function dependencyGroups(issues: Issue[]): IssueId[][] {
+  const parent = new Map<IssueId, IssueId>()
+  const find = (x: IssueId): IssueId => {
     let r = x
     while (parent.get(r) !== r) r = parent.get(r)!
     parent.set(x, r)
@@ -54,7 +54,7 @@ export function dependencyGroups(issues: Issue[]): number[][] {
     if (!parent.has(b)) parent.set(b, b)
     parent.set(find(a), find(b))
   }
-  const groups = new Map<number, number[]>()
+  const groups = new Map<IssueId, IssueId[]>()
   for (const id of parent.keys()) {
     const root = find(id)
     groups.set(root, [...(groups.get(root) ?? []), id])

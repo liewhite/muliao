@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { asAgentId, type Agent, type Issue, type IssueActivity } from './api'
+import { asAgentId, asIssueId, type Agent, type Issue, type IssueActivity } from './api'
 import {
   FOLD_LIMIT,
   activityText,
@@ -11,8 +11,9 @@ import {
   parseIssueRefs,
 } from './issues'
 
+const ids = (...xs: number[]) => xs.map(asIssueId)
 const issue = (id: number, over: Partial<Issue> = {}): Issue => ({
-  id,
+  id: asIssueId(id),
   title: `t${id}`,
   status: 'in_progress',
   priority: 'none',
@@ -22,9 +23,9 @@ const issue = (id: number, over: Partial<Issue> = {}): Issue => ({
   sessions: {},
   assignee_state: null,
   stalled: false,
-  depends_on: [],
-  blocks: [],
-  waiting_on: [],
+  depends_on: ids(),
+  blocks: ids(),
+  waiting_on: ids(),
   finished: false,
   reviewable: false,
   startable: false,
@@ -58,8 +59,8 @@ describe('issues', () => {
 
   it('moves every pending issue to its new status', () => {
     const moves = new Map([
-      [2, { status: 'done' as const, at: '2026-10-21T09:00:00Z' }],
-      [3, { status: 'blocked' as const, at: '2026-10-21T09:00:01Z' }],
+      [asIssueId(2), { status: 'done' as const, at: '2026-10-21T09:00:00Z' }],
+      [asIssueId(3), { status: 'blocked' as const, at: '2026-10-21T09:00:01Z' }],
     ])
     const moved = moveIssues([issue(1), issue(2), issue(3)], moves)
     expect(moved.map((i) => i.status)).toEqual(['in_progress', 'done', 'blocked'])
@@ -74,7 +75,7 @@ describe('issues', () => {
   })
 
   it('describes changes in the timeline', () => {
-    const base = { id: 1, issue_id: 7, created_at: '', actor: { kind: 'user' as const }, session_id: null }
+    const base = { id: 1, issue_id: asIssueId(7), created_at: '', actor: { kind: 'user' as const }, session_id: null }
     // 每种只写 kind 与它自己的内容、变化，公共字段用 base
     type Own<A> = A extends unknown ? Omit<A, keyof typeof base> : never
     const at = (a: Own<IssueActivity>): IssueActivity => ({ ...base, ...a })
@@ -84,8 +85,8 @@ describe('issues', () => {
     expect(activityText(agents, at({ kind: 'status', change: { from: 'waiting', to: 'in_progress' } }))).toBe('把状态从「waiting」改为「进行中」')
     expect(activityText(agents, at({ kind: 'assignee', change: { from: null, to: { kind: 'agent', agent_id: asAgentId('a1') } } }))).toBe('把指派从「未指派」改为「alpha」')
     expect(activityText(agents, at({ kind: 'priority', change: { from: 'none', to: 'high' } }))).toContain('改为')
-    expect(activityText(agents, at({ kind: 'depends_on', change: { from: [1, 2], to: [] } }))).toBe('把依赖从「#1, #2」改为「无」')
-    expect(activityText(agents, at({ kind: 'dependency', change: { issue: 3, from: 'in_progress', to: 'done' } }))).toBe(
+    expect(activityText(agents, at({ kind: 'depends_on', change: { from: ids(1, 2), to: [] } }))).toBe('把依赖从「#1, #2」改为「无」')
+    expect(activityText(agents, at({ kind: 'dependency', change: { issue: asIssueId(3), from: 'in_progress', to: 'done' } }))).toBe(
       '把依赖 #3 的状态从「进行中」改为「完成」',
     )
     expect(activityText(agents, at({ kind: 'run_failed', body: 'Boom: bad' }))).toBe('在 issue 会话里的运行失败了：Boom: bad')
@@ -107,18 +108,18 @@ describe('ownerHue', () => {
   const team = [agent('b', '2026-10-02T00:00:00Z'), agent('a', '2026-10-01T00:00:00Z'), agent('c', '2026-10-03T00:00:00Z')]
 
   it('gives agents hues a golden angle apart in creation order, whatever the list order', () => {
-    expect(['a', 'b', 'c'].map((id) => ownerHue(team, id))).toEqual([0, 138, 275])
-    expect(ownerHue([...team].reverse(), 'b')).toBe(138)
+    expect(['a', 'b', 'c'].map((id) => ownerHue(team, asAgentId(id)))).toEqual([0, 138, 275])
+    expect(ownerHue([...team].reverse(), asAgentId('b'))).toBe(138)
   })
 
   it('keeps existing hues when a newer agent is added', () => {
     const grown = [...team, agent('0', '2026-10-04T00:00:00Z')]
-    expect(['a', 'b', 'c'].map((id) => ownerHue(grown, id))).toEqual([0, 138, 275])
+    expect(['a', 'b', 'c'].map((id) => ownerHue(grown, asAgentId(id)))).toEqual([0, 138, 275])
   })
 
   it('is null without an owner, for a deleted agent, or before agents load', () => {
     expect(ownerHue(team, null)).toBeNull()
-    expect(ownerHue(team, 'gone')).toBeNull()
-    expect(ownerHue(undefined, 'a')).toBeNull()
+    expect(ownerHue(team, asAgentId('gone'))).toBeNull()
+    expect(ownerHue(undefined, asAgentId('a'))).toBeNull()
   })
 })

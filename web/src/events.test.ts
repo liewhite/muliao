@@ -1,19 +1,22 @@
 import { describe, expect, it } from 'vitest'
-import { asSessionId } from './api'
+import { asSessionId, type CallId } from './api'
 import { isOutdated, isStale, liveItems, mergeLive, needsReconnect, withoutCovered, type RunEvent } from './events'
 
 const base = { type: 'run', session_id: asSessionId('s'), agent: 'a', segment_id: 'r', seq: 0 } as const
 
 const delta = (item_type: 'assistant' | 'thinking', text: string): RunEvent => ({ ...base, event: 'delta', item_type, text })
 
-const tool = (type: 'tool_call' | 'tool_result', text: string, tool_call_id: string): RunEvent => ({
+const tool = (type: 'tool_call' | 'tool_result', text: string, id: string): RunEvent => {
+  const tool_call_id = id as CallId
+  return {
   ...base,
   event: 'item',
   item:
     type === 'tool_call'
       ? { type, text, tool_name: 'tool', tool_call_id, threads: [], wait: null, view: null, at: null }
       : { type, text, tool_name: 'tool', tool_call_id, attachments: [], images: [], view: null, at: null },
-})
+  }
+}
 
 describe('liveItems', () => {
   it('joins consecutive thinking deltas into one thinking item before the answer', () => {

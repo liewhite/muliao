@@ -4,7 +4,7 @@ import { selectVariants } from '@heroui/styles'
 import { ChevronDown, Folder } from 'lucide-react'
 import { Autocomplete } from 'react-aria-components'
 import { findAgent, groupAgents, searchAgents, selectableAgents } from './agentGroups'
-import type { Agent } from './api'
+import type { Agent, AgentId } from './api'
 
 /**
  * 选 agent：一级菜单是各分组（悬停/点击展开二级列表）和未分组的 agent；
@@ -21,8 +21,8 @@ export function AgentPicker({
   label: string
   agents: Agent[]
   /** null 表示未选择 */
-  value: string | null
-  onChange: (id: string) => void
+  value: AgentId | null
+  onChange: (id: AgentId) => void
   placeholder?: string
 }) {
   const labelId = useId()
@@ -34,7 +34,7 @@ export function AgentPicker({
   const searching = query.trim() !== ''
   const slots = selectVariants({ variant: 'secondary', fullWidth: true })
 
-  function choose(id: string) {
+  function choose(id: AgentId) {
     onChange(id)
     setQuery('')
   }
@@ -95,7 +95,7 @@ function AgentTree({
 }: {
   agents: Agent[]
   selected: string[]
-  onChoose: (id: string) => void
+  onChoose: (id: AgentId) => void
 }) {
   const { groups, ungrouped } = groupAgents(agents)
   return (
@@ -136,7 +136,7 @@ function AgentItem({
 }: {
   agent: Agent
   showGroup?: boolean
-  onChoose: (id: string) => void
+  onChoose: (id: AgentId) => void
 }) {
   return (
     <Dropdown.Item id={agent.id} textValue={agent.name} onAction={() => onChoose(agent.id)}>

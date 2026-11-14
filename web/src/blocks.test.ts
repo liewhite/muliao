@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { asSessionId, sourceKey, type AskView, type Item, type ItemSource } from './api'
+import { asSessionId, sourceKey, type AskView, type CallId, type Item, type ItemSource, type JobId } from './api'
 import { foldCheckIns, groupSteps, stepAttachments, stepThreads, summarizeSteps, toBlocks, unlinkedThreads, type Step } from './blocks'
 
 type Of<T extends Item['type']> = Extract<Item, { type: T }>
@@ -12,7 +12,7 @@ const stopped: Item = { type: 'stopped' }
 const call = (tool_call_id: string, text = '{}', at: string | null = null): Of<'tool_call'> => ({
   type: 'tool_call',
   tool_name: 'run_shell',
-  tool_call_id,
+  tool_call_id: tool_call_id as CallId,
   text,
   threads: [],
   wait: null,
@@ -22,14 +22,14 @@ const call = (tool_call_id: string, text = '{}', at: string | null = null): Of<'
 const result = (tool_call_id: string, text: string, at: string | null = null): Of<'tool_result'> => ({
   type: 'tool_result',
   tool_name: 'run_shell',
-  tool_call_id,
+  tool_call_id: tool_call_id as CallId,
   text,
   attachments: [],
   images: [],
   view: null,
   at,
 })
-const error = (tool_call_id: string, text: string): Of<'tool_error'> => ({ type: 'tool_error', tool_name: 'run_shell', tool_call_id, text, at: null })
+const error = (tool_call_id: string, text: string): Of<'tool_error'> => ({ type: 'tool_error', tool_name: 'run_shell', tool_call_id: tool_call_id as CallId, text, at: null })
 const event = (source: Of<'event'>['source'], text: string, at = '10:00', check_in = false): Item => ({ type: 'event', source, text, at, check_in })
 
 describe('groupSteps', () => {
@@ -266,9 +266,9 @@ describe('unlinkedThreads', () => {
   })
 })
 
-const JOB_1 = { kind: 'job', job_id: 1 } as const
+const JOB_1 = { kind: 'job', job_id: 1 as JobId } as const
 const src = (raw: string): ItemSource =>
-  raw.startsWith('job:') ? { kind: 'job', job_id: Number(raw.slice(4)) } : { kind: 'thread', session_id: asSessionId(raw.slice(7)) }
+  raw.startsWith('job:') ? { kind: 'job', job_id: Number(raw.slice(4)) as JobId } : { kind: 'thread', session_id: asSessionId(raw.slice(7)) }
 
 describe('session events', () => {
   it('become their own block with the source, not part of a user bubble', () => {

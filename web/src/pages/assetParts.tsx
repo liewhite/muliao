@@ -1,11 +1,11 @@
 import { useState } from 'react'
 import { Button, Chip } from '@heroui/react'
 import { Link } from 'react-router-dom'
-import { agentRoute, api, asAgentId, type AgentId, type CatalogAsset } from '../api'
+import { agentRoute, api, type AgentId, type CatalogAsset } from '../api'
 import { ActionButton, ErrorAlert, SelectInput, useAction, useAgents } from '../ui'
 import { agentLabel } from '../agentGroups'
 
-const PLATFORM = 'platform'
+const PLATFORM = 'platform' as const
 
 /** 资产归谁：平台（要收录进角色才有人能用）或某个 agent（它自己总能用）。withArchived：也列出归档的（转移时，资产可能正归它们） */
 export function OwnerSelect({
@@ -19,7 +19,7 @@ export function OwnerSelect({
 }) {
   const agents = useAgents()
   return (
-    <SelectInput
+    <SelectInput<AgentId | typeof PLATFORM>
       label="归属（owner）"
       hint={
         value === null
@@ -27,7 +27,7 @@ export function OwnerSelect({
           : '这个 agent 自己总能用；要给别的 agent，把它收录进角色'
       }
       value={value ?? PLATFORM}
-      onChange={(v) => onChange(v === PLATFORM ? null : asAgentId(v))}
+      onChange={(v) => onChange(v === PLATFORM ? null : v)}
       options={[
         { id: PLATFORM, label: '平台' },
         ...(agents.data ?? [])

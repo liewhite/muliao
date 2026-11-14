@@ -1,4 +1,5 @@
 import { findAndReplace } from 'mdast-util-find-and-replace'
+import { asIssueId } from './api'
 import { issueRoute } from './issues'
 
 /**
@@ -19,7 +20,7 @@ export function remarkIssueRefs() {
         ISSUE_REF,
         (ref: string, id: string) => ({
           type: 'link',
-          url: issueRoute(Number(id)),
+          url: issueRoute(asIssueId(Number(id))),
           children: [{ type: 'text', value: ref }],
         }),
       ],

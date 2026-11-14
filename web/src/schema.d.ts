@@ -1319,7 +1319,9 @@ export interface components {
          */
         Busy: "running" | "waiting";
         /** @description 一次工具调用的编号（模型给出，会话里唯一；挂起的调用、委派、提问与审批的回答都按它对应） */
-        CallId: string;
+        CallId: string & {
+            readonly __brand: 'CallId';
+        };
         CallItem: {
             tool_name: string;
             tool_call_id: components["schemas"]["CallId"];
@@ -1405,8 +1407,12 @@ export interface components {
         };
         /** @description 属性从什么改成什么（存为 `{"from": ..., "to": ...}`）。 */
         Change_Option_AgentId: {
-            from: null | string;
-            to: null | string;
+            from: null | (string & {
+                readonly __brand: 'AgentId';
+            });
+            to: null | (string & {
+                readonly __brand: 'AgentId';
+            });
         };
         /** @description 属性从什么改成什么（存为 `{"from": ..., "to": ...}`）。 */
         Change_Option_Assignee: {
@@ -1448,8 +1454,12 @@ export interface components {
         };
         /** @description 属性从什么改成什么（存为 `{"from": ..., "to": ...}`）。 */
         Change_Vec_IssueId: {
-            from: number[];
-            to: number[];
+            from: (number & {
+                readonly __brand: 'IssueId';
+            })[];
+            to: (number & {
+                readonly __brand: 'IssueId';
+            })[];
         };
         /** @description 服务端数据变了（不分类别）：正在显示的页面重新拉取。 */
         ChangedEvent: Record<string, unknown>;
@@ -1590,7 +1600,9 @@ export interface components {
             value: string;
         };
         /** @description 上传或交回的文件的编号（files 表的 id） */
-        FileId: string;
+        FileId: string & {
+            readonly __brand: 'FileId';
+        };
         FileOut: {
             id: components["schemas"]["FileId"];
             name: string;
@@ -1614,7 +1626,9 @@ export interface components {
          * Format: int64
          * @description 一条「始终允许」的编号（script_grants 表的行号）
          */
-        GrantId: number;
+        GrantId: number & {
+            readonly __brand: 'GrantId';
+        };
         /** @description 时间线上发生的一件事。 */
         Happening: {
             /** @enum {string} */
@@ -1716,7 +1730,9 @@ export interface components {
          * Format: int64
          * @description issue 的编号（issues 表的行号，看板上的 #N）
          */
-        IssueId: number;
+        IssueId: number & {
+            readonly __brand: 'IssueId';
+        };
         /** @description 只修改给出的字段。assignee 给出 null 表示取消指派，不出现表示不变。 */
         IssuePatch: {
             owner?: components["schemas"]["AgentId"] | null;
@@ -1788,7 +1804,9 @@ export interface components {
          * Format: int64
          * @description 一个后台任务的编号（jobs 表的行号）
          */
-        JobId: number;
+        JobId: number & {
+            readonly __brand: 'JobId';
+        };
         /** @description 在等的后台任务的详情（与 job_status 同一份）。 */
         JobOut: {
             command: string;
@@ -1857,7 +1875,9 @@ export interface components {
          * Format: int64
          * @description 一封信件的编号（mail 表的行号）
          */
-        MailId: number;
+        MailId: number & {
+            readonly __brand: 'MailId';
+        };
         MailKindOut: {
             /** @enum {string} */
             kind: "message";
@@ -1970,7 +1990,9 @@ export interface components {
          * Format: int64
          * @description 会话里一条消息的编号（messages 表的行号）
          */
-        MessageId: number;
+        MessageId: number & {
+            readonly __brand: 'MessageId';
+        };
         /** @description 一个模型：哪个 provider（服务端配置的 `[llm.providers]`）的哪个模型；agent.toml 里写作 `<provider>:<model>`。 */
         ModelIo: {
             provider: string;
@@ -2011,7 +2033,9 @@ export interface components {
          * Format: int64
          * @description 通知的编号（notifications 表的行号）
          */
-        NotificationId: number;
+        NotificationId: number & {
+            readonly __brand: 'NotificationId';
+        };
         /** @description 存下的配置：带服务端时区的到期时间。 */
         OnceConfig: {
             at: string;
@@ -2209,7 +2233,9 @@ export interface components {
          * Format: int64
          * @description 一次运行的编号（runs 表的行号）
          */
-        RunId: number;
+        RunId: number & {
+            readonly __brand: 'RunId';
+        };
         RunRecord: {
             id: components["schemas"]["RunId"];
             session_id: components["schemas"]["SessionId"];
@@ -2512,7 +2538,9 @@ export interface components {
          * Format: int64
          * @description 触发器的编号（triggers 表的行号）
          */
-        TriggerId: number;
+        TriggerId: number & {
+            readonly __brand: 'TriggerId';
+        };
         TriggerKindOut: {
             name: components["schemas"]["Kind"];
             /** @description 什么时候触发、config 的格式 */

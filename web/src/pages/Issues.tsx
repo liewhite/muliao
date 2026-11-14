@@ -13,7 +13,7 @@ import {
 } from '@dnd-kit/core'
 import { Link, useNavigate } from 'react-router-dom'
 import { selectableAgents } from '../agentGroups'
-import { api, asAgentId, type Issue, type IssuePriority, type IssueStatus } from '../api'
+import { api, type AgentId, type Issue, type IssueId, type IssuePriority, type IssueStatus } from '../api'
 import {
   PRIORITIES,
   PRIORITY_LABEL,
@@ -31,6 +31,7 @@ import {
   groupByStatus,
   issueRoute,
   moveIssues,
+  type AssigneeChoice,
   type PendingMove,
   WORK_LABEL,
   issueRefs,
@@ -72,7 +73,7 @@ function ownerStyle(hue: number | null): CSSProperties | undefined {
 }
 
 /** 负责项目的色点；不着色时是灰点 */
-export function OwnerDot({ owner }: { owner: string | null }) {
+export function OwnerDot({ owner }: { owner: AgentId | null }) {
   const agents = useAgents().data
   const hue = ownerHue(agents, owner)
   return (
@@ -85,7 +86,7 @@ export function OwnerDot({ owner }: { owner: string | null }) {
 }
 
 /** 负责项目的胶囊：浅色底 + owner 色文字 */
-function OwnerChip({ owner }: { owner: string }) {
+function OwnerChip({ owner }: { owner: AgentId }) {
   const agents = useAgents().data
   const hue = ownerHue(agents, owner)
   return (
@@ -103,22 +104,26 @@ function OwnerChip({ owner }: { owner: string }) {
 
 /** 选负责项目的下拉框：每个 agent 前带它的色点；leading 是排在 agent 前面的额外选项（如「所有项目」）。
  * assignable：是在给 issue 定 owner（不是筛选），归档的 agent 不列，当前值除外 */
-export function OwnerSelect({
+export function OwnerSelect<L extends string = never>({
+  value,
+  onChange,
   leading = [],
   assignable = false,
   ...props
-}: Omit<ComponentProps<typeof SelectInput>, 'options'> & {
-  leading?: Option[]
+}: Omit<ComponentProps<typeof SelectInput>, 'options' | 'value' | 'onChange'> & {
+  // 哨兵选项（如「所有项目」）的 id 只从 leading 推断，没有 leading 时只能选 agent
+  value: AgentId | NoInfer<L> | null
+  onChange: (value: AgentId | NoInfer<L>) => void
+  leading?: Option<L>[]
   assignable?: boolean
 }) {
   const agents = useAgents().data
-  const listed = assignable ? selectableAgents(agents, props.value) : (agents ?? [])
-  const options = listed.map((a) => ({
-    id: a.id as string,
-    label: a.name,
-    prefix: <OwnerDot owner={a.id} />,
-  }))
-  return <SelectInput {...props} options={[...leading, ...options]} />
+  const listed = assignable ? selectableAgents(agents, value) : (agents ?? [])
+  const options: Option<AgentId | L>[] = [
+    ...leading,
+    ...listed.map((a) => ({ id: a.id, label: a.name, prefix: <OwnerDot owner={a.id} /> })),
+  ]
+  return <SelectInput<AgentId | L> {...props} value={value} onChange={onChange} options={options} />
 }
 
 function IssueCard({ issue }: { issue: Issue }) {
@@ -172,7 +177,7 @@ function IssueCard({ issue }: { issue: Issue }) {
   )
 }
 
-function DraggableCard({ issue, onOpen }: { issue: Issue; onOpen: (id: number) => void }) {
+function DraggableCard({ issue, onOpen }: { issue: Issue; onOpen: (id: IssueId) => void }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: issue.id })
   const style = transform ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` } : undefined
   return (
@@ -212,7 +217,7 @@ function Column({
 }: {
   status: IssueStatus
   issues: Issue[]
-  onOpen: (id: number) => void
+  onOpen: (id: IssueId) => void
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: status })
   const [expanded, setExpanded] = useState(false)
@@ -234,7 +239,7 @@ function Column({
   )
 }
 
-function Board({ issues, onMove }: { issues: Issue[]; onMove: (id: number, s: IssueStatus) => void }) {
+function Board({ issues, onMove }: { issues: Issue[]; onMove: (id: IssueId, s: IssueStatus) => void }) {
   // 鼠标拖动一小段才算拖拽，点一下是打开；触屏长按才拖，滑动仍是滚动。不用 PointerSensor：触屏上它与浏览器的滚动
   // 抢同一串指针事件，滑动一开始就被 pointercancel 打断，拖不起来
   const sensors = useSensors(
@@ -253,15 +258,15 @@ function Board({ issues, onMove }: { issues: Issue[]; onMove: (id: number, s: Is
       dragging.current = false
     }, 0)
   }
-  const onOpen = (id: number) => {
+  const onOpen = (id: IssueId) => {
     if (!dragging.current) navigate(issueRoute(id))
   }
   const onDragEnd = (e: DragEndEvent) => {
     settle()
     if (e.over === null) return
     const status = e.over.id as IssueStatus
-    const id = Number(e.active.id)
-    if (issues.find((i) => i.id === id)?.status !== status) onMove(id, status)
+    const issue = issues.find((i) => i.id === Number(e.active.id))
+    if (issue !== undefined && issue.status !== status) onMove(issue.id, status)
   }
   return (
     <DndContext
@@ -339,7 +344,7 @@ function DependencyGraph({ issues, scope }: { issues: Issue[]; scope: GraphScope
   const g = useMemo(() => layoutIssueGraph(graphIssues(issues, scope)), [issues, scope])
   if (g.nodes.length === 0)
     return <EmptyHint>{scope === 'open' ? '没有未完成的依赖关系' : '还没有带依赖关系的 issue'}</EmptyHint>
-  const touches = (e: { from: number; to: number }) => hover !== null && (e.from === hover || e.to === hover)
+  const touches = (e: { from: IssueId; to: IssueId }) => hover !== null && (e.from === hover || e.to === hover)
   return (
     <div className="overflow-auto px-4 py-3">
       <div className="relative" style={{ width: g.width, height: g.height }}>
@@ -406,9 +411,9 @@ function NewIssueForm() {
   const [description, setDescription] = useState('')
   const [status, setStatus] = useState<IssueStatus>('in_progress')
   const [priority, setPriority] = useState<IssuePriority>('none')
-  const [assignee, setAssignee] = useState(UNASSIGNED)
+  const [assignee, setAssignee] = useState<AssigneeChoice>(UNASSIGNED)
   // 负责的项目必填：不猜
-  const [owner, setOwner] = useState<string | null>(null)
+  const [owner, setOwner] = useState<AgentId | null>(null)
   const [dependsOn, setDependsOn] = useState('')
   const parsed = parseIssueRefs(dependsOn)
   const action = useAction()
@@ -418,7 +423,7 @@ function NewIssueForm() {
       if (parsed === null) throw new Error('依赖只能填 issue 编号，如 #12, #15')
       await api.createIssue({
         title,
-        owner: asAgentId(owner),
+        owner,
         description,
         status,
         priority,
@@ -474,16 +479,16 @@ function NewIssueForm() {
 export default function Issues() {
   const [view, changeView] = useStoredState(VIEW_KEY, oneOf<View>(['board', 'list', 'graph'], 'board'))
   // 按负责项目筛选：看一个项目的全部 issue（含已完成、已取消）
-  const [owner, setOwner] = useState(ALL_OWNERS)
-  const loaded = useLoad(() => api.issues(owner === ALL_OWNERS ? undefined : asAgentId(owner)), [owner])
+  const [owner, setOwner] = useState<AgentId | typeof ALL_OWNERS>(ALL_OWNERS)
+  const loaded = useLoad(() => api.issues(owner === ALL_OWNERS ? undefined : owner), [owner])
   // 拖拽后先在本地挪动，接口返回、重新拉取之后以服务端为准；连着拖几张时每张各占一项
-  const [moving, setMoving] = useState<ReadonlyMap<number, PendingMove>>(new Map())
+  const [moving, setMoving] = useState<ReadonlyMap<IssueId, PendingMove>>(new Map())
   const issues = loaded.data && moveIssues(loaded.data, moving)
   // 拖拽：失败用 toast 提示（连着拖几张时各自报，不互相冲掉）；成功后等看板重新拉取落下才撤掉本地挪动
   // 几张同时拖时共用它：busy 会被最先结束的那次清掉，不拿它禁用拖拽
   const move = useAction()
   const [graphScope, changeGraphScope] = useStoredState(GRAPH_SCOPE_KEY, oneOf<GraphScope>(['open', 'all'], 'open'))
-  const onMove = (id: number, status: IssueStatus) => {
+  const onMove = (id: IssueId, status: IssueStatus) => {
     const pending: PendingMove = { status, at: new Date().toISOString() }
     setMoving((prev) => new Map(prev).set(id, pending))
     void (async () => {

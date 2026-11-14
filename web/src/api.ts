@@ -7,13 +7,21 @@ export type Schemas = components['schemas']
 /** 会话来源的种类：用户在网页发起、触发器、agent 之间委派、issue 看板唤醒 */
 export type Origin = Schemas['SessionOrigin']['kind']
 
-/** agent 与会话的编号：生成的接口类型里带品牌（scripts/gen-api.mjs），编译器拦住「把名称或别种编号当它传」 */
+/** 各种编号：生成的接口类型里带品牌（scripts/gen-api.mjs），编译器拦住「把名称或别种编号当它传」 */
 export type AgentId = Schemas['AgentId']
 export type SessionId = Schemas['SessionId']
+export type IssueId = Schemas['IssueId']
+export type TriggerId = Schemas['TriggerId']
+export type JobId = Schemas['JobId']
+export type FileId = Schemas['FileId']
+export type CallId = Schemas['CallId']
+export type GrantId = Schemas['GrantId']
+export type NotificationId = Schemas['NotificationId']
 
-/** 仅用于边界：路由参数、取值为 id 的下拉框 */
+/** 仅用于边界：路由参数、取值为 id 的下拉框、用户输入的 issue 号 */
 export const asAgentId = (value: string) => value as AgentId
 export const asSessionId = (value: string) => value as SessionId
+export const asIssueId = (value: number) => value as IssueId
 
 export type Agent = Schemas['AgentOut']
 /** agent 表单的一整份值（新建时预填的缺省、编辑时打开的当前值）；修改只提交改过的字段（Schemas['AgentUpdate']） */
@@ -354,7 +362,7 @@ export const api = {
   sessions: (query: {
     agent_id?: AgentId
     origin?: Origin[]
-    trigger_id?: number
+    trigger_id?: TriggerId
     q?: string
     limit?: number
     offset?: number
@@ -362,12 +370,12 @@ export const api = {
     call('get', '/api/sessions', { query }),
   session: (session_id: SessionId) =>
     call('get', '/api/sessions/{session_id}', { path: { session_id } }),
-  startSession: (agent_id: AgentId, prompt: string, attachments: string[]) =>
+  startSession: (agent_id: AgentId, prompt: string, attachments: FileId[]) =>
     call('post', '/api/sessions', { body: { agent_id, prompt, attachments } }),
-  reply: (session_id: SessionId, prompt: string, attachments: string[]) =>
+  reply: (session_id: SessionId, prompt: string, attachments: FileId[]) =>
     call('post', '/api/sessions/{session_id}/messages', { path: { session_id }, body: { kind: 'message', prompt, attachments } }),
   /** 回答挂起的提问：作为这次 ask_user 调用的结果交回模型 */
-  answer: (session_id: SessionId, toolCallId: string, answers: QuestionAnswer[]) =>
+  answer: (session_id: SessionId, toolCallId: CallId, answers: QuestionAnswer[]) =>
     call('post', '/api/sessions/{session_id}/messages', {
       path: { session_id },
       body: { kind: 'answer', call_id: toolCallId, answers },
@@ -376,7 +384,7 @@ export const api = {
    * 批准或拒绝一次等批准的工具调用：批准后按原参数执行，结果交回模型；拒绝时模型收到「用户拒绝」；始终允许：批准，
    * 且以后同样的调用不再问（设置页可撤销）
    */
-  approve: (session_id: SessionId, toolCallId: string, choice: ApprovalChoice) =>
+  approve: (session_id: SessionId, toolCallId: CallId, choice: ApprovalChoice) =>
     call('post', '/api/sessions/{session_id}/messages', {
       path: { session_id },
       body: { kind: 'approval', call_id: toolCallId, choice },
@@ -384,7 +392,7 @@ export const api = {
   /** skill 脚本的「始终允许」，新的在前 */
   scriptGrants: () => call('get', '/api/script-grants'),
   /** 撤销一条始终允许：之后同一调用重新要批准 */
-  revokeScriptGrant: (grant_id: number) =>
+  revokeScriptGrant: (grant_id: GrantId) =>
     call('delete', '/api/script-grants/{grant_id}', { path: { grant_id } }),
   /** 请求体就是文件内容，Content-Type 是它的类型（接口描述里没有 JSON 请求体）；浏览器认不出类型时 file.type 为空，按「未知二进制」上传 */
   uploadFile: (file: File) =>
@@ -397,7 +405,7 @@ export const api = {
   notifications: () => call('get', '/api/notifications'),
   unreadNotifications: () => call('get', '/api/notifications/unread'),
   /** 标记到 throughId（用户看到的最新一条）为止已读，之后才到的保持未读 */
-  markNotificationsRead: (throughId: number) => call('post', '/api/notifications/read', { body: { through_id: throughId } }),
+  markNotificationsRead: (throughId: NotificationId) => call('post', '/api/notifications/read', { body: { through_id: throughId } }),
   /** 打开了一个页面：点开就是它的通知标为已读（如 issue 页：请用户审核它的通知） */
   markLinkRead: (link: string) => call('post', '/api/notifications/read-link', { body: { link } }),
   /** 停止正在进行的运行；停止前已经产生的部分照常保存 */
@@ -409,7 +417,7 @@ export const api = {
   retry: (session_id: SessionId) => call('post', '/api/sessions/{session_id}/retry', { path: { session_id } }),
   deleteSession: (session_id: SessionId) => call('delete', '/api/sessions/{session_id}', { path: { session_id } }),
   /** 结束 agent 的一个后台任务（同 job_kill）；结局照常作为事件回到发起它的会话 */
-  killJob: (agent_id: AgentId, job_id: number) =>
+  killJob: (agent_id: AgentId, job_id: JobId) =>
     call('post', '/api/agents/{agent_id}/jobs/{job_id}/kill', { path: { agent_id, job_id } }),
 
   /** [since, until) 之间的 token 用量，按给出的维度分组；天按服务端配置的时区划分 */
@@ -421,11 +429,11 @@ export const api = {
   triggers: (finished = false) => call('get', '/api/triggers', { query: { finished } }),
   createTrigger: (body: TriggerCreate & { agent_id: AgentId }) => call('post', '/api/triggers', { body }),
   /** 只修改给出的字段；precheck 不给表示不变，给 null 表示去掉 */
-  updateTrigger: (trigger_id: number, body: Schemas['TriggerPatch']) =>
+  updateTrigger: (trigger_id: TriggerId, body: Schemas['TriggerPatch']) =>
     call('patch', '/api/triggers/{trigger_id}', { path: { trigger_id }, body }),
   /** session_id 为 null：前置检查判定这次不调用 agent */
-  runTrigger: (trigger_id: number) => call('post', '/api/triggers/{trigger_id}/run', { path: { trigger_id } }),
-  deleteTrigger: (trigger_id: number) => call('delete', '/api/triggers/{trigger_id}', { path: { trigger_id } }),
+  runTrigger: (trigger_id: TriggerId) => call('post', '/api/triggers/{trigger_id}/run', { path: { trigger_id } }),
+  deleteTrigger: (trigger_id: TriggerId) => call('delete', '/api/triggers/{trigger_id}', { path: { trigger_id } }),
   /** 新增（启用的）MCP server；同名已存在 409 */
   addMcp: (name: string, body: McpInput) =>
     call('put', '/api/assets/mcp/{name}', { path: { name }, body }),
@@ -442,19 +450,19 @@ export const api = {
 
   /** owner 给出时只列这个项目（agent）负责的 issue */
   issues: (owner?: AgentId) => call('get', '/api/issues', { query: { owner } }),
-  issue: (issue_id: number) => call('get', '/api/issues/{issue_id}', { path: { issue_id } }),
+  issue: (issue_id: IssueId) => call('get', '/api/issues/{issue_id}', { path: { issue_id } }),
   createIssue: (body: Schemas['IssueCreate']) => call('post', '/api/issues', { body }),
   /** 只修改给出的字段；assignee 给 null 表示取消指派 */
-  updateIssue: (issue_id: number, body: Schemas['IssuePatch']) =>
+  updateIssue: (issue_id: IssueId, body: Schemas['IssuePatch']) =>
     call('patch', '/api/issues/{issue_id}', { path: { issue_id }, body }),
-  commentIssue: (issue_id: number, body: string) =>
+  commentIssue: (issue_id: IssueId, body: string) =>
     call('post', '/api/issues/{issue_id}/comments', { path: { issue_id }, body: { body } }),
-  deleteIssue: (issue_id: number) => call('delete', '/api/issues/{issue_id}', { path: { issue_id } }),
+  deleteIssue: (issue_id: IssueId) => call('delete', '/api/issues/{issue_id}', { path: { issue_id } }),
   /** 审核指派给用户的 issue：通过 → done；打回 → 理由记成评论、回到 in_progress、指派回交给用户的 agent */
-  approveIssue: (issue_id: number) => call('post', '/api/issues/{issue_id}/approve', { path: { issue_id } }),
+  approveIssue: (issue_id: IssueId) => call('post', '/api/issues/{issue_id}/approve', { path: { issue_id } }),
   /** 开工 backlog 里的 issue：指派给 owner 并进入 in_progress */
-  startIssue: (issue_id: number) => call('post', '/api/issues/{issue_id}/start', { path: { issue_id } }),
-  rejectIssue: (issue_id: number, reason: string) =>
+  startIssue: (issue_id: IssueId) => call('post', '/api/issues/{issue_id}/start', { path: { issue_id } }),
+  rejectIssue: (issue_id: IssueId, reason: string) =>
     call('post', '/api/issues/{issue_id}/reject', { path: { issue_id }, body: { reason } }),
 
   vapidKey: () => call('get', '/api/push/vapid'),

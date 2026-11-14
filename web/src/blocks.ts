@@ -4,6 +4,7 @@ import {
   sourceKey,
   type AskView,
   type Attachment,
+  type CallId,
   type ItemSource,
   type Item,
   type SessionId,
@@ -38,23 +39,23 @@ export interface ToolOutcome {
 export interface CalledTool {
   name: string
   /** 调用关联的子会话 id（委派开出的 thread）：显示在过程组外，就在开它的那次调用处 */
-  threads: string[]
+  threads: SessionId[]
   call: ToolCall
   outcome: ToolOutcome | null
 }
 
 /** 工具调用的展示：有调用的；或只有结果、没有对应调用的（调用在压缩前或运行中还没保存的那一段里） */
-export type ToolView = CalledTool | { name: string; threads: string[]; call: null; outcome: ToolOutcome }
+export type ToolView = CalledTool | { name: string; threads: SessionId[]; call: null; outcome: ToolOutcome }
 
 /** 一次 ask_user 提问：是要用户操作的交互，不收进过程组。状态与内容都由后端给出（条目上的 ask） */
 export interface AskBlock {
-  callId: string
+  callId: CallId
   ask: AskView
 }
 
 /** 停下来等用户批准的工具调用（条目上的 approval，由后端给出）：要用户操作，不收进过程组 */
 export interface ApprovalBlock {
-  callId: string
+  callId: CallId
   status: 'pending' | 'submitted'
   tool: CalledTool
 }
@@ -229,7 +230,7 @@ export function foldCheckIns(views: View[]): View[] {
 }
 
 /** 一组步骤里委派开出或续写的 thread（子会话 id），按出现顺序、去重 */
-export function stepThreads(steps: Step[]): string[] {
+export function stepThreads(steps: Step[]): SessionId[] {
   return [...new Set(steps.flatMap((s) => (s.kind === 'tool' ? s.tool.threads : [])))]
 }
 
