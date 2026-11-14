@@ -11,7 +11,7 @@
 use muliao_platform::ids::{AgentId, DelegationId, SessionId, new_id};
 
 use muliao_assets::agents::{Availability, agent_in, availability_in, runnable_agent_in};
-use muliao_files::{FileMeta, load_metas};
+use muliao_files::load_metas;
 use muliao_platform::db::Tx;
 use rusqlite::Connection;
 
@@ -114,16 +114,22 @@ pub struct Accepted {
     pub session_id: SessionId,
 }
 
-/// 一封来信的内部形式。
-pub(crate) struct Inbound {
-    pub from: Party,
-    pub content: String,
-    pub attachments: Vec<String>,
-    pub target: Target,
-    /// 用户在等它的回答
-    pub awaited: bool,
-    /// 委派来的信件：是哪项委派（thread_calls 的行）
-    pub delegation: Option<DelegationId>,
+/// 一封来信的内部形式，按种类各带自己的字段。
+pub(crate) enum Inbound {
+    /// 用户的一条消息（回答与批准不是来信，走 [`reply_in`]）：用户在等它的回答
+    User { session: UserTarget, content: String, attachments: Vec<String> },
+    /// 别的领域（触发器、issue）的来信：没有人在等
+    Sender(SenderMail),
+    /// 委派来的信：发送方是父会话 parent，投给它已开出的 thread
+    Delegated { parent: SessionId, thread: SessionId, content: String, handback: Handback },
+}
+
+/// 委派的 thread 的结局交给谁。
+pub(crate) enum Handback {
+    /// 用户在等 thread 的回答（普通 delegate_task）
+    User,
+    /// 交回发起方：是哪项委派（thread_calls 的行）
+    Parent(DelegationId),
 }
 
 /// 用户对已有会话里一次挂起调用的回复（[`reply_in`]）。
@@ -134,51 +140,36 @@ pub(crate) enum CallReply {
     Approval(Choice),
 }
 
-pub(crate) enum Target {
-    Existing(SessionId),
-    New { agent_id: AgentId, title: Option<String> },
-    Keyed { agent_id: AgentId, title: String },
-}
-
 impl Inbound {
-    /// 用户的一条消息（回答与批准不是来信，走 [`reply_in`]）。
-    pub(crate) fn user(session: UserTarget, content: String, attachments: Vec<String>) -> Self {
-        let target = match session {
-            UserTarget::Existing(id) => Target::Existing(id),
-            UserTarget::NewChat { agent_id } => Target::New { agent_id, title: None },
-        };
-        Inbound { from: Party::User, content, attachments, target, awaited: true, delegation: None }
-    }
-
-    fn sender(m: SenderMail) -> Self {
-        Inbound {
-            from: Party::Sender(m.sender),
-            content: m.content,
-            attachments: Vec::new(),
-            target: match m.session {
-                SenderTarget::New { agent_id, title } => Target::New { agent_id, title: Some(title) },
-                SenderTarget::Keyed { agent_id, title } => Target::Keyed { agent_id, title },
-            },
-            awaited: false,
-            delegation: None,
+    fn from(&self) -> Party {
+        match self {
+            Inbound::User { .. } => Party::User,
+            Inbound::Sender(m) => Party::Sender(m.sender),
+            Inbound::Delegated { parent, .. } => Party::Parent(parent.clone()),
         }
     }
 
-    /// 委派来的信：发送方是父会话。awaited：用户是否在等 thread 的回答（普通 delegate_task 是，要交回结局的不是）。
-    pub(crate) fn delegated(
-        parent_id: &SessionId,
-        thread_id: &SessionId,
-        content: &str,
-        awaited: bool,
-        delegation: Option<DelegationId>,
-    ) -> Self {
-        Inbound {
-            from: Party::Parent(parent_id.to_owned()),
-            content: content.to_owned(),
-            attachments: Vec::new(),
-            target: Target::Existing(thread_id.to_owned()),
-            awaited,
-            delegation,
+    fn content(&self) -> &str {
+        match self {
+            Inbound::User { content, .. } | Inbound::Delegated { content, .. } => content,
+            Inbound::Sender(m) => &m.content,
+        }
+    }
+
+    fn attachments(&self) -> &[String] {
+        match self {
+            Inbound::User { attachments, .. } => attachments,
+            Inbound::Sender(_) | Inbound::Delegated { .. } => &[],
+        }
+    }
+
+    /// 投成信件：(正文, 附件, 委派来的是哪项委派, 用户在不在等)
+    fn into_mail(self) -> (String, Vec<String>, Option<DelegationId>, bool) {
+        match self {
+            Inbound::User { content, attachments, .. } => (content, attachments, None, true),
+            Inbound::Sender(m) => (m.content, Vec::new(), None, false),
+            Inbound::Delegated { content, handback: Handback::User, .. } => (content, Vec::new(), None, true),
+            Inbound::Delegated { content, handback: Handback::Parent(d), .. } => (content, Vec::new(), Some(d), false),
         }
     }
 }
@@ -252,55 +243,70 @@ fn agent_refusal_in(c: &Connection, agent_id: &AgentId) -> Result<Option<Refused
     })
 }
 
-/// 校验通过的来信：要续写的会话（新建时为 None）与附件的元数据。
-pub(crate) struct Checked {
-    session: Option<Session>,
-    attachments: Vec<FileMeta>,
+/// 校验通过的来信要进的会话：续写已有的，或新建一个（谁开、给哪个 agent、标题）。
+pub(crate) enum Checked {
+    Existing(Session),
+    New { opener: Opener<'static>, agent_id: AgentId, title: String },
+}
+
+impl Checked {
+    fn agent_id(&self) -> &AgentId {
+        match self {
+            Checked::Existing(s) => &s.agent_id,
+            Checked::New { agent_id, .. } => agent_id,
+        }
+    }
+}
+
+/// 续写已有的会话：会话要在、发送方要准续写。
+fn existing_in(c: &Connection, id: &SessionId, from: &Party) -> Result<Session> {
+    let session = directory::get_in(c, id)?.ok_or_else(|| not_found(format!("session {id:?} not found")))?;
+    if !may_continue(&session, from) {
+        tracing::warn!(session_id = %session.id, sender = ?from, "continuation refused");
+        return Err(forbidden(format!(
+            "session {} was not started by this sender; it may only continue its own sessions",
+            session.id
+        )));
+    }
+    Ok(session)
 }
 
 /// 来信的校验规则（只读）：agent 收不了信的是 Refused。续写已有会话时（只有用户与父会话会）会话不在了、发送方不准续写
 /// 直接报领域错误；内容为空、附件不存在是发送方自己的错（只有用户的消息会碰到），也报错。
 pub(crate) fn check_in(c: &Connection, inbound: &Inbound) -> Result<std::result::Result<Checked, Refused>> {
-    if inbound.content.trim().is_empty() && inbound.attachments.is_empty() {
+    if inbound.content().trim().is_empty() && inbound.attachments().is_empty() {
         return Err(invalid("message must not be empty"));
     }
-    let attachments = load_metas(c, &inbound.attachments)?;
-    let session = match &inbound.target {
-        Target::New { agent_id, .. } => {
-            return Ok(match agent_refusal_in(c, agent_id)? {
-                Some(r) => Err(r),
-                None => Ok(Checked { session: None, attachments }),
-            });
+    let attachments = load_metas(c, inbound.attachments())?;
+    let checked = match inbound {
+        Inbound::User { session: UserTarget::Existing(id), .. } => Checked::Existing(existing_in(c, id, &Party::User)?),
+        Inbound::Delegated { parent, thread, .. } => {
+            Checked::Existing(existing_in(c, thread, &Party::Parent(parent.clone()))?)
         }
-        Target::Keyed { agent_id, .. } => {
-            let Party::Sender(sender) = &inbound.from else {
-                panic!("only a sender with an identity can address a session by key")
+        Inbound::User { session: UserTarget::NewChat { agent_id }, content, .. } => {
+            // 没给标题：取文字的第一行，只发了文件时用文件名
+            let title = if content.trim().is_empty() {
+                default_title(&attachments.iter().map(|m| m.name.as_str()).collect::<Vec<_>>().join(", "))
+            } else {
+                default_title(content)
             };
+            Checked::New { opener: Opener::User, agent_id: agent_id.clone(), title }
+        }
+        Inbound::Sender(SenderMail { sender, session: SenderTarget::New { agent_id, title }, .. }) => {
+            Checked::New { opener: Opener::Sender(*sender), agent_id: agent_id.clone(), title: title.clone() }
+        }
+        Inbound::Sender(SenderMail { sender, session: SenderTarget::Keyed { agent_id, title }, .. }) => {
             match keyed_among(c, &[*sender], Some(agent_id))?.remove(&(*sender, agent_id.clone())) {
-                Some(s) => s,
+                Some(s) => Checked::Existing(s),
                 None => {
-                    return Ok(match agent_refusal_in(c, agent_id)? {
-                        Some(r) => Err(r),
-                        None => Ok(Checked { session: None, attachments }),
-                    });
+                    Checked::New { opener: Opener::Sender(*sender), agent_id: agent_id.clone(), title: title.clone() }
                 }
             }
         }
-        Target::Existing(id) => {
-            let session = directory::get_in(c, id)?.ok_or_else(|| not_found(format!("session {id:?} not found")))?;
-            if !may_continue(&session, &inbound.from) {
-                tracing::warn!(session_id = %session.id, sender = ?inbound.from, "continuation refused");
-                return Err(forbidden(format!(
-                    "session {} was not started by this sender; it may only continue its own sessions",
-                    session.id
-                )));
-            }
-            session
-        }
     };
-    Ok(match agent_refusal_in(c, &session.agent_id)? {
+    Ok(match agent_refusal_in(c, checked.agent_id())? {
         Some(r) => Err(r),
-        None => Ok(Checked { session: Some(session), attachments }),
+        None => Ok(checked),
     })
 }
 
@@ -330,44 +336,16 @@ pub(crate) fn receive_in(tx: &mut Tx<'_>, waker: &Waker, inbound: Inbound) -> Re
 }
 
 fn receive_into(tx: &mut Tx<'_>, waker: &Waker, inbound: Inbound, checked: Checked) -> Result<Session> {
-    let session = match checked.session {
-        Some(s) => s,
-        None => {
-            let opener = match &inbound.from {
-                Party::User => Opener::User,
-                Party::Sender(s) => Opener::Sender(*s),
-                // 委派来的信只投给已开出的 thread（Target::Existing）
-                Party::Parent(_) => panic!("delegated mail resolved to no thread"),
-            };
-            let (agent_id, title) = match &inbound.target {
-                Target::Existing(id) => panic!("inbound for session {id:?} resolved to no session"),
-                Target::New { agent_id, title: Some(t) } | Target::Keyed { agent_id, title: t } => {
-                    (agent_id, t.clone())
-                }
-                Target::New { agent_id, title: None } => {
-                    let title = if inbound.content.trim().is_empty() {
-                        default_title(
-                            &checked.attachments.iter().map(|m| m.name.as_str()).collect::<Vec<_>>().join(", "),
-                        )
-                    } else {
-                        default_title(&inbound.content)
-                    };
-                    (agent_id, title)
-                }
-            };
-            create_session_in(tx, opener, agent_id, &title)?
-        }
+    let session = match checked {
+        Checked::Existing(s) => s,
+        Checked::New { opener, agent_id, title } => create_session_in(tx, opener, &agent_id, &title)?,
     };
     directory::touch_in(tx, &session.id)?;
-    let origin = inbound.from.origin();
-    let body = MailBody::Message {
-        origin,
-        content: inbound.content,
-        attachments: inbound.attachments,
-        delegation_id: inbound.delegation,
-    };
-    post_in(tx, waker, &session.id, NewMail { body, awaited: inbound.awaited })?;
-    tracing::info!(session_id = %session.id, sender = ?inbound.from, "message received");
+    let from = inbound.from();
+    let (content, attachments, delegation_id, awaited) = inbound.into_mail();
+    let body = MailBody::Message { origin: from.origin(), content, attachments, delegation_id };
+    post_in(tx, waker, &session.id, NewMail { body, awaited })?;
+    tracing::info!(session_id = %session.id, sender = ?from, "message received");
     Ok(session)
 }
 
@@ -410,7 +388,7 @@ impl SenderInbox {
 
     /// 投不进的返回 Refused（原因由这里判断，发送方只决定自己怎么反应）。
     pub fn receive_in(&self, tx: &mut Tx<'_>, mail: SenderMail) -> Result<std::result::Result<Accepted, Refused>> {
-        let inbound = Inbound::sender(mail);
+        let inbound = Inbound::Sender(mail);
         Ok(match check_in(tx, &inbound)? {
             Err(refused) => Err(refused),
             Ok(checked) => Ok(Accepted { session_id: receive_into(tx, &self.waker, inbound, checked)?.id }),

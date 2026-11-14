@@ -13,7 +13,7 @@ use crate::answers::Waiting;
 use crate::holds::HoldOf;
 use crate::origins::SessionOrigin;
 
-/// 一次运行结束了（完成、停在挂起的调用上、被停止）；没有可交给模型的空闲收尾不发。只带事实。
+/// 一次运行结束了（模型给出了回答，或停在挂起的调用上）；没有可交给模型的空闲收尾、被用户停止的不发。只带事实。
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunEnded {
     pub session_id: SessionId,
@@ -22,13 +22,37 @@ pub struct RunEnded {
     pub agent_id: AgentId,
     pub agent_name: String,
     pub run_id: RunId,
-    /// 模型的最后回答；停在提问、等批准上时是问题与等批准的调用，只停在等 agent 上时为空
-    pub answer: String,
-    pub stopped: bool,
-    /// 停在哪几类挂起的调用上（不重复）；空是没有停在挂起的调用上
-    pub waiting_on: Vec<Waiting>,
+    pub end: RunEnd,
     /// 这次运行处理过的信件里有用户在等的
     pub awaited: bool,
+}
+
+/// 一次运行怎么结束的。
+#[derive(Debug, Clone, PartialEq)]
+pub enum RunEnd {
+    /// 模型的最后回答
+    Answered { answer: String },
+    /// 停在挂起的调用上：prompt 是要告诉用户的问题与等批准的调用（只停在等 agent 上时为空），waiting_on 是停在哪几类上
+    /// （不重复、不空）
+    Paused { prompt: String, waiting_on: Vec<Waiting> },
+}
+
+impl RunEnd {
+    /// 停在这一类挂起的调用上。
+    pub fn waits_on(&self, kind: Waiting) -> bool {
+        match self {
+            RunEnd::Answered { .. } => false,
+            RunEnd::Paused { waiting_on, .. } => waiting_on.contains(&kind),
+        }
+    }
+
+    /// 给用户看的文字：回答，或问题与等批准的调用。
+    pub fn text(&self) -> &str {
+        match self {
+            RunEnd::Answered { answer } => answer,
+            RunEnd::Paused { prompt, .. } => prompt,
+        }
+    }
 }
 
 /// 一次运行最终失败了（暂时性失败的重试用完，或契约外的失败）。不自动重试。

@@ -88,7 +88,7 @@ impl SessionService {
         self.db
             .write(move |tx| match message {
                 UserMessage::Message { session, content, attachments } => {
-                    receive_in(tx, &waker, Inbound::user(session, content, attachments))
+                    receive_in(tx, &waker, Inbound::User { session, content, attachments })
                 }
                 UserMessage::Answer { session_id, call_id, answers } => {
                     reply_in(tx, &waker, &session_id, call_id, CallReply::Answer(answers))

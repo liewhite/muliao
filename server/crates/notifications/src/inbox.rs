@@ -17,7 +17,7 @@ use muliao_platform::db::{Database, Tx};
 use muliao_platform::errors::{Result, broken};
 use muliao_platform::text::truncate;
 use muliao_sessions::answers::Waiting;
-use muliao_sessions::events::{RunEnded, RunFailed, SessionDeleted, Subscribers};
+use muliao_sessions::events::{RunEnd, RunEnded, RunFailed, SessionDeleted, Subscribers};
 use rusqlite::{Connection, OptionalExtension, Row, params, params_from_iter};
 use serde::Serialize;
 use utoipa::ToSchema;
@@ -90,12 +90,13 @@ fn notification(r: &Row<'_>) -> rusqlite::Result<Notification> {
 }
 
 /// 推送一次运行的回答吗（推送规则只在这里）。停下来等用户批准的总是推：没人在看的运行（触发器、issue）也只有用户能批。
-/// 其余的要处理过的信件里有用户在等的、且有话要告诉用户：做完了，或停下来问用户；用户自己停止的、只在等别的 agent 的不推。
+/// 其余的要处理过的信件里有用户在等的、且有话要告诉用户：做完了，或停下来问用户；只在等别的 agent 的不推。
 pub fn worth_pushing(e: &RunEnded) -> bool {
-    if e.waiting_on.contains(&Waiting::Approval) {
-        return true;
+    match &e.end {
+        RunEnd::Paused { waiting_on, .. } if waiting_on.contains(&Waiting::Approval) => true,
+        RunEnd::Paused { waiting_on, .. } => e.awaited && waiting_on.contains(&Waiting::AskUser),
+        RunEnd::Answered { .. } => e.awaited,
     }
-    e.awaited && !e.stopped && (e.waiting_on.is_empty() || e.waiting_on.contains(&Waiting::AskUser))
 }
 
 /// 推到设备上的一条通知（推送时从收件箱取）。
@@ -212,7 +213,7 @@ impl Notifications {
         }
         let n = Notify {
             title: format!("{} · {}", e.agent_name, e.session_title),
-            body: e.answer.clone(),
+            body: e.end.text().to_owned(),
             session_id: Some(e.session_id.clone()),
             issue_id: None,
         };

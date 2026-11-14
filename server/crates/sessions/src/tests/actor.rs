@@ -12,7 +12,7 @@ use crate::actor::{Actors, Waker};
 use crate::answers::QuestionAnswer;
 use crate::compaction::Compactor;
 use crate::conventions::{STOPPED_TOOL_RESULT, is_stopped};
-use crate::events::{Events, RunEnded, RunFailed, Subscribers};
+use crate::events::{Events, RunEnd, RunEnded, RunFailed, Subscribers};
 use crate::history;
 use crate::inbound::{UserMessage, UserTarget};
 use crate::live::Live;
@@ -383,7 +383,7 @@ async fn a_chat_with_a_tool_call_is_saved_step_by_step() {
     assert_eq!(h[3], h[3].clone());
     let ended = w.ended.lock().unwrap().clone();
     assert_eq!(ended.len(), 1);
-    assert!(ended[0].awaited && ended[0].answer == "好了" && !ended[0].stopped);
+    assert!(ended[0].awaited && ended[0].end == RunEnd::Answered { answer: "好了".into() });
     // 第二条消息续写同一个会话：运行上下文挂在新增的第一条请求上
     w.script.text("又好了");
     w.say(UserTarget::Existing(s.clone()), "再来").await;
@@ -421,7 +421,7 @@ async fn ask_user_pauses_until_the_user_answers() {
     assert_eq!(w.settled(&s).await, WorkState::Waiting, "waiting for the user's answer");
     let view = w.service.detail(&s).await.unwrap();
     assert_eq!(view.waits.len(), 1);
-    assert!(w.ended.lock().unwrap()[0].answer.contains("哪个？"));
+    assert!(w.ended.lock().unwrap()[0].end.text().contains("哪个？"));
     w.script.text("你选了 a");
     let answer = UserMessage::Answer {
         session_id: s.clone(),

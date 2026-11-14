@@ -17,7 +17,7 @@ use muliao_platform::db::{Database, Tx};
 use muliao_platform::errors::{DomainError, ErrorKind};
 use muliao_platform::text::truncate;
 use muliao_sessions::activity::WorkState;
-use muliao_sessions::events::{RunEnded, RunFailed, SessionDeleted, Subscribers};
+use muliao_sessions::events::{RunEnd, RunEnded, RunFailed, SessionDeleted, Subscribers};
 use muliao_sessions::halt::Halted;
 use muliao_sessions::inbound::SenderInbox;
 use muliao_sessions::origins::SessionOrigin;
@@ -285,13 +285,11 @@ impl Board {
     }
 
     /// issue 会话里的一次运行结束了：issue 指派给这个 agent、却因此停滞（还是 in_progress，会话空闲）时，以它的名义记一条
-    /// 「没表态」并投进那个会话，请它表态。停在挂起的调用上、被用户停止的不问；会话已经又有事要做（信箱里还有信、在等后台
+    /// 「没表态」并投进那个会话，请它表态。停在挂起的调用上的不问；会话已经又有事要做（信箱里还有信、在等后台
     /// 任务）时不算停滞，不问。其他来源的会话、已被删除的 issue 不处理。
     fn on_run_ended(&self, tx: &mut Tx<'_>, e: &RunEnded) -> Result<()> {
         let SessionOrigin::Issue { issue_id } = e.origin else { return Ok(()) };
-        if e.stopped || !e.waiting_on.is_empty() {
-            return Ok(());
-        }
+        let RunEnd::Answered { .. } = e.end else { return Ok(()) };
         let Some(issue) = model::find_in(tx, issue_id)? else { return Ok(()) };
         // 这个发送方给它开过不止一个会话时只认最新的：别的那个不是它在这个 issue 上的会话，不问
         if conversation::session_in(tx, issue_id, &e.agent_id)?.is_none_or(|s| s.id != e.session_id) {

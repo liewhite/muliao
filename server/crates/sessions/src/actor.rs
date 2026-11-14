@@ -312,17 +312,17 @@ async fn run_with_retries(inner: &Arc<Inner>, id: &SessionId, rx: &mut mpsc::Unb
                     .cloned()
                     .or_else(|| panic.downcast_ref::<&str>().map(|s| (*s).to_owned()))
                     .unwrap_or_else(|| "the run panicked".to_owned());
-                crate::run::Failure { transient: false, message: format!("panicked: {message}") }
+                crate::run::Failure::Final(format!("panicked: {message}"))
             }
         };
         if last_message(core, id).await != before {
             backoff.reset();
         }
-        if failure.transient
+        if let crate::run::Failure::Transient(message) = &failure
             && let Some(delay) = backoff.next_delay()
         {
-            tracing::warn!(session_id = %id, error = %failure.message, retry_in = ?delay, "run failed transiently; retrying");
-            attempts.retrying(&failure.message, delay);
+            tracing::warn!(session_id = %id, error = %message, retry_in = ?delay, "run failed transiently; retrying");
+            attempts.retrying(message, delay);
             // 退避期间也能停止（停在两次尝试之间：没有已产生、没保存的部分）
             let sleep = tokio::time::sleep(delay);
             tokio::pin!(sleep);
@@ -343,7 +343,7 @@ async fn run_with_retries(inner: &Arc<Inner>, id: &SessionId, rx: &mut mpsc::Unb
             }
             continue;
         }
-        return fail(core, id, &failure.message).await;
+        return fail(core, id, failure.message()).await;
     }
 }
 

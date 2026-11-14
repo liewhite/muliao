@@ -14,7 +14,7 @@ use muliao_platform::bus::Bus;
 use muliao_platform::db::{Database, migrate};
 use muliao_platform::retry::Retry;
 use muliao_sessions::answers::Waiting;
-use muliao_sessions::events::{RunEnded, RunFailed, SessionDeleted, Subscribers};
+use muliao_sessions::events::{RunEnd, RunEnded, RunFailed, SessionDeleted, Subscribers};
 use muliao_sessions::origins::SessionOrigin;
 use p256::elliptic_curve::rand_core::{OsRng, RngCore};
 use p256::elliptic_curve::sec1::ToEncodedPoint;
@@ -133,7 +133,12 @@ impl Harness {
 type HandlerOf<E> =
     Arc<dyn Fn(&mut muliao_platform::db::Tx<'_>, &E) -> Result<(), muliao_platform::errors::Error> + Send + Sync>;
 
-fn ended(waiting_on: Vec<Waiting>, awaited: bool, stopped: bool) -> RunEnded {
+fn ended(waiting_on: Vec<Waiting>, awaited: bool) -> RunEnded {
+    let end = if waiting_on.is_empty() {
+        RunEnd::Answered { answer: "做完了".into() }
+    } else {
+        RunEnd::Paused { prompt: "问题".into(), waiting_on }
+    };
     RunEnded {
         session_id: SessionId::new("s1"),
         session_title: "标题".into(),
@@ -141,9 +146,7 @@ fn ended(waiting_on: Vec<Waiting>, awaited: bool, stopped: bool) -> RunEnded {
         agent_id: AgentId::new("a1"),
         agent_name: "muliao".into(),
         run_id: RunId::new(1),
-        answer: "做完了".into(),
-        stopped,
-        waiting_on,
+        end,
         awaited,
     }
 }
@@ -151,18 +154,17 @@ fn ended(waiting_on: Vec<Waiting>, awaited: bool, stopped: bool) -> RunEnded {
 #[test]
 fn push_rule() {
     use Waiting::*;
-    // 等批准：没人在等、被停止也推
-    assert!(worth_pushing(&ended(vec![Approval], false, false)));
-    assert!(worth_pushing(&ended(vec![AskAgent, Approval], false, true)));
+    // 等批准：没人在等也推
+    assert!(worth_pushing(&ended(vec![Approval], false)));
+    assert!(worth_pushing(&ended(vec![AskAgent, Approval], false)));
     // 用户在等：做完了、在问用户推
-    assert!(worth_pushing(&ended(vec![], true, false)));
-    assert!(worth_pushing(&ended(vec![AskUser], true, false)));
-    assert!(worth_pushing(&ended(vec![AskAgent, AskUser], true, false)));
-    // 只在等 agent、用户自己停止、没人在等的不推
-    assert!(!worth_pushing(&ended(vec![AskAgent], true, false)));
-    assert!(!worth_pushing(&ended(vec![], true, true)));
-    assert!(!worth_pushing(&ended(vec![], false, false)));
-    assert!(!worth_pushing(&ended(vec![AskUser], false, false)));
+    assert!(worth_pushing(&ended(vec![], true)));
+    assert!(worth_pushing(&ended(vec![AskUser], true)));
+    assert!(worth_pushing(&ended(vec![AskAgent, AskUser], true)));
+    // 只在等 agent、没人在等的不推
+    assert!(!worth_pushing(&ended(vec![AskAgent], true)));
+    assert!(!worth_pushing(&ended(vec![], false)));
+    assert!(!worth_pushing(&ended(vec![AskUser], false)));
 }
 
 #[tokio::test]
@@ -221,8 +223,8 @@ async fn session_events_write_and_delete_notifications() {
     let h = harness().await;
     h.add_session("s1", "改 bug").await;
 
-    h.publish(|s| &s.run_ended, ended(vec![], true, false)).await;
-    h.publish(|s| &s.run_ended, ended(vec![Waiting::AskAgent], true, false)).await;
+    h.publish(|s| &s.run_ended, ended(vec![], true)).await;
+    h.publish(|s| &s.run_ended, ended(vec![Waiting::AskAgent], true)).await;
     let list = h.notifications.list(10).await.unwrap();
     assert_eq!(list.len(), 1, "only the answer someone waits for is pushed");
     assert_eq!((list[0].title.as_str(), list[0].body.as_str()), ("muliao · 标题", "做完了"));

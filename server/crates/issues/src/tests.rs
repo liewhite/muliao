@@ -9,7 +9,7 @@ use muliao_platform::bus::Bus;
 use muliao_platform::db::{Database, migrate};
 use muliao_platform::retry::Retry;
 use muliao_sessions::actor::Waker;
-use muliao_sessions::events::{RunEnded, RunFailed, SessionDeleted, Subscribers};
+use muliao_sessions::events::{RunEnd, RunEnded, RunFailed, SessionDeleted, Subscribers};
 use muliao_sessions::inbound::SenderInbox;
 use muliao_sessions::mailbox::queued_in;
 use muliao_sessions::origins::SessionOrigin;
@@ -365,27 +365,26 @@ async fn a_run_ending_with_the_issue_unsettled_asks_the_agent_to_settle_it() {
     let w = world().await;
     let i = w.create(By::user(), new(A, "做完要表态", Status::InProgress, agent(A))).await;
     let its = w.session(i.id, A).await.unwrap();
-    let ended = |stopped: bool, waiting_on| RunEnded {
+    let ended = |end| RunEnded {
         session_id: its.clone(),
         session_title: "t".into(),
         origin: SessionOrigin::Issue { issue_id: i.id },
         agent_id: AgentId::new(A),
         agent_name: "alpha".into(),
         run_id: RunId::new(1),
-        answer: "好了".into(),
-        stopped,
-        waiting_on,
+        end,
         awaited: false,
     };
+    let answered = || RunEnd::Answered { answer: "好了".into() };
     // 还有信没处理（会话 running）：不问
-    w.publish(run_ended, ended(false, vec![])).await;
+    w.publish(run_ended, ended(answered())).await;
     assert_eq!(kinds(&w.timeline(i.id).await), ["created"]);
     w.consume_all().await;
-    // 被停止的、停在挂起调用上的：不问
-    w.publish(run_ended, ended(true, vec![])).await;
-    w.publish(run_ended, ended(false, vec![muliao_sessions::answers::Waiting::AskUser])).await;
+    // 停在挂起调用上的：不问
+    let paused = RunEnd::Paused { prompt: "?".into(), waiting_on: vec![muliao_sessions::answers::Waiting::AskUser] };
+    w.publish(run_ended, ended(paused)).await;
     assert_eq!(kinds(&w.timeline(i.id).await), ["created"]);
-    w.publish(run_ended, ended(false, vec![])).await;
+    w.publish(run_ended, ended(answered())).await;
     let t = w.timeline(i.id).await;
     assert_eq!(kinds(&t), ["created", "unsettled"]);
     assert_eq!(t[1].actor, Actor::Agent { agent_id: AgentId::new(A) });
@@ -398,7 +397,7 @@ async fn a_run_ending_with_the_issue_unsettled_asks_the_agent_to_settle_it() {
         .update(by_agent(A, its.as_str()), i.id, Patch { status: Some(Status::Blocked), ..Patch::default() })
         .await
         .unwrap();
-    w.publish(run_ended, ended(false, vec![])).await;
+    w.publish(run_ended, ended(answered())).await;
     assert_eq!(kinds(&w.timeline(i.id).await), ["created", "unsettled", "status"]);
 }
 

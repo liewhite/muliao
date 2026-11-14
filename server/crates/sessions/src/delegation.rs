@@ -26,7 +26,7 @@ use crate::answers::{AgentAnswer, CallResult};
 use crate::directory::{self, Session};
 use crate::history::latest_answers_among;
 use crate::holds::hold_delegation_in;
-use crate::inbound::{Inbound, Opener, create_session_in, receive_in};
+use crate::inbound::{Handback, Inbound, Opener, create_session_in, receive_in};
 use crate::paused_calls::{self, Pause};
 use crate::runs::{RunRecord, latest_among};
 use crate::thread_calls::{CallMode, Delegated, Owed, owed_in, record_call_in};
@@ -86,7 +86,12 @@ pub(crate) fn send_in(
     };
     let call = record_call_in(tx, parent_id, call_id, &child.id, recorded)?;
     let inbound = match mode {
-        Mode::Plain => Inbound::delegated(parent_id, &child.id, prompt, true, None),
+        Mode::Plain => Inbound::Delegated {
+            parent: parent_id.clone(),
+            thread: child.id.clone(),
+            content: prompt.to_owned(),
+            handback: Handback::User,
+        },
         Mode::Delegated { kind, awaited } => {
             hold_delegation_in(tx, parent_id, call.id, awaited)?;
             if kind == Delegated::Ask {
@@ -96,7 +101,12 @@ pub(crate) fn send_in(
             tracing::info!(session_id = %parent_id, thread_session_id = %child.id, delegation = %call.id, call_id,
                 "delegation dispatched");
             // 没有人等 thread 的回答：结局交回发起方，由它处理
-            Inbound::delegated(parent_id, &child.id, prompt, false, Some(call.id))
+            Inbound::Delegated {
+                parent: parent_id.clone(),
+                thread: child.id.clone(),
+                content: prompt.to_owned(),
+                handback: Handback::Parent(call.id),
+            }
         }
     };
     receive_in(tx, waker, inbound)?;

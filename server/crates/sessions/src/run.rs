@@ -42,7 +42,7 @@ use crate::conventions::{
     set_finished_at, unanswered_calls,
 };
 use crate::directory::{self, Session};
-use crate::events::{Events, RunEnded};
+use crate::events::{Events, RunEnd, RunEnded};
 use crate::history::{self, SessionContext, Stored};
 use crate::live::{DeltaType, Live};
 use crate::mailbox::{Mail, consume_in, consumed_by_in, give_in, queued_in};
@@ -100,20 +100,32 @@ pub(crate) struct Unsaved {
 
 /// 运行失败：暂时性的（模型或外部服务一时不可用）由 actor 退避重试，其余最终失败。
 #[derive(Debug)]
-pub(crate) struct Failure {
-    pub transient: bool,
-    pub message: String,
+pub(crate) enum Failure {
+    Transient(String),
+    Final(String),
+}
+
+impl Failure {
+    fn of(transient: bool, message: String) -> Self {
+        if transient { Failure::Transient(message) } else { Failure::Final(message) }
+    }
+
+    pub fn message(&self) -> &str {
+        match self {
+            Failure::Transient(m) | Failure::Final(m) => m,
+        }
+    }
 }
 
 impl From<Error> for Failure {
     fn from(e: Error) -> Self {
-        Failure { transient: e.is_transient(), message: e.to_string() }
+        Failure::of(e.is_transient(), e.to_string())
     }
 }
 
 impl From<muliao_runtime::StepError> for Failure {
     fn from(e: muliao_runtime::StepError) -> Self {
-        Failure { transient: e.is_transient(), message: e.to_string() }
+        Failure::of(e.is_transient(), e.to_string())
     }
 }
 
@@ -129,15 +141,6 @@ pub(crate) fn audience_of(mail: &[&Mail], delegated: bool) -> Audience {
     }
 }
 
-/// 一次运行怎么结束的。
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct RunEnd {
-    /// 给用户的回答：停在提问、等批准上时是问题与等批准的调用
-    pub answer: String,
-    pub stopped: bool,
-    pub waiting_on: Vec<Waiting>,
-}
-
 /// 停在这些挂起的调用上：提问的问题、等批准的调用要告诉用户。
 fn paused_end(calls: &[PendingCall]) -> RunEnd {
     let mut texts = Vec::new();
@@ -151,7 +154,7 @@ fn paused_end(calls: &[PendingCall]) -> RunEnd {
         texts.push(approvals_waiting_text(&gated));
     }
     let waiting: BTreeSet<Waiting> = calls.iter().map(|c| c.kind).collect();
-    RunEnd { answer: texts.join("\n"), stopped: false, waiting_on: waiting.into_iter().collect() }
+    RunEnd::Paused { prompt: texts.join("\n"), waiting_on: waiting.into_iter().collect() }
 }
 
 /// 通知里等批准的调用：工具名与参数（长的截短，全文在会话里）。
@@ -176,8 +179,8 @@ struct Begun {
     delegated: bool,
     /// 接着别的运行保存的部分续跑时，那次运行处理过的信件：这次运行接管它们的推送
     adopted: Vec<Mail>,
-    /// 之前的尝试已经跑完、只差收尾（它保存的就是历史的末尾，且没标停止）
-    settled: bool,
+    /// 之前的尝试已经跑完、只差收尾时它的结局（它保存的就是历史的末尾，且没标停止）
+    settled: Option<RunEnd>,
 }
 
 /// 一次运行（或从上次的尝试接着跑）：返回时运行已经收尾（结局已记下）。Err 是失败，由 actor 决定重试还是最终失败。
@@ -195,14 +198,17 @@ pub(crate) async fn execute(
         run: None,
     }));
     slot.set(partial.clone()).unwrap_or_else(|_| unreachable!("each attempt has its own slot"));
-    let opening = opening(core, &begun).await?;
-    let resend = matches!(begun.at, Position::Resend);
-    if opening.is_none() && !resend {
-        // 没有要交给模型的：信箱空了，或停在挂起的调用上、还不能继续
-        let end = if begun.settled { Some(settled_end(&begun)?) } else { None };
-        finish(core, &begun, end).await?;
-        return Ok(());
-    }
+    let start = match plan(core, &begun).await? {
+        Plan::Drive(start) => start,
+        Plan::Settle(end) => {
+            finish(core, &begun, Ending::Ended(end)).await?;
+            return Ok(());
+        }
+        Plan::Idle => {
+            finish(core, &begun, Ending::Idle).await?;
+            return Ok(());
+        }
+    };
     let assets = core.runtime.run_assets(&begun.session.agent_id).await?;
     let audience = audience_of(&begun.audience_mail.iter().collect::<Vec<_>>(), begun.delegated);
     let mut driver = Driver {
@@ -221,8 +227,8 @@ pub(crate) async fn execute(
     if driver.compaction_due() {
         driver.compact().await?;
     }
-    let end = driver.drive(opening).await?;
-    finish(core, &begun, Some(end)).await?;
+    let end = driver.drive(start).await?;
+    finish(core, &begun, Ending::Ended(end)).await?;
     Ok(())
 }
 
@@ -252,14 +258,19 @@ async fn begin(core: &Core, session_id: &SessionId) -> Result<Begun> {
             let earlier = consumed_by_in(tx, &session_id, run_id)?;
             let saved = history::saved_by_in(tx, &session_id, run_id)?;
             let last = history::last_message_id_in(tx, &session_id)?;
-            let settled = saved.last().is_some_and(|s: &Stored| Some(s.id) == last && !is_stopped(&s.message));
+            let context = history::load_context(tx, &session_id)?;
+            let settled = if saved.last().is_some_and(|s: &Stored| Some(s.id) == last && !is_stopped(&s.message)) {
+                settled_end(&at, &context)
+            } else {
+                None
+            };
             let agent_name = agent_in(tx, &session.agent_id)?.name;
             let mut audience_mail = earlier;
             audience_mail.extend(adopted.iter().cloned());
             audience_mail.extend(queued.iter().cloned());
             Ok(Begun {
                 run_id,
-                context: history::load_context(tx, &session_id)?,
+                context,
                 delegated: delegated_in(tx, &session_id)?,
                 agent_name: agent_name.to_string(),
                 session,
@@ -282,52 +293,74 @@ fn adopted_in(c: &Connection, session_id: &SessionId, run_id: RunId) -> Result<V
     }
 }
 
-/// 这次运行开头要交给模型的。
-struct Opening {
-    /// 开头取走的信件（随第一条新请求记为已处理）
-    mail: Vec<MailId>,
-    paused: Option<Paused>,
-    content: Content,
+/// 这次运行开头要做什么。
+enum Plan {
+    /// 交给模型
+    Drive(Start),
+    /// 没有要交给模型的，之前的尝试已经跑完、只差收尾：记下它的结局
+    Settle(RunEnd),
+    /// 没有要交给模型的：信箱空了，或停在挂起的调用上、还不能继续
+    Idle,
 }
 
-async fn opening(core: &Core, begun: &Begun) -> Result<Option<Opening>> {
+/// 交给模型时从哪开始。mail 是开头取走的信件（随这次运行新增的第一条请求记为已处理）。
+enum Start {
+    /// 从历史续跑：重发末尾那条请求
+    Resend,
+    /// 停在挂起的调用上、能继续：回答作为挂起调用的结果交回，其余信件作为内容
+    Resume { paused: Paused, content: Content, mail: Vec<MailId> },
+    /// 新开：信箱里的信作为开头的内容，自己成一条请求
+    Fresh { content: Content, mail: Vec<MailId> },
+}
+
+async fn plan(core: &Core, begun: &Begun) -> Result<Plan> {
     let workspace = core.agents.workspace(&begun.session.agent_id);
-    Ok(match &begun.at {
+    let mail = || begun.queued.iter().map(|m| m.id).collect();
+    let start = match &begun.at {
+        Position::Resend => Some(Start::Resend),
         Position::Paused(p) if p.ready => {
-            // 回答作为挂起调用的结果交回，其余信件（事件、新消息、迟到的回答）作为内容
             let answering: HashSet<MailId> = p.answer_mail.iter().map(|(id, _)| *id).collect();
             let rest: Vec<Mail> = begun.queued.iter().filter(|m| !answering.contains(&m.id)).cloned().collect();
-            Some(Opening {
-                mail: begun.queued.iter().map(|m| m.id).collect(),
-                paused: Some(p.clone()),
+            Some(Start::Resume {
+                paused: p.clone(),
                 content: content_of(&core.files, &workspace, &rest).await?,
+                mail: mail(),
             })
         }
         Position::Fresh => {
             let content = content_of(&core.files, &workspace, &begun.queued).await?;
-            (!content.is_empty()).then(|| Opening {
-                mail: begun.queued.iter().map(|m| m.id).collect(),
-                paused: None,
-                content,
-            })
+            (!content.is_empty()).then(|| Start::Fresh { content, mail: mail() })
         }
-        _ => None,
+        // 被打断的那一步开头已补上结果、换成了补完之后停在哪
+        Position::Paused(_) | Position::Idle | Position::Interrupted { .. } => None,
+    };
+    Ok(match (start, &begun.settled) {
+        (Some(start), _) => Plan::Drive(start),
+        (None, Some(end)) => Plan::Settle(end.clone()),
+        (None, None) => Plan::Idle,
     })
 }
 
-/// 之前的尝试已经跑完、只差收尾：从保存的历史与它停在哪得出它怎么结束的。
-fn settled_end(begun: &Begun) -> Result<RunEnd> {
-    if let Some(p) = begun.at.paused() {
-        return Ok(paused_end(&p.pending));
+/// 历史的末尾是之前的尝试保存的：它停在挂起的调用上或以模型的回答结束时就是已经跑完、只差收尾，得出它怎么结束的；末尾是
+/// 一条请求时没跑完（从历史续跑）。
+fn settled_end(at: &Position, context: &SessionContext) -> Option<RunEnd> {
+    if let Some(p) = at.paused() {
+        return Some(paused_end(&p.pending));
     }
-    match begun.context.messages.last() {
-        Some(Message::Assistant(r)) => Ok(RunEnd { answer: answer_text(r), stopped: false, waiting_on: Vec::new() }),
-        other => Err(broken(format!("a settled run must end with a model response, history ends with {other:?}"))),
+    match context.messages.last() {
+        Some(Message::Assistant(r)) => Some(RunEnd::Answered { answer: answer_text(r) }),
+        Some(Message::User(_)) | None => None,
     }
 }
 
-/// 收尾：记下结局、结清做完的委派、发布 RunEnded（end 为 None 是没事可做的空收尾：只记结局）。
-async fn finish(core: &Core, begun: &Begun, end: Option<RunEnd>) -> Result<()> {
+/// 收尾时这次运行的结局：没事可做的空收尾只记结局，否则还要结清、发布 RunEnded。
+enum Ending {
+    Idle,
+    Ended(RunEnd),
+}
+
+/// 收尾：记下结局、结清做完的委派、发布 RunEnded（[`Ending`]）。
+async fn finish(core: &Core, begun: &Begun, end: Ending) -> Result<()> {
     let finishing = Finishing {
         run_id: begun.run_id,
         session_id: begun.session.id.clone(),
@@ -352,13 +385,17 @@ fn finish_in(
     events: &Events,
     live: &Live,
     finishing: &Finishing,
-    end: Option<RunEnd>,
+    end: Ending,
 ) -> Result<()> {
     let Finishing { run_id, session_id, agent_name, adopted } = finishing;
     let run_id = *run_id;
     runs::end_in(tx, live, run_id, Outcome::Done)?;
+    let Ending::Ended(end) = end else { return Ok(()) };
     let saved = history::saved_by_in(tx, session_id, run_id)?;
-    let Some(end) = end.filter(|_| !saved.is_empty()) else { return Ok(()) };
+    if saved.is_empty() {
+        // 交回挂起调用的结局后又停在挂起的调用上、这一步什么也没存：没有新东西要结清、告诉谁
+        return Ok(());
+    }
     let session = directory::running_in(tx, session_id)?;
     directory::touch_in(tx, session_id)?;
     let mut handled = consumed_by_in(tx, session_id, run_id)?;
@@ -366,10 +403,12 @@ fn finish_in(
     // 工作做完了：没有人替它在外面做事，信箱里也没有还要交给模型的信（比如最后一次请求期间才到的结局，它会唤醒下一次运行，
     // 结清由那次运行做）
     let done = !crate::holds::has_active_in(tx, session_id)? && queued_in(tx, session_id)?.is_empty();
-    if !end.stopped && end.waiting_on.is_empty() && done {
+    if let RunEnd::Answered { answer } = &end
+        && done
+    {
         let messages: Vec<Message> = saved.into_iter().map(|s| s.message).collect();
         let shared = shared_attachments(&messages).map_err(broken)?;
-        settle_finished_in(tx, waker, &session, &end.answer, &shared)?;
+        settle_finished_in(tx, waker, &session, answer, &shared)?;
     }
     // 最后发布：订阅者（推送、issue 的表态）看到的是结清之后的状态
     events.run_ended(
@@ -381,9 +420,7 @@ fn finish_in(
             agent_id: session.agent_id.clone(),
             agent_name: agent_name.to_owned(),
             run_id,
-            answer: end.answer,
-            stopped: end.stopped,
-            waiting_on: end.waiting_on,
+            end,
             awaited: handled.iter().any(|m| m.awaited),
         },
     )
@@ -437,34 +474,33 @@ impl Driver<'_> {
         Ok(run)
     }
 
-    async fn drive(&mut self, opening: Option<Opening>) -> std::result::Result<RunEnd, Failure> {
+    async fn drive(&mut self, start: Start) -> std::result::Result<RunEnd, Failure> {
         let mut run = self.start_run().await?;
         let mut notices: Vec<String> = run.notices().to_vec();
         let session_id = self.session_id().to_owned();
         let last = self.core.db.read(move |c| history::last_message_id_in(c, &session_id)).await?;
         // 实时展示随这个守卫结束：运行返回、被停止时丢掉、panic 时都一样
         let _live = self.core.live.begin(self.session_id(), last);
-        self.steps(&mut run, &mut notices, opening).await
+        self.steps(&mut run, &mut notices, start).await
     }
 
     async fn steps(
         &mut self,
         run: &mut Arc<Run>,
         notices: &mut Vec<String>,
-        opening: Option<Opening>,
+        start: Start,
     ) -> std::result::Result<RunEnd, Failure> {
         // 挂起调用的结局（停在挂起的调用上、能继续时）
         let mut resolved: Option<HashMap<String, Resolution>> = None;
-        // 开头的内容与信件：并进这次运行新增的第一条请求
+        // 继续挂起的调用时开头的内容与信件：并进这次运行新增的第一条请求（随交回的结果）
         let mut first: Option<(Content, Vec<MailId>)> = None;
-        if let Some(o) = opening {
-            if let Some(p) = &o.paused {
-                resolved = Some(self.hand_over(run, p).await?);
+        match start {
+            Start::Resend => {}
+            Start::Resume { paused, content, mail } => {
+                resolved = Some(self.hand_over(run, &paused).await?);
+                first = Some((content, mail));
             }
-            first = Some((o.content, o.mail));
-            if o.paused.is_none() {
-                // 新开：开头的内容自己成一条请求
-                let (content, mail) = first.take().expect("just set");
+            Start::Fresh { content, mail } => {
                 self.save_request(request_of(content), mail, notices).await?;
                 if let Some(r) = self.after_request(notices).await? {
                     *run = r;
@@ -479,9 +515,7 @@ impl Driver<'_> {
                 None => return Err(broken("cannot run from an empty history").into()),
                 _ if open => self.tools(run, resolved.take(), first.take(), notices).await?,
                 Some(Message::User(_)) => self.request(run).await?,
-                Some(Message::Assistant(r)) => {
-                    Next::End(RunEnd { answer: answer_text(r), stopped: false, waiting_on: Vec::new() })
-                }
+                Some(Message::Assistant(r)) => Next::End(RunEnd::Answered { answer: answer_text(r) }),
             };
             match next {
                 Next::End(end) => return Ok(end),
