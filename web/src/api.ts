@@ -143,7 +143,8 @@ export const unauthorizedEvent = new EventTarget()
 
 // 请求的时限：服务端或网络卡住时报错，而不是让等它的操作（按钮）一直转。要大于服务端单个操作的上限，否则服务端随后
 // 成功或报出的真正原因被换成「超时」：最长的是探测 MCP server（连接 30 秒，runtime 的 mcp.rs CONNECT_TIMEOUT，再列工具）。
-// 传文件（上传、录音、预览）按大小与网速可能很久
+// 传文件（上传、录音、预览）按大小与网速可能很久。做完才返回、没有上限但能由别的操作打断的（手动压缩，逐批调模型，
+// 可以停止）不设时限（call 的 untimed）
 export const REQUEST_TIMEOUT_MS = 120_000
 const FILE_TIMEOUT_MS = 600_000
 
@@ -155,6 +156,7 @@ async function send<T>(
   body?: { type: string; data: BodyInit },
   // 响应体是文件（如预览的文件）：成功时交出响应本身，由调用方读 Blob
   raw = false,
+  untimed = false,
 ): Promise<T> {
   const timeoutMs = raw || body?.data instanceof Blob ? FILE_TIMEOUT_MS : REQUEST_TIMEOUT_MS
   let resp: Response
@@ -164,7 +166,7 @@ async function send<T>(
       credentials: 'same-origin',
       headers: body === undefined ? undefined : { 'Content-Type': body.type },
       body: body?.data,
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: untimed ? undefined : AbortSignal.timeout(timeoutMs),
     })
   } catch (e) {
     if (e instanceof DOMException && e.name === 'TimeoutError')
@@ -215,14 +217,19 @@ type Body<O> = O extends { requestBody: { content: { 'application/json': infer B
 type WithoutNever<T> = { [K in keyof T as [T[K]] extends [never] ? never : K]: T[K] }
 /** 查询参数都可选时，query 本身也可以不给 */
 type QueryArg<Q> = [Q] extends [never] ? object : object extends Q ? { query?: Q } : { query: Q }
-type Args<O> = WithoutNever<{ path: PathParams<O>; body: Body<O> }> & QueryArg<QueryParams<O>>
+type Args<O> = WithoutNever<{ path: PathParams<O>; body: Body<O> }> & QueryArg<QueryParams<O>> & { untimed?: true }
 
 export function call<P extends Path, M extends MethodOf<P>>(
   method: M,
   path: P,
   ...[args]: object extends Args<Operation<P, M>> ? [Args<Operation<P, M>>?] : [Args<Operation<P, M>>]
 ): Promise<Result<Operation<P, M>>> {
-  const given = (args ?? {}) as { path?: Record<string, string | number>; query?: Query; body?: unknown }
+  const given = (args ?? {}) as {
+    path?: Record<string, string | number>
+    query?: Query
+    body?: unknown
+    untimed?: true
+  }
   const url = path.replace(/\{(\w+)\}/g, (_, name: string) => {
     const value = given.path?.[name]
     if (value === undefined) throw new Error(`missing path parameter ${name} for ${path}`)
@@ -230,7 +237,7 @@ export function call<P extends Path, M extends MethodOf<P>>(
   })
   // 只有接口描述里有 JSON 请求体的调用才发请求体
   const body = given.body === undefined ? undefined : { type: 'application/json', data: JSON.stringify(given.body) }
-  return send(method.toUpperCase(), url, given.query, body)
+  return send(method.toUpperCase(), url, given.query, body, false, given.untimed)
 }
 
 /** 前端路由：agent 页按 id（名称可改） */
@@ -393,8 +400,9 @@ export const api = {
     call('post', '/api/notifications/issues/{issue_id}/read', { path: { issue_id } }),
   /** 停止正在进行的运行；停止前已经产生的部分照常保存 */
   stop: (session_id: SessionId) => call('post', '/api/sessions/{session_id}/stop', { path: { session_id } }),
-  /** 压缩在后台做，开始与结束时会话页随 saved 事件刷新 */
-  compact: (session_id: SessionId) => call('post', '/api/sessions/{session_id}/compact', { path: { session_id } }),
+  /** 做完才返回（不设时限，可用 stop 打断）；会话在运行、已在压缩或压缩中被停止时 409 */
+  compact: (session_id: SessionId) =>
+    call('post', '/api/sessions/{session_id}/compact', { path: { session_id }, untimed: true }),
   /** 重试最近一次最终失败的运行（同一次运行接着跑）；会话在跑或最近一次没失败时 409 */
   retry: (session_id: SessionId) => call('post', '/api/sessions/{session_id}/retry', { path: { session_id } }),
   deleteSession: (session_id: SessionId) => call('delete', '/api/sessions/{session_id}', { path: { session_id } }),

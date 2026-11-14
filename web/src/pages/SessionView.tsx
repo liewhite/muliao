@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
-import { Button, Chip, Disclosure, Spinner, TextArea, TextField } from '@heroui/react'
+import { Button, Chip, Disclosure, Spinner, TextArea, TextField, toast } from '@heroui/react'
 import {
   AlarmClock,
   Archive,
@@ -880,8 +880,10 @@ export default function SessionView() {
   const [draft, setDraft] = useState('')
   const uploads = useUploads()
   const action = useAction()
-  // 压缩单独一个：它要做完才返回（几秒到几十秒），期间停止等其他操作照常可用
+  // 压缩单独一个：它要做完才返回（几秒到几分钟），期间停止等其他操作照常可用
   const compaction = useAction()
+  // 压缩中用户点了停止：压缩请求随后以「已停止」结束，那是用户要的结果，不当错误显示
+  const stoppedCompaction = useRef(false)
   const bottom = useFollowBottom()
   // 说完就发：转写出的文字接在已输入的内容后面，连同附件一起发出；暂时发不了（附件还在上传、上一条还在发）
   // 或发送失败时留在输入框里，不丢
@@ -973,7 +975,15 @@ export default function SessionView() {
             variant="secondary"
             isDisabled={action.busy}
             isPending={compaction.busy}
-            onPress={() => void compaction.run(() => api.compact(id))}
+            onPress={() => {
+              stoppedCompaction.current = false
+              void compaction.run(() =>
+                api.compact(id).catch((e: unknown) => {
+                  if (stoppedCompaction.current) toast('压缩已停止')
+                  else throw e
+                }),
+              )
+            }}
             aria-description="把早期对话压缩成摘要，减少发给模型的上下文"
           >
             {!compaction.busy && <Archive className="size-4" />}
@@ -1011,7 +1021,10 @@ export default function SessionView() {
               // 压缩中也能停止（会话此时是空闲的）
               active={compaction.busy || (detail.data !== undefined && detail.data.state !== 'idle')}
               onSend={() => void send()}
-              onStop={() => void action.run(() => api.stop(id))}
+              onStop={() => {
+                if (compaction.busy) stoppedCompaction.current = true
+                void action.run(() => api.stop(id))
+              }}
             />
           </div>
         </div>
