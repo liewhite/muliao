@@ -151,7 +151,7 @@ pub(crate) fn owed_in(
     let held: Vec<(DelegationId, Hold)> = active_delegations_in(c, session_id)?
         .into_iter()
         .filter_map(|h| match h.of {
-            HoldOf::Delegation { row: Some(row) } => Some((row, h)),
+            HoldOf::Delegation { row } => Some((row, h)),
             _ => None,
         })
         .filter(|(row, _)| ids.is_none_or(|ids| ids.contains(row)))

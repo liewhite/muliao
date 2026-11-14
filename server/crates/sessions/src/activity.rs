@@ -157,7 +157,7 @@ pub(crate) fn waits_of_in(c: &Connection, session_id: &SessionId, waiting: &Wait
         .iter()
         .filter_map(|h| match h.of {
             HoldOf::Job { job_id } => Some((h.id, Wait::Job { job_id, since: h.created_at })),
-            HoldOf::Wake | HoldOf::Delegation { .. } => None,
+            HoldOf::Wake | HoldOf::Delegation { .. } | HoldOf::DeletedThread => None,
         })
         .collect();
     held.extend(owed_in(c, None, Some(session_id))?.into_iter().map(|o| {

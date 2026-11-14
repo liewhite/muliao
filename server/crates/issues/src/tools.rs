@@ -16,6 +16,7 @@ use crate::change::Patch;
 use crate::graph::Upstream;
 use crate::model::{Assignee, By, Priority, Status};
 use crate::render::assignee_name;
+use crate::rules::{StopStatus, StopTo};
 use muliao_platform::errors::{Result, invalid};
 
 /// issue 看板的工具组。
@@ -517,7 +518,7 @@ pub struct StopArgs {
     issue_id: i64,
     /// New status: `backlog`, `blocked`, `cancelled`, or `in_progress` to redirect the work (then `message` is
     /// required); not `in_review` or `done`.
-    status: Status,
+    status: StopStatus,
     /// Recorded as your comment and delivered to the stopped conversation, which then runs once more to act on it
     /// (wrap up, or what to do instead), whatever the new status.
     #[serde(default)]
@@ -543,7 +544,8 @@ impl Tool<RunScope> for IssueStop {
 
     async fn call(&self, ctx: ToolCtx<'_, RunScope>, a: StopArgs) -> std::result::Result<ToolOutput, ToolError> {
         let with_message = a.message.is_some();
-        let result = self.0.stop(by(&ctx), a.issue_id, a.status, a.message).await?;
+        let to = StopTo::new(a.status, a.message).map_err(invalid)?;
+        let result = self.0.stop(by(&ctx), a.issue_id, to).await?;
         let name = names(&self.0).await?.name(&result.agent);
         let id = a.issue_id;
         if !result.stopped {
@@ -562,7 +564,7 @@ impl Tool<RunScope> for IssueStop {
 
 fn stop_render() -> ToolRender {
     ToolRender::new().call(|a: &StopArgs| {
-        let mut view = vec![fields([issue_field(a.issue_id), ("status", a.status.as_str().into())])];
+        let mut view = vec![fields([issue_field(a.issue_id), ("status", a.status.status().as_str().into())])];
         view.extend(a.message.as_deref().and_then(markdown));
         Some(view)
     })

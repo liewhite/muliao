@@ -182,7 +182,7 @@ impl Runtime {
             meter: Meter::new(
                 self.d.usage.clone(),
                 agent_id,
-                Some(spec.session_id),
+                spec.session_id,
                 &dir.file.model().to_string(),
                 RunKind::Run,
             ),
@@ -206,13 +206,8 @@ impl Runtime {
             timestamp: Utc::now(),
             metadata: None,
         })];
-        let meter = Meter::new(
-            self.d.usage.clone(),
-            &dir.id,
-            Some(session_id),
-            &dir.file.model().to_string(),
-            RunKind::Compaction,
-        );
+        let meter =
+            Meter::new(self.d.usage.clone(), &dir.id, session_id, &dir.file.model().to_string(), RunKind::Compaction);
         let response = agent.respond(&history, &mut |_| {}).await.map_err(|e: RunError| {
             let message = format!("summarizing for compaction failed: {e}");
             if e.is_transient() { Error::Unavailable(message) } else { Error::Upstream(message) }
@@ -327,7 +322,7 @@ impl Drop for Run {
 struct Meter {
     usage: Arc<UsageLog>,
     agent_id: AgentId,
-    session_id: Option<SessionId>,
+    session_id: SessionId,
     model: String,
     kind: RunKind,
     /// 整次运行花掉的（日志用）
@@ -335,17 +330,11 @@ struct Meter {
 }
 
 impl Meter {
-    fn new(
-        usage: Arc<UsageLog>,
-        agent_id: &AgentId,
-        session_id: Option<&SessionId>,
-        model: &str,
-        kind: RunKind,
-    ) -> Self {
+    fn new(usage: Arc<UsageLog>, agent_id: &AgentId, session_id: &SessionId, model: &str, kind: RunKind) -> Self {
         Self {
             usage,
             agent_id: agent_id.to_owned(),
-            session_id: session_id.cloned(),
+            session_id: session_id.to_owned(),
             model: model.to_owned(),
             kind,
             spent: Mutex::default(),
@@ -363,13 +352,13 @@ impl Meter {
         *self.spent.lock().expect("meter lock") += totals;
         let entry = UsageEntry {
             agent_id: self.agent_id.clone(),
-            session_id: self.session_id.clone(),
+            session_id: Some(self.session_id.clone()),
             kind: self.kind,
             model: self.model.clone(),
             totals,
         };
         if let Err(e) = self.usage.record(entry).await {
-            tracing::error!(agent = %self.agent_id, session_id = ?self.session_id, kind = self.kind.as_str(),
+            tracing::error!(agent = %self.agent_id, session_id = %self.session_id, kind = self.kind.as_str(),
                 model = %self.model, input_tokens = totals.input_tokens, output_tokens = totals.output_tokens,
                 cache_read_tokens = totals.cache_read_tokens, cache_write_tokens = totals.cache_write_tokens,
                 error = %e, "recording model usage failed; this request is not in the usage log");

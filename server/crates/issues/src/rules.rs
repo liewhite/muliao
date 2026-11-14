@@ -31,8 +31,70 @@ not assigned to an agent, or still waiting on dependencies) arrives here when yo
 its owner, even if it is not assigned to you: decide whether to close it, assign it to someone, or reply. \
 Nobody is watching this conversation: the user reads the issue, not this conversation.";
 
-/// issue_stop 叫停之后 issue 可以进入的状态：停下不是做完，不能交审（in_review）或完成（done）；in_progress 是打断后改方向
-const STOP_STATUSES: [Status; 4] = [Status::Backlog, Status::Blocked, Status::Cancelled, Status::InProgress];
+/// issue_stop 叫停之后 issue 可以进入的状态：停下不是做完，不能交审（in_review）或完成（done）；in_progress 是打断后改方向。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StopStatus {
+    Backlog,
+    Blocked,
+    Cancelled,
+    InProgress,
+}
+
+impl StopStatus {
+    pub fn status(self) -> Status {
+        match self {
+            StopStatus::Backlog => Status::Backlog,
+            StopStatus::Blocked => Status::Blocked,
+            StopStatus::Cancelled => Status::Cancelled,
+            StopStatus::InProgress => Status::InProgress,
+        }
+    }
+}
+
+/// 叫停之后 issue 怎样：停在 backlog、blocked、cancelled（可以带一句话记成评论、投给被停下的会话收尾），或留在 in_progress
+/// 改方向（必须带消息告诉 agent 现在做什么）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StopTo {
+    Backlog(Option<String>),
+    Blocked(Option<String>),
+    Cancelled(Option<String>),
+    Redirect(String),
+}
+
+impl StopTo {
+    /// 工具交来的状态与消息；空消息、留在 in_progress 却没带消息时是原因。
+    pub fn new(status: StopStatus, message: Option<String>) -> Result<Self, String> {
+        if message.as_deref().is_some_and(|m| m.trim().is_empty()) {
+            return Err("message must not be empty".into());
+        }
+        Ok(match (status, message) {
+            (StopStatus::Backlog, m) => StopTo::Backlog(m),
+            (StopStatus::Blocked, m) => StopTo::Blocked(m),
+            (StopStatus::Cancelled, m) => StopTo::Cancelled(m),
+            (StopStatus::InProgress, Some(m)) => StopTo::Redirect(m),
+            (StopStatus::InProgress, None) => {
+                return Err("give a message when the issue stays in_progress: it tells the agent what to do now".into());
+            }
+        })
+    }
+
+    pub fn status(&self) -> Status {
+        match self {
+            StopTo::Backlog(_) => Status::Backlog,
+            StopTo::Blocked(_) => Status::Blocked,
+            StopTo::Cancelled(_) => Status::Cancelled,
+            StopTo::Redirect(_) => Status::InProgress,
+        }
+    }
+
+    pub fn message(&self) -> Option<&str> {
+        match self {
+            StopTo::Backlog(m) | StopTo::Blocked(m) | StopTo::Cancelled(m) => m.as_deref(),
+            StopTo::Redirect(m) => Some(m),
+        }
+    }
+}
 
 /// 投递与停滞判定看的那部分 issue 状态（动作之后的）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,20 +127,6 @@ pub fn start_assignee(status: Status, owner: Option<&AgentId>) -> Result<&AgentI
         return Err(format!("is already {status}, not in the backlog"));
     }
     Ok(owner)
-}
-
-/// issue_stop 不能把 issue 改成 status 的原因；能为 None。停下不是做完；留在 in_progress（打断后改方向）必须带消息告诉
-/// agent 现在做什么。
-pub fn cannot_stop_into(status: Status, with_message: bool) -> Option<String> {
-    if !STOP_STATUSES.contains(&status) {
-        let mut allowed: Vec<&str> = STOP_STATUSES.iter().map(|s| s.as_str()).collect();
-        allowed.sort();
-        return Some(format!("status must be one of {}: stopping is not finishing", allowed.join(", ")));
-    }
-    if status == Status::InProgress && !with_message {
-        return Some("give a message when the issue stays in_progress: it tells the agent what to do now".into());
-    }
-    None
 }
 
 /// 这次的动态里有外来的输入（用户的评论）：没有 agent 接手时也唤起 owner（见 [`recipient`]）。
@@ -212,13 +260,13 @@ mod tests {
         assert_eq!(start_assignee(Status::Backlog, Some(&AgentId::new("a"))).map(AgentId::as_str), Ok("a"));
         assert!(start_assignee(Status::Backlog, None).is_err());
         assert!(start_assignee(Status::Blocked, Some(&AgentId::new("a"))).is_err());
-        assert!(cannot_stop_into(Status::Done, true).is_some());
-        assert!(cannot_stop_into(Status::InProgress, false).is_some());
-        assert!(cannot_stop_into(Status::InProgress, true).is_none());
-        assert_eq!(
-            cannot_stop_into(Status::InReview, false).unwrap(),
-            "status must be one of backlog, blocked, cancelled, in_progress: stopping is not finishing"
-        );
+        assert!(StopTo::new(StopStatus::InProgress, None).is_err());
+        assert!(StopTo::new(StopStatus::Blocked, Some(" ".into())).is_err());
+        assert_eq!(StopTo::new(StopStatus::InProgress, Some("改做 X".into())), Ok(StopTo::Redirect("改做 X".into())));
+        assert_eq!(StopTo::new(StopStatus::Cancelled, None).map(|s| s.status()), Ok(Status::Cancelled));
+        // 停下不是做完：交审、完成不在可选的状态里
+        assert!(serde_json::from_str::<StopStatus>("\"done\"").is_err());
+        assert!(serde_json::from_str::<StopStatus>("\"in_review\"").is_err());
     }
 
     #[test]

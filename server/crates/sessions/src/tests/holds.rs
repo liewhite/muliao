@@ -120,5 +120,5 @@ async fn a_deleted_thread_is_no_longer_owed() {
     assert_eq!(threads(&before), [sid("t1"), sid("t2")]);
     assert_eq!(threads(&only_r2), [sid("t2")]);
     assert_eq!(threads(&after), [sid("t2")]);
-    assert!(matches!(after[0].hold.of, HoldOf::Delegation { row: Some(_) }));
+    assert!(matches!(after[0].hold.of, HoldOf::Delegation { .. }));
 }

@@ -161,7 +161,7 @@ pub(crate) fn hand_back_in(
         let delivered = deliver_in(
             tx,
             waker,
-            Some(&o.hold),
+            &o.hold,
             &EventSource::Thread { session_id: child.id.clone() },
             &event_text(name, agent.name.as_str(), ending, text),
             Some((o.delegation.call_id.as_str(), answer)),
@@ -243,7 +243,7 @@ pub(crate) async fn check_threads(
             let child = &children[child_id];
             let agent = agent_in(tx, &child.agent_id)?;
             let text = check_text(child, &agent, states[child_id], runs.get(child_id), now, *interval);
-            if post_check_in(tx, &waker, Some(&o.hold), &EventSource::Thread { session_id: child_id.clone() }, &text)? {
+            if post_check_in(tx, &waker, &o.hold, &EventSource::Thread { session_id: child_id.clone() }, &text)? {
                 posted += 1;
             }
         }

@@ -75,7 +75,7 @@ pub(crate) async fn halt(
             let rows: Vec<DelegationId> = cleared
                 .iter()
                 .filter_map(|h| match h.of {
-                    HoldOf::Delegation { row } => row,
+                    HoldOf::Delegation { row } => Some(row),
                     _ => None,
                 })
                 .collect();

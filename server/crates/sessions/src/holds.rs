@@ -48,8 +48,10 @@ pub enum HoldOf {
     Job { job_id: JobId },
     /// 到点唤醒（wake_me）：约的时刻与说明在引用它的 `wakeups` 行
     Wake,
-    /// 委派：row 是委派行（thread 删除后置空）
-    Delegation { row: Option<DelegationId> },
+    /// 委派：row 是委派行
+    Delegation { row: DelegationId },
+    /// 委派的 thread 已删除（委派行随之删掉，占用的引用置空）
+    DeletedThread,
 }
 
 impl HoldOf {
@@ -57,7 +59,7 @@ impl HoldOf {
         match self {
             HoldOf::Job { .. } => "job",
             HoldOf::Wake => "wake",
-            HoldOf::Delegation { .. } => "delegation",
+            HoldOf::Delegation { .. } | HoldOf::DeletedThread => "delegation",
         }
     }
 }
@@ -86,7 +88,10 @@ fn hold((id, session_id, kind, job_id, row, awaited, status, created_at): Raw) -
     let of = match (kind.as_str(), job_id) {
         ("job", Some(job_id)) => HoldOf::Job { job_id },
         ("wake", None) => HoldOf::Wake,
-        ("delegation", None) => HoldOf::Delegation { row },
+        ("delegation", None) => match row {
+            Some(row) => HoldOf::Delegation { row },
+            None => HoldOf::DeletedThread,
+        },
         _ => return Err(broken(format!("hold {id} of kind {kind:?} does not match its columns"))),
     };
     Ok(Hold { id, session_id, of, awaited, status: HoldStatus::parse(&status)?, created_at })
@@ -115,14 +120,15 @@ pub(crate) fn hold_delegation_in(
     row: DelegationId,
     awaited: bool,
 ) -> Result<Hold> {
-    insert(c, session_id, HoldOf::Delegation { row: Some(row) }, awaited)
+    insert(c, session_id, HoldOf::Delegation { row }, awaited)
 }
 
 fn insert(c: &Connection, session_id: &SessionId, of: HoldOf, awaited: bool) -> Result<Hold> {
     let (job_id, row) = match &of {
         HoldOf::Job { job_id } => (Some(*job_id), None),
         HoldOf::Wake => (None, None),
-        HoldOf::Delegation { row } => (None, *row),
+        HoldOf::Delegation { row } => (None, Some(*row)),
+        HoldOf::DeletedThread => (None, None),
     };
     let now = Utc::now();
     c.execute(

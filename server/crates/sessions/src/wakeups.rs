@@ -95,7 +95,7 @@ pub(crate) async fn deliver_due(db: &Database, waker: &Waker, tz: Tz) -> Result<
                 local_time(wakeup.due_at, tz),
                 wakeup.note
             );
-            deliver_in(tx, &waker, Some(hold), &EventSource::Wake, &text, None)?;
+            deliver_in(tx, &waker, hold, &EventSource::Wake, &text, None)?;
         }
         Ok(due.len())
     })

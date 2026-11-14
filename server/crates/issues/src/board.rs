@@ -31,7 +31,7 @@ use crate::conversation;
 use crate::graph::{Upstream, batch_label, check_batch, downstream_in, links_in, links_of_in, set_depends_on_in};
 use crate::model::{self, Actor, Assignee, By, Issue, Priority, Status, agent_of, issue_in};
 use crate::render::{render_activity, render_issue};
-use crate::rules::{ask_to_settle, cannot_review, cannot_stop_into, handed_by, stalled, start_assignee};
+use crate::rules::{StopTo, ask_to_settle, cannot_review, handed_by, stalled, start_assignee};
 use muliao_platform::errors::{Error, Result, conflict, invalid};
 
 /// 运行失败记进时间线的正文（错误原文）最多这么多字符，全文在会话页
@@ -577,13 +577,7 @@ impl Board {
     /// 先停后改：停止返回时停止事务已提交，之后投的信不会被它清掉。两个事务之间指派人被改了也不改目标：记的、收尾消息投的都
     /// 是被停下的那个 agent。从被停会话开出去的 thread 里调用时，那个 thread 随停止被逐层停掉，可能在第二个事务之前
     /// 就被取消：会话停了而状态没改，调用方看不到结果（契约之外的用法，不另拦）。
-    pub async fn stop(&self, by: By, issue_id: i64, status: Status, message: Option<String>) -> Result<Stopping> {
-        if message.as_deref().is_some_and(|m| m.trim().is_empty()) {
-            return Err(invalid("message must not be empty"));
-        }
-        if let Some(reason) = cannot_stop_into(status, message.is_some()) {
-            return Err(invalid(reason));
-        }
+    pub async fn stop(&self, by: By, issue_id: i64, to: StopTo) -> Result<Stopping> {
         let (agent, target) = self
             .db
             .read(move |c| {
@@ -607,7 +601,7 @@ impl Board {
             Some(t) => self.stopper.stop(&t.id).await? == Halted::Stopped,
             None => false,
         };
-        let routing = if stopped && message.is_some() { Routing::Direct(agent.clone()) } else { Routing::ByRules };
+        let routing = if stopped && to.message().is_some() { Routing::Direct(agent.clone()) } else { Routing::ByRules };
         let (changes, who) = (self.changes.clone(), agent.clone());
         let issue = self
             .db
@@ -616,13 +610,13 @@ impl Board {
                     if stopped {
                         c.stopped(&who)?;
                     }
-                    c.set_status(status)?;
-                    if let Some(m) = message {
-                        c.comment(m)?;
+                    c.set_status(to.status())?;
+                    if let Some(m) = to.message() {
+                        c.comment(m.to_owned())?;
                     }
                     Ok(())
                 })?;
-                tracing::info!(issue_id, actor = by.actor.as_str(), agent = %who, stopped, %status, "issue conversation stopped");
+                tracing::info!(issue_id, actor = by.actor.as_str(), agent = %who, stopped, status = %to.status(), "issue conversation stopped");
                 Ok::<_, Error>(issue)
             })
             .await?;

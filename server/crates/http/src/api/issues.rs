@@ -32,10 +32,25 @@ pub struct IssueQuery {
     #[serde(default)]
     #[param(value_type = Option<Vec<Status>>)]
     pub status: Vec<Status>,
-    /// 指派人：agent id，或 `user` 表示用户
-    pub assignee: Option<String>,
+    /// 指派人：`user` 是用户，`agent:<agent id>` 是某个 agent；别的写法 422
+    #[param(value_type = Option<String>)]
+    pub assignee: Option<AssigneeParam>,
     /// 负责项目的 agent id
     pub owner: Option<AgentId>,
+}
+
+/// 查询串里的指派人：种类写在值里（查询串放不了按种类打标签的对象），进门时解析，写错的不当成 agent id。
+pub struct AssigneeParam(Assignee);
+
+impl<'de> Deserialize<'de> for AssigneeParam {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        match (s.as_str(), s.strip_prefix("agent:")) {
+            ("user", _) => Ok(AssigneeParam(Assignee::User)),
+            (_, Some(id)) if !id.is_empty() => Ok(AssigneeParam(Assignee::Agent { agent_id: AgentId::new(id) })),
+            _ => Err(serde::de::Error::custom(format!("assignee must be 'user' or 'agent:<agent id>', got {s:?}"))),
+        }
+    }
 }
 
 #[utoipa::path(get, path = "/api/issues", tag = "issues", params(IssueQuery),
@@ -44,8 +59,7 @@ async fn list_issues(
     State(s): State<AppState>,
     Query(q): Query<IssueQuery>,
 ) -> ApiResult<axum::Json<Vec<ListedIssue>>> {
-    // 查询参数沿用库里的写法（`user` 或 agent id）：查询串里放不了按种类打标签的对象
-    let filter = Filter { statuses: q.status, assignee: q.assignee.map(Assignee::from_stored), owner: q.owner };
+    let filter = Filter { statuses: q.status, assignee: q.assignee.map(|a| a.0), owner: q.owner };
     Ok(axum::Json(s.services.board.list(filter).await?))
 }
 

@@ -44,24 +44,18 @@ pub enum Delivered {
     Event,
     /// 占用已被停止清掉：不投
     Dropped,
-    /// 会话已删除
-    Gone,
 }
 
-/// 交回这项占用的结局并释放它，唯一出口。hold 为 None：会话已删除。answer 是（调用 id, 结果）：会话还停在这次调用上时
-/// 作为那次调用的结果；否则作为事件信件（「迟到的回答改为事件」只在这里）。已经释放过的再交回是 bug，当场报错。
+/// 交回这项占用的结局并释放它，唯一出口。answer 是（调用 id, 结果）：会话还停在这次调用上时作为那次调用的结果；否则作为
+/// 事件信件（「迟到的回答改为事件」只在这里）。已经释放过的再交回是 bug，当场报错。
 pub(crate) fn deliver_in(
     tx: &mut Tx<'_>,
     waker: &Waker,
-    hold: Option<&Hold>,
+    hold: &Hold,
     source: &EventSource,
     event_text: &str,
     answer: Option<(&str, CallResult)>,
 ) -> Result<Delivered> {
-    let Some(hold) = hold else {
-        tracing::info!(source = %source.raw(), "outcome for a deleted session dropped");
-        return Ok(Delivered::Gone);
-    };
     let session_id = &hold.session_id;
     match holds::release_in(tx, hold)? {
         HoldStatus::Cleared => {
@@ -88,16 +82,18 @@ pub(crate) fn deliver_in(
     Ok(delivered)
 }
 
-/// 运行中检查：给这项工作的会话投一封检查信件（不推送）。这个来源已有信件排着时不投（不堆积）；占用已不是 active 或会话
-/// 已删除时也不投。返回是否投了。
+/// 运行中检查：给这项工作的会话投一封检查信件（不推送）。这个来源已有信件排着时不投（不堆积）；占用已不是 active 时也
+/// 不投。返回是否投了。
 pub(crate) fn post_check_in(
     tx: &mut Tx<'_>,
     waker: &Waker,
-    hold: Option<&Hold>,
+    hold: &Hold,
     source: &EventSource,
     text: &str,
 ) -> Result<bool> {
-    let Some(hold) = hold.filter(|h| h.status == HoldStatus::Active) else { return Ok(false) };
+    if hold.status != HoldStatus::Active {
+        return Ok(false);
+    }
     if has_queued_from(tx, &hold.session_id, &source.raw())? {
         return Ok(false);
     }
@@ -166,16 +162,22 @@ impl SessionWork {
         Ok(())
     }
 
-    /// 后台任务结束了：往会话的信箱投一封事件信件，同时释放占用。
-    pub fn ended_in(&self, tx: &mut Tx<'_>, session_id: &SessionId, job_id: JobId, text: &str) -> Result<Delivered> {
-        let hold = job_hold_in(tx, session_id, job_id)?;
-        deliver_in(tx, &self.waker, hold.as_ref(), &EventSource::Job { job_id }, text, None)
+    /// 后台任务结束了：往会话的信箱投一封事件信件，同时释放占用；会话已删除时不投。
+    pub fn ended_in(&self, tx: &mut Tx<'_>, session_id: &SessionId, job_id: JobId, text: &str) -> Result<()> {
+        let Some(hold) = job_hold_in(tx, session_id, job_id)? else {
+            tracing::info!(%session_id, %job_id, "outcome of a job for a deleted session dropped");
+            return Ok(());
+        };
+        deliver_in(tx, &self.waker, &hold, &EventSource::Job { job_id }, text, None)?;
+        Ok(())
     }
 
-    /// 后台任务还在进行：给会话投一封检查信件。
+    /// 后台任务还在进行：给会话投一封检查信件；会话已删除时不投。返回是否投了。
     pub fn checked_in(&self, tx: &mut Tx<'_>, session_id: &SessionId, job_id: JobId, text: &str) -> Result<bool> {
-        let hold = job_hold_in(tx, session_id, job_id)?;
-        post_check_in(tx, &self.waker, hold.as_ref(), &EventSource::Job { job_id }, text)
+        match job_hold_in(tx, session_id, job_id)? {
+            Some(hold) => post_check_in(tx, &self.waker, &hold, &EventSource::Job { job_id }, text),
+            None => Ok(false),
+        }
     }
 }
 

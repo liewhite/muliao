@@ -319,8 +319,7 @@ async fn issue_stop_stops_the_running_session_and_delivers_the_message_there() {
         .stop(
             By::agent(&w.other, &SessionId::new("elsewhere")),
             i.id,
-            Status::InProgress,
-            Some("先停下，等用户".into()),
+            muliao_issues::rules::StopTo::Redirect("先停下，等用户".into()),
         )
         .await
         .unwrap();

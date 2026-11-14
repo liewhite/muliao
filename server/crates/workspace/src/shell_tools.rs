@@ -396,47 +396,52 @@ impl Tool<RunScope> for SkillRun {
         let deps = &self.0;
         let scope = ctx.deps;
         let found = deps.skills.scripts(&a.skill, &scope.agent_id).await?;
-        let (command, gated, fingerprint) = {
+        let (command, gated) = {
             let (found, skill, script, args) = (found.clone(), a.skill.clone(), a.script.clone(), a.args.clone());
             tokio::task::spawn_blocking(move || -> Result<_, ToolError> {
                 let (command, gated) = script_command(&found, &skill, &script, &args)?;
                 // 要批准的脚本：按 skill 目录的指纹认是哪一份
-                let fingerprint = match &gated {
-                    Some(_) => Some(found.fingerprint().map_err(|e| ToolError::Abort(Box::new(e)))?),
+                let gated = match gated {
+                    Some(script) => Some((script, found.fingerprint().map_err(|e| ToolError::Abort(Box::new(e)))?)),
                     None => None,
                 };
-                Ok((command, gated, fingerprint))
+                Ok((command, gated))
             })
             .await
             .expect("locating the script panicked")?
         };
-        // 批准后再执行时须与请求批准时的一样（批准的是那一份）；用户这次点了始终允许就记下；还没批准的看有没有始终允许
-        let mut granted = None;
-        let mut pin = None;
-        if let (Some(script), Some(fingerprint)) = (gated, fingerprint) {
-            let call = ScriptCall::new(&scope.agent_id, &a.skill, &script, &a.args, &a.secrets, &fingerprint);
-            match ctx.approval {
-                Some(approval) => {
-                    if approval.pin != fingerprint {
-                        return Err(ToolError::Retry(format!(
-                            "the files of skill {:?} are not the version the user approved (they changed after approval \
-                             was requested, or the request did not record the version); nothing was run. Call it \
-                             again to ask the user to approve the current version.",
-                            a.skill
-                        )));
+        let clearance = match gated {
+            None => Clearance::Free,
+            Some((script, fingerprint)) => {
+                let call = ScriptCall::new(&scope.agent_id, &a.skill, &script, &a.args, &a.secrets, &fingerprint);
+                match ctx.approval {
+                    // 批准后再执行时须与请求批准时的一样（批准的是那一份）；用户这次点了始终允许就记下
+                    Some(approval) => {
+                        if approval.pin != fingerprint {
+                            return Err(ToolError::Retry(format!(
+                                "the files of skill {:?} are not the version the user approved (they changed after \
+                                 approval was requested, or the request did not record the version); nothing was run. \
+                                 Call it again to ask the user to approve the current version.",
+                                a.skill
+                            )));
+                        }
+                        if approval.always {
+                            deps.grants.grant(call, &scope.session_id, &ctx.call.id).await?;
+                        }
+                        Clearance::Approved
                     }
-                    if approval.always {
-                        deps.grants.grant(call, &scope.session_id, &ctx.call.id).await?;
-                    }
-                }
-                None => {
-                    granted = deps.grants.find(&call).await?;
-                    if granted.is_none() {
-                        pin = Some(fingerprint);
-                    }
+                    // 还没批准：有始终允许就照它，否则停下请用户批准
+                    None => match deps.grants.find(&call).await? {
+                        Some(grant) => Clearance::Granted(grant),
+                        None => Clearance::Needed { pin: fingerprint },
+                    },
                 }
             }
-        }
+        };
+        let approval_pin = match &clearance {
+            Clearance::Needed { pin } => Some(pin.clone()),
+            Clearance::Free | Clearance::Granted(_) | Clearance::Approved => None,
+        };
         let e = Execution {
             command,
             timeout: a.timeout,
@@ -444,13 +449,29 @@ impl Tool<RunScope> for SkillRun {
             background: a.background,
             heartbeat_seconds: a.heartbeat_seconds,
             secret_use: SecretUse::Wrapped,
-            approval_pin: pin,
+            approval_pin,
         };
         let result = deps.execute(scope, e).await?;
-        let Some(grant) = granted else { return Ok(agenter::tool::text(result)) };
-        deps.grants.used(grant).await?;
-        Ok(agenter::tool::text(format!("{GRANTED_NOTE}\n{result}")))
+        match clearance {
+            Clearance::Granted(grant) => {
+                deps.grants.used(grant).await?;
+                Ok(agenter::tool::text(format!("{GRANTED_NOTE}\n{result}")))
+            }
+            Clearance::Free | Clearance::Needed { .. } | Clearance::Approved => Ok(agenter::tool::text(result)),
+        }
     }
+}
+
+/// 一次 skill_run 的批准状态。
+enum Clearance {
+    /// 脚本不用批准
+    Free,
+    /// 要批准、还没批准：停下请用户批准，pin 是请求批准时 skill 目录的指纹
+    Needed { pin: String },
+    /// 用户「始终允许」过同样的调用（那条记录的 id）
+    Granted(i64),
+    /// 用户批准了这次调用
+    Approved,
 }
 
 // ---- job_status / job_kill ----

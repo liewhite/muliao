@@ -17,6 +17,7 @@ use muliao_sessions::tools::Stopper;
 
 use crate::activity::Happening;
 use crate::graph::Upstream;
+use crate::rules::StopTo;
 use crate::*;
 
 const A: &str = "aaaaaaaaaaaa";
@@ -498,16 +499,14 @@ async fn issue_show_lists_and_stop_rules() {
     let by_owner = w.board.list(Filter { owner: Some(AgentId::new(B)), ..Filter::default() }).await.unwrap();
     assert!(by_owner.is_empty());
     // issue_stop 的规则（停会话本身在端到端测试里）
-    let err = w.board.stop(by_agent(A, "x"), i.id, Status::Done, None).await.unwrap_err();
-    assert!(err.to_string().contains("stopping is not finishing"), "{err}");
-    let err = w.board.stop(by_agent(A, "x"), up.id, Status::Blocked, None).await.unwrap_err();
+    let err = w.board.stop(by_agent(A, "x"), up.id, StopTo::Blocked(None)).await.unwrap_err();
     assert!(err.to_string().contains("not assigned to an agent"), "{err}");
     let its = w.session(i.id, B).await.unwrap();
-    let err = w.board.stop(by_agent(B, its.as_str()), i.id, Status::Blocked, None).await.unwrap_err();
+    let err = w.board.stop(by_agent(B, its.as_str()), i.id, StopTo::Blocked(None)).await.unwrap_err();
     assert!(err.to_string().contains("itself"), "{err}");
     // 指派人还没有这个会话：只改状态
     let fresh = w.create(By::user(), new(A, "没会话", Status::Blocked, agent(B))).await;
-    let s = w.board.stop(by_agent(A, "x"), fresh.id, Status::Cancelled, None).await.unwrap();
+    let s = w.board.stop(by_agent(A, "x"), fresh.id, StopTo::Cancelled(None)).await.unwrap();
     assert!(!s.stopped);
     assert_eq!(s.issue.status, Status::Cancelled);
 }
